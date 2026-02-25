@@ -1,0 +1,348 @@
+.ap-shell {
+  background-color: #DA291C;
+  min-height: 100vh;
+}
+
+.ap-body {
+  display: flex;
+  background-color: #DA291C;
+}
+
+.ap-content {
+  flex: 1;
+  padding: 26px;
+  font-family: "FSAlbertArabic", sans-serif;
+}
+
+.ap-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  font-family:"FSAlbertArabic", sans-serif;
+  font-size: 16px;
+  color: #ffffff;
+}
+
+.ap-crumbLink {
+  background: transparent;
+  border: none;
+  font-weight: 800;
+  cursor: pointer;
+  padding: 0;
+  font-family:"FSAlbertArabic", sans-serif;
+  font-size: 16px;
+  color: #ffffff;
+  text-decoration:underline;
+}
+
+.ap-crumbSep {
+  opacity:.6;
+  font-weight:700;
+}
+
+.ap-crumbCurrent {
+  opacity:.75;
+  font-weight:700;
+}
+
+.ap-card {
+  background: #ffffff;
+  border-radius: 14px;
+  padding: 22px 26px;
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.08);
+}
+
+.ap-cardTop {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.ap-title {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 900;
+  color: #373a36;
+}
+
+.ap-subtitle {
+  margin: 6px 0 0 0;
+  color: #6b6e6a;
+  font-size: 15px;
+}
+
+.ap-backBtn {
+  background: #ffffff;
+  border:1px solid rgba(0,0,0,0.12);
+  padding: 10px 14px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-weight:800;
+  font-family:"FSAlbertArabic", sans-serif;
+  font-size: 14px;
+  color:#373A36;
+}
+
+.ap-backBtn:hover {
+  background: rgba(218, 41, 28, 0.08);
+}
+
+.ap-lockedRow {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  background: #f3f4f6;
+  border: 1px solid #e6e7ea;
+  border-radius: 12px;
+  padding: 12px;
+  margin-bottom: 18px;
+}
+
+.ap-lockedItem {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ap-lockedLabel {
+  font-size: 12px;
+  font-weight: 900;
+  color: #6b6e6a;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.ap-lockedValue {
+  font-size: 14px;
+  font-weight: 900;
+  color: #373a36;
+}
+
+.ap-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.ap-section {
+  border: 1px solid #eceef1;
+  border-radius: 14px;
+  padding: 14px;
+}
+
+.ap-sectionTitle {
+  margin: 0 0 12px 0;
+  font-size: 16px;
+  font-weight: 900;
+  color: #373a36;
+}
+
+.ap-grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.ap-grid3 {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 14px;
+}
+
+.ap-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ap-label {
+  font-size: 14px;
+  font-weight: 900;
+  color: #373a36;
+}
+
+.ap-input {
+  border: 1px solid #e6e7ea;
+  border-radius: 12px;
+  padding: 12px 12px;
+  font-size: 14px;
+  outline: none;
+  font-family: "FSAlbertArabic", sans-serif;
+}
+
+.ap-input:focus {
+  border-color: #c9ccd3;
+  box-shadow: 0 0 0 3px rgba(218, 41, 28, 0.10);
+}
+
+.ap-input.error {
+  border-color: #DA291C;
+  box-shadow: 0 0 0 3px rgba(218, 41, 28, 0.10);
+}
+
+.ap-error {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 800;
+  color: #DA291C;
+}
+
+.ap-phoneWrap {
+  display: flex;
+  align-items: center;
+  border: 1px solid #e6e7ea;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.ap-phonePrefix {
+  padding: 12px 10px;
+  background: #f3f4f6;
+  border-right: 1px solid #e6e7ea;
+  font-weight: 900;
+  color: #373a36;
+  min-width: 52px;
+  text-align: center;
+}
+
+.ap-phoneInput {
+  border: none;
+  border-radius: 0;
+  flex: 1;
+}
+
+.ap-phoneInput:focus {
+  box-shadow: none;
+}
+
+.ap-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.ap-secondaryBtn {
+  background: #ffffff;
+  border: 1px solid #e6e7ea;
+  padding: 11px 14px;
+  border-radius: 12px;
+  cursor: pointer;
+  font-weight: 900;
+  font-size: 15px;
+  font-family: "FSAlbertArabic", sans-serif;
+}
+
+.ap-secondaryBtn:hover {
+  background: rgba(218, 41, 28, 0.08);
+}
+
+.ap-primaryBtn {
+  background: rgba(218, 41, 28, 0.813);
+  border: none;
+  color: #ffffff;
+  padding: 11px 14px;
+  border-radius: 12px;
+  cursor: pointer;
+  font-weight: 900;
+  font-family: "FSAlbertArabic", sans-serif;
+  font-size: 15px;
+}
+
+.ap-primaryBtn:hover {
+  filter: brightness(0.9);
+}
+
+.ap-note {
+  margin: 0;
+  font-size: 13px;
+  color: #6b6e6a;
+}
+
+/* Responsive */
+@media (max-width: 980px) {
+  .ap-lockedRow {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .ap-grid3 {
+    grid-template-columns: 1fr;
+  }
+  .ap-grid2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+.ap-modalOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(17, 24, 39, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  z-index: 9999;
+}
+
+.ap-modal {
+  width: 100%;
+  max-width: 520px;
+  background: #ffffff;
+  border-radius: 16px;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.2);
+  padding: 18px 18px 16px 18px;
+  position: relative;
+  font-family: "FSAlbertArabic", sans-serif;
+}
+
+.ap-modalClose {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  border: 1px solid #e6e7ea;
+  background: #ffffff;
+  cursor: pointer;
+  font-size: 22px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.ap-modalClose:hover {
+  background: rgba(255, 141, 162, 0.25);
+}
+
+.ap-modalTitle {
+  margin: 4px 0 10px 0;
+  font-size: 22px;
+  font-weight: 900;
+  color: #373a36;
+}
+
+.ap-modalText {
+  margin: 0 0 14px 0;
+  color: #6b6e6a;
+  font-size: 16px;
+}
+
+.ap-modalName {
+  font-weight: 900;
+  color: #373a36;
+}
+
+.ap-modalCode {
+  display: inline-block;
+  margin-top: 6px;
+  font-weight: 900;
+  color: #373a36;
+}
+
+.ap-modalActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}

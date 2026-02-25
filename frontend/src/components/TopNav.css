@@ -1,0 +1,136 @@
+.top-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 28px;
+  background-color: #ffffff;
+  border-bottom: 1px solid #eef1f2;
+}
+
+.tn-logo {
+  width: 320px;
+  height: 70px;
+  cursor: pointer;
+  object-fit: contain;
+}
+
+.tn-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.tn-bell-btn {
+  border: none;
+  border-radius: 14px;
+  background: #ffffff;
+  cursor: pointer;
+  width: 46px;
+  height: 46px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #373A36;
+  position: relative;
+}
+
+.tn-bell-btn:hover {
+  background-color: #D9E1E2;
+}
+
+.tn-bell-btn:active {
+  transform: scale(0.98);
+}
+
+.tn-profile-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  cursor: pointer;
+  padding: 12px 16px;
+  border-radius: 14px;
+  border: 1px solid #e7ecee;
+  background: #ffffff;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.tn-profile-card:hover {
+  background-color: #D9E1E2;
+}
+
+.tn-profile-pic {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid #f2f4f5;
+  flex: 0 0 auto;
+}
+
+.tn-profile-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: "FSAlbertArabic", sans-serif;
+  font-size: 16px;
+  line-height: 1.15;
+  align-items: flex-start;
+}
+
+.tn-profile-info strong {
+  font-weight: 700;
+  color: #1f2328;
+  margin-top: 2px;
+}
+
+.tn-profile-info small {
+  color: #3e3f3e;
+  font-weight: 400;
+  margin-top: 2px;
+}
+
+.tn-logout-btn {
+  margin-top: 6px;
+  padding: 0;
+  width: fit-content;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: "FSAlbertArabic", sans-serif;
+  background: none;
+  border: none;
+  color: #DA291C;
+  cursor: pointer;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.tn-logout-btn:hover {
+  opacity: 0.85;
+  transform: translateY(-1px);
+}
+
+
+.tn-badge {
+  position: absolute;
+  top: 4px;
+  right: 2px;
+
+  min-width: 15px;
+  height: 18px;
+  padding: 0 6px;
+
+  border-radius: 999px;
+  background: #DA291C;
+  color: #fff;
+
+  font-size: 12px;
+  font-family: "FSAlbertArabic", sans-serif;
+  font-weight: 900;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+}
+

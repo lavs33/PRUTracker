@@ -1,0 +1,49 @@
+.welcome-text {
+  color: #373A36;
+  font-weight: 700;
+  font-size: 36px;
+  font-family: "FSAlbertArabic", sans-serif;
+  text-align: center;
+  margin-top: 100px;
+}
+
+.module-grid {
+  display: flex;
+  justify-content: center;
+  gap: 40px;
+  margin-top: 50px;
+}
+
+.module-card {
+  width: 280px;
+  height: 250px;
+  background-color: #DA291C;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.08);
+}
+
+.module-card:hover {
+  transform: translateY(-6px);
+  box-shadow: 0 12px 22px rgba(84, 84, 84, 0.71);
+}
+
+.module-icon {
+  color: #ffffff;
+  margin-bottom: 15px;
+}
+
+.module-card p {
+  font-size: 18px;
+  font-family: "FSAlbertArabic", sans-serif;
+  font-weight: 600;
+  color: #ffffff;
+  text-align: center;
+  padding: 0 10px;
+
+}

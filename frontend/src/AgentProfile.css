@@ -1,0 +1,151 @@
+.profile-page {
+  padding: 30px 60px;
+  font-family: "FSAlbertArabic", sans-serif;
+  color: #373A36;
+  background-color: #D9E1E2;
+}
+
+.back-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #373A36;
+  padding: 8px;
+  border-radius: 8px;
+}
+
+.back-btn:hover {
+  opacity: 0.85;
+  transform: translateX(-2px);
+}
+
+.profile-header {
+  margin-top: 25px;
+  display: flex;
+  align-items: center;
+  gap: 35px;
+  justify-content: center;
+}
+
+.profile-photo {
+  width: 140px;
+  height: 140px;
+  border: 2px solid #f2f4f5;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.profile-header-info {
+  min-width: 280px;
+  color: #373A36;
+}
+
+.profile-name {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.profile-meta {
+  margin: 6px 0;
+  font-size: 16px;
+  font-weight: 400;
+}
+
+.profile-sections {
+  margin-top: 35px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.profile-card {
+  background-color: #ffffff;
+  border-radius: 14px;
+  padding: 22px 26px;
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.08);
+}
+
+.section-title {
+  margin: 0 0 16px 0;
+  color: #DA291C;
+  font-size: 20px;
+  font-weight: 700;
+  padding-right: 40px;
+}
+
+.info-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 20px 60px;
+}
+
+.info-item {
+  display: flex;
+  gap: 8px;
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.label {
+  font-weight: 700;
+}
+
+.value {
+  font-weight: 500;
+}
+
+.password-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 20px;
+  align-items: center;
+}
+
+.password-input {
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid #e5e5e5;
+  font-size: 14px;
+  font-family: "FSAlbertArabic", sans-serif;
+}
+
+.save-btn {
+  padding: 12px 18px;
+  border-radius: 10px;
+  border: none;
+  background-color: #DA291C;
+  color: #ffffff;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  font-family: "FSAlbertArabic", sans-serif;
+}
+
+.save-btn:hover {
+  opacity: 0.7;
+}
+
+.logout-row {
+  margin-top: 30px;
+  display: flex;
+  justify-content: center;
+}
+
+.logout-main-btn {
+  background-color: #ffffff;
+  border: 2px solid #DA291C;
+  color: #DA291C;
+  font-weight: 700;
+  padding: 12px 22px;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  font-size: 16px;
+  font-family: "FSAlbertArabic", sans-serif;
+}
+
+.logout-main-btn:hover {
+  background-color: #DA291C;
+  color: #ffffff;
+}
