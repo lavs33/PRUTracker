@@ -39,18 +39,31 @@ function AgentLeadEngagement() {
     notes: "",
   });
 
-  // ✅ NEW: attempt warning modal BEFORE opening form
-  const [showAttemptLimitModal, setShowAttemptLimitModal] = useState(false);
-
-  // ✅ NEW: Validate Contact UI
-  const [validateForm, setValidateForm] = useState({
-    phoneValidation: "", // "CORRECT" | "WRONG_CONTACT"
-  });
+  const [validateForm, setValidateForm] = useState({ phoneValidation: "" });
   const [validatingContact, setValidatingContact] = useState(false);
   const [validateError, setValidateError] = useState("");
 
-  // ✅ NEW: Blocked modal (when Wrong Contact is confirmed)
-  const [showBlockedModal, setShowBlockedModal] = useState(false);
+  const [interestForm, setInterestForm] = useState({
+    interestLevel: "",
+    preferredChannel: "",
+    preferredChannelOther: "",
+  });
+  const [savingInterest, setSavingInterest] = useState(false);
+  const [interestError, setInterestError] = useState("");
+
+  const [meetingForm, setMeetingForm] = useState({
+    meetingAt: "",
+    meetingMode: "",
+    meetingPlatform: "",
+    meetingPlatformOther: "",
+    meetingLink: "",
+    meetingInviteSent: false,
+    meetingPlace: "",
+  });
+  const [savingMeeting, setSavingMeeting] = useState(false);
+  const [meetingError, setMeetingError] = useState("");
+
+  const [selectedStageView, setSelectedStageView] = useState("CURRENT");
 
   // Title
   useEffect(() => {
@@ -206,7 +219,15 @@ function AgentLeadEngagement() {
   const prospectName = prospect?.fullName || "—";
   const leadCode = lead?.leadCode || "—";
 
-  const attempts = Array.isArray(engagement?.contactAttempts) ? engagement.contactAttempts : [];
+  const attempts = useMemo(() => {
+    const source = Array.isArray(engagement?.attempts)
+      ? engagement.attempts
+      : Array.isArray(engagement?.contactAttempts)
+      ? engagement.contactAttempts
+      : [];
+    const list = [...source];
+    return list.sort((a, b) => Number(a.attemptNo || 0) - Number(b.attemptNo || 0));
+  }, [engagement?.attempts, engagement?.contactAttempts]);
   const lastAttempt = attempts.length ? attempts[attempts.length - 1] : null;
 
   // UI stage: if there are attempts but backend still says Not Started, show Contacting on UI
@@ -216,16 +237,30 @@ function AgentLeadEngagement() {
   // Not Started => no active pipeline step
   const safeIndex = stage === "Not Started" ? -1 : PIPELINE_STEPS.indexOf(stage);
 
-  // Activity tracker only relevant in Contacting
-  const showContactingTracker = stage === "Contacting";
+  // Stage view behavior:
+  // - CURRENT: follow backend current stage
+  // - explicit stage click: inspect selected stage
+  const viewStage = selectedStageView === "CURRENT" ? stage : selectedStageView;
+  const isViewingCurrentStage = viewStage === stage;
+
+  // Contacting panel is shown only when viewing Contacting stage
+  const showContactingPanel = viewStage === "Contacting";
+
+  // Editable when viewing Contacting while current stage is Contacting,
+  // or when current stage is Not Started and user moved into Contacting view
+  // to create the very first attempt.
+  const isContactingEditableNow = showContactingPanel && (stage === "Contacting" || stage === "Not Started");
+  const isContactingReadOnly = !isContactingEditableNow;
+
+  // Activity tracker only relevant when Contacting panel is shown
+  const showContactingTracker = showContactingPanel;
 
   // Current activity (badge + tracker)
   const currentActivityKeyRaw = String(engagement?.currentActivityKey || "").trim();
 
   
-  // ✅ NEW: block flags
   const isEngagementBlocked = !!engagement?.isBlocked;
-  const uiLocked = isEngagementBlocked; // clearer name
+  const uiLocked = isEngagementBlocked;
 
   const isLastAttemptResponded = lastAttempt?.response === "Responded";
 
@@ -238,9 +273,13 @@ function AgentLeadEngagement() {
   // - last attempt used the CURRENT contact info version
   const showValidateContact =
     !isEngagementBlocked &&
+    isViewingCurrentStage &&
+    showContactingPanel &&
+    !isContactingReadOnly &&
     lastAttempt?.response === "Responded" &&
     Number.isFinite(lastAttemptVersionUsed) &&
-    lastAttemptVersionUsed === currentContactVersion;
+    lastAttemptVersionUsed === currentContactVersion &&
+    currentActivityKeyRaw === "Validate Contact";
 
   const hasOpenApproachTask = useMemo(() => {
       const list = Array.isArray(engagement?.tasks) ? engagement.tasks : [];
@@ -266,20 +305,51 @@ function AgentLeadEngagement() {
     return idx >= 0 ? idx : 0;
   }, [stage, attempts.length, CONTACTING_STEPS_UI, effectiveActivityKey]);
 
+  const addAttemptActivityIndex = useMemo(() => {
+    if (!showAddAttempt) return normalizedActivityIndex;
+
+    if (attemptForm.response !== "Responded") return 0;
+    if (!validateForm.phoneValidation) return 1;
+    if (validateForm.phoneValidation === "WRONG_CONTACT") return 1;
+
+    if (!interestForm.interestLevel) return 2;
+    if (interestForm.interestLevel === "NOT_INTERESTED") return 2;
+
+    return 3;
+  }, [
+    showAddAttempt,
+    normalizedActivityIndex,
+    attemptForm.response,
+    validateForm.phoneValidation,
+    interestForm.interestLevel,
+  ]);
+
   // ✅ Badge label
   const currentActivityLabel = useMemo(() => {
+    if (showAddAttempt) {
+      return CONTACTING_STEPS_UI[addAttemptActivityIndex]?.label || "Attempt Contact";
+    }
+
     if (stage === "Not Started" && attempts.length === 0) return "—";
     if (attempts.length > 0) return effectiveActivityKey || "Attempt Contact";
     return "Attempt Contact";
-  }, [stage, attempts.length, effectiveActivityKey]);
+  }, [
+    showAddAttempt,
+    CONTACTING_STEPS_UI,
+    addAttemptActivityIndex,
+    stage,
+    attempts.length,
+    effectiveActivityKey,
+  ]);
 
-  const mainTitle = stage === "Not Started" ? "Not Started" : stage || "—";
+  const mainTitle = viewStage === "Not Started" ? "Not Started" : viewStage || "—";
 
     // ✅ Add Attempt is allowed ONLY when:
     // - not blocked
     // - and (no responded yet OR re-approach after Wrong Contact)
     // has open approach task
     const canAddAttempt = useMemo(() => {
+    if (isContactingReadOnly) return false;
     if (isEngagementBlocked) return false;
 
     // if they haven't responded yet -> allow attempts
@@ -287,23 +357,18 @@ function AgentLeadEngagement() {
 
     // if they responded, only allow if re-approach conditions are met
     return isReApproachMode;
-  }, [isEngagementBlocked, isLastAttemptResponded, isReApproachMode]);
+  }, [isContactingReadOnly, isEngagementBlocked, isLastAttemptResponded, isReApproachMode]);
 
   const addAttemptDisabledReason = useMemo(() => {
+    if (isContactingReadOnly) return "Contacting stage is read-only.";
     if (isEngagementBlocked) return "Engagement is blocked. Update contact info to continue.";
     if (isLastAttemptResponded && !isReApproachMode)
       return "Prospect already responded. Please validate contact instead.";
     return "";
-  }, [isEngagementBlocked, isLastAttemptResponded, isReApproachMode]);
+  }, [isContactingReadOnly, isEngagementBlocked, isLastAttemptResponded, isReApproachMode]);
 
-
-  // ✅ Auto open/close blocked modal based on backend flag
   useEffect(() => {
-    if (isEngagementBlocked) {
-      setShowBlockedModal(true);
-    } else {
-      setShowBlockedModal(false);
-    }
+    if (isEngagementBlocked) setShowAddAttempt(false);
   }, [isEngagementBlocked]);
 
   // =========================
@@ -315,10 +380,25 @@ function AgentLeadEngagement() {
       primaryChannel: "",
       otherChannels: [],
       response: "",
-      attemptedAtLabel: formatDateTime(new Date()), // show "now", not editable
+      attemptedAtLabel: formatDateTime(new Date()),
       notes: "",
     });
   };
+
+  const resetProgressiveSubForms = () => {
+    setValidateForm({ phoneValidation: "" });
+    setInterestForm({ interestLevel: "", preferredChannel: "", preferredChannelOther: "" });
+    setMeetingForm({
+      meetingAt: "",
+      meetingMode: "",
+      meetingPlatform: "",
+      meetingPlatformOther: "",
+      meetingLink: "",
+      meetingInviteSent: false,
+      meetingPlace: "",
+    });
+  };
+
 
   const validateAttempt = () => {
     const e = {};
@@ -357,67 +437,151 @@ function AgentLeadEngagement() {
     setAttemptErrors((er) => ({ ...er, otherChannels: undefined }));
   };
 
-  // ✅ show warning modal BEFORE opening the form if attempts >= 10
-  const shouldWarnAttemptLimit = useMemo(() => attempts.length >= 10, [attempts.length]);
-
   const onOpenAddAttempt = () => {
-    // If blocked, show blocked modal
-    if (isEngagementBlocked) {
-      setShowBlockedModal(true);
-      return;
-    }
-
-    // If disabled due to responded (not wrong-contact re-approach), do nothing
     if (!canAddAttempt) return;
-
-    if (shouldWarnAttemptLimit) {
-      setShowAttemptLimitModal(true);
-      return;
-    }
-
     setShowAddAttempt(true);
     resetAttemptForm();
+    resetProgressiveSubForms();
   };
 
   const onCancelAddAttempt = () => {
     setShowAddAttempt(false);
     resetAttemptForm();
+    resetProgressiveSubForms();
   };
 
   const onSubmitAttempt = async () => {
-    const errs = validateAttempt();
+    const baseErrors = validateAttempt();
+    const response = String(attemptForm.response || "").trim();
+    const phoneValidation = String(validateForm.phoneValidation || "").trim().toUpperCase();
+    const interestLevel = String(interestForm.interestLevel || "").trim().toUpperCase();
+    const preferredChannel = String(interestForm.preferredChannel || "").trim();
+    const preferredChannelOther = String(interestForm.preferredChannelOther || "").trim();
+    const meetingAt = String(meetingForm.meetingAt || "").trim();
+    const meetingMode = String(meetingForm.meetingMode || "").trim();
+    const meetingPlatform = String(meetingForm.meetingPlatform || "").trim();
+    const meetingPlatformOther = String(meetingForm.meetingPlatformOther || "").trim();
+    const meetingLink = String(meetingForm.meetingLink || "").trim();
+    const meetingPlace = String(meetingForm.meetingPlace || "").trim();
+
+    const errs = { ...baseErrors };
+
+    if (response === "Responded") {
+      if (!phoneValidation) errs.phoneValidation = "Please select phone validation result.";
+
+      if (phoneValidation === "CORRECT") {
+        if (!["INTERESTED", "NOT_INTERESTED"].includes(interestLevel)) {
+          errs.interestLevel = "Please select a valid interest level.";
+        }
+
+        if (interestLevel === "INTERESTED") {
+          if (!["SMS", "WhatsApp", "Viber", "Telegram", "Other"].includes(preferredChannel)) {
+            errs.preferredChannel = "Please select a preferred communication channel.";
+          }
+          if (preferredChannel === "Other" && !preferredChannelOther) {
+            errs.preferredChannelOther = "Please specify the other communication channel.";
+          }
+
+          if (!meetingAt) errs.meetingAt = "Meeting date/time is required.";
+          if (!["Online", "Face-to-face"].includes(meetingMode)) {
+            errs.meetingMode = "Please select meeting mode.";
+          }
+          if (meetingMode === "Online") {
+            if (!["Zoom", "Google Meet", "Other"].includes(meetingPlatform)) {
+              errs.meetingPlatform = "Please select online platform.";
+            }
+            if (meetingPlatform === "Other" && !meetingPlatformOther) {
+              errs.meetingPlatformOther = "Please specify other platform.";
+            }
+            if (!meetingLink) errs.meetingLink = "Meeting link is required for online meetings.";
+          }
+          if (meetingMode === "Face-to-face" && !meetingPlace) {
+            errs.meetingPlace = "Meeting place is required for face-to-face meetings.";
+          }
+        }
+      }
+    }
+
     setAttemptErrors(errs);
     if (Object.keys(errs).length) return;
 
     try {
       setAddingAttempt(true);
 
-      const payload = {
-        primaryChannel: attemptForm.primaryChannel,
-        otherChannels: attemptForm.otherChannels,
-        response: attemptForm.response,
-        notes: String(attemptForm.notes || "").trim(),
-      };
-
       const res = await fetch(
         `${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/contact-attempts?userId=${user.id}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
+          body: JSON.stringify({
+            primaryChannel: attemptForm.primaryChannel,
+            otherChannels: attemptForm.otherChannels,
+            response,
+            notes: String(attemptForm.notes || "").trim(),
+          }),
         }
       );
 
       const data = await res.json();
+      if (!res.ok) throw new Error(data?.message || "Failed to add contact attempt.");
 
-      if (!res.ok) {
-        throw new Error(data?.message || "Failed to add contact attempt.");
+      if (response === "Responded") {
+        const validateRes = await fetch(
+          `${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/validate-contact?userId=${user.id}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ result: phoneValidation }),
+          }
+        );
+        const validateData = await validateRes.json();
+        if (!validateRes.ok) throw new Error(validateData?.message || "Failed to validate contact.");
+
+        if (phoneValidation === "CORRECT") {
+          const interestRes = await fetch(
+            `${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/assess-interest?userId=${user.id}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                interestLevel,
+                preferredChannel: interestLevel === "INTERESTED" ? preferredChannel : undefined,
+                preferredChannelOther:
+                  interestLevel === "INTERESTED" && preferredChannel === "Other" ? preferredChannelOther : undefined,
+              }),
+            }
+          );
+          const interestData = await interestRes.json();
+          if (!interestRes.ok) throw new Error(interestData?.message || "Failed to save assess interest.");
+
+          if (interestLevel === "INTERESTED") {
+            const meetingRes = await fetch(
+              `${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/schedule-meeting?userId=${user.id}`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  meetingAt: new Date(meetingAt).toISOString(),
+                  meetingMode,
+                  meetingPlatform: meetingMode === "Online" ? meetingPlatform : undefined,
+                  meetingPlatformOther:
+                    meetingMode === "Online" && meetingPlatform === "Other" ? meetingPlatformOther : undefined,
+                  meetingLink: meetingMode === "Online" ? meetingLink : undefined,
+                  meetingInviteSent: Boolean(meetingForm.meetingInviteSent),
+                  meetingPlace: meetingMode === "Face-to-face" ? meetingPlace : undefined,
+                }),
+              }
+            );
+            const meetingData = await meetingRes.json();
+            if (!meetingRes.ok) throw new Error(meetingData?.message || "Failed to schedule meeting.");
+          }
+        }
       }
 
       await fetchEngagement();
-
       setShowAddAttempt(false);
       resetAttemptForm();
+      resetProgressiveSubForms();
     } catch (err) {
       setAttemptErrors((er) => ({
         ...er,
@@ -428,27 +592,12 @@ function AgentLeadEngagement() {
     }
   };
 
-  // =========================
-  // ✅ Validate Contact submit
-  // =========================
   const submitValidateContact = async () => {
     try {
       setValidateError("");
-
-      const result = String(validateForm.phoneValidation || "").trim();
+      const result = String(validateForm.phoneValidation || "").trim().toUpperCase();
       if (!result) {
         setValidateError("Please select a validation result.");
-        return;
-      }
-
-      // ✅ If Correct: no backend route needed yet (your backend only handles WRONG_CONTACT)
-      if (result === "CORRECT") {
-        // Optionally you can also move UI forward (ex: show badge/step change) later,
-        // but safest is: just clear the validate UI and let user continue attempts/next steps.
-        setValidateForm({ phoneValidation: "" });
-        setValidateError("");
-        // If you want, you can also refetch just to sync, but not required:
-        // await fetchEngagement();
         return;
       }
 
@@ -473,6 +622,129 @@ function AgentLeadEngagement() {
       setValidateError(err?.message || "Cannot connect to server. Is backend running?");
     } finally {
       setValidatingContact(false);
+    }
+  };
+
+  const submitAssessInterest = async () => {
+    try {
+      setInterestError("");
+
+      const interestLevel = String(interestForm.interestLevel || "").trim().toUpperCase();
+      if (!["INTERESTED", "NOT_INTERESTED"].includes(interestLevel)) {
+        setInterestError("Please select a valid interest level.");
+        return;
+      }
+
+      if (interestLevel === "INTERESTED") {
+        const pc = String(interestForm.preferredChannel || "").trim();
+        if (!["SMS", "WhatsApp", "Viber", "Telegram", "Other"].includes(pc)) {
+          setInterestError("Please select a preferred communication channel.");
+          return;
+        }
+        if (pc === "Other" && !String(interestForm.preferredChannelOther || "").trim()) {
+          setInterestError("Please specify the other communication channel.");
+          return;
+        }
+      }
+
+      setSavingInterest(true);
+
+      const res = await fetch(
+        `${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/assess-interest?userId=${user.id}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            interestLevel,
+            preferredChannel:
+              interestLevel === "INTERESTED" ? String(interestForm.preferredChannel || "").trim() : undefined,
+            preferredChannelOther:
+              interestLevel === "INTERESTED" && interestForm.preferredChannel === "Other"
+                ? String(interestForm.preferredChannelOther || "").trim()
+                : undefined,
+          }),
+        }
+      );
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.message || "Failed to save assess interest.");
+
+      await fetchEngagement();
+    } catch (err) {
+      setInterestError(err?.message || "Cannot connect to server. Is backend running?");
+    } finally {
+      setSavingInterest(false);
+    }
+  };
+
+  const submitScheduleMeeting = async () => {
+    try {
+      setMeetingError("");
+
+      const meetingAt = String(meetingForm.meetingAt || "").trim();
+      const meetingMode = String(meetingForm.meetingMode || "").trim();
+
+      if (!meetingAt) {
+        setMeetingError("Meeting date/time is required.");
+        return;
+      }
+
+      if (!["Online", "Face-to-face"].includes(meetingMode)) {
+        setMeetingError("Please select meeting mode.");
+        return;
+      }
+
+      if (meetingMode === "Online") {
+        const platform = String(meetingForm.meetingPlatform || "").trim();
+        if (!["Zoom", "Google Meet", "Other"].includes(platform)) {
+          setMeetingError("Please select online platform.");
+          return;
+        }
+        if (platform === "Other" && !String(meetingForm.meetingPlatformOther || "").trim()) {
+          setMeetingError("Please specify other platform.");
+          return;
+        }
+        if (!String(meetingForm.meetingLink || "").trim()) {
+          setMeetingError("Meeting link is required for online meetings.");
+          return;
+        }
+      }
+
+      if (meetingMode === "Face-to-face" && !String(meetingForm.meetingPlace || "").trim()) {
+        setMeetingError("Meeting place is required for face-to-face meetings.");
+        return;
+      }
+
+      setSavingMeeting(true);
+
+      const res = await fetch(
+        `${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/schedule-meeting?userId=${user.id}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            meetingAt: new Date(meetingAt).toISOString(),
+            meetingMode,
+            meetingPlatform: meetingMode === "Online" ? String(meetingForm.meetingPlatform || "").trim() : undefined,
+            meetingPlatformOther:
+              meetingMode === "Online" && meetingForm.meetingPlatform === "Other"
+                ? String(meetingForm.meetingPlatformOther || "").trim()
+                : undefined,
+            meetingLink: meetingMode === "Online" ? String(meetingForm.meetingLink || "").trim() : undefined,
+            meetingInviteSent: Boolean(meetingForm.meetingInviteSent),
+            meetingPlace: meetingMode === "Face-to-face" ? String(meetingForm.meetingPlace || "").trim() : undefined,
+          }),
+        }
+      );
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.message || "Failed to schedule meeting.");
+
+      await fetchEngagement();
+    } catch (err) {
+      setMeetingError(err?.message || "Cannot connect to server. Is backend running?");
+    } finally {
+      setSavingMeeting(false);
     }
   };
 
@@ -742,7 +1014,19 @@ function AgentLeadEngagement() {
                   const isDone = safeIndex > i;
 
                   return (
-                    <div key={step} className="le-pipelineGroup">
+                    <div
+                      key={step}
+                      className="le-pipelineGroup"
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setSelectedStageView(step)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          setSelectedStageView(step);
+                        }
+                      }}
+                    >
                       <div className={`le-pipelineStep ${isActive ? "active" : ""} ${isDone ? "done" : ""}`}>
                         <div className="le-stepCircle">{i + 1}</div>
                         <span className="le-stepText">{step}</span>
@@ -766,16 +1050,33 @@ function AgentLeadEngagement() {
                 <section className="le-card">
                   <div className="le-cardHeader">
                     <h2 className="le-cardTitle">{mainTitle}</h2>
-                    <span className="le-badge">{currentActivityLabel}</span>
+                    {showContactingPanel ? <span className="le-badge">{currentActivityLabel}</span> : null}
                   </div>
 
-                  {/* Tracker */}
+                  {stage === "Not Started" && (
+                    <p className="le-muted" style={{ marginTop: 10 }}>
+                      No engagement activity yet. Move to Contacting to start.
+                    </p>
+                  )}
+                  
+                  {!isViewingCurrentStage && (
+                    <p className="le-muted" style={{ marginTop: 8, marginBottom: 10 }}>
+                      You are viewing a non-current stage. This section is read-only.
+                    </p>
+                  )}
+
                   {showContactingTracker && (
                     <div className="le-activityTracker">
                       {CONTACTING_STEPS_UI.map((s, idx) => {
-                        const isActive = normalizedActivityIndex === idx;
+                        const trackerIndex = showAddAttempt ? addAttemptActivityIndex : normalizedActivityIndex;
+                        const isActiveCurrent = trackerIndex === idx;
+                        const isCompleted = trackerIndex > idx;
+                        const isReached = trackerIndex >= idx;
                         return (
-                          <span key={s.key} className={isActive ? "active" : ""}>
+                          <span
+                            key={s.key}
+                            className={`${isReached ? "active" : ""} ${isCompleted ? "done" : ""} ${isActiveCurrent ? "current" : ""}`.trim()}
+                          >
                             {s.label}
                           </span>
                         );
@@ -783,283 +1084,915 @@ function AgentLeadEngagement() {
                     </div>
                   )}
 
-                  {/* Contact Attempts block */}
-                  <div className="le-block">
-                    <div className="le-blockHeader">
-                      <h4 className="le-blockTitle">
-                        {attempts.length > 0 ? "Contact Attempts" : "Add a Contact Attempt"}
-                      </h4>
-
-                      {!showAddAttempt ? (
-                        <button
-                          type="button"
-                          className="le-btn secondary"
-                          onClick={onOpenAddAttempt}
-                          disabled={addingAttempt || !canAddAttempt}
-                          title={addAttemptDisabledReason || "Add Attempt"}
-                        >
-                          + Add Attempt
-                        </button>
-                      ) : null}
-                    </div>
-
-                    {showAddAttempt && (
-                      <div className="le-inlineForm">
-                        {attemptErrors._global ? (
-                          <div className="le-formError" style={{ color: "#DA291C", marginBottom: 10 }}>
-                            {attemptErrors._global}
-                          </div>
-                        ) : null}
-
-                        <div className="le-formRow">
-                          <label className="le-label">Attempt No.</label>
-                          <input className="le-input" value={`#${nextAttemptNo}`} disabled />
-                        </div>
-
-                        <div className="le-formRow">
-                          <label className="le-label">Primary Channel *</label>
-                          <select
-                            className={`le-input ${attemptErrors.primaryChannel ? "error" : ""}`}
-                            value={attemptForm.primaryChannel}
-                            onChange={(e) => {
-                              const v = e.target.value;
-                              setAttemptForm((f) => ({
-                                ...f,
-                                primaryChannel: v,
-                                otherChannels: (f.otherChannels || []).filter((x) => x !== v),
-                              }));
-                              setAttemptErrors((er) => ({ ...er, primaryChannel: undefined, otherChannels: undefined }));
-                            }}
-                            disabled={addingAttempt}
-                          >
-                            <option value="">Select</option>
-                            {CHANNELS.map((c) => (
-                              <option key={c} value={c}>
-                                {c}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                        {attemptErrors.primaryChannel ? (
-                          <div className="le-smallNote" style={{ color: "#DA291C" }}>
-                            {attemptErrors.primaryChannel}
-                          </div>
-                        ) : null}
-
-                        <div className="le-formRow" style={{ alignItems: "flex-start" }}>
-                          <label className="le-label">Other Channels</label>
-                          <div className="le-checkboxGrid">
-                            {CHANNELS.filter((c) => c !== attemptForm.primaryChannel).map((c) => (
-                              <label key={c} className="le-check">
-                                <input
-                                  type="checkbox"
-                                  checked={(attemptForm.otherChannels || []).includes(c)}
-                                  onChange={() => toggleOtherChannel(c)}
-                                  disabled={addingAttempt}
-                                />
-                                <span>{c}</span>
-                              </label>
-                            ))}
-                          </div>
-                        </div>
-                        {attemptErrors.otherChannels ? (
-                          <div className="le-smallNote" style={{ color: "#DA291C" }}>
-                            {attemptErrors.otherChannels}
-                          </div>
-                        ) : null}
-
-                        <div className="le-formRow">
-                          <label className="le-label">Attempted At</label>
-                          <input className="le-input" value={attemptForm.attemptedAtLabel || "—"} disabled />
-                        </div>
-
-                        <div className="le-formRow">
-                          <label className="le-label">Response *</label>
-                          <select
-                            className={`le-input ${attemptErrors.response ? "error" : ""}`}
-                            value={attemptForm.response}
-                            onChange={(e) => {
-                              setAttemptForm((f) => ({ ...f, response: e.target.value }));
-                              setAttemptErrors((er) => ({ ...er, response: undefined }));
-                            }}
-                            disabled={addingAttempt}
-                          >
-                            <option value="">Select</option>
-                            {RESPONSES.map((r) => (
-                              <option key={r} value={r}>
-                                {r}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                        {attemptErrors.response ? (
-                          <div className="le-smallNote" style={{ color: "#DA291C" }}>
-                            {attemptErrors.response}
-                          </div>
-                        ) : null}
-
-                        <div className="le-formRow" style={{ alignItems: "flex-start" }}>
-                          <label className="le-label">Notes</label>
-                          <textarea
-                            className="le-input"
-                            value={attemptForm.notes}
-                            onChange={(e) => setAttemptForm((f) => ({ ...f, notes: e.target.value }))}
-                            rows={3}
-                            disabled={addingAttempt}
-                            placeholder="Optional notes..."
-                          />
-                        </div>
-
-                        <div className="le-actions">
-                          <button
-                            type="button"
-                            className="le-btn secondary"
-                            onClick={onCancelAddAttempt}
-                            disabled={addingAttempt}
-                          >
-                            Cancel
-                          </button>
-                          <button
-                            type="button"
-                            className="le-btn primary"
-                            onClick={onSubmitAttempt}
-                            disabled={addingAttempt}
-                          >
-                            {addingAttempt ? "Saving..." : "Save Attempt"}
-                          </button>
-                        </div>
-                      </div>
-                    )}
-
-                    {showAddAttempt && attempts.length > 0 && (
-                      <div className="le-dividerWrapper">
-                        <div className="le-divider" />
-                        <span className="le-dividerLabel">Previous Attempts</span>
-                        <div className="le-divider" />
-                      </div>
-                    )}
-
-                    <div className="le-attemptList">
-                      {attempts.map((a) => (
-                        <div key={a.attemptNo} className="le-attemptItem">
-                          <div className="le-attemptTop">
-                            <strong>Attempt #{a.attemptNo}</strong>
-                            <span className="le-attemptDate">{formatDateTime(a.attemptedAt)}</span>
-                          </div>
-
-                          <div className="le-attemptMeta">
-                            <div>
-                              <span className="le-metaLabel">Primary Channel</span>
-                              <span className="le-metaValue">{a.primaryChannel}</span>
-                            </div>
-
-                            <div>
-                              <span className="le-metaLabel">Others</span>
-                              <span className="le-metaValue">
-                                {a.otherChannels?.length ? a.otherChannels.join(", ") : "—"}
-                              </span>
-                            </div>
-
-                            <div>
-                              <span className="le-metaLabel">Result</span>
-                              <span className="le-metaValue">{a.response}</span>
-                            </div>
-
-                            <div>
-                              <span className="le-metaLabel">Phone No. Ver. Used</span>
-                              <span className="le-metaValue">{a.contactInfoVersionUsed ?? "—"}</span>
-                            </div>
-                          </div>
-
-                          {String(a.notes || "").trim() ? (
-                            <div className="le-attemptNotes">
-                              <span className="le-metaLabel">Notes</span>
-                              <div className="le-metaValue">{a.notes}</div>
-                            </div>
-                          ) : null}
-                        </div>
-                      ))}
-
-                      {!showAddAttempt && attempts.length === 0 && (
-                        <div className="le-muted" style={{ padding: "10px 0" }}>
-                          No contact attempts yet.
-                        </div>
-                      )}
-                    </div>
-
-                    {!showAddAttempt && attempts.length === 0 && (
-                      <p className="le-muted">Next Step: Create your first contact attempt to start engagement.</p>
-                    )}
-                  </div>
-
-                  {/* ✅ Read-only validation indicator when blocked / wrong contact already confirmed */}
-                  {isEngagementBlocked && (
-                    <div className="le-block">
-                      <h4 className="le-blockTitle">Validate Contact</h4>
-
-                      <div className="le-formRow">
-                        <label className="le-label">Phone Number Correct?</label>
-                        <select className="le-input" value="WRONG_CONTACT" disabled>
-                          <option value="WRONG_CONTACT">Wrong</option>
-                        </select>
-                      </div>
-
-                      <p className="le-muted" style={{ marginTop: 8 }}>
-                        Contact was marked wrong. Update phone number to continue.
-                      </p>
-                    </div>
+                  {showContactingPanel && isContactingReadOnly && (
+                    <p className="le-muted" style={{ marginBottom: 10 }}>
+                      Contacting records are view-only at this stage. Add Attempt and edits are disabled.
+                    </p>
                   )}
 
-                  {/* Validate Contact */}
-                  {showValidateContact && (
-                    <div className="le-block">
-                      <h4 className="le-blockTitle">Validate Contact</h4>
+                  {showContactingPanel && (
+                    <>
+                      <div className="le-block">
+                        <div className="le-blockHeader">
+                          <h4 className="le-blockTitle">{attempts.length > 0 ? "Contact Attempts" : "Add a Contact Attempt"}</h4>
 
-                      {validateError ? (
-                        <div className="le-formError" style={{ color: "#DA291C", marginBottom: 10 }}>
-                          {validateError}
+                          {!showAddAttempt ? (
+                            <button
+                              type="button"
+                              className="le-btn secondary"
+                              onClick={onOpenAddAttempt}
+                              disabled={addingAttempt || !canAddAttempt}
+                              title={addAttemptDisabledReason || "Add Attempt"}
+                            >
+                              + Add Attempt
+                            </button>
+                          ) : null}
                         </div>
-                      ) : null}
 
-                      <div className="le-formRow">
-                        <label className="le-label">Phone Number Correct?</label>
-                        <select
-                          className="le-input"
-                          value={validateForm.phoneValidation}
-                          onChange={(e) => {
-                            setValidateForm({ phoneValidation: e.target.value });
-                            setValidateError("");
-                          }}
-                          disabled={validatingContact || uiLocked}
-                        >
-                          <option value="">Select</option>
-                          <option value="CORRECT">Correct</option>
-                          <option value="WRONG_CONTACT">Wrong</option>
-                        </select>
+                        {showAddAttempt && (
+                          <div className="le-inlineForm">
+                            {attemptErrors._global ? (
+                              <div className="le-formError" style={{ color: "#DA291C", marginBottom: 10 }}>
+                                {attemptErrors._global}
+                              </div>
+                            ) : null}
+
+                            <div className="le-activitySectionHeader">1. Attempt Contact</div>
+
+                            <div className="le-formRow">
+                              <label className="le-label">Attempt No.</label>
+                              <input className="le-input" value={`#${nextAttemptNo}`} disabled />
+                            </div>
+
+                            <div className="le-formRow">
+                              <label className="le-label">Primary Channel *</label>
+                              <select
+                                className={`le-input ${attemptErrors.primaryChannel ? "error" : ""}`}
+                                value={attemptForm.primaryChannel}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  setAttemptForm((f) => ({
+                                    ...f,
+                                    primaryChannel: v,
+                                    otherChannels: (f.otherChannels || []).filter((x) => x !== v),
+                                  }));
+                                  setAttemptErrors((er) => ({
+                                    ...er,
+                                    primaryChannel: undefined,
+                                    otherChannels: undefined,
+                                  }));
+                                }}
+                                disabled={addingAttempt}
+                              >
+                                <option value="">Select</option>
+                                {CHANNELS.map((c) => (
+                                  <option key={c} value={c}>
+                                    {c}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+
+                            {attemptErrors.primaryChannel ? (
+                              <div className="le-smallNote" style={{ color: "#DA291C" }}>
+                                {attemptErrors.primaryChannel}
+                              </div>
+                            ) : null}
+
+                            <div className="le-formRow" style={{ alignItems: "flex-start" }}>
+                              <label className="le-label">Other Channels</label>
+                              <div className="le-checkboxGrid">
+                                {CHANNELS.filter((c) => c !== attemptForm.primaryChannel).map((c) => (
+                                  <label key={c} className="le-check">
+                                    <input
+                                      type="checkbox"
+                                      checked={(attemptForm.otherChannels || []).includes(c)}
+                                      onChange={() => toggleOtherChannel(c)}
+                                      disabled={addingAttempt}
+                                    />
+                                    <span>{c}</span>
+                                  </label>
+                                ))}
+                              </div>
+                            </div>
+
+                            <div className="le-formRow">
+                              <label className="le-label">Attempted At</label>
+                              <input className="le-input" value={attemptForm.attemptedAtLabel || "—"} disabled />
+                            </div>
+
+                            <div className="le-formRow">
+                              <label className="le-label">Response *</label>
+                              <select
+                                className={`le-input ${attemptErrors.response ? "error" : ""}`}
+                                value={attemptForm.response}
+                                onChange={(e) => {
+                                  const nextResponse = e.target.value;
+                                  setAttemptForm((f) => ({ ...f, response: nextResponse }));
+                                  if (nextResponse !== "Responded") {
+                                    resetProgressiveSubForms();
+                                  }
+                                  setAttemptErrors((er) => ({
+                                    ...er,
+                                    response: undefined,
+                                    phoneValidation: undefined,
+                                    interestLevel: undefined,
+                                    preferredChannel: undefined,
+                                    preferredChannelOther: undefined,
+                                    meetingAt: undefined,
+                                    meetingMode: undefined,
+                                    meetingPlatform: undefined,
+                                    meetingPlatformOther: undefined,
+                                    meetingLink: undefined,
+                                    meetingPlace: undefined,
+                                  }));
+                                }}
+                                disabled={addingAttempt}
+                              >
+                                <option value="">Select</option>
+                                {RESPONSES.map((r) => (
+                                  <option key={r} value={r}>
+                                    {r}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+
+                            {attemptErrors.response ? (
+                              <div className="le-smallNote" style={{ color: "#DA291C" }}>
+                                {attemptErrors.response}
+                              </div>
+                            ) : null}
+
+                            <div className="le-formRow" style={{ alignItems: "flex-start" }}>
+                              <label className="le-label">Attempt Contact Notes</label>
+                              <textarea
+                                className="le-input"
+                                value={attemptForm.notes}
+                                onChange={(e) => setAttemptForm((f) => ({ ...f, notes: e.target.value }))}
+                                rows={3}
+                                disabled={addingAttempt}
+                                placeholder="Optional notes for Attempt Contact..."
+                              />
+                            </div>
+
+                            {attemptForm.response === "Responded" && (
+                              <>
+                                <div className="le-activitySectionHeader">2. Validate Contact</div>
+
+                                <div className="le-formRow">
+                                  <label className="le-label">Phone Number Correct? *</label>
+                                  <select
+                                    className={`le-input ${attemptErrors.phoneValidation ? "error" : ""}`}
+                                    value={validateForm.phoneValidation}
+                                    onChange={(e) => {
+                                      const nextValidation = e.target.value;
+                                      setValidateForm({ phoneValidation: nextValidation });
+                                      if (nextValidation !== "CORRECT") {
+                                        setInterestForm({ interestLevel: "", preferredChannel: "", preferredChannelOther: "" });
+                                        setMeetingForm({
+                                          meetingAt: "",
+                                          meetingMode: "",
+                                          meetingPlatform: "",
+                                          meetingPlatformOther: "",
+                                          meetingLink: "",
+                                          meetingInviteSent: false,
+                                          meetingPlace: "",
+                                        });
+                                      }
+                                      setAttemptErrors((er) => ({
+                                        ...er,
+                                        phoneValidation: undefined,
+                                        interestLevel: undefined,
+                                        preferredChannel: undefined,
+                                        preferredChannelOther: undefined,
+                                        meetingAt: undefined,
+                                        meetingMode: undefined,
+                                        meetingPlatform: undefined,
+                                        meetingPlatformOther: undefined,
+                                        meetingLink: undefined,
+                                        meetingPlace: undefined,
+                                      }));
+                                    }}
+                                    disabled={addingAttempt}
+                                  >
+                                    <option value="">Select</option>
+                                    <option value="CORRECT">Correct</option>
+                                    <option value="WRONG_CONTACT">Wrong</option>
+                                  </select>
+                                </div>
+
+                                {attemptErrors.phoneValidation ? (
+                                  <div className="le-smallNote" style={{ color: "#DA291C" }}>
+                                    {attemptErrors.phoneValidation}
+                                  </div>
+                                ) : null}
+                              </>
+                            )}
+
+                            {attemptForm.response === "Responded" && validateForm.phoneValidation === "CORRECT" && (
+                              <>
+                                <div className="le-activitySectionHeader">3. Assess Interest</div>
+
+                                <div className="le-formRow">
+                                  <label className="le-label">Interest Level *</label>
+                                  <select
+                                    className={`le-input ${attemptErrors.interestLevel ? "error" : ""}`}
+                                    value={interestForm.interestLevel}
+                                    onChange={(e) => {
+                                      const nextInterestLevel = e.target.value;
+                                      setInterestForm((f) => ({
+                                        ...f,
+                                        interestLevel: nextInterestLevel,
+                                        preferredChannel: "",
+                                        preferredChannelOther: "",
+                                      }));
+                                      if (nextInterestLevel !== "INTERESTED") {
+                                        setMeetingForm({
+                                          meetingAt: "",
+                                          meetingMode: "",
+                                          meetingPlatform: "",
+                                          meetingPlatformOther: "",
+                                          meetingLink: "",
+                                          meetingInviteSent: false,
+                                          meetingPlace: "",
+                                        });
+                                      }
+                                      setAttemptErrors((er) => ({
+                                        ...er,
+                                        interestLevel: undefined,
+                                        preferredChannel: undefined,
+                                        preferredChannelOther: undefined,
+                                        meetingAt: undefined,
+                                        meetingMode: undefined,
+                                        meetingPlatform: undefined,
+                                        meetingPlatformOther: undefined,
+                                        meetingLink: undefined,
+                                        meetingPlace: undefined,
+                                      }));
+                                    }}
+                                    disabled={addingAttempt}
+                                  >
+                                    <option value="">Select</option>
+                                    <option value="INTERESTED">Interested</option>
+                                    <option value="NOT_INTERESTED">Not Interested</option>
+                                  </select>
+                                </div>
+
+                                {attemptErrors.interestLevel ? (
+                                  <div className="le-smallNote" style={{ color: "#DA291C" }}>
+                                    {attemptErrors.interestLevel}
+                                  </div>
+                                ) : null}
+                              </>
+                            )}
+
+                            {attemptForm.response === "Responded" &&
+                              validateForm.phoneValidation === "CORRECT" &&
+                              interestForm.interestLevel === "INTERESTED" && (
+                                <>
+                                  <div className="le-activitySectionHeader">4. Schedule Meeting</div>
+
+                                  <div className="le-formRow">
+                                    <label className="le-label">Preferred Communication Channel *</label>
+                                    <select
+                                      className={`le-input ${attemptErrors.preferredChannel ? "error" : ""}`}
+                                      value={interestForm.preferredChannel}
+                                      onChange={(e) => {
+                                        setInterestForm((f) => ({ ...f, preferredChannel: e.target.value }));
+                                        setAttemptErrors((er) => ({
+                                          ...er,
+                                          preferredChannel: undefined,
+                                          preferredChannelOther: undefined,
+                                        }));
+                                      }}
+                                      disabled={addingAttempt}
+                                    >
+                                      <option value="">Select</option>
+                                      <option value="SMS">SMS</option>
+                                      <option value="WhatsApp">WhatsApp</option>
+                                      <option value="Viber">Viber</option>
+                                      <option value="Telegram">Telegram</option>
+                                      <option value="Other">Other</option>
+                                    </select>
+                                  </div>
+
+                                  {attemptErrors.preferredChannel ? (
+                                    <div className="le-smallNote" style={{ color: "#DA291C" }}>
+                                      {attemptErrors.preferredChannel}
+                                    </div>
+                                  ) : null}
+
+                                  {interestForm.preferredChannel === "Other" && (
+                                    <div className="le-formRow">
+                                      <label className="le-label">Other Channel *</label>
+                                      <input
+                                        className={`le-input ${attemptErrors.preferredChannelOther ? "error" : ""}`}
+                                        value={interestForm.preferredChannelOther}
+                                        onChange={(e) => {
+                                          setInterestForm((f) => ({ ...f, preferredChannelOther: e.target.value }));
+                                          setAttemptErrors((er) => ({ ...er, preferredChannelOther: undefined }));
+                                        }}
+                                        disabled={addingAttempt}
+                                      />
+                                    </div>
+                                  )}
+
+                                  {attemptErrors.preferredChannelOther ? (
+                                    <div className="le-smallNote" style={{ color: "#DA291C" }}>
+                                      {attemptErrors.preferredChannelOther}
+                                    </div>
+                                  ) : null}
+
+                                  <div className="le-formRow">
+                                    <label className="le-label">Meeting Date & Time *</label>
+                                    <input
+                                      type="datetime-local"
+                                      className={`le-input ${attemptErrors.meetingAt ? "error" : ""}`}
+                                      value={meetingForm.meetingAt}
+                                      onChange={(e) => {
+                                        setMeetingForm((f) => ({ ...f, meetingAt: e.target.value }));
+                                        setAttemptErrors((er) => ({ ...er, meetingAt: undefined }));
+                                      }}
+                                      disabled={addingAttempt}
+                                    />
+                                  </div>
+
+                                  {attemptErrors.meetingAt ? (
+                                    <div className="le-smallNote" style={{ color: "#DA291C" }}>
+                                      {attemptErrors.meetingAt}
+                                    </div>
+                                  ) : null}
+
+                                  <div className="le-formRow">
+                                    <label className="le-label">Meeting Mode *</label>
+                                    <select
+                                      className={`le-input ${attemptErrors.meetingMode ? "error" : ""}`}
+                                      value={meetingForm.meetingMode}
+                                      onChange={(e) => {
+                                        setMeetingForm((f) => ({
+                                          ...f,
+                                          meetingMode: e.target.value,
+                                          meetingPlatform: "",
+                                          meetingPlatformOther: "",
+                                          meetingLink: "",
+                                          meetingPlace: "",
+                                        }));
+                                        setAttemptErrors((er) => ({
+                                          ...er,
+                                          meetingMode: undefined,
+                                          meetingPlatform: undefined,
+                                          meetingPlatformOther: undefined,
+                                          meetingLink: undefined,
+                                          meetingPlace: undefined,
+                                        }));
+                                      }}
+                                      disabled={addingAttempt}
+                                    >
+                                      <option value="">Select</option>
+                                      <option value="Online">Online</option>
+                                      <option value="Face-to-face">Face-to-face</option>
+                                    </select>
+                                  </div>
+
+                                  {attemptErrors.meetingMode ? (
+                                    <div className="le-smallNote" style={{ color: "#DA291C" }}>
+                                      {attemptErrors.meetingMode}
+                                    </div>
+                                  ) : null}
+
+                                  {meetingForm.meetingMode === "Online" && (
+                                    <>
+                                      <div className="le-formRow">
+                                        <label className="le-label">Platform *</label>
+                                        <select
+                                          className={`le-input ${attemptErrors.meetingPlatform ? "error" : ""}`}
+                                          value={meetingForm.meetingPlatform}
+                                          onChange={(e) => {
+                                            setMeetingForm((f) => ({ ...f, meetingPlatform: e.target.value }));
+                                            setAttemptErrors((er) => ({
+                                              ...er,
+                                              meetingPlatform: undefined,
+                                              meetingPlatformOther: undefined,
+                                            }));
+                                          }}
+                                          disabled={addingAttempt}
+                                        >
+                                          <option value="">Select</option>
+                                          <option value="Zoom">Zoom</option>
+                                          <option value="Google Meet">Google Meet</option>
+                                          <option value="Other">Other</option>
+                                        </select>
+                                      </div>
+
+                                      {attemptErrors.meetingPlatform ? (
+                                        <div className="le-smallNote" style={{ color: "#DA291C" }}>
+                                          {attemptErrors.meetingPlatform}
+                                        </div>
+                                      ) : null}
+
+                                      {meetingForm.meetingPlatform === "Other" && (
+                                        <div className="le-formRow">
+                                          <label className="le-label">Other Platform *</label>
+                                          <input
+                                            className={`le-input ${attemptErrors.meetingPlatformOther ? "error" : ""}`}
+                                            value={meetingForm.meetingPlatformOther}
+                                            onChange={(e) => {
+                                              setMeetingForm((f) => ({ ...f, meetingPlatformOther: e.target.value }));
+                                              setAttemptErrors((er) => ({ ...er, meetingPlatformOther: undefined }));
+                                            }}
+                                            disabled={addingAttempt}
+                                          />
+                                        </div>
+                                      )}
+
+                                      {attemptErrors.meetingPlatformOther ? (
+                                        <div className="le-smallNote" style={{ color: "#DA291C" }}>
+                                          {attemptErrors.meetingPlatformOther}
+                                        </div>
+                                      ) : null}
+
+                                      <div className="le-formRow">
+                                        <label className="le-label">Meeting Link *</label>
+                                        <input
+                                          className={`le-input ${attemptErrors.meetingLink ? "error" : ""}`}
+                                          value={meetingForm.meetingLink}
+                                          onChange={(e) => {
+                                            setMeetingForm((f) => ({ ...f, meetingLink: e.target.value }));
+                                            setAttemptErrors((er) => ({ ...er, meetingLink: undefined }));
+                                          }}
+                                          disabled={addingAttempt}
+                                          placeholder="https://..."
+                                        />
+                                      </div>
+
+                                      {attemptErrors.meetingLink ? (
+                                        <div className="le-smallNote" style={{ color: "#DA291C" }}>
+                                          {attemptErrors.meetingLink}
+                                        </div>
+                                      ) : null}
+                                    </>
+                                  )}
+
+                                  {meetingForm.meetingMode === "Face-to-face" && (
+                                    <div className="le-formRow">
+                                      <label className="le-label">Meeting Place *</label>
+                                      <input
+                                        className={`le-input ${attemptErrors.meetingPlace ? "error" : ""}`}
+                                        value={meetingForm.meetingPlace}
+                                        onChange={(e) => {
+                                          setMeetingForm((f) => ({ ...f, meetingPlace: e.target.value }));
+                                          setAttemptErrors((er) => ({ ...er, meetingPlace: undefined }));
+                                        }}
+                                        disabled={addingAttempt}
+                                      />
+                                    </div>
+                                  )}
+
+                                  {attemptErrors.meetingPlace ? (
+                                    <div className="le-smallNote" style={{ color: "#DA291C" }}>
+                                      {attemptErrors.meetingPlace}
+                                    </div>
+                                  ) : null}
+                                </>
+                              )}
+
+                            <div className="le-actions">
+                              <button type="button" className="le-btn secondary" onClick={onCancelAddAttempt} disabled={addingAttempt}>
+                                Cancel
+                              </button>
+                              <button type="button" className="le-btn primary" onClick={onSubmitAttempt} disabled={addingAttempt}>
+                                {addingAttempt ? "Saving..." : "Save"}
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="le-attemptList">
+                          {attempts.map((a) => {
+                            const hasPhoneValidation = !!String(a.phoneValidation || "").trim();
+                            const hasInterest = !!String(a.interestLevel || "").trim();
+                            const hasPreferredChannel = !!String(a.preferredChannel || "").trim();
+                            const hasMeetingData =
+                              !!a.meetingAt ||
+                              !!String(a.meetingMode || "").trim() ||
+                              !!String(a.meetingPlatform || "").trim() ||
+                              !!String(a.meetingPlatformOther || "").trim() ||
+                              !!String(a.meetingLink || "").trim() ||
+                              !!String(a.meetingPlace || "").trim();
+
+                            return (
+                              <div key={a.attemptNo} className="le-attemptItem">
+                                <div className="le-attemptTop">
+                                  <strong>Attempt #{a.attemptNo}</strong>
+                                  <span className="le-attemptDate">{formatDateTime(a.attemptedAt)}</span>
+                                </div>
+
+                                <div className="le-attemptMeta">
+                                  <div>
+                                    <span className="le-metaLabel">Primary Channel</span>
+                                    <span className="le-metaValue">{a.primaryChannel}</span>
+                                  </div>
+                                  <div>
+                                    <span className="le-metaLabel">Others</span>
+                                    <span className="le-metaValue">
+                                      {a.otherChannels?.length ? a.otherChannels.join(", ") : "—"}
+                                    </span>
+                                  </div>
+                                  <div>
+                                    <span className="le-metaLabel">Result</span>
+                                    <span className="le-metaValue">{a.response}</span>
+                                  </div>
+                                  <div>
+                                    <span className="le-metaLabel">Phone No. Ver. Used</span>
+                                    <span className="le-metaValue">{a.contactInfoVersionUsed ?? "—"}</span>
+                                  </div>
+
+                                  {hasPhoneValidation ? (
+                                    <div>
+                                      <span className="le-metaLabel">Phone Validation</span>
+                                      <span className="le-metaValue">{a.phoneValidation}</span>
+                                    </div>
+                                  ) : null}
+
+                                  {hasInterest ? (
+                                    <div>
+                                      <span className="le-metaLabel">Interest Level</span>
+                                      <span className="le-metaValue">{a.interestLevel}</span>
+                                    </div>
+                                  ) : null}
+
+                                  {hasPreferredChannel ? (
+                                    <div>
+                                      <span className="le-metaLabel">Preferred Channel</span>
+                                      <span className="le-metaValue">{a.preferredChannel}</span>
+                                    </div>
+                                  ) : null}
+
+                                  {String(a.preferredChannelOther || "").trim() ? (
+                                    <div>
+                                      <span className="le-metaLabel">Preferred Channel (Other)</span>
+                                      <span className="le-metaValue">{a.preferredChannelOther}</span>
+                                    </div>
+                                  ) : null}
+
+                                  {hasMeetingData ? (
+                                    <div>
+                                      <span className="le-metaLabel">Meeting Date & Time</span>
+                                      <span className="le-metaValue">{formatDateTime(a.meetingAt)}</span>
+                                    </div>
+                                  ) : null}
+
+                                  {String(a.meetingMode || "").trim() ? (
+                                    <div>
+                                      <span className="le-metaLabel">Meeting Mode</span>
+                                      <span className="le-metaValue">{a.meetingMode}</span>
+                                    </div>
+                                  ) : null}
+
+                                  {String(a.meetingPlatform || "").trim() ? (
+                                    <div>
+                                      <span className="le-metaLabel">Meeting Platform</span>
+                                      <span className="le-metaValue">{a.meetingPlatform}</span>
+                                    </div>
+                                  ) : null}
+
+                                  {String(a.meetingPlatformOther || "").trim() ? (
+                                    <div>
+                                      <span className="le-metaLabel">Meeting Platform (Other)</span>
+                                      <span className="le-metaValue">{a.meetingPlatformOther}</span>
+                                    </div>
+                                  ) : null}
+
+                                  {String(a.meetingLink || "").trim() ? (
+                                    <div>
+                                      <span className="le-metaLabel">Meeting Link</span>
+                                      <span className="le-metaValue">{a.meetingLink}</span>
+                                    </div>
+                                  ) : null}
+
+                                  {String(a.meetingMode || "").trim() === "Online" ? (
+                                    <div>
+                                      <span className="le-metaLabel">Meeting Invite Sent</span>
+                                      <span className="le-metaValue">{a.meetingInviteSent ? "Yes" : "No"}</span>
+                                    </div>
+                                  ) : null}
+
+                                  {String(a.meetingPlace || "").trim() ? (
+                                    <div>
+                                      <span className="le-metaLabel">Meeting Place</span>
+                                      <span className="le-metaValue">{a.meetingPlace}</span>
+                                    </div>
+                                  ) : null}
+                                </div>
+
+                                {String(a.notes || "").trim() ? (
+                                  <div className="le-attemptNotes">
+                                    <span className="le-metaLabel">Notes</span>
+                                    <div className="le-metaValue">{a.notes}</div>
+                                  </div>
+                                ) : null}
+                              </div>
+                            );
+                          })}
+
+                          {!showAddAttempt && attempts.length === 0 && (
+                            <div className="le-muted" style={{ padding: "10px 0" }}>
+                              No contact attempts yet.
+                            </div>
+                          )}
+                        </div>
                       </div>
 
-                      <div className="le-actions">
-                        <button
-                          type="button"
-                          className="le-btn secondary"
-                          onClick={() => {
-                            setValidateForm({ phoneValidation: "" });
-                            setValidateError("");
-                          }}
-                          disabled={validatingContact || uiLocked}
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          type="button"
-                          className="le-btn primary"
-                          onClick={submitValidateContact}
-                          disabled={validatingContact || uiLocked}
-                        >
-                          {validatingContact ? "Saving..." : "Save"}
-                        </button>
-                      </div>
-                    </div>
+                      {!showAddAttempt && isEngagementBlocked && (
+                        <div className="le-block">
+                          <h4 className="le-blockTitle">Validate Contact</h4>
+                          <div className="le-formRow">
+                            <label className="le-label">Phone Number Correct?</label>
+                            <select className="le-input" value="WRONG_CONTACT" disabled>
+                              <option value="WRONG_CONTACT">Wrong</option>
+                            </select>
+                          </div>
+                          <p className="le-muted" style={{ marginTop: 8 }}>
+                            Contact was marked wrong. Update phone number to continue.
+                          </p>
+                        </div>
+                      )}
+
+                      {!showAddAttempt && showValidateContact && (
+                        <div className="le-block">
+                          <h4 className="le-blockTitle">Validate Contact</h4>
+
+                          {validateError ? (
+                            <div className="le-formError" style={{ color: "#DA291C", marginBottom: 10 }}>
+                              {validateError}
+                            </div>
+                          ) : null}
+
+                          <div className="le-formRow">
+                            <label className="le-label">Phone Number Correct?</label>
+                            <select
+                              className="le-input"
+                              value={validateForm.phoneValidation}
+                              onChange={(e) => {
+                                setValidateForm({ phoneValidation: e.target.value });
+                                setValidateError("");
+                              }}
+                              disabled={validatingContact || uiLocked || isContactingReadOnly}
+                            >
+                              <option value="">Select</option>
+                              <option value="CORRECT">Correct</option>
+                              <option value="WRONG_CONTACT">Wrong</option>
+                            </select>
+                          </div>
+
+                          <div className="le-actions">
+                            <button
+                              type="button"
+                              className="le-btn secondary"
+                              onClick={() => {
+                                setValidateForm({ phoneValidation: "" });
+                                setValidateError("");
+                              }}
+                              disabled={validatingContact || uiLocked || isContactingReadOnly}
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              className="le-btn primary"
+                              onClick={submitValidateContact}
+                              disabled={validatingContact || uiLocked || isContactingReadOnly}
+                            >
+                              {validatingContact ? "Saving..." : "Save"}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {!showAddAttempt && isViewingCurrentStage && !isContactingReadOnly && currentActivityKeyRaw === "Assess Interest" && (
+                        <div className="le-block">
+                          <h4 className="le-blockTitle">Assess Interest</h4>
+
+                          {interestError ? (
+                            <div className="le-formError" style={{ color: "#DA291C", marginBottom: 10 }}>
+                              {interestError}
+                            </div>
+                          ) : null}
+
+                          <div className="le-formRow">
+                            <label className="le-label">Interest Level *</label>
+                            <select
+                              className="le-input"
+                              value={interestForm.interestLevel}
+                              onChange={(e) =>
+                                setInterestForm((f) => ({
+                                  ...f,
+                                  interestLevel: e.target.value,
+                                  preferredChannel: "",
+                                  preferredChannelOther: "",
+                                }))
+                              }
+                              disabled={savingInterest}
+                            >
+                              <option value="">Select</option>
+                              <option value="INTERESTED">Interested</option>
+                              <option value="NOT_INTERESTED">Not Interested</option>
+                            </select>
+                          </div>
+
+                          {interestForm.interestLevel === "INTERESTED" && (
+                            <>
+                              <div className="le-formRow">
+                                <label className="le-label">Preferred Communication Channel *</label>
+                                <select
+                                  className="le-input"
+                                  value={interestForm.preferredChannel}
+                                  onChange={(e) => setInterestForm((f) => ({ ...f, preferredChannel: e.target.value }))}
+                                  disabled={savingInterest}
+                                >
+                                  <option value="">Select</option>
+                                  <option value="SMS">SMS</option>
+                                  <option value="WhatsApp">WhatsApp</option>
+                                  <option value="Viber">Viber</option>
+                                  <option value="Telegram">Telegram</option>
+                                  <option value="Other">Other</option>
+                                </select>
+                              </div>
+
+                              {interestForm.preferredChannel === "Other" && (
+                                <div className="le-formRow">
+                                  <label className="le-label">Other Channel *</label>
+                                  <input
+                                    className="le-input"
+                                    value={interestForm.preferredChannelOther}
+                                    onChange={(e) =>
+                                      setInterestForm((f) => ({ ...f, preferredChannelOther: e.target.value }))
+                                    }
+                                    disabled={savingInterest}
+                                  />
+                                </div>
+                              )}
+                            </>
+                          )}
+
+                          <div className="le-actions">
+                            <button
+                              type="button"
+                              className="le-btn secondary"
+                              onClick={() =>
+                                setInterestForm({ interestLevel: "", preferredChannel: "", preferredChannelOther: "" })
+                              }
+                              disabled={savingInterest}
+                            >
+                              Cancel
+                            </button>
+                            <button type="button" className="le-btn primary" onClick={submitAssessInterest} disabled={savingInterest}>
+                              {savingInterest ? "Saving..." : "Save"}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {!showAddAttempt && isViewingCurrentStage && !isContactingReadOnly && currentActivityKeyRaw === "Schedule Meeting" && (
+                        <div className="le-block">
+                          <h4 className="le-blockTitle">Schedule Meeting</h4>
+
+                          {meetingError ? (
+                            <div className="le-formError" style={{ color: "#DA291C", marginBottom: 10 }}>
+                              {meetingError}
+                            </div>
+                          ) : null}
+
+                          <div className="le-formRow">
+                            <label className="le-label">Meeting Date & Time *</label>
+                            <input
+                              type="datetime-local"
+                              className="le-input"
+                              value={meetingForm.meetingAt}
+                              onChange={(e) => setMeetingForm((f) => ({ ...f, meetingAt: e.target.value }))}
+                              disabled={savingMeeting}
+                            />
+                          </div>
+
+                          <div className="le-formRow">
+                            <label className="le-label">Meeting Mode *</label>
+                            <select
+                              className="le-input"
+                              value={meetingForm.meetingMode}
+                              onChange={(e) =>
+                                setMeetingForm((f) => ({
+                                  ...f,
+                                  meetingMode: e.target.value,
+                                  meetingPlatform: "",
+                                  meetingPlatformOther: "",
+                                  meetingLink: "",
+                                  meetingPlace: "",
+                                }))
+                              }
+                              disabled={savingMeeting}
+                            >
+                              <option value="">Select</option>
+                              <option value="Online">Online</option>
+                              <option value="Face-to-face">Face-to-face</option>
+                            </select>
+                          </div>
+
+                          {meetingForm.meetingMode === "Online" && (
+                            <>
+                              <div className="le-formRow">
+                                <label className="le-label">Platform *</label>
+                                <select
+                                  className="le-input"
+                                  value={meetingForm.meetingPlatform}
+                                  onChange={(e) => setMeetingForm((f) => ({ ...f, meetingPlatform: e.target.value }))}
+                                  disabled={savingMeeting}
+                                >
+                                  <option value="">Select</option>
+                                  <option value="Zoom">Zoom</option>
+                                  <option value="Google Meet">Google Meet</option>
+                                  <option value="Other">Other</option>
+                                </select>
+                              </div>
+
+                              {meetingForm.meetingPlatform === "Other" && (
+                                <div className="le-formRow">
+                                  <label className="le-label">Other Platform *</label>
+                                  <input
+                                    className="le-input"
+                                    value={meetingForm.meetingPlatformOther}
+                                    onChange={(e) =>
+                                      setMeetingForm((f) => ({ ...f, meetingPlatformOther: e.target.value }))
+                                    }
+                                    disabled={savingMeeting}
+                                  />
+                                </div>
+                              )}
+
+                              <div className="le-formRow">
+                                <label className="le-label">Meeting Link *</label>
+                                <input
+                                  className="le-input"
+                                  value={meetingForm.meetingLink}
+                                  onChange={(e) => setMeetingForm((f) => ({ ...f, meetingLink: e.target.value }))}
+                                  disabled={savingMeeting}
+                                  placeholder="https://..."
+                                />
+                              </div>
+
+                              <div className="le-formRow">
+                                <label className="le-check">
+                                  <input
+                                    type="checkbox"
+                                    checked={meetingForm.meetingInviteSent}
+                                    onChange={(e) => setMeetingForm((f) => ({ ...f, meetingInviteSent: e.target.checked }))}
+                                    disabled={savingMeeting}
+                                  />
+                                  <span>Meeting invite link already sent</span>
+                                </label>
+                              </div>
+                            </>
+                          )}
+
+                          {meetingForm.meetingMode === "Face-to-face" && (
+                            <div className="le-formRow">
+                              <label className="le-label">Meeting Place *</label>
+                              <input
+                                className="le-input"
+                                value={meetingForm.meetingPlace}
+                                onChange={(e) => setMeetingForm((f) => ({ ...f, meetingPlace: e.target.value }))}
+                                disabled={savingMeeting}
+                                placeholder="Enter full place/address"
+                              />
+                            </div>
+                          )}
+
+                          <div className="le-actions">
+                            <button
+                              type="button"
+                              className="le-btn secondary"
+                              onClick={() =>
+                                setMeetingForm({
+                                  meetingAt: "",
+                                  meetingMode: "",
+                                  meetingPlatform: "",
+                                  meetingPlatformOther: "",
+                                  meetingLink: "",
+                                  meetingInviteSent: false,
+                                  meetingPlace: "",
+                                })
+                              }
+                              disabled={savingMeeting}
+                            >
+                              Cancel
+                            </button>
+                            <button type="button" className="le-btn primary" onClick={submitScheduleMeeting} disabled={savingMeeting}>
+                              {savingMeeting ? "Saving..." : "Save Meeting"}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </>
                   )}
                 </section>
 
@@ -1120,84 +2053,6 @@ function AgentLeadEngagement() {
                 </aside>
               </div>
 
-              {/* Attempt Limit Modal */}
-              {showAttemptLimitModal && (
-                <div
-                  className="le-modalOverlay"
-                  onClick={() => setShowAttemptLimitModal(false)}
-                  role="dialog"
-                  aria-modal="true"
-                >
-                  <div className="le-modalCard" onClick={(e) => e.stopPropagation()}>
-                    <h3 className="le-modalTitle">10 attempts reached</h3>
-                    <p className="le-modalText">
-                      You already have <strong>{attempts.length}</strong> contact attempts for this lead.
-                      <br />
-                      Do you want to continue attempting, or drop this lead for unresponsiveness?
-                    </p>
-
-                    <div className="le-modalActions">
-                      <button
-                        type="button"
-                        className="le-btn secondary"
-                        onClick={() => setShowAttemptLimitModal(false)}
-                      >
-                        Cancel
-                      </button>
-
-                      <button
-                        type="button"
-                        className="le-btn secondary"
-                        onClick={() => {
-                          setShowAttemptLimitModal(false);
-                          setShowAddAttempt(true);
-                          resetAttemptForm();
-                        }}
-                      >
-                        Continue Attempting
-                      </button>
-
-                      <button
-                        type="button"
-                        className="le-btn primary"
-                        onClick={() => {
-                          setShowAttemptLimitModal(false);
-                          alert("TODO: Drop lead action (backend route not yet wired).");
-                        }}
-                      >
-                        Drop Lead
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* ✅ NEW: Blocked Modal (Wrong Contact confirmed) */}
-              {showBlockedModal && (
-                <div
-                  className="le-modalOverlay"
-                  onClick={() => setShowBlockedModal(false)}
-                  role="dialog"
-                  aria-modal="true"
-                >
-                  <div className="le-modalCard" onClick={(e) => e.stopPropagation()}>
-                    <h3 className="le-modalTitle">Update required</h3>
-                    <p className="le-modalText">Phone number marked invalid. Update required to continue.</p>
-
-                    <div className="le-modalActions">
-                      <button
-                        type="button"
-                        className="le-btn primary"
-                        onClick={() => {
-                          navigate(`/agent/${username}/prospects/${prospectId}`);
-                        }}
-                      >
-                        Go to Prospect Details
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
             </>
           )}
         </main>
