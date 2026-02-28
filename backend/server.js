@@ -2440,16 +2440,25 @@ app.post("/api/leads", async (req, res) => {
           createdLeadDoc = createdLead;
 
           // 2) CREATE LEAD ENGAGEMENT (1:1 record controlling the engagement pipeline)
+          const engagementStartedAt = new Date();
+
           const engagementDocs = await LeadEngagement.create(
             [
               {
                 leadId: createdLead._id,
 
-                currentStage: "Not Started",
-                currentActivityKey: null,
-                stageStartedAt: null,
+                currentStage: "Contacting",
+                currentActivityKey: "Attempt Contact",
+                stageStartedAt: engagementStartedAt,
                 stageCompletedAt: null,
-                stageHistory: [],
+                stageHistory: [
+                  {
+                    stage: "Contacting",
+                    startedAt: engagementStartedAt,
+                    completedAt: null,
+                    reason: "Lead created.",
+                  },
+                ],
 
                 isBlocked: false,
 
@@ -3017,14 +3026,22 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
     let engagement = await LeadEngagement.findOne({ leadId: lead._id }).lean();
 
     if (!engagement) {
+      const startedAt = new Date();
       const created = await LeadEngagement.create({
         leadId: lead._id,
 
-        currentStage: "Not Started",
-        currentActivityKey: null,
-        stageStartedAt: null,
+        currentStage: "Contacting",
+        currentActivityKey: "Attempt Contact",
+        stageStartedAt: startedAt,
         stageCompletedAt: null,
-        stageHistory: [],
+        stageHistory: [
+          {
+            stage: "Contacting",
+            startedAt,
+            completedAt: null,
+            reason: "Auto-created missing engagement record.",
+          },
+        ],
 
         isBlocked: false,
 
@@ -3047,7 +3064,9 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
       leadEngagementId: engagement._id,
     })
       .sort({ attemptNo: 1 })
-      .select("attemptNo primaryChannel otherChannels response attemptedAt contactInfoVersion outcomeActivity notes")
+      .select(
+        "attemptNo primaryChannel otherChannels response attemptedAt contactInfoVersion outcomeActivity notes phoneValidation interestLevel preferredChannel preferredChannelOther meetingAt meetingEndAt meetingDurationMin meetingMode meetingPlatform meetingPlatformOther meetingLink meetingInviteSent meetingPlace"
+      )
       .lean();
 
     /**
@@ -3103,6 +3122,19 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
       contactInfoVersionUsed: a.contactInfoVersion, 
       outcomeActivity: a.outcomeActivity || "Attempt Contact",
       notes: a.notes || "",
+      phoneValidation: a.phoneValidation || "",
+      interestLevel: a.interestLevel || "",
+      preferredChannel: a.preferredChannel || "",
+      preferredChannelOther: a.preferredChannelOther || "",
+      meetingAt: a.meetingAt || null,
+      meetingEndAt: a.meetingEndAt || null,
+      meetingDurationMin: Number(a.meetingDurationMin || 0) || null,
+      meetingMode: a.meetingMode || "",
+      meetingPlatform: a.meetingPlatform || "",
+      meetingPlatformOther: a.meetingPlatformOther || "",
+      meetingLink: a.meetingLink || "",
+      meetingInviteSent: Boolean(a.meetingInviteSent),
+      meetingPlace: a.meetingPlace || "",
     }));
 
     // Response combines Prospect + Lead + Engagement + Attempts + Tasks
@@ -3297,16 +3329,24 @@ app.post("/api/prospects/:prospectId/leads/:leadId/contact-attempts", async (req
       let engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).session(session);
 
       if (!engagement) {
+        const startedAt = new Date();
         // Failsafe create if missing (prevents UI/flow break)
         engagement = await LeadEngagement.create(
           [
             {
               leadId: leadObjectId,
-              currentStage: "Not Started",
-              currentActivityKey: null,
-              stageStartedAt: null,
+              currentStage: "Contacting",
+              currentActivityKey: "Attempt Contact",
+              stageStartedAt: startedAt,
               stageCompletedAt: null,
-              stageHistory: [],
+              stageHistory: [
+                {
+                  stage: "Contacting",
+                  startedAt,
+                  completedAt: null,
+                  reason: "Auto-created during contact attempt.",
+                },
+              ],
               isBlocked: false,
               contactAttemptsCount: 0,
               lastContactAttemptNo: 0,
@@ -3455,45 +3495,38 @@ app.post("/api/prospects/:prospectId/leads/:leadId/contact-attempts", async (req
   }
 });
 
+async function getLatestRespondedAttemptForEngagement(leadEngagementId, session) {
+  return ContactAttempt.findOne({
+    leadEngagementId,
+    response: "Responded",
+  })
+    .sort({ attemptNo: -1 })
+    .session(session || null);
+}
+
 /* ===========================
-   VALIDATE CONTACT (Wrong Contact)
+   VALIDATE CONTACT: UPDATE CURRENT ATTEMPT (Agent)
    POST /api/prospects/:prospectId/leads/:leadId/validate-contact?userId=...
 
    Purpose:
-   - Handles the "Wrong Contact" validation outcome.
-   - When agent confirms wrong contact:
-     1) Prospect.status becomes "Wrong Contact"
-     2) Engagement becomes blocked (isBlocked = true)
-     3) Engagement.currentActivityKey is persisted as "Validate Contact" (tracker step)
-     4) Open APPROACH task (if any) is completed
-     5) Ensures an Open UPDATE_CONTACT_INFO task exists (create if missing)
-     6) Creates notifications only when UPDATE_CONTACT_INFO task was newly created
-
-   Inputs:
-   Body: { result: "WRONG_CONTACT" }  // Only supported value for now
-
-   Atomicity:
-   - All changes happen inside a MongoDB transaction.
-   - If anything fails mid-way, none of the changes commit.
+   - Updates the SAME latest responded ContactAttempt with phone validation result.
+   - Does NOT create a new ContactAttempt.
 =========================== */
 app.post("/api/prospects/:prospectId/leads/:leadId/validate-contact", async (req, res) => {
-  // Start session so Prospect + Engagement + Task + Notification changes commit together
   const session = await mongoose.startSession();
 
   try {
     const { userId } = req.query;
     const { prospectId, leadId } = req.params;
-    const { result } = req.body;
+    const result = String(req.body?.result || "").trim().toUpperCase();
 
-    // Basic required ID validation
     if (!userId) return res.status(400).json({ message: "Missing userId." });
     if (!mongoose.isValidObjectId(userId)) return res.status(400).json({ message: "Invalid userId." });
     if (!mongoose.isValidObjectId(prospectId)) return res.status(400).json({ message: "Invalid prospectId." });
     if (!mongoose.isValidObjectId(leadId)) return res.status(400).json({ message: "Invalid leadId." });
 
-    // Only support WRONG_CONTACT for now (future: CORRECT_CONTACT, etc.)
-    if (String(result) !== "WRONG_CONTACT") {
-      return res.status(400).json({ message: "Only WRONG_CONTACT is supported for now." });
+    if (!["CORRECT", "WRONG_CONTACT"].includes(result)) {
+      return res.status(400).json({ message: "result must be CORRECT or WRONG_CONTACT." });
     }
 
     const userObjectId = new mongoose.Types.ObjectId(userId);
@@ -3501,49 +3534,57 @@ app.post("/api/prospects/:prospectId/leads/:leadId/validate-contact", async (req
     const leadObjectId = new mongoose.Types.ObjectId(leadId);
 
     await session.withTransaction(async () => {
-      // 1) Authorization: prospect must belong to agent
       const prospect = await Prospect.findOne({
         _id: prospectObjectId,
         assignedToUserId: userObjectId,
       }).session(session);
-
       if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
 
-      // 2) Lead must belong to that prospect
       const lead = await Lead.findOne({
         _id: leadObjectId,
         prospectId: prospectObjectId,
       }).session(session);
-
       if (!lead) throw Object.assign(new Error("Lead not found."), { status: 404 });
 
-      // 3) Engagement must exist (this endpoint does not auto-create engagement)
-      const engagement = await LeadEngagement.findOne({
-        leadId: leadObjectId,
-      }).session(session);
+      const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).session(session);
+      if (!engagement) throw Object.assign(new Error("Engagement not found."), { status: 404 });
 
-      if (!engagement) {
-        throw Object.assign(new Error("Engagement not found."), { status: 404 });
+      const attempt = await ContactAttempt.findOne({
+        leadEngagementId: engagement._id,
+        response: "Responded",
+      })
+        .sort({ attemptNo: -1 })
+        .session(session);
+
+      if (!attempt) {
+        throw Object.assign(new Error("No responded contact attempt found to validate."), { status: 409 });
       }
 
-      // Guard: prevent repeating the flow if already blocked
-      // This avoids duplicate update tasks + duplicate notifications
+      if (String(attempt.phoneValidation || "").trim()) {
+        throw Object.assign(new Error("This attempt has already been validated."), { status: 409 });
+      }
+
+      attempt.phoneValidation = result;
+      attempt.outcomeActivity = "Validate Contact";
+      await attempt.save({ session });
+
+      if (result === "CORRECT") {
+        engagement.currentActivityKey = "Assess Interest";
+        await engagement.save({ session });
+        return;
+      }
+
       if (engagement.isBlocked) {
         throw Object.assign(new Error("Engagement is already blocked."), { status: 409 });
       }
 
-      // 4) Mark Prospect as Wrong Contact (this impacts Prospect-level UI + filtering)
       prospect.status = "Wrong Contact";
       await prospect.save({ session });
 
-      // 5) Block Engagement so no new attempts can be created until contact info is updated
-      // Also persist the tracker step explicitly as "Validate Contact"
       engagement.isBlocked = true;
       engagement.currentActivityKey = "Validate Contact";
       await engagement.save({ session });
 
-      // 6) Complete open APPROACH task (if exists)
-      // This prevents "Contact lead" tasks staying open after wrong contact is confirmed
       const openApproachTask = await Task.findOne({
         assignedToUserId: userObjectId,
         prospectId: prospectObjectId,
@@ -3558,7 +3599,6 @@ app.post("/api/prospects/:prospectId/leads/:leadId/validate-contact", async (req
         await openApproachTask.save({ session });
       }
 
-      // 7) Ensure there's an Open UPDATE_CONTACT_INFO task (create only if missing)
       let updateTask = await Task.findOne({
         assignedToUserId: userObjectId,
         prospectId: prospectObjectId,
@@ -3569,7 +3609,6 @@ app.post("/api/prospects/:prospectId/leads/:leadId/validate-contact", async (req
 
       let createdNewUpdateTask = false;
 
-      // If missing, create it with due date = now + 2 days
       if (!updateTask) {
         const due = new Date();
         due.setDate(due.getDate() + 2);
@@ -3582,7 +3621,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/validate-contact", async (req
               leadEngagementId: engagement._id,
               type: "UPDATE_CONTACT_INFO",
               title: "Update phone number",
-              description: `Phone number for this prospect was marked invalid. Update required before proceeding.`,
+              description: "Phone number for this prospect was marked invalid. Update required before proceeding.",
               dueAt: due,
               status: "Open",
             },
@@ -3593,17 +3632,10 @@ app.post("/api/prospects/:prospectId/leads/:leadId/validate-contact", async (req
         createdNewUpdateTask = true;
       }
 
-      // Display name used in notifications
-      const fullName = `${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${
-        prospect.lastName
-      }`.trim();
-
-      // Use the actual dueAt regardless of whether task existed or was created
+      const fullName = `${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName}`.trim();
       const dueAt = updateTask?.dueAt;
 
-      // 8) Notifications are only created if we just created the update task
       if (createdNewUpdateTask) {
-        // 8a) TASK_ADDED
         await Notification.create(
           [
             {
@@ -3619,7 +3651,6 @@ app.post("/api/prospects/:prospectId/leads/:leadId/validate-contact", async (req
           { session }
         );
 
-        // 8b) TASK_DUE_TODAY (only if due date is today in Asia/Manila)
         if (dueAt && isDueTodayInManila(dueAt)) {
           await Notification.create(
             [
@@ -3640,10 +3671,363 @@ app.post("/api/prospects/:prospectId/leads/:leadId/validate-contact", async (req
       }
     });
 
-    return res.json({ message: "Marked as Wrong Contact. Update task created." });
+    return res.json({
+      message:
+        result === "CORRECT"
+          ? "Contact validated as correct. Proceed to Assess Interest."
+          : "Marked as Wrong Contact. Update task created.",
+    });
   } catch (err) {
     console.error("Validate contact error:", err);
     return res.status(err?.status || 500).json({ message: err.message || "Server error." });
+  } finally {
+    session.endSession();
+  }
+});
+
+app.post("/api/prospects/:prospectId/leads/:leadId/assess-interest", async (req, res) => {
+  const session = await mongoose.startSession();
+  try {
+    const { userId } = req.query;
+    const { prospectId, leadId } = req.params;
+    const { interestLevel, preferredChannel, preferredChannelOther } = req.body;
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId)) return res.status(400).json({ message: "Invalid userId." });
+    if (!mongoose.isValidObjectId(prospectId)) return res.status(400).json({ message: "Invalid prospectId." });
+    if (!mongoose.isValidObjectId(leadId)) return res.status(400).json({ message: "Invalid leadId." });
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+
+    await session.withTransaction(async () => {
+      const prospect = await Prospect.findOne({ _id: prospectId, assignedToUserId: userObjectId }).session(session);
+      if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
+
+      const lead = await Lead.findOne({ _id: leadId, prospectId }).session(session);
+      if (!lead) throw Object.assign(new Error("Lead not found."), { status: 404 });
+
+      const engagement = await LeadEngagement.findOne({ leadId }).session(session);
+      if (!engagement) throw Object.assign(new Error("Engagement not found."), { status: 404 });
+
+      if (engagement.currentActivityKey !== "Assess Interest") {
+        throw Object.assign(new Error("Assess Interest is not the current activity."), { status: 409 });
+      }
+
+      const lvl = String(interestLevel || "").trim().toUpperCase();
+      if (!["INTERESTED", "NOT_INTERESTED"].includes(lvl)) {
+        throw Object.assign(new Error("interestLevel must be INTERESTED or NOT_INTERESTED."), { status: 400 });
+      }
+
+      const attempt = await getLatestRespondedAttemptForEngagement(engagement._id, session);
+      if (!attempt) throw Object.assign(new Error("No responded contact attempt found."), { status: 409 });
+
+      attempt.interestLevel = lvl;
+      attempt.outcomeActivity = "Assess Interest";
+
+      if (lvl === "INTERESTED") {
+        const pc = String(preferredChannel || "").trim();
+        if (!["SMS", "WhatsApp", "Viber", "Telegram", "Other"].includes(pc)) {
+          throw Object.assign(new Error("Invalid preferredChannel."), { status: 400 });
+        }
+        attempt.preferredChannel = pc;
+        attempt.preferredChannelOther = pc === "Other" ? String(preferredChannelOther || "").trim() : undefined;
+
+        if (pc === "Other" && !attempt.preferredChannelOther) {
+          throw Object.assign(new Error("preferredChannelOther is required when preferredChannel is Other."), {
+            status: 400,
+          });
+        }
+
+        engagement.currentActivityKey = "Schedule Meeting";
+      } else {
+        attempt.preferredChannel = undefined;
+        attempt.preferredChannelOther = undefined;
+        engagement.currentActivityKey = "Assess Interest";
+      }
+
+      await attempt.save({ session });
+      await engagement.save({ session });
+    });
+
+    return res.json({ message: "Assess Interest saved." });
+  } catch (err) {
+    console.error("Assess interest error:", err);
+    return res.status(err?.status || 500).json({ message: err?.message || "Server error." });
+  } finally {
+    session.endSession();
+  }
+});
+
+
+
+function combineDateAndTimeLocal(dateStr, timeStr) {
+  const [y, m, d] = String(dateStr || "").split("-").map((n) => Number(n));
+  const [hh, mm] = String(timeStr || "").split(":").map((n) => Number(n));
+
+  if (!y || !m || !d || Number.isNaN(hh) || Number.isNaN(mm)) return null;
+  return new Date(y, m - 1, d, hh, mm, 0, 0);
+}
+
+function isMeetingSlotValidWindow(startAt, durationMin) {
+  if (!(startAt instanceof Date) || Number.isNaN(startAt.getTime())) return false;
+  if (![30, 60, 90, 120].includes(Number(durationMin))) return false;
+
+  const start = new Date(startAt.getTime());
+  const end = new Date(startAt.getTime() + Number(durationMin) * 60 * 1000);
+
+  const startMin = start.getHours() * 60 + start.getMinutes();
+  const endMin = end.getHours() * 60 + end.getMinutes();
+  return startMin >= 7 * 60 && endMin <= 21 * 60;
+}
+
+async function getAgentMeetingWindows(userObjectId, from, to, session) {
+  const prospects = await Prospect.find({ assignedToUserId: userObjectId })
+    .select("_id")
+    .session(session || null)
+    .lean();
+  const prospectIds = prospects.map((p) => p._id);
+  if (!prospectIds.length) return [];
+
+  const leads = await Lead.find({ prospectId: { $in: prospectIds } })
+    .select("_id")
+    .session(session || null)
+    .lean();
+  const leadIds = leads.map((l) => l._id);
+  if (!leadIds.length) return [];
+
+  const engagements = await LeadEngagement.find({ leadId: { $in: leadIds } })
+    .select("_id")
+    .session(session || null)
+    .lean();
+  const engagementIds = engagements.map((e) => e._id);
+  if (!engagementIds.length) return [];
+
+  const q = {
+    leadEngagementId: { $in: engagementIds },
+    meetingAt: { $ne: null },
+  };
+
+  if (from || to) {
+    q.meetingAt = { ...(q.meetingAt || {}) };
+    if (from) q.meetingAt.$gte = from;
+    if (to) q.meetingAt.$lt = to;
+  }
+
+  const attempts = await ContactAttempt.find(q)
+    .select("meetingAt meetingEndAt meetingDurationMin")
+    .session(session || null)
+    .lean();
+
+  return attempts
+    .map((a) => {
+      const start = a.meetingAt ? new Date(a.meetingAt) : null;
+      if (!start || Number.isNaN(start.getTime())) return null;
+
+      let end = a.meetingEndAt ? new Date(a.meetingEndAt) : null;
+      if (!end || Number.isNaN(end.getTime())) {
+        const duration = Number(a.meetingDurationMin || 120);
+        end = new Date(start.getTime() + duration * 60 * 1000);
+      }
+
+      return { start, end };
+    })
+    .filter(Boolean);
+}
+
+function hasMeetingConflict(startAt, endAt, windows) {
+  return windows.some((w) => w.start < endAt && w.end > startAt);
+}
+
+app.get("/api/agents/:agentId/meeting-availability", async (req, res) => {
+  const session = await mongoose.startSession();
+  try {
+    const { userId } = req.query;
+    const { agentId } = req.params;
+    const days = Math.min(Math.max(Number(req.query.days || 30), 1), 60);
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId) || !mongoose.isValidObjectId(agentId)) {
+      return res.status(400).json({ message: "Invalid userId/agentId." });
+    }
+    if (String(userId) !== String(agentId)) {
+      return res.status(403).json({ message: "Forbidden." });
+    }
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    start.setDate(start.getDate() + 1);
+
+    const end = new Date(start);
+    end.setDate(end.getDate() + days);
+
+    const windows = await getAgentMeetingWindows(userObjectId, start, end, session);
+
+    return res.json({
+      fromDate: start.toISOString(),
+      toDate: end.toISOString(),
+      bookedWindows: windows.map((w) => ({ startAt: w.start.toISOString(), endAt: w.end.toISOString() })),
+    });
+  } catch (err) {
+    console.error("Meeting availability error:", err);
+    return res.status(500).json({ message: "Server error." });
+  } finally {
+    session.endSession();
+  }
+});
+
+app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req, res) => {
+  const session = await mongoose.startSession();
+  try {
+    const { userId } = req.query;
+    const { prospectId, leadId } = req.params;
+    const {
+      meetingAt,
+      meetingDate,
+      meetingStartTime,
+      meetingDurationMin,
+      meetingMode,
+      meetingPlatform,
+      meetingPlatformOther,
+      meetingLink,
+      meetingInviteSent,
+      meetingPlace,
+    } = req.body;
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId)) return res.status(400).json({ message: "Invalid userId." });
+    if (!mongoose.isValidObjectId(prospectId)) return res.status(400).json({ message: "Invalid prospectId." });
+    if (!mongoose.isValidObjectId(leadId)) return res.status(400).json({ message: "Invalid leadId." });
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
+    const leadObjectId = new mongoose.Types.ObjectId(leadId);
+
+    await session.withTransaction(async () => {
+      const prospect = await Prospect.findOne({
+        _id: prospectObjectId,
+        assignedToUserId: userObjectId,
+      }).session(session);
+      if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
+
+      const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).session(session);
+      if (!lead) throw Object.assign(new Error("Lead not found."), { status: 404 });
+
+      const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).session(session);
+      if (!engagement) throw Object.assign(new Error("Engagement not found."), { status: 404 });
+
+      if (engagement.currentActivityKey !== "Schedule Meeting") {
+        throw Object.assign(new Error("Schedule Meeting is not the current activity."), { status: 409 });
+      }
+
+      const durationMin = Number(meetingDurationMin || 120);
+      const dt = meetingDate && meetingStartTime
+        ? combineDateAndTimeLocal(meetingDate, meetingStartTime)
+        : new Date(meetingAt);
+
+      if (!dt || Number.isNaN(dt.getTime())) {
+        throw Object.assign(new Error("meeting date/time is required and must be valid."), { status: 400 });
+      }
+
+      const tomorrow = new Date();
+      tomorrow.setHours(0, 0, 0, 0);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+
+      const latestDay = new Date(tomorrow);
+      latestDay.setDate(latestDay.getDate() + 30);
+
+      if (dt < tomorrow || dt >= latestDay) {
+        throw Object.assign(new Error("Meeting date must be between tomorrow and the next 30 days."), { status: 400 });
+      }
+
+      if (!isMeetingSlotValidWindow(dt, durationMin)) {
+        throw Object.assign(
+          new Error("Meeting must start between 7:00 AM and 9:00 PM, and duration must be 30/60/90/120 minutes."),
+          { status: 400 }
+        );
+      }
+
+      const endAt = new Date(dt.getTime() + durationMin * 60 * 1000);
+
+      const windows = await getAgentMeetingWindows(userObjectId, null, null, session);
+      if (hasMeetingConflict(dt, endAt, windows)) {
+        throw Object.assign(new Error("Selected time slot conflicts with an existing meeting."), {
+          status: 409,
+          code: "MEETING_CONFLICT",
+        });
+      }
+
+      const mode = String(meetingMode || "").trim();
+      if (!["Online", "Face-to-face"].includes(mode)) {
+        throw Object.assign(new Error("meetingMode must be Online or Face-to-face."), { status: 400 });
+      }
+
+      const platform = String(meetingPlatform || "").trim();
+      const platformOther = String(meetingPlatformOther || "").trim();
+      const link = String(meetingLink || "").trim();
+      const place = String(meetingPlace || "").trim();
+
+      if (mode === "Online") {
+        if (!["Zoom", "Google Meet", "Other"].includes(platform)) {
+          throw Object.assign(new Error("Invalid meetingPlatform."), { status: 400 });
+        }
+        if (platform === "Other" && !platformOther) {
+          throw Object.assign(new Error("meetingPlatformOther is required when meetingPlatform is Other."), { status: 400 });
+        }
+        if (!link) throw Object.assign(new Error("meetingLink is required for online meeting."), { status: 400 });
+      } else {
+        if (!place) throw Object.assign(new Error("meetingPlace is required for face-to-face meeting."), { status: 400 });
+      }
+
+      const attempt = await getLatestRespondedAttemptForEngagement(engagement._id, session);
+      if (!attempt) throw Object.assign(new Error("No responded contact attempt found."), { status: 409 });
+
+      attempt.meetingAt = dt;
+      attempt.meetingEndAt = endAt;
+      attempt.meetingDurationMin = durationMin;
+      attempt.meetingMode = mode;
+      attempt.meetingPlatform = mode === "Online" ? platform : undefined;
+      attempt.meetingPlatformOther = mode === "Online" && platform === "Other" ? platformOther : undefined;
+      attempt.meetingLink = mode === "Online" ? link : undefined;
+      attempt.meetingInviteSent = Boolean(meetingInviteSent);
+      attempt.meetingPlace = mode === "Face-to-face" ? place : undefined;
+      attempt.outcomeActivity = "Schedule Meeting";
+      await attempt.save({ session });
+
+      const now = new Date();
+      engagement.currentStage = "Needs Assessment";
+      engagement.currentActivityKey = "";
+      engagement.stageCompletedAt = now;
+      engagement.stageHistory = Array.isArray(engagement.stageHistory) ? engagement.stageHistory : [];
+
+      const openContacting = [...engagement.stageHistory]
+        .reverse()
+        .find((h) => h?.stage === "Contacting" && !h?.completedAt);
+      if (openContacting) {
+        openContacting.completedAt = now;
+        openContacting.reason = "Meeting scheduled successfully.";
+      }
+
+      engagement.stageHistory.push({
+        stage: "Needs Assessment",
+        startedAt: now,
+        completedAt: null,
+        reason: "Moved from Contacting after meeting schedule.",
+      });
+
+      engagement.stageStartedAt = now;
+      await engagement.save({ session });
+    });
+
+    return res.json({
+      message: "Meeting scheduled. Contacting completed and Needs Assessment activated.",
+    });
+  } catch (err) {
+    console.error("Schedule meeting error:", err);
+    return res.status(err?.status || 500).json({
+      message: err?.message || "Server error.",
+      code: err?.code,
+    });
   } finally {
     session.endSession();
   }
