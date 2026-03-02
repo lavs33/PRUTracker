@@ -1,166 +1,180 @@
 /**
  * ==========================================================
- * reset-db.js (TEMPORARY MAINTENANCE SCRIPT)
+ * reset-db.js (LEAD-CASCADE RESET SCRIPT)
  * ==========================================================
  *
  * Purpose:
- * - Resets (wipes) core CRM collections for development/testing,
- *   WITHOUT touching User accounts.
+ * - Deletes ALL Leads and all records that depend on them.
+ * - Keeps Users and Prospects untouched.
  *
- * Collections wiped (ALL documents):
- * - Prospects
- * - Leads
- * - LeadEngagements
- * - Policyholders
- * - ContactAttempts
+ * Cascaded collections:
+ * - Policyholders      (leadId -> Lead._id)
+ * - LeadEngagements    (leadId -> Lead._id)
+ * - ContactAttempts    (leadEngagementId -> LeadEngagement._id)
+ * - ScheduledMeetings  (leadEngagementId)
+ * - Tasks              (leadEngagementId -> LeadEngagement._id)
+ * - Notifications      (entityType="Task" + entityId in deleted Task._id)
  *
  * Safety:
- * - Intended to be DRY RUN by default (no deletes).
- * - To actually delete, you should control it via an environment flag.
- *
- * ⚠ NOTE ABOUT CURRENT CODE:
- * - In THIS file, DO_DELETE is hardcoded to true,
- *   which means it WILL DELETE every time you run it.
- * - If you want dry-run default, DO_DELETE should be read from process.env.
+ * - DRY RUN by default.
+ * - Real delete only when DO_DELETE=true
  *
  * Usage:
- *   DRY RUN (recommended default):
+ *   Dry run:
  *     node reset-db.js
  *
- *   REAL DELETE:
+ *   Real delete:
  *     DO_DELETE=true node reset-db.js
  *
  * Requires:
- * - .env containing MONGO_URI
+ * - .env with MONGO_URI
  * ==========================================================
  */
+
 require("dotenv").config();
 const mongoose = require("mongoose");
 
-// Models that will be wiped (Users are intentionally excluded)
-const Prospect = require("./models/Prospect");
+// Core models
 const Lead = require("./models/Lead");
 const LeadEngagement = require("./models/LeadEngagement");
+const ContactAttempt = require("./models/ContactAttempt");
+const ScheduledMeeting = require("./models/ScheduledMeeting");
 const Policyholder = require("./models/Policyholder");
-const ContactAttempt = require("./models/ContactAttempt"); 
+const Task = require("./models/Task");
+const Notification = require("./models/Notification");
 
 const MONGO_URI = process.env.MONGO_URI;
+const DO_DELETE = String(process.env.DO_DELETE).toLowerCase() === "true";
 
-/**
- * ⚠ Deletion toggle
- *
- * CURRENT BEHAVIOR:
- * - hardcoded true => always deletes
- *
- * Recommended behavior for safety:
- *   const DO_DELETE = String(process.env.DO_DELETE).toLowerCase() === "true";
- */
-const DO_DELETE = true;
-
-/**
- * Helper: pretty console section headers for readability
- */
 function header(title) {
-  console.log("\n" + "=".repeat(70));
+  console.log("\n" + "=".repeat(72));
   console.log(title);
-  console.log("=".repeat(70));
+  console.log("=".repeat(72));
 }
 
-/**
- * Helper: count all target collections
- *
- * Used for:
- * - Pre-check (what will be deleted)
- * - Post-check (confirm deletion worked)
- */
-async function countAll() {
-  const counts = {
-    prospects: await Prospect.countDocuments({}),
-    leads: await Lead.countDocuments({}),
-    leadEngagements: await LeadEngagement.countDocuments({}),
-    policyholders: await Policyholder.countDocuments({}),
-    contactAttempts: await ContactAttempt.countDocuments({}),
+function toObjectIds(arr) {
+  return (arr || []).map((x) => (x?._id ? x._id : x)).filter(Boolean);
+}
+
+async function getIdsSnapshot() {
+  const leads = await Lead.find({}, { _id: 1 }).lean();
+  const leadIds = toObjectIds(leads);
+
+  const engagements = await LeadEngagement.find(
+    { leadId: { $in: leadIds } },
+    { _id: 1, leadId: 1 }
+  ).lean();
+  const engagementIds = toObjectIds(engagements);
+
+  const attempts = await ContactAttempt.find(
+    { leadEngagementId: { $in: engagementIds } },
+    { _id: 1 }
+  ).lean();
+  const attemptIds = toObjectIds(attempts);
+
+  const tasks = await Task.find(
+    { leadEngagementId: { $in: engagementIds } },
+    { _id: 1 }
+  ).lean();
+  const taskIds = toObjectIds(tasks);
+
+  return { leadIds, engagementIds, attemptIds, taskIds };
+}
+
+async function countScope(ids) {
+  const { leadIds, engagementIds, attemptIds, taskIds } = ids;
+
+  return {
+    leads: await Lead.countDocuments({ _id: { $in: leadIds } }),
+    leadEngagements: await LeadEngagement.countDocuments({ _id: { $in: engagementIds } }),
+    contactAttempts: await ContactAttempt.countDocuments({
+      leadEngagementId: { $in: engagementIds },
+    }),
+    scheduledMeetings: await ScheduledMeeting.countDocuments({
+      leadEngagementId: { $in: engagementIds },
+    }),
+    policyholders: await Policyholder.countDocuments({ leadId: { $in: leadIds } }),
+    tasks: await Task.countDocuments({ _id: { $in: taskIds } }),
+    notificationsForTasks: await Notification.countDocuments({
+      entityType: "Task",
+      entityId: { $in: taskIds },
+    }),
   };
-  return counts;
 }
 
-/**
- * Helper: delete all documents in a collection (or dry-run)
- *
- * - If DO_DELETE=false: does NOT delete anything, prints what it would do.
- * - If DO_DELETE=true: deletes all documents with deleteMany({})
- *
- * Returns:
- * - In dry run: { deletedCount: 0, dryRun: true }
- * - In delete mode: MongoDB deleteMany result
- */
-async function delAll(Model, label) {
+async function delMany(Model, query, label) {
   if (!DO_DELETE) {
-    console.log(`(dry-run) would delete ALL ${label}`);
+    const count = await Model.countDocuments(query);
+    console.log(`(dry-run) would delete ${count} ${label}`);
     return { deletedCount: 0, dryRun: true };
   }
-  const res = await Model.deleteMany({});
+
+  const res = await Model.deleteMany(query);
   console.log(`✅ deleted ${res.deletedCount} ${label}`);
   return res;
 }
 
-/**
- * Main execution block (IIFE)
- *
- * Flow:
- * 1) Validate environment config
- * 2) Connect to MongoDB
- * 3) Print pre-deletion counts
- * 4) Delete in safe order (children → parents)
- * 5) Print post-deletion counts
- * 6) Disconnect
- */
 (async () => {
-  header("DB RESET (NO USERS) — DRY RUN by default");
+  header("LEAD CASCADE RESET — DRY RUN by default");
 
-  // Validate MONGO_URI exists
   if (!MONGO_URI) {
     console.error("❌ Missing MONGO_URI in environment (.env).");
     process.exit(1);
   }
 
-  // Print connection + safety summary
   console.log("DB:", MONGO_URI.includes("@") ? "(atlas uri loaded)" : MONGO_URI);
   console.log("DO_DELETE:", DO_DELETE ? "true (WILL DELETE)" : "false (DRY RUN ONLY)");
-  console.log("Collections to wipe:", "Prospects, Leads, LeadEngagements, Policyholders, ContactAttempts");
-  console.log("Users:", "✅ NOT TOUCHED");
+  console.log("Scope:", "ALL LEADS + dependent collections");
+  console.log("Untouched:", "Users, Prospects");
 
-  // Connect
   await mongoose.connect(MONGO_URI);
 
-  // Pre-check counts
+  header("Snapshot IDs");
+  const ids = await getIdsSnapshot();
+  console.log({
+    leadIds: ids.leadIds.length,
+    engagementIds: ids.engagementIds.length,
+    attemptIds: ids.attemptIds.length,
+    taskIds: ids.taskIds.length,
+  });
+
   header("Pre-check counts (what would be deleted)");
-  const before = await countAll();
+  const before = await countScope(ids);
   console.log(before);
 
-  header("Delete phase (safe order)");
-  /**
-   * Delete order matters due to references:
-   * - Policyholder depends on Lead (leadId)
-   * - ContactAttempt depends on LeadEngagement
-   * - LeadEngagement depends on Lead
-   * - Lead depends on Prospect
-   *
-   * Therefore delete children first to avoid leaving orphan references
-   * (even though MongoDB won’t block deletes by default).
-   */
-  await delAll(Policyholder, "Policyholders");
-  await delAll(ContactAttempt, "ContactAttempts");
-  await delAll(LeadEngagement, "LeadEngagements");
-  await delAll(Lead, "Leads");
-  await delAll(Prospect, "Prospects");
+  header("Delete phase (children -> parents)");
+  await delMany(
+    Notification,
+    { entityType: "Task", entityId: { $in: ids.taskIds } },
+    "Notifications (Task-linked)"
+  );
+  await delMany(Task, { _id: { $in: ids.taskIds } }, "Tasks");
+  await delMany(
+    ScheduledMeeting,
+    { leadEngagementId: { $in: ids.engagementIds } },
+    "ScheduledMeetings"
+  );
+  await delMany(
+    ContactAttempt,
+    { leadEngagementId: { $in: ids.engagementIds } },
+    "ContactAttempts"
+  );
+  await delMany(
+    Policyholder,
+    { leadId: { $in: ids.leadIds } },
+    "Policyholders"
+  );
+  await delMany(
+    LeadEngagement,
+    { _id: { $in: ids.engagementIds } },
+    "LeadEngagements"
+  );
+  await delMany(Lead, { _id: { $in: ids.leadIds } }, "Leads");
 
-  // Post-check counts
   header("Post-check counts");
-  const after = await countAll();
+  const after = await countScope(ids);
   console.log(after);
 
-  // Disconnect cleanly
   await mongoose.disconnect();
 
   header("DONE");
@@ -168,10 +182,10 @@ async function delAll(Model, label) {
     console.log("✅ DRY RUN only. To actually delete, run:");
     console.log("   DO_DELETE=true node reset-db.js");
   }
+
   process.exit(0);
 })().catch(async (err) => {
   console.error("❌ Script failed:", err);
-  // Attempt cleanup
   try {
     await mongoose.disconnect();
   } catch {}
