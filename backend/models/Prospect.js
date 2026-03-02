@@ -157,6 +157,19 @@ const prospectSchema = new mongoose.Schema(
       max: 70,
     },
 
+    civilStatus: {
+      type: String,
+      enum: ["Single", "Married", "Widowed", "Separated", "Annulled"],
+      default: undefined,
+    },
+
+    occupation: {
+      type: String,
+      trim: true,
+      default: "",
+      maxlength: 150,
+    },
+
     /**
      * marketType
      * ----------
