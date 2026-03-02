@@ -258,6 +258,14 @@ function AgentProspectFullDetails() {
 
     if (draft.sex && !["Male", "Female"].includes(draft.sex)) next.sex = "Invalid sex.";
 
+    if (draft.civilStatus && !["Single", "Married", "Widowed", "Separated", "Annulled"].includes(draft.civilStatus)) {
+      next.civilStatus = "Invalid civil status.";
+    }
+
+    if (String(draft.occupation || "").length > 150) {
+      next.occupation = "Occupation must be 150 characters or less.";
+    }
+
     if (draft.prospectType && !["Elite", "Ordinary"].includes(draft.prospectType)) {
       next.prospectType = "Invalid prospect type.";
     }
@@ -353,6 +361,8 @@ const handleSideNav = (key) => {
         phoneNumber: cleanedPhone,
         email: String(draft.email ?? "").trim(),
         sex: draft.sex || "", // allow clearing
+        civilStatus: draft.civilStatus || "", // optional
+        occupation: String(draft.occupation || "").trim(), // optional
         marketType: draft.marketType,
         prospectType: draft.prospectType || "", // allow clearing
       };
@@ -929,6 +939,47 @@ const handleSideNav = (key) => {
                           <option value="Female">Female</option>
                         </select>
                         {errors.sex && <p className="vp-error">{errors.sex}</p>}
+                      </>
+                    )}
+                  </div>
+
+                  <div className="vp-field">
+                    <label className="vp-label">Civil Status (optional)</label>
+                    {!isEditing ? (
+                      <div className="vp-value">{display.civilStatus || "—"}</div>
+                    ) : (
+                      <>
+                        <select
+                          className={`vp-input ${errors.civilStatus ? "error" : ""}`}
+                          value={draft.civilStatus || ""}
+                          onChange={(e) => setDraft((d) => ({ ...d, civilStatus: e.target.value }))}
+                        >
+                          <option value="">—</option>
+                          <option value="Single">Single</option>
+                          <option value="Married">Married</option>
+                          <option value="Widowed">Widowed</option>
+                          <option value="Separated">Separated</option>
+                          <option value="Annulled">Annulled</option>
+                        </select>
+                        {errors.civilStatus && <p className="vp-error">{errors.civilStatus}</p>}
+                      </>
+                    )}
+                  </div>
+
+                  <div className="vp-field">
+                    <label className="vp-label">Occupation (optional)</label>
+                    {!isEditing ? (
+                      <div className="vp-value">{display.occupation || "—"}</div>
+                    ) : (
+                      <>
+                        <input
+                          className={`vp-input ${errors.occupation ? "error" : ""}`}
+                          value={draft.occupation || ""}
+                          onChange={(e) => setDraft((d) => ({ ...d, occupation: e.target.value }))}
+                          maxLength={150}
+                          placeholder="e.g., Engineer"
+                        />
+                        {errors.occupation && <p className="vp-error">{errors.occupation}</p>}
                       </>
                     )}
                   </div>
