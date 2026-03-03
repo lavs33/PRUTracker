@@ -4,6 +4,7 @@ import TopNav from "./components/TopNav";
 import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
 import "./AgentProspectFullDetails.css";
+import { PH_CITY_REGION_OPTIONS, CITY_TO_REGION } from "./constants/phCityRegionOptions";
 
 function AgentProspectFullDetails() {
   const navigate = useNavigate();
@@ -141,6 +142,11 @@ function AgentProspectFullDetails() {
     });
   };
 
+  const cityOptions = useMemo(
+    () => [...PH_CITY_REGION_OPTIONS].sort((a, b) => a.city.localeCompare(b.city)),
+    []
+  );
+
   // Guard
   useEffect(() => {
     if (!user || user.username !== username) {
@@ -258,6 +264,36 @@ function AgentProspectFullDetails() {
 
     if (draft.sex && !["Male", "Female"].includes(draft.sex)) next.sex = "Invalid sex.";
 
+    if (draft.civilStatus && !["Single", "Married", "Widowed", "Separated", "Annulled"].includes(draft.civilStatus)) {
+      next.civilStatus = "Invalid civil status.";
+    }
+
+    if (!draft.occupationCategory || !["Employed", "Self-Employed", "Not Employed"].includes(draft.occupationCategory)) {
+      next.occupationCategory = "Occupation category is required.";
+    }
+
+    const occupationVal = String(draft.occupation || "").trim();
+    if (["Employed", "Self-Employed"].includes(draft.occupationCategory) && !occupationVal) {
+      next.occupation = "Occupation is required for employed/self-employed.";
+    }
+    if (occupationVal.length > 150) {
+      next.occupation = "Occupation must be 150 characters or less.";
+    }
+
+    const addr = draft.address || {};
+    if (!String(addr.line1 || "").trim()) next.addressLine1 = "Street Address Line 1 is required.";
+    if (!String(addr.barangay || "").trim()) next.addressBarangay = "Barangay is required.";
+    if (!String(addr.city || "").trim()) next.addressCity = "City is required.";
+    if (!String(addr.region || "").trim()) next.addressRegion = "Region is required.";
+    const zip = String(addr.zipCode || "").trim();
+    if (!zip) next.addressZipCode = "Zip code is required.";
+    else if (!/^\d{4}$/.test(zip)) next.addressZipCode = "Zip code must be 4 digits.";
+
+    const country = String(addr.country || "Philippines").trim();
+    if (country && country.toLowerCase() !== "philippines") {
+      next.addressCountry = "Country must be Philippines.";
+    }
+
     if (draft.prospectType && !["Elite", "Ordinary"].includes(draft.prospectType)) {
       next.prospectType = "Invalid prospect type.";
     }
@@ -353,6 +389,20 @@ const handleSideNav = (key) => {
         phoneNumber: cleanedPhone,
         email: String(draft.email ?? "").trim(),
         sex: draft.sex || "", // allow clearing
+        civilStatus: draft.civilStatus || "", // optional
+        occupationCategory: draft.occupationCategory || "",
+        occupation: ["Employed", "Self-Employed"].includes(draft.occupationCategory)
+          ? String(draft.occupation || "").trim()
+          : "",
+        address: {
+          line1: String(draft.address?.line1 || "").trim(),
+          line2: String(draft.address?.line2 || "").trim(),
+          barangay: String(draft.address?.barangay || "").trim(),
+          city: String(draft.address?.city || "").trim(),
+          region: String(draft.address?.region || "").trim(),
+          zipCode: String(draft.address?.zipCode || "").trim(),
+          country: "Philippines",
+        },
         marketType: draft.marketType,
         prospectType: draft.prospectType || "", // allow clearing
       };
@@ -470,6 +520,17 @@ const handleSideNav = (key) => {
         sex: prospect.sex || "",
         birthday: prospect.birthday ? toDateInputValue(prospect.birthday) : "",
         age: prospect.age ?? "",
+        occupationCategory: prospect.occupationCategory || "Not Employed",
+        occupation: String(prospect.occupation || "").trim(),
+        address: {
+          line1: String(prospect.address?.line1 || "").trim(),
+          line2: String(prospect.address?.line2 || "").trim(),
+          barangay: String(prospect.address?.barangay || "").trim(),
+          city: String(prospect.address?.city || "").trim(),
+          region: String(prospect.address?.region || "").trim(),
+          zipCode: String(prospect.address?.zipCode || "").trim(),
+          country: "Philippines",
+        },
         marketType: prospect.marketType,
         prospectType: prospect.prospectType || "",
         source: prospect.source,
@@ -526,6 +587,17 @@ const handleSideNav = (key) => {
         sex: prospect.sex || "",
         birthday: prospect.birthday ? toDateInputValue(prospect.birthday) : "",
         age: prospect.age ?? "",
+        occupationCategory: prospect.occupationCategory || "Not Employed",
+        occupation: String(prospect.occupation || "").trim(),
+        address: {
+          line1: String(prospect.address?.line1 || "").trim(),
+          line2: String(prospect.address?.line2 || "").trim(),
+          barangay: String(prospect.address?.barangay || "").trim(),
+          city: String(prospect.address?.city || "").trim(),
+          region: String(prospect.address?.region || "").trim(),
+          zipCode: String(prospect.address?.zipCode || "").trim(),
+          country: "Philippines",
+        },
         marketType: prospect.marketType,
         prospectType: prospect.prospectType || "",
         source: prospect.source,
@@ -930,6 +1002,186 @@ const handleSideNav = (key) => {
                         </select>
                         {errors.sex && <p className="vp-error">{errors.sex}</p>}
                       </>
+                    )}
+                  </div>
+
+                  <div className="vp-field">
+                    <label className="vp-label">Civil Status (optional)</label>
+                    {!isEditing ? (
+                      <div className="vp-value">{display.civilStatus || "—"}</div>
+                    ) : (
+                      <>
+                        <select
+                          className={`vp-input ${errors.civilStatus ? "error" : ""}`}
+                          value={draft.civilStatus || ""}
+                          onChange={(e) => setDraft((d) => ({ ...d, civilStatus: e.target.value }))}
+                        >
+                          <option value="">—</option>
+                          <option value="Single">Single</option>
+                          <option value="Married">Married</option>
+                          <option value="Widowed">Widowed</option>
+                          <option value="Separated">Separated</option>
+                          <option value="Annulled">Annulled</option>
+                        </select>
+                        {errors.civilStatus && <p className="vp-error">{errors.civilStatus}</p>}
+                      </>
+                    )}
+                  </div>
+
+                  <div className="vp-field">
+                    <label className="vp-label">Occupation Category *</label>
+                    {!isEditing ? (
+                      <div className="vp-value">{display.occupationCategory || "—"}</div>
+                    ) : (
+                      <>
+                        <select
+                          className={`vp-input ${errors.occupationCategory ? "error" : ""}`}
+                          value={draft.occupationCategory || ""}
+                          onChange={(e) =>
+                            setDraft((d) => ({
+                              ...d,
+                              occupationCategory: e.target.value,
+                              occupation: e.target.value === "Not Employed" ? "" : d.occupation,
+                            }))
+                          }
+                        >
+                          <option value="">Select</option>
+                          <option value="Employed">Employed</option>
+                          <option value="Self-Employed">Self-Employed</option>
+                          <option value="Not Employed">Not Employed</option>
+                        </select>
+                        {errors.occupationCategory && <p className="vp-error">{errors.occupationCategory}</p>}
+                      </>
+                    )}
+                  </div>
+
+                  {(String(display.occupationCategory || "") === "Employed" ||
+                    String(display.occupationCategory || "") === "Self-Employed" ||
+                    (isEditing && ["Employed", "Self-Employed"].includes(String(draft.occupationCategory || "")))) && (
+                    <div className="vp-field">
+                      <label className="vp-label">Occupation {isEditing ? "*" : ""}</label>
+                      {!isEditing ? (
+                        <div className="vp-value">{display.occupation || "—"}</div>
+                      ) : (
+                        <>
+                          <input
+                            className={`vp-input ${errors.occupation ? "error" : ""}`}
+                            value={draft.occupation || ""}
+                            onChange={(e) => setDraft((d) => ({ ...d, occupation: e.target.value }))}
+                            maxLength={150}
+                            placeholder="e.g., Engineer"
+                          />
+                          {errors.occupation && <p className="vp-error">{errors.occupation}</p>}
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="vp-field">
+                    <label className="vp-label">Street Address Line 1 *</label>
+                    {!isEditing ? (
+                      <div className="vp-value">{display.address?.line1 || "—"}</div>
+                    ) : (
+                      <>
+                        <input
+                          className={`vp-input ${errors.addressLine1 ? "error" : ""}`}
+                          value={draft.address?.line1 || ""}
+                          onChange={(e) => setDraft((d) => ({ ...d, address: { ...(d.address || {}), line1: e.target.value } }))}
+                        />
+                        {errors.addressLine1 && <p className="vp-error">{errors.addressLine1}</p>}
+                      </>
+                    )}
+                  </div>
+
+                  <div className="vp-field">
+                    <label className="vp-label">Street Address Line 2 (optional)</label>
+                    {!isEditing ? (
+                      <div className="vp-value">{display.address?.line2 || "—"}</div>
+                    ) : (
+                      <input
+                        className="vp-input"
+                        value={draft.address?.line2 || ""}
+                        onChange={(e) => setDraft((d) => ({ ...d, address: { ...(d.address || {}), line2: e.target.value } }))}
+                      />
+                    )}
+                  </div>
+
+                  <div className="vp-field">
+                    <label className="vp-label">Barangay *</label>
+                    {!isEditing ? (
+                      <div className="vp-value">{display.address?.barangay || "—"}</div>
+                    ) : (
+                      <>
+                        <input
+                          className={`vp-input ${errors.addressBarangay ? "error" : ""}`}
+                          value={draft.address?.barangay || ""}
+                          onChange={(e) => setDraft((d) => ({ ...d, address: { ...(d.address || {}), barangay: e.target.value } }))}
+                        />
+                        {errors.addressBarangay && <p className="vp-error">{errors.addressBarangay}</p>}
+                      </>
+                    )}
+                  </div>
+
+                  <div className="vp-field">
+                    <label className="vp-label">City *</label>
+                    {!isEditing ? (
+                      <div className="vp-value">{display.address?.city || "—"}</div>
+                    ) : (
+                      <>
+                        <select
+                          className={`vp-input ${errors.addressCity ? "error" : ""}`}
+                          value={draft.address?.city || ""}
+                          onChange={(e) => {
+                            const city = e.target.value;
+                            const region = CITY_TO_REGION[city] || "";
+                            setDraft((d) => ({ ...d, address: { ...(d.address || {}), city, region, country: "Philippines" } }));
+                          }}
+                        >
+                          <option value="">Select city</option>
+                          {cityOptions.map((item) => (
+                            <option key={item.city} value={item.city}>{item.city}</option>
+                          ))}
+                        </select>
+                        {errors.addressCity && <p className="vp-error">{errors.addressCity}</p>}
+                      </>
+                    )}
+                  </div>
+
+                  <div className="vp-field">
+                    <label className="vp-label">Region *</label>
+                    {!isEditing ? (
+                      <div className="vp-value">{display.address?.region || "—"}</div>
+                    ) : (
+                      <>
+                        <input className={`vp-input ${errors.addressRegion ? "error" : ""}`} value={draft.address?.region || ""} readOnly />
+                        {errors.addressRegion && <p className="vp-error">{errors.addressRegion}</p>}
+                      </>
+                    )}
+                  </div>
+
+                  <div className="vp-field">
+                    <label className="vp-label">Zip Code *</label>
+                    {!isEditing ? (
+                      <div className="vp-value">{display.address?.zipCode || "—"}</div>
+                    ) : (
+                      <>
+                        <input
+                          className={`vp-input ${errors.addressZipCode ? "error" : ""}`}
+                          value={draft.address?.zipCode || ""}
+                          onChange={(e) => setDraft((d) => ({ ...d, address: { ...(d.address || {}), zipCode: String(e.target.value).replace(/[^\d]/g, "").slice(0, 4) } }))}
+                          inputMode="numeric"
+                        />
+                        {errors.addressZipCode && <p className="vp-error">{errors.addressZipCode}</p>}
+                      </>
+                    )}
+                  </div>
+
+                  <div className="vp-field">
+                    <label className="vp-label">Country</label>
+                    {!isEditing ? (
+                      <div className="vp-value">{display.address?.country || "Philippines"}</div>
+                    ) : (
+                      <input className="vp-input" value="Philippines" readOnly />
                     )}
                   </div>
 

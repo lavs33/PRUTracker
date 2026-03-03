@@ -157,6 +157,36 @@ const prospectSchema = new mongoose.Schema(
       max: 70,
     },
 
+    civilStatus: {
+      type: String,
+      enum: ["Single", "Married", "Widowed", "Separated", "Annulled"],
+      default: undefined,
+    },
+
+    occupationCategory: {
+      type: String,
+      enum: ["Employed", "Self-Employed", "Not Employed"],
+      required: true,
+      default: "Not Employed",
+    },
+
+    occupation: {
+      type: String,
+      trim: true,
+      default: "",
+      maxlength: 150,
+    },
+
+    address: {
+      line1: { type: String, trim: true, default: "" },
+      line2: { type: String, trim: true, default: "" },
+      barangay: { type: String, trim: true, default: "" },
+      city: { type: String, trim: true, default: "" },
+      region: { type: String, trim: true, default: "" },
+      zipCode: { type: String, trim: true, default: "" },
+      country: { type: String, trim: true, default: "Philippines" },
+    },
+
     /**
      * marketType
      * ----------
