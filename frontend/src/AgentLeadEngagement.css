@@ -267,6 +267,12 @@
   gap: 10px;
 }
 
+.le-blockHeader.withTopBorder {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid #eef0f2;
+}
+
 .le-blockTitle {
   margin: 0;
   font-size: 18px;
@@ -300,6 +306,16 @@
   color: #6b6e6a;
   font-size: 13px;
   font-weight: 800;
+}
+
+
+.le-attemptSectionHeader {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed #e6e7ea;
+  font-size: 13px;
+  font-weight: 900;
+  color: #373a36;
 }
 
 .le-attemptMeta {
@@ -337,6 +353,16 @@
   font-family: "FSAlbertArabic", sans-serif;
   font-weight: 700;
   opacity: 0.75;
+}
+
+
+.le-activitySectionHeader {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px dashed #e6e7ea;
+  font-size: 13px;
+  font-weight: 900;
+  color: #373a36;
 }
 
 .le-formRow {
