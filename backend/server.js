@@ -29,6 +29,9 @@ const Policyholder = require("./models/Policyholder");
 const Lead = require("./models/Lead");
 const LeadEngagement = require("./models/LeadEngagement");
 const ContactAttempt = require("./models/ContactAttempt");
+const ScheduledMeeting = require("./models/ScheduledMeeting");
+const NeedsAssessment = require("./models/NeedsAssessment");
+const Product = require("./models/Product");
 const Task = require("./models/Task");
 const Notification = require("./models/Notification");
 
@@ -442,6 +445,117 @@ function isDueTodayInManila(dueAt) {
   const todayKey = dateKeyInTZ(new Date(), "Asia/Manila");
   const dueKey = dateKeyInTZ(dueAt, "Asia/Manila");
   return !!todayKey && todayKey === dueKey;
+}
+
+function formatTimeInManila(date) {
+  const d = new Date(date);
+  if (Number.isNaN(d.getTime())) return "";
+
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Manila",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  }).format(d);
+}
+
+function formatDateTimeInManila(date) {
+  const d = new Date(date);
+  if (Number.isNaN(d.getTime())) return "";
+
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Manila",
+    month: "short",
+    day: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  }).format(d);
+}
+
+async function createTaskAddedNotifications({
+  assignedToUserId,
+  task,
+  prospectFullName,
+  leadCode,
+  session,
+}) {
+  await Notification.create(
+    [
+      {
+        assignedToUserId,
+        type: "TASK_ADDED",
+        title: "New task added",
+        message: `${task.title} was created for ${prospectFullName} (Lead ${leadCode || "—"}).`,
+        status: "Unread",
+        entityType: "Task",
+        entityId: task._id,
+      },
+    ],
+    { session }
+  );
+
+  if (task?.dueAt && isDueTodayInManila(task.dueAt)) {
+    await Notification.create(
+      [
+        {
+          assignedToUserId,
+          type: "TASK_DUE_TODAY",
+          title: "Task due today",
+          message: `${task.title} for ${prospectFullName} (Lead ${leadCode || "—"}) is due today at ${formatTimeInManila(task.dueAt)}.`,
+          status: "Unread",
+          entityType: "Task",
+          entityId: task._id,
+          dedupeKey: `TASK_DUE_TODAY:${task._id}:${dateKeyInTZ(task.dueAt, "Asia/Manila")}`,
+        },
+      ],
+      { session }
+    );
+  }
+}
+
+async function ensureTaskMissedNotificationsForUser(userObjectId) {
+  const now = new Date();
+  const overdueTasks = await Task.find({
+    assignedToUserId: userObjectId,
+    status: "Open",
+    dueAt: { $lt: now },
+  })
+    .select("_id title dueAt")
+    .lean();
+
+  if (!overdueTasks.length) return;
+
+  const writes = overdueTasks
+    .map((task) => {
+      const dueKey = dateKeyInTZ(task.dueAt, "Asia/Manila");
+      if (!dueKey) return null;
+
+      const dedupeKey = `TASK_MISSED:${task._id}:${dueKey}`;
+      return {
+        updateOne: {
+          filter: { assignedToUserId: userObjectId, dedupeKey },
+          update: {
+            $setOnInsert: {
+              assignedToUserId: userObjectId,
+              type: "TASK_MISSED",
+              title: "Task missed",
+              message: `${task.title || "Task"} is now overdue.`,
+              status: "Unread",
+              entityType: "Task",
+              entityId: task._id,
+              dedupeKey,
+            },
+          },
+          upsert: true,
+        },
+      };
+    })
+    .filter(Boolean);
+
+  if (!writes.length) return;
+  await Notification.bulkWrite(writes, { ordered: false });
 }
 
 /**
@@ -1685,6 +1799,10 @@ app.put("/api/prospects/:prospectId", async (req, res) => {
         phoneNumber,
         email,
         sex,
+        civilStatus,
+        occupationCategory,
+        occupation,
+        address,
         birthday,
         age,
         marketType,
@@ -1739,6 +1857,51 @@ app.put("/api/prospects/:prospectId", async (req, res) => {
       // Sex (optional)
       if (sex && !["Male", "Female"].includes(sex)) {
         throw Object.assign(new Error("Invalid sex."), { status: 400 });
+      }
+
+      // Civil status (optional)
+      if (civilStatus && !["Single", "Married", "Widowed", "Separated", "Annulled"].includes(civilStatus)) {
+        throw Object.assign(new Error("Invalid civil status."), { status: 400 });
+      }
+
+      // Occupation category + occupation (optional in full-details edit)
+      const occupationCategoryProvided = Object.prototype.hasOwnProperty.call(req.body, "occupationCategory");
+      const occupationProvided = Object.prototype.hasOwnProperty.call(req.body, "occupation");
+      const rawOccupationCategory = String(occupationCategory ?? "").trim();
+      const cleanOccupation = String(occupation ?? "").trim();
+      let cleanOccupationCategory = rawOccupationCategory;
+      if (!cleanOccupationCategory && cleanOccupation) cleanOccupationCategory = "Employed";
+
+      if (cleanOccupationCategory && !["Employed", "Self-Employed", "Not Employed"].includes(cleanOccupationCategory)) {
+        throw Object.assign(new Error("Invalid occupation category."), { status: 400 });
+      }
+      if (["Employed", "Self-Employed"].includes(cleanOccupationCategory) && !cleanOccupation && occupationProvided) {
+        throw Object.assign(new Error("Occupation is required for employed/self-employed prospects."), { status: 400 });
+      }
+      if (cleanOccupation.length > 150) {
+        throw Object.assign(new Error("Occupation must be 150 characters or less."), { status: 400 });
+      }
+
+      // Address (Philippines only, optional in full-details edit)
+      const addressProvided = Object.prototype.hasOwnProperty.call(req.body, "address");
+      const addressIn = address && typeof address === "object" ? address : {};
+      const line = String(addressIn.line ?? "").trim();
+      const barangay = String(addressIn.barangay ?? "").trim();
+      const city = String(addressIn.city ?? "").trim();
+      const otherCity = String(addressIn.otherCity ?? "").trim();
+      const region = String(addressIn.region ?? "").trim();
+      const zipCode = String(addressIn.zipCode ?? "").trim();
+      const country = String(addressIn.country ?? "Philippines").trim() || "Philippines";
+
+      if (zipCode && !/^\d{4}$/.test(zipCode)) throw Object.assign(new Error("Zip code must be 4 digits."), { status: 400 });
+      if (country && country.toLowerCase() !== "philippines") {
+        throw Object.assign(new Error("Country must be Philippines."), { status: 400 });
+      }
+      if (city === "Other" && !otherCity) {
+        throw Object.assign(new Error("Other city is required when city is Other."), { status: 400 });
+      }
+      if (city && !region) {
+        throw Object.assign(new Error("Region is required when city is provided."), { status: 400 });
       }
 
       // ===========================
@@ -1902,6 +2065,31 @@ app.put("/api/prospects/:prospectId", async (req, res) => {
       existing.email = cleanEmail;
 
       existing.sex = sex ? sex : undefined;
+      existing.civilStatus = civilStatus ? civilStatus : undefined;
+
+      if (occupationCategoryProvided || occupationProvided) {
+        const nextOccupationCategory = occupationCategoryProvided
+          ? (cleanOccupationCategory || "Not Employed")
+          : (cleanOccupationCategory || existing.occupationCategory || "Not Employed");
+        existing.occupationCategory = nextOccupationCategory;
+        if (nextOccupationCategory === "Not Employed") {
+          existing.occupation = "";
+        } else if (occupationProvided) {
+          existing.occupation = cleanOccupation;
+        }
+      }
+
+      if (addressProvided) {
+        existing.address = {
+          line,
+          barangay,
+          city,
+          otherCity,
+          region,
+          zipCode,
+          country: "Philippines",
+        };
+      }
 
       existing.birthday = nextBirthday;
       existing.age = nextAge;
@@ -2440,16 +2628,25 @@ app.post("/api/leads", async (req, res) => {
           createdLeadDoc = createdLead;
 
           // 2) CREATE LEAD ENGAGEMENT (1:1 record controlling the engagement pipeline)
+          const engagementStartedAt = new Date();
+
           const engagementDocs = await LeadEngagement.create(
             [
               {
                 leadId: createdLead._id,
 
-                currentStage: "Not Started",
-                currentActivityKey: null,
-                stageStartedAt: null,
+                currentStage: "Contacting",
+                currentActivityKey: "Attempt Contact",
+                stageStartedAt: engagementStartedAt,
                 stageCompletedAt: null,
-                stageHistory: [],
+                stageHistory: [
+                  {
+                    stage: "Contacting",
+                    startedAt: engagementStartedAt,
+                    completedAt: null,
+                    reason: "Lead created.",
+                  },
+                ],
 
                 isBlocked: false,
 
@@ -2489,48 +2686,13 @@ app.post("/api/leads", async (req, res) => {
 
           const createdTask = taskDocs[0];
 
-          // 4) CREATE NOTIFICATION: TASK_ADDED (lets the agent know a new task exists)
-          await Notification.create(
-            [
-              {
-                assignedToUserId: userObjectId,
-
-                type: "TASK_ADDED",
-                title: "New task added",
-                message: `An Approach task was created for ${prospectFullName} (Lead ${leadCode}).`,
-
-                status: "Unread",
-
-                entityType: "Task",
-                entityId: createdTask._id,
-              },
-            ],
-            { session }
-          );
-
-
-          /**
-           * Optional: TASK_DUE_TODAY notification
-           * - Only created if due date is "today" in Asia/Manila timezone.
-           * - Includes a dedupeKey to avoid duplicate "due today" notifications per task per date.
-           */
-          if (isDueTodayInManila(due)) {
-            await Notification.create(
-              [
-                {
-                  assignedToUserId: userObjectId,
-                  type: "TASK_DUE_TODAY",
-                  title: "Task due today",
-                  message: `Approach task for ${prospectFullName} (Lead ${leadCode}) is due today at 6:00 PM.`,
-                  status: "Unread",
-                  entityType: "Task",
-                  entityId: createdTask._id,
-                  dedupeKey: `TASK_DUE_TODAY:${createdTask._id}:${dateKeyInTZ(due, "Asia/Manila")}`,
-                },
-              ],
-              { session }
-            );
-          }
+          await createTaskAddedNotifications({
+            assignedToUserId: userObjectId,
+            task: createdTask,
+            prospectFullName,
+            leadCode,
+            session,
+          });
         });
 
         // Transaction succeeded → return created lead
@@ -3017,14 +3179,22 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
     let engagement = await LeadEngagement.findOne({ leadId: lead._id }).lean();
 
     if (!engagement) {
+      const startedAt = new Date();
       const created = await LeadEngagement.create({
         leadId: lead._id,
 
-        currentStage: "Not Started",
-        currentActivityKey: null,
-        stageStartedAt: null,
+        currentStage: "Contacting",
+        currentActivityKey: "Attempt Contact",
+        stageStartedAt: startedAt,
         stageCompletedAt: null,
-        stageHistory: [],
+        stageHistory: [
+          {
+            stage: "Contacting",
+            startedAt,
+            completedAt: null,
+            reason: "Auto-created missing engagement record.",
+          },
+        ],
 
         isBlocked: false,
 
@@ -3047,8 +3217,21 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
       leadEngagementId: engagement._id,
     })
       .sort({ attemptNo: 1 })
-      .select("attemptNo primaryChannel otherChannels response attemptedAt contactInfoVersion outcomeActivity notes")
+      .select(
+        "attemptNo primaryChannel otherChannels response attemptedAt contactInfoVersion outcomeActivity notes phoneValidation interestLevel preferredChannel preferredChannelOther"
+      )
       .lean();
+
+    const scheduledMeetings = await ScheduledMeeting.find({
+      leadEngagementId: engagement._id,
+      status: { $ne: "Cancelled" },
+    })
+      .sort({ startAt: -1 })
+      .select("meetingType startAt endAt durationMin mode platform platformOther link inviteSent place")
+      .lean();
+
+    const latestMeeting = scheduledMeetings[0] || null;
+    const lastAttemptNo = attempts.length ? attempts[attempts.length - 1].attemptNo : null;
 
     /**
      * 4.5) Load engagement-related tasks for the sidebar (may be empty)
@@ -3103,6 +3286,24 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
       contactInfoVersionUsed: a.contactInfoVersion, 
       outcomeActivity: a.outcomeActivity || "Attempt Contact",
       notes: a.notes || "",
+      phoneValidation: a.phoneValidation || "",
+      interestLevel: a.interestLevel || "",
+      preferredChannel: a.preferredChannel || "",
+      preferredChannelOther: a.preferredChannelOther || "",
+      ...(function () {
+        const m = a.attemptNo === lastAttemptNo ? latestMeeting : null;
+        return {
+          meetingAt: m?.startAt || null,
+          meetingEndAt: m?.endAt || null,
+          meetingDurationMin: Number(m?.durationMin || 0) || null,
+          meetingMode: m?.mode || "",
+          meetingPlatform: m?.platform || "",
+          meetingPlatformOther: m?.platformOther || "",
+          meetingLink: m?.link || "",
+          meetingInviteSent: Boolean(m?.inviteSent),
+          meetingPlace: m?.place || "",
+        };
+      })(),
     }));
 
     // Response combines Prospect + Lead + Engagement + Attempts + Tasks
@@ -3297,16 +3498,24 @@ app.post("/api/prospects/:prospectId/leads/:leadId/contact-attempts", async (req
       let engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).session(session);
 
       if (!engagement) {
+        const startedAt = new Date();
         // Failsafe create if missing (prevents UI/flow break)
         engagement = await LeadEngagement.create(
           [
             {
               leadId: leadObjectId,
-              currentStage: "Not Started",
-              currentActivityKey: null,
-              stageStartedAt: null,
+              currentStage: "Contacting",
+              currentActivityKey: "Attempt Contact",
+              stageStartedAt: startedAt,
               stageCompletedAt: null,
-              stageHistory: [],
+              stageHistory: [
+                {
+                  stage: "Contacting",
+                  startedAt,
+                  completedAt: null,
+                  reason: "Auto-created during contact attempt.",
+                },
+              ],
               isBlocked: false,
               contactAttemptsCount: 0,
               lastContactAttemptNo: 0,
@@ -3455,45 +3664,38 @@ app.post("/api/prospects/:prospectId/leads/:leadId/contact-attempts", async (req
   }
 });
 
+async function getLatestRespondedAttemptForEngagement(leadEngagementId, session) {
+  return ContactAttempt.findOne({
+    leadEngagementId,
+    response: "Responded",
+  })
+    .sort({ attemptNo: -1 })
+    .session(session || null);
+}
+
 /* ===========================
-   VALIDATE CONTACT (Wrong Contact)
+   VALIDATE CONTACT: UPDATE CURRENT ATTEMPT (Agent)
    POST /api/prospects/:prospectId/leads/:leadId/validate-contact?userId=...
 
    Purpose:
-   - Handles the "Wrong Contact" validation outcome.
-   - When agent confirms wrong contact:
-     1) Prospect.status becomes "Wrong Contact"
-     2) Engagement becomes blocked (isBlocked = true)
-     3) Engagement.currentActivityKey is persisted as "Validate Contact" (tracker step)
-     4) Open APPROACH task (if any) is completed
-     5) Ensures an Open UPDATE_CONTACT_INFO task exists (create if missing)
-     6) Creates notifications only when UPDATE_CONTACT_INFO task was newly created
-
-   Inputs:
-   Body: { result: "WRONG_CONTACT" }  // Only supported value for now
-
-   Atomicity:
-   - All changes happen inside a MongoDB transaction.
-   - If anything fails mid-way, none of the changes commit.
+   - Updates the SAME latest responded ContactAttempt with phone validation result.
+   - Does NOT create a new ContactAttempt.
 =========================== */
 app.post("/api/prospects/:prospectId/leads/:leadId/validate-contact", async (req, res) => {
-  // Start session so Prospect + Engagement + Task + Notification changes commit together
   const session = await mongoose.startSession();
 
   try {
     const { userId } = req.query;
     const { prospectId, leadId } = req.params;
-    const { result } = req.body;
+    const result = String(req.body?.result || "").trim().toUpperCase();
 
-    // Basic required ID validation
     if (!userId) return res.status(400).json({ message: "Missing userId." });
     if (!mongoose.isValidObjectId(userId)) return res.status(400).json({ message: "Invalid userId." });
     if (!mongoose.isValidObjectId(prospectId)) return res.status(400).json({ message: "Invalid prospectId." });
     if (!mongoose.isValidObjectId(leadId)) return res.status(400).json({ message: "Invalid leadId." });
 
-    // Only support WRONG_CONTACT for now (future: CORRECT_CONTACT, etc.)
-    if (String(result) !== "WRONG_CONTACT") {
-      return res.status(400).json({ message: "Only WRONG_CONTACT is supported for now." });
+    if (!["CORRECT", "WRONG_CONTACT"].includes(result)) {
+      return res.status(400).json({ message: "result must be CORRECT or WRONG_CONTACT." });
     }
 
     const userObjectId = new mongoose.Types.ObjectId(userId);
@@ -3501,49 +3703,57 @@ app.post("/api/prospects/:prospectId/leads/:leadId/validate-contact", async (req
     const leadObjectId = new mongoose.Types.ObjectId(leadId);
 
     await session.withTransaction(async () => {
-      // 1) Authorization: prospect must belong to agent
       const prospect = await Prospect.findOne({
         _id: prospectObjectId,
         assignedToUserId: userObjectId,
       }).session(session);
-
       if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
 
-      // 2) Lead must belong to that prospect
       const lead = await Lead.findOne({
         _id: leadObjectId,
         prospectId: prospectObjectId,
       }).session(session);
-
       if (!lead) throw Object.assign(new Error("Lead not found."), { status: 404 });
 
-      // 3) Engagement must exist (this endpoint does not auto-create engagement)
-      const engagement = await LeadEngagement.findOne({
-        leadId: leadObjectId,
-      }).session(session);
+      const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).session(session);
+      if (!engagement) throw Object.assign(new Error("Engagement not found."), { status: 404 });
 
-      if (!engagement) {
-        throw Object.assign(new Error("Engagement not found."), { status: 404 });
+      const attempt = await ContactAttempt.findOne({
+        leadEngagementId: engagement._id,
+        response: "Responded",
+      })
+        .sort({ attemptNo: -1 })
+        .session(session);
+
+      if (!attempt) {
+        throw Object.assign(new Error("No responded contact attempt found to validate."), { status: 409 });
       }
 
-      // Guard: prevent repeating the flow if already blocked
-      // This avoids duplicate update tasks + duplicate notifications
+      if (String(attempt.phoneValidation || "").trim()) {
+        throw Object.assign(new Error("This attempt has already been validated."), { status: 409 });
+      }
+
+      attempt.phoneValidation = result;
+      attempt.outcomeActivity = "Validate Contact";
+      await attempt.save({ session });
+
+      if (result === "CORRECT") {
+        engagement.currentActivityKey = "Assess Interest";
+        await engagement.save({ session });
+        return;
+      }
+
       if (engagement.isBlocked) {
         throw Object.assign(new Error("Engagement is already blocked."), { status: 409 });
       }
 
-      // 4) Mark Prospect as Wrong Contact (this impacts Prospect-level UI + filtering)
       prospect.status = "Wrong Contact";
       await prospect.save({ session });
 
-      // 5) Block Engagement so no new attempts can be created until contact info is updated
-      // Also persist the tracker step explicitly as "Validate Contact"
       engagement.isBlocked = true;
       engagement.currentActivityKey = "Validate Contact";
       await engagement.save({ session });
 
-      // 6) Complete open APPROACH task (if exists)
-      // This prevents "Contact lead" tasks staying open after wrong contact is confirmed
       const openApproachTask = await Task.findOne({
         assignedToUserId: userObjectId,
         prospectId: prospectObjectId,
@@ -3558,7 +3768,6 @@ app.post("/api/prospects/:prospectId/leads/:leadId/validate-contact", async (req
         await openApproachTask.save({ session });
       }
 
-      // 7) Ensure there's an Open UPDATE_CONTACT_INFO task (create only if missing)
       let updateTask = await Task.findOne({
         assignedToUserId: userObjectId,
         prospectId: prospectObjectId,
@@ -3569,7 +3778,6 @@ app.post("/api/prospects/:prospectId/leads/:leadId/validate-contact", async (req
 
       let createdNewUpdateTask = false;
 
-      // If missing, create it with due date = now + 2 days
       if (!updateTask) {
         const due = new Date();
         due.setDate(due.getDate() + 2);
@@ -3582,7 +3790,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/validate-contact", async (req
               leadEngagementId: engagement._id,
               type: "UPDATE_CONTACT_INFO",
               title: "Update phone number",
-              description: `Phone number for this prospect was marked invalid. Update required before proceeding.`,
+              description: "Phone number for this prospect was marked invalid. Update required before proceeding.",
               dueAt: due,
               status: "Open",
             },
@@ -3593,17 +3801,10 @@ app.post("/api/prospects/:prospectId/leads/:leadId/validate-contact", async (req
         createdNewUpdateTask = true;
       }
 
-      // Display name used in notifications
-      const fullName = `${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${
-        prospect.lastName
-      }`.trim();
-
-      // Use the actual dueAt regardless of whether task existed or was created
+      const fullName = `${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName}`.trim();
       const dueAt = updateTask?.dueAt;
 
-      // 8) Notifications are only created if we just created the update task
       if (createdNewUpdateTask) {
-        // 8a) TASK_ADDED
         await Notification.create(
           [
             {
@@ -3619,7 +3820,6 @@ app.post("/api/prospects/:prospectId/leads/:leadId/validate-contact", async (req
           { session }
         );
 
-        // 8b) TASK_DUE_TODAY (only if due date is today in Asia/Manila)
         if (dueAt && isDueTodayInManila(dueAt)) {
           await Notification.create(
             [
@@ -3640,7 +3840,12 @@ app.post("/api/prospects/:prospectId/leads/:leadId/validate-contact", async (req
       }
     });
 
-    return res.json({ message: "Marked as Wrong Contact. Update task created." });
+    return res.json({
+      message:
+        result === "CORRECT"
+          ? "Contact validated as correct. Proceed to Assess Interest."
+          : "Marked as Wrong Contact. Update task created.",
+    });
   } catch (err) {
     console.error("Validate contact error:", err);
     return res.status(err?.status || 500).json({ message: err.message || "Server error." });
@@ -3648,6 +3853,1231 @@ app.post("/api/prospects/:prospectId/leads/:leadId/validate-contact", async (req
     session.endSession();
   }
 });
+
+app.post("/api/prospects/:prospectId/leads/:leadId/assess-interest", async (req, res) => {
+  const session = await mongoose.startSession();
+  try {
+    const { userId } = req.query;
+    const { prospectId, leadId } = req.params;
+    const { interestLevel, preferredChannel, preferredChannelOther } = req.body;
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId)) return res.status(400).json({ message: "Invalid userId." });
+    if (!mongoose.isValidObjectId(prospectId)) return res.status(400).json({ message: "Invalid prospectId." });
+    if (!mongoose.isValidObjectId(leadId)) return res.status(400).json({ message: "Invalid leadId." });
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+
+    await session.withTransaction(async () => {
+      const prospect = await Prospect.findOne({ _id: prospectId, assignedToUserId: userObjectId }).session(session);
+      if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
+
+      const lead = await Lead.findOne({ _id: leadId, prospectId }).session(session);
+      if (!lead) throw Object.assign(new Error("Lead not found."), { status: 404 });
+
+      const engagement = await LeadEngagement.findOne({ leadId }).session(session);
+      if (!engagement) throw Object.assign(new Error("Engagement not found."), { status: 404 });
+
+      if (engagement.currentActivityKey !== "Assess Interest") {
+        throw Object.assign(new Error("Assess Interest is not the current activity."), { status: 409 });
+      }
+
+      const lvl = String(interestLevel || "").trim().toUpperCase();
+      if (!["INTERESTED", "NOT_INTERESTED"].includes(lvl)) {
+        throw Object.assign(new Error("interestLevel must be INTERESTED or NOT_INTERESTED."), { status: 400 });
+      }
+
+      const attempt = await getLatestRespondedAttemptForEngagement(engagement._id, session);
+      if (!attempt) throw Object.assign(new Error("No responded contact attempt found."), { status: 409 });
+
+      attempt.interestLevel = lvl;
+      attempt.outcomeActivity = "Assess Interest";
+
+      if (lvl === "INTERESTED") {
+        const pc = String(preferredChannel || "").trim();
+        if (!["SMS", "WhatsApp", "Viber", "Telegram", "Other"].includes(pc)) {
+          throw Object.assign(new Error("Invalid preferredChannel."), { status: 400 });
+        }
+        attempt.preferredChannel = pc;
+        attempt.preferredChannelOther = pc === "Other" ? String(preferredChannelOther || "").trim() : undefined;
+
+        if (pc === "Other" && !attempt.preferredChannelOther) {
+          throw Object.assign(new Error("preferredChannelOther is required when preferredChannel is Other."), {
+            status: 400,
+          });
+        }
+
+        engagement.currentActivityKey = "Schedule Meeting";
+      } else {
+        attempt.preferredChannel = undefined;
+        attempt.preferredChannelOther = undefined;
+        engagement.currentActivityKey = "Assess Interest";
+      }
+
+      await attempt.save({ session });
+      await engagement.save({ session });
+    });
+
+    return res.json({ message: "Assess Interest saved." });
+  } catch (err) {
+    console.error("Assess interest error:", err);
+    return res.status(err?.status || 500).json({ message: err?.message || "Server error." });
+  } finally {
+    session.endSession();
+  }
+});
+
+
+
+function isValidHttpUrl(value) {
+  try {
+    const u = new URL(String(value || "").trim());
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function combineDateAndTimeLocal(dateStr, timeStr) {
+  const [y, m, d] = String(dateStr || "").split("-").map((n) => Number(n));
+  const [hh, mm] = String(timeStr || "").split(":").map((n) => Number(n));
+
+  if (!y || !m || !d || Number.isNaN(hh) || Number.isNaN(mm)) return null;
+  return new Date(y, m - 1, d, hh, mm, 0, 0);
+}
+
+function isMeetingSlotValidWindow(startAt, durationMin) {
+  if (!(startAt instanceof Date) || Number.isNaN(startAt.getTime())) return false;
+  if (![30, 60, 90, 120].includes(Number(durationMin))) return false;
+
+  const start = new Date(startAt.getTime());
+  const end = new Date(startAt.getTime() + Number(durationMin) * 60 * 1000);
+
+  const startMin = start.getHours() * 60 + start.getMinutes();
+  const endMin = end.getHours() * 60 + end.getMinutes();
+  return startMin >= 7 * 60 && endMin <= 21 * 60;
+}
+
+async function getAgentMeetingWindows(userObjectId, from, to, session) {
+  const leads = await Lead.find({})
+    .select("_id prospectId")
+    .session(session || null)
+    .lean();
+
+  const prospectIds = [...new Set(leads.map((l) => String(l.prospectId)).filter(Boolean))];
+  const prospects = prospectIds.length
+    ? await Prospect.find({ _id: { $in: prospectIds }, assignedToUserId: userObjectId })
+        .select("_id")
+        .session(session || null)
+        .lean()
+    : [];
+
+  const allowedProspectIds = new Set(prospects.map((p) => String(p._id)));
+  const leadIdsForAgent = leads
+    .filter((l) => allowedProspectIds.has(String(l.prospectId)))
+    .map((l) => l._id);
+
+  if (!leadIdsForAgent.length) return [];
+
+  const engagements = await LeadEngagement.find({ leadId: { $in: leadIdsForAgent } })
+    .select("_id")
+    .session(session || null)
+    .lean();
+
+  const engagementIds = engagements.map((e) => e._id);
+  if (!engagementIds.length) return [];
+
+  const q = {
+    leadEngagementId: { $in: engagementIds },
+    status: { $ne: "Cancelled" },
+  };
+
+  if (from || to) {
+    q.startAt = {};
+    if (from) q.startAt.$gte = from;
+    if (to) q.startAt.$lt = to;
+  }
+
+  const meetings = await ScheduledMeeting.find(q)
+    .select("startAt endAt durationMin")
+    .session(session || null)
+    .lean();
+
+  return meetings
+    .map((m) => {
+      const start = m.startAt ? new Date(m.startAt) : null;
+      if (!start || Number.isNaN(start.getTime())) return null;
+
+      let end = m.endAt ? new Date(m.endAt) : null;
+      if (!end || Number.isNaN(end.getTime())) {
+        const duration = Number(m.durationMin || 120);
+        end = new Date(start.getTime() + duration * 60 * 1000);
+      }
+
+      return { start, end };
+    })
+    .filter(Boolean);
+}
+
+function hasMeetingConflict(startAt, endAt, windows) {
+  return windows.some((w) => w.start < endAt && w.end > startAt);
+}
+
+app.get("/api/agents/:agentId/meeting-availability", async (req, res) => {
+  const session = await mongoose.startSession();
+  try {
+    const { userId } = req.query;
+    const { agentId } = req.params;
+    const days = Math.min(Math.max(Number(req.query.days || 30), 1), 60);
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId) || !mongoose.isValidObjectId(agentId)) {
+      return res.status(400).json({ message: "Invalid userId/agentId." });
+    }
+    if (String(userId) !== String(agentId)) {
+      return res.status(403).json({ message: "Forbidden." });
+    }
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    start.setDate(start.getDate() + 1);
+
+    const end = new Date(start);
+    end.setDate(end.getDate() + days);
+
+    const windows = await getAgentMeetingWindows(userObjectId, start, end, session);
+
+    return res.json({
+      fromDate: start.toISOString(),
+      toDate: end.toISOString(),
+      bookedWindows: windows.map((w) => ({ startAt: w.start.toISOString(), endAt: w.end.toISOString() })),
+    });
+  } catch (err) {
+    console.error("Meeting availability error:", err);
+    return res.status(500).json({ message: "Server error." });
+  } finally {
+    session.endSession();
+  }
+});
+
+app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req, res) => {
+  const session = await mongoose.startSession();
+  try {
+    const { userId } = req.query;
+    const { prospectId, leadId } = req.params;
+    const {
+      meetingAt,
+      meetingDate,
+      meetingStartTime,
+      meetingDurationMin,
+      meetingMode,
+      meetingPlatform,
+      meetingPlatformOther,
+      meetingLink,
+      meetingInviteSent,
+      meetingPlace,
+    } = req.body;
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId)) return res.status(400).json({ message: "Invalid userId." });
+    if (!mongoose.isValidObjectId(prospectId)) return res.status(400).json({ message: "Invalid prospectId." });
+    if (!mongoose.isValidObjectId(leadId)) return res.status(400).json({ message: "Invalid leadId." });
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
+    const leadObjectId = new mongoose.Types.ObjectId(leadId);
+
+    await session.withTransaction(async () => {
+      const prospect = await Prospect.findOne({
+        _id: prospectObjectId,
+        assignedToUserId: userObjectId,
+      }).session(session);
+      if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
+
+      const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).session(session);
+      if (!lead) throw Object.assign(new Error("Lead not found."), { status: 404 });
+
+      const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).session(session);
+      if (!engagement) throw Object.assign(new Error("Engagement not found."), { status: 404 });
+
+      if (engagement.currentActivityKey !== "Schedule Meeting") {
+        throw Object.assign(new Error("Schedule Meeting is not the current activity."), { status: 409 });
+      }
+
+      const durationMin = Number(meetingDurationMin || 120);
+      const dt = meetingDate && meetingStartTime
+        ? combineDateAndTimeLocal(meetingDate, meetingStartTime)
+        : new Date(meetingAt);
+
+      if (!dt || Number.isNaN(dt.getTime())) {
+        throw Object.assign(new Error("meeting date/time is required and must be valid."), { status: 400 });
+      }
+
+      const tomorrow = new Date();
+      tomorrow.setHours(0, 0, 0, 0);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+
+      const latestDay = new Date(tomorrow);
+      latestDay.setDate(latestDay.getDate() + 30);
+
+      if (dt < tomorrow || dt >= latestDay) {
+        throw Object.assign(new Error("Meeting date must be between tomorrow and the next 30 days."), { status: 400 });
+      }
+
+      if (!isMeetingSlotValidWindow(dt, durationMin)) {
+        throw Object.assign(
+          new Error("Meeting must start between 7:00 AM and 9:00 PM, and duration must be 30/60/90/120 minutes."),
+          { status: 400 }
+        );
+      }
+
+      const endAt = new Date(dt.getTime() + durationMin * 60 * 1000);
+
+      const windows = await getAgentMeetingWindows(userObjectId, null, null, session);
+      if (hasMeetingConflict(dt, endAt, windows)) {
+        throw Object.assign(new Error("Selected time slot conflicts with an existing meeting."), {
+          status: 409,
+          code: "MEETING_CONFLICT",
+        });
+      }
+
+      const mode = String(meetingMode || "").trim();
+      if (!["Online", "Face-to-face"].includes(mode)) {
+        throw Object.assign(new Error("meetingMode must be Online or Face-to-face."), { status: 400 });
+      }
+
+      const platform = String(meetingPlatform || "").trim();
+      const platformOther = String(meetingPlatformOther || "").trim();
+      const link = String(meetingLink || "").trim();
+      const place = String(meetingPlace || "").trim();
+
+      if (mode === "Online") {
+        if (!["Zoom", "Google Meet", "Other"].includes(platform)) {
+          throw Object.assign(new Error("Invalid meetingPlatform."), { status: 400 });
+        }
+        if (platform === "Other" && !platformOther) {
+          throw Object.assign(new Error("meetingPlatformOther is required when meetingPlatform is Other."), { status: 400 });
+        }
+        if (!link) throw Object.assign(new Error("meetingLink is required for online meeting."), { status: 400 });
+        if (!isValidHttpUrl(link)) {
+          throw Object.assign(new Error("meetingLink must be a valid http/https URL."), { status: 400 });
+        }
+        if (meetingInviteSent !== true) {
+          throw Object.assign(new Error("meetingInviteSent must be true before saving an online meeting."), {
+            status: 400,
+          });
+        }
+      } else {
+        if (!place) throw Object.assign(new Error("meetingPlace is required for face-to-face meeting."), { status: 400 });
+      }
+
+      const attempt = await getLatestRespondedAttemptForEngagement(engagement._id, session);
+      if (!attempt) throw Object.assign(new Error("No responded contact attempt found."), { status: 409 });
+
+      attempt.outcomeActivity = "Schedule Meeting";
+      await attempt.save({ session });
+
+      const meetingType = "Needs Assessment";
+      const existingMeeting = await ScheduledMeeting.findOne({
+        leadEngagementId: engagement._id,
+        meetingType,
+      }).session(session);
+
+      if (existingMeeting) {
+        existingMeeting.startAt = dt;
+        existingMeeting.endAt = endAt;
+        existingMeeting.durationMin = durationMin;
+        existingMeeting.mode = mode;
+        existingMeeting.platform = mode === "Online" ? platform : undefined;
+        existingMeeting.platformOther = mode === "Online" && platform === "Other" ? platformOther : undefined;
+        existingMeeting.link = mode === "Online" ? link : undefined;
+        existingMeeting.inviteSent = Boolean(meetingInviteSent);
+        existingMeeting.place = mode === "Face-to-face" ? place : undefined;
+        existingMeeting.status = "Scheduled";
+        await existingMeeting.save({ session });
+      } else {
+        await ScheduledMeeting.create(
+          [
+            {
+              leadEngagementId: engagement._id,
+              meetingType,
+              startAt: dt,
+              endAt,
+              durationMin,
+              mode,
+              platform: mode === "Online" ? platform : undefined,
+              platformOther: mode === "Online" && platform === "Other" ? platformOther : undefined,
+              link: mode === "Online" ? link : undefined,
+              inviteSent: Boolean(meetingInviteSent),
+              place: mode === "Face-to-face" ? place : undefined,
+              status: "Scheduled",
+            },
+          ],
+          { session }
+        );
+      }
+
+      const openApproachTask = await Task.findOne({
+        assignedToUserId: userObjectId,
+        prospectId: prospectObjectId,
+        leadEngagementId: engagement._id,
+        type: "APPROACH",
+        status: "Open",
+      }).session(session);
+
+      if (openApproachTask) {
+        openApproachTask.status = "Done";
+        openApproachTask.completedAt = new Date();
+        await openApproachTask.save({ session });
+      }
+
+      const appointmentDedupeKey = `APPOINTMENT:${engagement._id}`;
+      let appointmentTask = await Task.findOne({
+        assignedToUserId: userObjectId,
+        dedupeKey: appointmentDedupeKey,
+      }).session(session);
+
+      const appointmentTitle = `Meeting scheduled with ${prospect.firstName}`;
+      const appointmentDescription = `Attend scheduled meeting with ${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName} (Lead ${lead.leadCode || "—"}). Meeting window: ${formatDateTimeInManila(dt)} to ${formatDateTimeInManila(endAt)} (Asia/Manila).`;
+      const appointmentDueAt = new Date(endAt.getTime() + 15 * 60 * 1000);
+
+      if (!appointmentTask) {
+        appointmentTask = await Task.create(
+          [
+            {
+              assignedToUserId: userObjectId,
+              prospectId: prospectObjectId,
+              leadEngagementId: engagement._id,
+              type: "APPOINTMENT",
+              title: appointmentTitle,
+              description: appointmentDescription,
+              dueAt: appointmentDueAt,
+              status: "Open",
+              dedupeKey: appointmentDedupeKey,
+            },
+          ],
+          { session }
+        ).then((docs) => docs[0]);
+
+        const prospectFullName = `${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName}`.trim();
+        await createTaskAddedNotifications({
+          assignedToUserId: userObjectId,
+          task: appointmentTask,
+          prospectFullName,
+          leadCode: lead.leadCode,
+          session,
+        });
+      } else if (appointmentTask.status !== "Done") {
+        appointmentTask.title = appointmentTitle;
+        appointmentTask.description = appointmentDescription;
+        appointmentTask.dueAt = appointmentDueAt;
+        await appointmentTask.save({ session });
+      }
+
+      const now = new Date();
+      engagement.currentStage = "Needs Assessment";
+      engagement.currentActivityKey = "Record Prospect Attendance";
+      engagement.stageCompletedAt = now;
+      engagement.stageHistory = Array.isArray(engagement.stageHistory) ? engagement.stageHistory : [];
+
+      const openContacting = [...engagement.stageHistory]
+        .reverse()
+        .find((h) => h?.stage === "Contacting" && !h?.completedAt);
+      if (openContacting) {
+        openContacting.completedAt = now;
+        openContacting.reason = "Meeting scheduled successfully.";
+      }
+
+      engagement.stageHistory.push({
+        stage: "Needs Assessment",
+        startedAt: now,
+        completedAt: null,
+        reason: "Moved from Contacting after meeting schedule.",
+      });
+
+      engagement.stageStartedAt = now;
+      await engagement.save({ session });
+    });
+
+    return res.json({
+      message: "Meeting scheduled. Contacting completed and Needs Assessment activated.",
+    });
+  } catch (err) {
+    console.error("Schedule meeting error:", err);
+    return res.status(err?.status || 500).json({
+      message: err?.message || "Server error.",
+      code: err?.code,
+    });
+  } finally {
+    session.endSession();
+  }
+});
+
+
+
+app.get("/api/prospects/:prospectId/leads/:leadId/needs-assessment", async (req, res) => {
+  try {
+    const { userId } = req.query;
+    const { prospectId, leadId } = req.params;
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId) || !mongoose.isValidObjectId(prospectId) || !mongoose.isValidObjectId(leadId)) {
+      return res.status(400).json({ message: "Invalid id(s)." });
+    }
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
+    const leadObjectId = new mongoose.Types.ObjectId(leadId);
+
+    const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId })
+      .select("firstName middleName lastName sex civilStatus birthday age occupation occupationCategory address")
+      .lean();
+    if (!prospect) return res.status(404).json({ message: "Prospect not found." });
+
+    const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).select("_id").lean();
+    if (!lead) return res.status(404).json({ message: "Lead not found." });
+
+    const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).select("_id currentStage currentActivityKey").lean();
+    if (!engagement) return res.status(404).json({ message: "Lead engagement not found." });
+
+    let needsAssessment = await NeedsAssessment.findOne({ leadEngagementId: engagement._id })
+      .select("outcomeActivity attendanceConfirmed attendedAt dependents needsPriorities")
+      .lean();
+
+    if (!needsAssessment) {
+      const created = await NeedsAssessment.create({
+        leadEngagementId: engagement._id,
+      });
+      needsAssessment = created.toObject();
+    }
+
+    const allLeadIds = await Lead.find({ prospectId: prospectObjectId }).distinct("_id");
+    const policyholders = await Policyholder.find({ leadId: { $in: allLeadIds } })
+      .select("policyNumber status productId")
+      .populate("productId", "productName")
+      .lean();
+
+    const existingPolicies = (policyholders || []).map((p) => ({
+      policyNumber: p.policyNumber || "",
+      productName: p?.productId?.productName || "",
+      status: p.status || "",
+    }));
+
+    const computedAge = prospect.birthday ? computeAgeFromBirthday(new Date(prospect.birthday)) : null;
+
+    const products = await Product.find({})
+      .select("_id productName productCategory description")
+      .sort({ productCategory: 1, productName: 1 })
+      .lean();
+
+    const needsSteps = [
+      "Record Prospect Attendance",
+      "Perform Needs Analysis",
+      "Schedule Proposal Presentation",
+    ];
+    const engagementActivity = String(engagement.currentActivityKey || "").trim();
+    const effectiveNeedsActivityKey = needsSteps.includes(engagementActivity)
+      ? engagementActivity
+      : !needsAssessment.attendanceConfirmed
+      ? "Record Prospect Attendance"
+      : String(needsAssessment.outcomeActivity || "") === "Perform Needs Analysis"
+      ? "Schedule Proposal Presentation"
+      : "Perform Needs Analysis";
+
+    return res.json({
+      prospectProfile: {
+        fullName: `${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName}`.trim(),
+        sex: prospect.sex || "",
+        civilStatus: prospect.civilStatus || "",
+        birthday: prospect.birthday || null,
+        age: computedAge ?? (prospect.age ?? null),
+        occupation: prospect.occupation || "",
+        occupationCategory: prospect.occupationCategory || "Not Employed",
+        address: prospect.address || {},
+      },
+      needsAssessment: {
+        currentActivityKey: effectiveNeedsActivityKey,
+        attendanceConfirmed: Boolean(needsAssessment.attendanceConfirmed),
+        attendedAt: needsAssessment.attendedAt || null,
+        outcomeActivity: needsAssessment.outcomeActivity || "",
+        dependents: Array.isArray(needsAssessment.dependents) ? needsAssessment.dependents : [],
+        needsPriorities: needsAssessment.needsPriorities || {},
+      },
+      existingPolicies,
+      products: Array.isArray(products) ? products : [],
+      engagement: {
+        currentStage: engagement.currentStage,
+        currentActivityKey: engagement.currentActivityKey || "",
+      },
+    });
+  } catch (err) {
+    console.error("Get needs assessment error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/attendance", async (req, res) => {
+  const session = await mongoose.startSession();
+  try {
+    const { userId } = req.query;
+    const { prospectId, leadId } = req.params;
+    const { attended } = req.body || {};
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId) || !mongoose.isValidObjectId(prospectId) || !mongoose.isValidObjectId(leadId)) {
+      return res.status(400).json({ message: "Invalid id(s)." });
+    }
+    if (attended !== true) {
+      return res.status(400).json({ message: "Prospect attendance must be marked attended." });
+    }
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
+    const leadObjectId = new mongoose.Types.ObjectId(leadId);
+
+    await session.withTransaction(async () => {
+      const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).session(session);
+      if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
+
+      const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).session(session);
+      if (!lead) throw Object.assign(new Error("Lead not found."), { status: 404 });
+
+      const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).session(session);
+      if (!engagement) throw Object.assign(new Error("Lead engagement not found."), { status: 404 });
+
+      const na = (await NeedsAssessment.findOne({ leadEngagementId: engagement._id }).session(session)) ||
+        new NeedsAssessment({ leadEngagementId: engagement._id });
+
+      na.attendanceConfirmed = true;
+      na.attendedAt = new Date();
+      na.outcomeActivity = "Record Prospect Attendance";
+      await na.save({ session });
+
+      if (engagement.currentStage === "Needs Assessment") {
+        engagement.currentActivityKey = "Perform Needs Analysis";
+        await engagement.save({ session });
+      }
+    });
+
+    return res.json({ message: "Prospect attendance recorded.", currentActivityKey: "Perform Needs Analysis" });
+  } catch (err) {
+    console.error("Record attendance error:", err);
+    return res.status(err?.status || 500).json({ message: err?.message || "Server error." });
+  } finally {
+    session.endSession();
+  }
+});
+
+app.put("/api/prospects/:prospectId/leads/:leadId/needs-assessment", async (req, res) => {
+  const session = await mongoose.startSession();
+  try {
+    const { userId } = req.query;
+    const { prospectId, leadId } = req.params;
+    const { basicInformation, dependents, needsPriorities } = req.body || {};
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId) || !mongoose.isValidObjectId(prospectId) || !mongoose.isValidObjectId(leadId)) {
+      return res.status(400).json({ message: "Invalid id(s)." });
+    }
+
+    const normalizedDependents = Array.isArray(dependents) ? dependents : [];
+    for (let i = 0; i < normalizedDependents.length; i += 1) {
+      const d = normalizedDependents[i] || {};
+      if (!String(d.name || "").trim()) return res.status(400).json({ message: `Dependent #${i + 1}: name is required.` });
+      const age = Number(d.age);
+      if (!Number.isFinite(age) || age < 0 || age > 120) {
+        return res.status(400).json({ message: `Dependent #${i + 1}: age must be between 0 and 120.` });
+      }
+      if (!["Male", "Female"].includes(String(d.gender || ""))) {
+        return res.status(400).json({ message: `Dependent #${i + 1}: invalid gender.` });
+      }
+      if (!["Child", "Parent", "Sibling"].includes(String(d.relationship || ""))) {
+        return res.status(400).json({ message: `Dependent #${i + 1}: invalid relationship.` });
+      }
+    }
+
+    const toNonNegativeNumber = (v) => {
+      const n = Number(v);
+      return Number.isFinite(n) && n >= 0 ? n : null;
+    };
+
+    const INCOME_BANDS = {
+      BELOW_15000: { requiresManual: true },
+      "15000_29999": { max: 29999 },
+      "30000_49999": { max: 49999 },
+      "50000_79999": { max: 79999 },
+      "80000_99999": { max: 99999 },
+      "100000_249999": { max: 249999 },
+      "250000_499999": { max: 499999 },
+      ABOVE_500000: { requiresManual: true },
+    };
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
+    const leadObjectId = new mongoose.Types.ObjectId(leadId);
+
+    await session.withTransaction(async () => {
+      const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).session(session);
+      if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
+
+      const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).session(session);
+      if (!lead) throw Object.assign(new Error("Lead not found."), { status: 404 });
+
+      const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).session(session);
+      if (!engagement) throw Object.assign(new Error("Lead engagement not found."), { status: 404 });
+
+      const na = (await NeedsAssessment.findOne({ leadEngagementId: engagement._id }).session(session)) ||
+        new NeedsAssessment({ leadEngagementId: engagement._id });
+
+      if (!na.attendanceConfirmed || engagement.currentActivityKey !== "Perform Needs Analysis") {
+        throw Object.assign(new Error("Record attendance first and proceed to Perform Needs Analysis."), { status: 409 });
+      }
+
+      const info = basicInformation || {};
+      const sex = String(info.sex || "").trim();
+      const civilStatus = String(info.civilStatus || "").trim();
+      const occupationCategory = String(info.occupationCategory || "").trim();
+      const occupation = String(info.occupation || "").trim();
+      const addressInfo = info.address && typeof info.address === "object" ? info.address : {};
+      const line = String(addressInfo.line || "").trim();
+      const barangay = String(addressInfo.barangay || "").trim();
+      const city = String(addressInfo.city || "").trim();
+      const otherCity = String(addressInfo.otherCity || "").trim();
+      const region = String(addressInfo.region || "").trim();
+      const zipCode = String(addressInfo.zipCode || "").trim();
+      const birthdayRaw = String(info.birthday || "").trim();
+
+      if (sex && !["Male", "Female"].includes(sex)) {
+        throw Object.assign(new Error("Invalid sex."), { status: 400 });
+      }
+      if (civilStatus && !["Single", "Married", "Widowed", "Separated", "Annulled"].includes(civilStatus)) {
+        throw Object.assign(new Error("Invalid civil status."), { status: 400 });
+      }
+      if (occupation.length > 150) {
+        throw Object.assign(new Error("Occupation must be 150 characters or less."), { status: 400 });
+      }
+      if (!["Employed", "Self-Employed", "Not Employed"].includes(occupationCategory)) {
+        throw Object.assign(new Error("Occupation category is required."), { status: 400 });
+      }
+      if (occupationCategory !== "Not Employed" && !occupation) {
+        throw Object.assign(new Error("Occupation is required for employed/self-employed prospects."), { status: 400 });
+      }
+
+      if (!line) throw Object.assign(new Error("Street address is required."), { status: 400 });
+      if (!barangay) throw Object.assign(new Error("Barangay is required."), { status: 400 });
+      if (!city) throw Object.assign(new Error("City is required."), { status: 400 });
+      if (city === "Other" && !otherCity) throw Object.assign(new Error("Other city is required."), { status: 400 });
+      if (!region) throw Object.assign(new Error("Region is required."), { status: 400 });
+      if (!zipCode) throw Object.assign(new Error("Zip code is required."), { status: 400 });
+      if (!/^\d{4}$/.test(zipCode)) throw Object.assign(new Error("Zip code must be 4 digits."), { status: 400 });
+
+      const np = needsPriorities && typeof needsPriorities === "object" ? needsPriorities : {};
+      const currentPriority = String(np.currentPriority || "").trim();
+      if (!["Protection", "Health", "Investment"].includes(currentPriority)) {
+        throw Object.assign(new Error("Current priority is required."), { status: 400 });
+      }
+
+      const monthlyIncomeBand = String(np.monthlyIncomeBand || "").trim();
+      if (!Object.prototype.hasOwnProperty.call(INCOME_BANDS, monthlyIncomeBand)) {
+        throw Object.assign(new Error("Approximate monthly income bracket is required."), { status: 400 });
+      }
+
+      const monthlyIncomeAmountInput = toNonNegativeNumber(np.monthlyIncomeAmount);
+      let approxIncome = null;
+      if (INCOME_BANDS[monthlyIncomeBand].requiresManual) {
+        if (monthlyIncomeAmountInput === null) {
+          throw Object.assign(new Error("Approximate monthly income amount is required for selected bracket."), { status: 400 });
+        }
+        if (monthlyIncomeBand === "BELOW_15000" && monthlyIncomeAmountInput >= 15000) {
+          throw Object.assign(new Error("Manual monthly income must be below Php 15,000 for selected bracket."), { status: 400 });
+        }
+        if (monthlyIncomeBand === "ABOVE_500000" && monthlyIncomeAmountInput <= 500000) {
+          throw Object.assign(new Error("Manual monthly income must be above Php 500,000 for selected bracket."), { status: 400 });
+        }
+        approxIncome = monthlyIncomeAmountInput;
+      } else {
+        approxIncome = INCOME_BANDS[monthlyIncomeBand].max;
+      }
+
+      const minPremium = toNonNegativeNumber(np.minPremium);
+      const maxPremium = toNonNegativeNumber(np.maxPremium);
+      if (minPremium === null) throw Object.assign(new Error("Minimum willing monthly premium is required."), { status: 400 });
+      if (maxPremium === null) throw Object.assign(new Error("Maximum willing monthly premium is required."), { status: 400 });
+      if (minPremium > approxIncome) throw Object.assign(new Error("Minimum willing monthly premium cannot be higher than approximate monthly income."), { status: 400 });
+      if (maxPremium > approxIncome) throw Object.assign(new Error("Maximum willing monthly premium cannot be higher than approximate monthly income."), { status: 400 });
+      if (maxPremium < minPremium) throw Object.assign(new Error("Maximum willing monthly premium must be equal to or higher than minimum."), { status: 400 });
+
+      const productSelectionInput = np?.productSelection && typeof np.productSelection === "object" ? np.productSelection : {};
+      const selectedProductId = String(productSelectionInput.selectedProductId || "").trim();
+      const requestedFrequency = String(productSelectionInput.requestedFrequency || "Monthly").trim() || "Monthly";
+      const requestedPremiumPayment = toNonNegativeNumber(productSelectionInput.requestedPremiumPayment);
+      if (!selectedProductId || !mongoose.isValidObjectId(selectedProductId)) {
+        throw Object.assign(new Error("Product Selection: product is required."), { status: 400 });
+      }
+      if (!["Monthly", "Quarterly", "Half-yearly", "Yearly"].includes(requestedFrequency)) {
+        throw Object.assign(new Error("Product Selection: requested frequency is invalid."), { status: 400 });
+      }
+      if (requestedPremiumPayment === null) {
+        throw Object.assign(new Error("Product Selection: requested premium payment is required."), { status: 400 });
+      }
+      const selectedProductDoc = await Product.findById(selectedProductId).select("productCategory").lean();
+      if (!selectedProductDoc) {
+        throw Object.assign(new Error("Product Selection: selected product not found."), { status: 400 });
+      }
+      if (String(selectedProductDoc.productCategory || "") !== currentPriority) {
+        throw Object.assign(new Error("Product Selection: selected product does not match the chosen priority."), { status: 400 });
+      }
+
+      const prioritiesPayload = {
+        currentPriority,
+        monthlyIncomeBand,
+        monthlyIncomeAmount: monthlyIncomeAmountInput,
+        minPremium,
+        maxPremium,
+        productSelection: {
+          selectedProductId: new mongoose.Types.ObjectId(selectedProductId),
+          requestedPremiumPayment,
+          requestedFrequency,
+        },
+        protection: {},
+        health: {},
+        investment: {},
+      };
+
+      const currentYear = new Date().getFullYear();
+      const ageForCompute = Number(info.age ?? prospect.age);
+
+      if (currentPriority === "Protection") {
+        const monthlySpend = toNonNegativeNumber(np?.protection?.monthlySpend);
+        const savingsForProtection = toNonNegativeNumber(np?.protection?.savingsForProtection);
+        if (monthlySpend === null) throw Object.assign(new Error("Protection: approximate monthly spend is required."), { status: 400 });
+        if (monthlySpend > approxIncome) throw Object.assign(new Error("Protection: monthly spend cannot be higher than approximate monthly income."), { status: 400 });
+        if (savingsForProtection === null) throw Object.assign(new Error("Protection: savings for protection is required."), { status: 400 });
+
+        const numberOfDependents = normalizedDependents.length;
+        const yearsToProtectIncome = Number.isFinite(ageForCompute) ? Math.max(0, 60 - ageForCompute) : 0;
+        const protectionGap = (monthlySpend * 12 * yearsToProtectIncome) - savingsForProtection;
+
+        prioritiesPayload.protection = {
+          monthlySpend,
+          numberOfDependents,
+          yearsToProtectIncome,
+          savingsForProtection,
+          protectionGap,
+        };
+      }
+
+      if (currentPriority === "Health") {
+        const amountToCoverCriticalIllness = toNonNegativeNumber(np?.health?.amountToCoverCriticalIllness);
+        const savingsForCriticalIllness = toNonNegativeNumber(np?.health?.savingsForCriticalIllness);
+        if (amountToCoverCriticalIllness === null) throw Object.assign(new Error("Health: approximate amount to cover critical illness is required."), { status: 400 });
+        if (savingsForCriticalIllness === null) throw Object.assign(new Error("Health: savings for critical illness is required."), { status: 400 });
+        if (savingsForCriticalIllness > amountToCoverCriticalIllness) {
+          throw Object.assign(new Error("Health: savings for critical illness cannot be higher than amount to cover critical illness."), { status: 400 });
+        }
+        prioritiesPayload.health = {
+          amountToCoverCriticalIllness,
+          savingsForCriticalIllness,
+          criticalIllnessGap: amountToCoverCriticalIllness - savingsForCriticalIllness,
+        };
+      }
+
+      if (currentPriority === "Investment") {
+        const savingsPlan = String(np?.investment?.savingsPlan || "").trim();
+        const savingsPlanOther = String(np?.investment?.savingsPlanOther || "").trim();
+        const targetSavingsAmount = toNonNegativeNumber(np?.investment?.targetSavingsAmount);
+        const targetUtilizationYear = Number(np?.investment?.targetUtilizationYear);
+        const savingsForInvestment = toNonNegativeNumber(np?.investment?.savingsForInvestment);
+        const riskProfiler = np?.investment?.riskProfiler && typeof np.investment.riskProfiler === "object"
+          ? np.investment.riskProfiler
+          : {};
+        const fundChoice = np?.investment?.fundChoice && typeof np.investment.fundChoice === "object"
+          ? np.investment.fundChoice
+          : {};
+
+        const INVESTMENT_FUNDS = {
+          PRULINK_MONEY_MARKET_FUND: { fundName: "PRULink Money Market Fund", currency: "PHP", riskRating: 1 },
+          PRULINK_BOND_FUND: { fundName: "PRULink Bond Fund", currency: "PHP", riskRating: 1 },
+          PRULINK_MANAGED_FUND: { fundName: "PRULink Managed Fund", currency: "PHP", riskRating: 2 },
+          PRULINK_PROACTIVE_FUND: { fundName: "PRULink Proactive Fund", currency: "PHP", riskRating: 3 },
+          PRULINK_GROWTH_FUND: { fundName: "PRULink Growth Fund", currency: "PHP", riskRating: 3 },
+          PRULINK_EQUITY_FUND: { fundName: "PRULink Equity Fund", currency: "PHP", riskRating: 3 },
+          PRULINK_US_DOLLAR_BOND_FUND: { fundName: "PRULink US Dollar Bond Fund", currency: "USD", riskRating: 1 },
+          PRULINK_ASIAN_LOCAL_BOND_FUND: { fundName: "PRULink Asian Local Bond Fund", currency: "USD", riskRating: 2 },
+          PRULINK_CASH_FLOW_FUND: { fundName: "PRULink Cash Flow Fund", currency: "USD", riskRating: 2 },
+          PRULINK_ASIAN_BALANCED_FUND: { fundName: "PRULink Asian Balanced Fund", currency: "USD", riskRating: 2 },
+          PRULINK_ASIA_PACIFIC_EQUITY_FUND: { fundName: "PRULink Asia Pacific Equity Fund", currency: "USD", riskRating: 3 },
+          PRULINK_GLOBAL_EMERGING_MARKETS_DYNAMIC_FUND: { fundName: "PRULink Global Emerging Markets Dynamic Fund", currency: "USD", riskRating: 3 },
+        };
+
+        const horizon = String(riskProfiler.investmentHorizon || "").trim();
+        const goal = String(riskProfiler.investmentGoal || "").trim();
+        const experience = String(riskProfiler.marketExperience || "").trim();
+        const volatility = String(riskProfiler.volatilityReaction || "").trim();
+        const capitalLoss = String(riskProfiler.capitalLossAffordability || "").trim();
+        const tradeoff = String(riskProfiler.riskReturnTradeoff || "").trim();
+
+        const horizonScores = { LT_3: 0, BETWEEN_3_7: 2, BETWEEN_7_10: 3, AT_LEAST_10: 4 };
+        const goalScores = { CAPITAL_PRESERVATION: 1, STEADY_GROWTH: 2, SIGNIFICANT_APPRECIATION: 3 };
+        const expScores = { NONE: 0, I_ONLY: 2, II_ONLY: 4, BOTH: 4 };
+        const volScores = { FULL_WITHDRAW: 0, LESS_RISKY: 1, HOLD: 2, TOP_UPS: 4 };
+        const lossScores = { NO_LOSS: 0, UP_TO_5: 1, UP_TO_10: 2, ABOVE_10: 3 };
+        const tradeoffScores = { PORTFOLIO_A: 1, PORTFOLIO_B: 1, PORTFOLIO_C: 2, PORTFOLIO_D: 3 };
+
+        if (!["Home", "Vehicle", "Holiday", "Early Retirement", "Other"].includes(savingsPlan)) {
+          throw Object.assign(new Error("Investment: savings plan is required."), { status: 400 });
+        }
+        if (savingsPlan === "Other" && !savingsPlanOther) {
+          throw Object.assign(new Error("Investment: please specify other savings plan."), { status: 400 });
+        }
+        if (targetSavingsAmount === null) throw Object.assign(new Error("Investment: target savings amount is required."), { status: 400 });
+        if (!Number.isFinite(targetUtilizationYear)) throw Object.assign(new Error("Investment: target year to utilize savings is required."), { status: 400 });
+        if (targetUtilizationYear < currentYear + 2 || targetUtilizationYear > currentYear + 20) {
+          throw Object.assign(new Error("Investment: target year must be between 2 and 20 years from current year."), { status: 400 });
+        }
+        if (savingsForInvestment === null) throw Object.assign(new Error("Investment: savings for investment is required."), { status: 400 });
+        if (savingsForInvestment > targetSavingsAmount) {
+          throw Object.assign(new Error("Investment: savings for investment cannot be higher than target savings amount."), { status: 400 });
+        }
+
+        if (!Object.prototype.hasOwnProperty.call(horizonScores, horizon)) {
+          throw Object.assign(new Error("Investment Risk Profiler: investment horizon is required."), { status: 400 });
+        }
+        if (!Object.prototype.hasOwnProperty.call(goalScores, goal)) {
+          throw Object.assign(new Error("Investment Risk Profiler: investment goal is required."), { status: 400 });
+        }
+        if (!Object.prototype.hasOwnProperty.call(expScores, experience)) {
+          throw Object.assign(new Error("Investment Risk Profiler: market experience is required."), { status: 400 });
+        }
+        if (!Object.prototype.hasOwnProperty.call(volScores, volatility)) {
+          throw Object.assign(new Error("Investment Risk Profiler: short-term volatility reaction is required."), { status: 400 });
+        }
+        if (!Object.prototype.hasOwnProperty.call(lossScores, capitalLoss)) {
+          throw Object.assign(new Error("Investment Risk Profiler: affordability to capital loss is required."), { status: 400 });
+        }
+        if (!Object.prototype.hasOwnProperty.call(tradeoffScores, tradeoff)) {
+          throw Object.assign(new Error("Investment Risk Profiler: risk and return trade-off is required."), { status: 400 });
+        }
+
+        const riskProfileScore =
+          horizonScores[horizon] +
+          goalScores[goal] +
+          expScores[experience] +
+          volScores[volatility] +
+          lossScores[capitalLoss] +
+          tradeoffScores[tradeoff];
+
+        const riskProfileCategory =
+          riskProfileScore <= 5
+            ? "NOT_RECOMMENDED"
+            : riskProfileScore <= 9
+            ? "CONSERVATIVE"
+            : riskProfileScore <= 15
+            ? "MODERATE"
+            : "AGGRESSIVE";
+
+        const suitableRiskRatingsByCategory = {
+          NOT_RECOMMENDED: [],
+          CONSERVATIVE: [1],
+          MODERATE: [1, 2],
+          AGGRESSIVE: [1, 2, 3],
+        };
+        const allowedRatings = suitableRiskRatingsByCategory[riskProfileCategory] || [];
+        const selectedFundsRaw = Array.isArray(fundChoice.selectedFunds) ? fundChoice.selectedFunds : [];
+        const normalizedSelectedFunds = [];
+
+        for (const row of selectedFundsRaw) {
+          const fundKey = String(row?.fundKey || "").trim();
+          if (!fundKey || !Object.prototype.hasOwnProperty.call(INVESTMENT_FUNDS, fundKey)) {
+            throw Object.assign(new Error("Fund Choice: invalid fund selection."), { status: 400 });
+          }
+          const allocationPercent = toNonNegativeNumber(row?.allocationPercent);
+          if (allocationPercent === null || allocationPercent > 100) {
+            throw Object.assign(new Error("Fund Choice: allocation per fund must be between 0 and 100."), { status: 400 });
+          }
+          const meta = INVESTMENT_FUNDS[fundKey];
+          normalizedSelectedFunds.push({
+            fundKey,
+            fundName: meta.fundName,
+            currency: meta.currency,
+            riskRating: meta.riskRating,
+            allocationPercent,
+            isSuitable: allowedRatings.includes(meta.riskRating),
+          });
+        }
+
+        if (normalizedSelectedFunds.length === 0) {
+          throw Object.assign(new Error("Fund Choice: select at least one fund."), { status: 400 });
+        }
+
+        const totalAllocationPercent = normalizedSelectedFunds.reduce((sum, item) => sum + item.allocationPercent, 0);
+        if (Math.abs(totalAllocationPercent - 100) > 0.0001) {
+          throw Object.assign(new Error("Fund Choice: allocation in percentage must equal 100%."), { status: 400 });
+        }
+
+        const fundMatch = normalizedSelectedFunds.some((item) => !item.isSuitable) ? "No" : "Yes";
+        const mismatchReason = String(fundChoice.mismatchReason || "").trim();
+        if (fundMatch === "No" && !mismatchReason) {
+          throw Object.assign(new Error("Fund Choice: reason for mismatch is required when fund match is No."), { status: 400 });
+        }
+
+        prioritiesPayload.investment = {
+          savingsPlan,
+          savingsPlanOther: savingsPlan === "Other" ? savingsPlanOther : "",
+          targetSavingsAmount,
+          targetUtilizationYear,
+          savingsForInvestment,
+          savingsGap: targetSavingsAmount - savingsForInvestment,
+          riskProfiler: {
+            investmentHorizon: horizon,
+            investmentGoal: goal,
+            marketExperience: experience,
+            volatilityReaction: volatility,
+            capitalLossAffordability: capitalLoss,
+            riskReturnTradeoff: tradeoff,
+            riskProfileScore,
+            riskProfileCategory,
+          },
+          fundChoice: {
+            selectedFunds: normalizedSelectedFunds,
+            totalAllocationPercent,
+            fundMatch,
+            mismatchReason: fundMatch === "No" ? mismatchReason : "",
+          },
+        };
+      }
+
+      let nextBirthday = prospect.birthday;
+      let nextAge = prospect.age;
+      if (birthdayRaw) {
+        const b = new Date(birthdayRaw);
+        if (Number.isNaN(b.getTime())) throw Object.assign(new Error("Invalid birthday."), { status: 400 });
+        if (isFutureDateOnly(b)) throw Object.assign(new Error("Birthday cannot be in the future."), { status: 400 });
+        const computedAge = computeAgeFromBirthday(b);
+        if (computedAge === null || computedAge < 18 || computedAge > 70) {
+          throw Object.assign(new Error("Prospect age must be between 18 and 70 years old."), { status: 400 });
+        }
+        nextBirthday = b;
+        nextAge = computedAge;
+      }
+
+      prospect.sex = sex || prospect.sex;
+      prospect.civilStatus = civilStatus || prospect.civilStatus;
+      prospect.occupationCategory = occupationCategory;
+      prospect.occupation = occupationCategory === "Not Employed" ? "" : occupation;
+      prospect.address = {
+        line,
+        barangay,
+        city,
+        otherCity: city === "Other" ? otherCity : "",
+        region,
+        zipCode,
+        country: "Philippines",
+      };
+      prospect.birthday = nextBirthday;
+      prospect.age = nextAge;
+      await prospect.save({ session });
+
+      na.dependents = normalizedDependents.map((d) => ({
+        name: String(d.name || "").trim(),
+        age: Number(d.age),
+        gender: String(d.gender || ""),
+        relationship: String(d.relationship || ""),
+      }));
+      na.needsPriorities = prioritiesPayload;
+      na.outcomeActivity = "Perform Needs Analysis";
+      await na.save({ session });
+
+      if (engagement.currentStage === "Needs Assessment") {
+        engagement.currentActivityKey = "Schedule Proposal Presentation";
+        await engagement.save({ session });
+      }
+    });
+
+    return res.json({ message: "Needs analysis saved.", currentActivityKey: "Schedule Proposal Presentation" });
+  } catch (err) {
+    console.error("Save needs assessment error:", err);
+    return res.status(err?.status || 500).json({ message: err?.message || "Server error." });
+  } finally {
+    session.endSession();
+  }
+});
+
+app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/schedule-proposal", async (req, res) => {
+  const session = await mongoose.startSession();
+  try {
+    const { userId } = req.query;
+    const { prospectId, leadId } = req.params;
+    const {
+      meetingAt,
+      meetingDate,
+      meetingStartTime,
+      meetingDurationMin,
+      meetingMode,
+      meetingPlatform,
+      meetingPlatformOther,
+      meetingLink,
+      meetingInviteSent,
+      meetingPlace,
+    } = req.body;
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId) || !mongoose.isValidObjectId(prospectId) || !mongoose.isValidObjectId(leadId)) {
+      return res.status(400).json({ message: "Invalid id(s)." });
+    }
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
+    const leadObjectId = new mongoose.Types.ObjectId(leadId);
+
+    await session.withTransaction(async () => {
+      const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).session(session);
+      if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
+
+      const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).session(session);
+      if (!lead) throw Object.assign(new Error("Lead not found."), { status: 404 });
+
+      const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).session(session);
+      if (!engagement) throw Object.assign(new Error("Lead engagement not found."), { status: 404 });
+
+      const na = await NeedsAssessment.findOne({ leadEngagementId: engagement._id }).session(session);
+      if (!na || engagement.currentActivityKey !== "Schedule Proposal Presentation") {
+        throw Object.assign(new Error("Complete attendance and needs analysis first."), { status: 409 });
+      }
+
+      const durationMin = Number(meetingDurationMin || 120);
+      const dt = meetingDate && meetingStartTime
+        ? combineDateAndTimeLocal(meetingDate, meetingStartTime)
+        : new Date(meetingAt);
+
+      if (!dt || Number.isNaN(dt.getTime())) {
+        throw Object.assign(new Error("meeting date/time is required and must be valid."), { status: 400 });
+      }
+
+      const tomorrow = new Date();
+      tomorrow.setHours(0, 0, 0, 0);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      if (dt < tomorrow) throw Object.assign(new Error("meetingAt must be at least tomorrow."), { status: 400 });
+
+      if (![30, 60, 90, 120].includes(durationMin)) {
+        throw Object.assign(new Error("meetingDurationMin must be one of 30, 60, 90, 120."), { status: 400 });
+      }
+
+      const mode = String(meetingMode || "").trim();
+      if (!["Online", "Face-to-face"].includes(mode)) {
+        throw Object.assign(new Error("meetingMode must be Online or Face-to-face."), { status: 400 });
+      }
+
+      const platform = String(meetingPlatform || "").trim();
+      const platformOther = String(meetingPlatformOther || "").trim();
+      const link = String(meetingLink || "").trim();
+      const place = String(meetingPlace || "").trim();
+
+      if (mode === "Online") {
+        if (!["Zoom", "Google Meet", "Other"].includes(platform)) {
+          throw Object.assign(new Error("meetingPlatform is required for online meetings."), { status: 400 });
+        }
+        if (platform === "Other" && !platformOther) {
+          throw Object.assign(new Error("meetingPlatformOther is required when platform is Other."), { status: 400 });
+        }
+        if (!link || !isValidHttpUrl(link)) {
+          throw Object.assign(new Error("Valid meetingLink (http/https) is required for online meetings."), { status: 400 });
+        }
+        if (meetingInviteSent !== true) {
+          throw Object.assign(new Error("meetingInviteSent must be true for online meetings."), { status: 400 });
+        }
+      }
+
+      if (mode === "Face-to-face" && !place) {
+        throw Object.assign(new Error("meetingPlace is required for face-to-face meetings."), { status: 400 });
+      }
+
+      const endAt = new Date(dt.getTime() + durationMin * 60 * 1000);
+
+      const windows = await getAgentMeetingWindows(userObjectId, null, null, session);
+      const conflict = hasMeetingConflict(dt, endAt, windows);
+      if (conflict) {
+        throw Object.assign(new Error("Selected meeting time conflicts with another scheduled meeting."), {
+          status: 409,
+          code: "MEETING_SLOT_CONFLICT",
+        });
+      }
+
+      const meetingType = "Proposal Presentation";
+      const existingMeeting = await ScheduledMeeting.findOne({
+        leadEngagementId: engagement._id,
+        meetingType,
+      }).session(session);
+
+      if (existingMeeting) {
+        existingMeeting.startAt = dt;
+        existingMeeting.endAt = endAt;
+        existingMeeting.durationMin = durationMin;
+        existingMeeting.mode = mode;
+        existingMeeting.platform = mode === "Online" ? platform : undefined;
+        existingMeeting.platformOther = mode === "Online" && platform === "Other" ? platformOther : undefined;
+        existingMeeting.link = mode === "Online" ? link : undefined;
+        existingMeeting.inviteSent = Boolean(meetingInviteSent);
+        existingMeeting.place = mode === "Face-to-face" ? place : undefined;
+        existingMeeting.status = "Scheduled";
+        await existingMeeting.save({ session });
+      } else {
+        await ScheduledMeeting.create(
+          [{
+            leadEngagementId: engagement._id,
+            meetingType,
+            startAt: dt,
+            endAt,
+            durationMin,
+            mode,
+            platform: mode === "Online" ? platform : undefined,
+            platformOther: mode === "Online" && platform === "Other" ? platformOther : undefined,
+            link: mode === "Online" ? link : undefined,
+            inviteSent: Boolean(meetingInviteSent),
+            place: mode === "Face-to-face" ? place : undefined,
+            status: "Scheduled",
+          }],
+          { session }
+        );
+      }
+
+      na.outcomeActivity = "Schedule Proposal Presentation";
+      await na.save({ session });
+
+      const now = new Date();
+      engagement.currentStage = "Proposal";
+      engagement.currentActivityKey = "";
+      engagement.stageCompletedAt = now;
+      engagement.stageHistory = Array.isArray(engagement.stageHistory) ? engagement.stageHistory : [];
+
+      const openNeeds = [...engagement.stageHistory]
+        .reverse()
+        .find((h) => h?.stage === "Needs Assessment" && !h?.completedAt);
+      if (openNeeds) {
+        openNeeds.completedAt = now;
+        openNeeds.reason = "Proposal presentation meeting scheduled.";
+      }
+
+      engagement.stageHistory.push({
+        stage: "Proposal",
+        startedAt: now,
+        completedAt: null,
+        reason: "Moved from Needs Assessment after proposal presentation schedule.",
+      });
+      engagement.stageStartedAt = now;
+      await engagement.save({ session });
+    });
+
+    return res.json({ message: "Proposal presentation scheduled. Proposal stage activated." });
+  } catch (err) {
+    console.error("Schedule proposal presentation error:", err);
+    return res.status(err?.status || 500).json({ message: err?.message || "Server error.", code: err?.code });
+  } finally {
+    session.endSession();
+  }
+});
+
 
 // ===========================
 // TASKS: SUMMARY (Agent dashboard)
@@ -3673,6 +5103,7 @@ app.get("/api/tasks/summary", async (req, res) => {
     }
 
     const userObjectId = new mongoose.Types.ObjectId(userId);
+    await ensureTaskMissedNotificationsForUser(userObjectId);
 
     // Fetch only OPEN tasks for dashboard (Done tasks are excluded entirely)
     let openTasks = await Task.find({ assignedToUserId: userObjectId, status: "Open" })
@@ -3763,6 +5194,7 @@ app.get("/api/tasks", async (req, res) => {
     }
 
     const userObjectId = new mongoose.Types.ObjectId(userId);
+    await ensureTaskMissedNotificationsForUser(userObjectId);
 
     // Base query always scoped to the user
     const query = { assignedToUserId: userObjectId };
@@ -3904,6 +5336,7 @@ app.get("/api/notifications", async (req, res) => {
     if (!mongoose.isValidObjectId(userId)) return res.status(400).json({ message: "Invalid userId." });
 
     const uid = new mongoose.Types.ObjectId(userId);
+    await ensureTaskMissedNotificationsForUser(uid);
 
     // Always scope notifications to this user
     const query = { assignedToUserId: uid };
@@ -4101,6 +5534,7 @@ app.get("/api/notifications/unread-count", async (req, res) => {
     if (!mongoose.isValidObjectId(userId)) return res.status(400).json({ message: "Invalid userId." });
 
     const uid = new mongoose.Types.ObjectId(userId);
+    await ensureTaskMissedNotificationsForUser(uid);
 
     // Base query: user-scoped + Unread only
     const q = { assignedToUserId: uid, status: "Unread" };
@@ -4140,6 +5574,7 @@ app.get("/api/notifications/counts", async (req, res) => {
     if (!mongoose.isValidObjectId(userId)) return res.status(400).json({ message: "Invalid userId." });
 
     const uid = new mongoose.Types.ObjectId(userId);
+    await ensureTaskMissedNotificationsForUser(uid);
 
     // Base query always user-scoped
     const qBase = { assignedToUserId: uid };
