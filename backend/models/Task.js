@@ -209,6 +209,20 @@ const taskSchema = new mongoose.Schema(
     },
 
     /**
+     * wasDelayed (Boolean)
+     * --------------------
+     * Tracks whether this task was completed after its dueAt deadline.
+     *
+     * - true  => completedAt is later than dueAt
+     * - false => completed on/before dueAt, or task is still Open
+     */
+    wasDelayed: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+
+    /**
      * dedupeKey (String)
      * ------------------
      * Optional key used to prevent duplicates (especially useful for follow-up tasks).
@@ -260,8 +274,12 @@ taskSchema.pre("validate", function () {
    */
   if (this.status === "Done") {
     if (!this.completedAt) this.completedAt = new Date();
+    if (this.dueAt instanceof Date && this.completedAt instanceof Date) {
+      this.wasDelayed = this.completedAt.getTime() > this.dueAt.getTime();
+    }
   } else {
     this.completedAt = null;
+    this.wasDelayed = false;
   }
 
   /**
