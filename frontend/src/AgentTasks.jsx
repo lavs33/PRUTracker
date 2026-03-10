@@ -106,6 +106,7 @@ function AgentTasks() {
         leadCode: t?.leadCode || "—",
         dueAt: t?.dueAt || null,
         createdAt: t?.createdAt || null,
+        wasDelayed: Boolean(t?.wasDelayed),
 
         status: normalizedStatus, // DB status (Open/Done)
         uiStatus, // ✅ UI status (Open/Overdue/Done)
@@ -226,6 +227,17 @@ function AgentTasks() {
           <div className="task-value">{formatDue(t.dueAt)}</div>
         </div>
       </div>
+
+      {t.uiStatus === "Done" ? (
+        <div className="task-meta" style={{ marginTop: 8 }}>
+          <div>
+            <div className="task-label">Fulfillment</div>
+            <div className="task-value" style={{ color: t.wasDelayed ? "#B91C1C" : "#166534", fontWeight: 700 }}>
+              {t.wasDelayed ? "Delayed" : "On time"}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {String(t.description || "").trim() ? <div className="task-note">{t.description}</div> : null}
 
