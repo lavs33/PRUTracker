@@ -39,7 +39,7 @@ function AgentLeadDetails() {
   const [dropBusy, setDropBusy] = useState(false);
   const [dropModal, setDropModal] = useState({
     open: false,
-    type: "", // "confirm" | "blocked" | "reopen"
+    type: "", // "confirm" | "blocked" 
     title: "",
     message: "",
   });
@@ -263,7 +263,7 @@ const handleSideNav = (key) => {
       openDropModal({
         type: "blocked",
         title: "Cannot Edit Lead",
-        message: "This lead is Dropped and cannot be edited. Please re-open lead for editing.",
+        message: "This lead is Dropped and cannot be edited. Dropped leads are final and cannot be reopened.",
       });
       return;
     }
@@ -352,7 +352,7 @@ const handleSideNav = (key) => {
     }
   };
 
-  // DROP / REOPEN
+  // DROP
   const onDropClick = () => {
     if (isClosed) {
       openDropModal({
@@ -368,7 +368,7 @@ const handleSideNav = (key) => {
       type: "confirm",
       title: "Drop Lead?",
       message:
-        "Dropping will mark this lead as Dropped. This action is used when the lead can no longer proceed. Do you want to continue?",
+        "Dropping this lead is NOT reversible. Once dropped, it cannot be reopened and all lead details become read-only. Do you want to continue?",
     });
   };
 
@@ -413,45 +413,6 @@ const handleSideNav = (key) => {
 
       closeDropModal();
       await fetchLeadDetails(); // refresh UI
-    } catch (err) {
-      openDropModal({
-        type: "blocked",
-        title: "Connection Error",
-        message: "Cannot connect to server. Is backend running?",
-      });
-    } finally {
-      setDropBusy(false);
-    }
-  };
-
-  const attemptReopen = async () => {
-    try {
-      setDropBusy(true);
-
-      const res = await fetch(
-        `http://localhost:5000/api/prospects/${prospectId}/leads/${leadId}?userId=${user.id}`,
-        {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            status: "Reopen", // command only
-          }),
-        }
-      );
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        openDropModal({
-          type: "blocked",
-          title: "Re-open Failed",
-          message: data.message || "Failed to re-open lead.",
-        });
-        return;
-      }
-
-      closeDropModal();
-      await fetchLeadDetails();
     } catch (err) {
       openDropModal({
         type: "blocked",
@@ -657,7 +618,7 @@ const handleSideNav = (key) => {
               <div className="ld-right">
                 <div className="ld-actionsRow">
                   {/* LEFT: Edit OR Cancel/Save */}
-                  {!isEditing ? (
+                  {!isEditing && !isDropped ? (
                     <button
                       type="button"
                       className="ld-iconBtn"
@@ -667,7 +628,7 @@ const handleSideNav = (key) => {
                     >
                       ✎
                     </button>
-                  ) : (
+                  ) : !isDropped ? (
                     <>
                       <button
                         type="button"
@@ -688,9 +649,9 @@ const handleSideNav = (key) => {
                         {editBusy ? "Saving..." : "Save Changes"}
                       </button>
                     </>
-                  )}
+                  ) : null}
 
-                  {/* RIGHT: Drop/Re-open ONLY when NOT editing */}
+                  {/* RIGHT: Drop ONLY when NOT editing and NOT dropped */}
                   {!isEditing && (
                     <>
                       {!isDropped ? (
@@ -703,24 +664,7 @@ const handleSideNav = (key) => {
                         >
                           ⛔
                         </button>
-                      ) : (
-                        <button
-                          type="button"
-                          className="ld-btn primary"
-                          onClick={() =>
-                            openDropModal({
-                              type: "reopen",
-                              title: "Re-open Lead?",
-                              message:
-                                "This will re-open the lead and return it to its previous status. Do you want to continue?",
-                            })
-                          }
-                          disabled={dropBusy}
-                          title="Re-open Lead"
-                        >
-                          Re-open Lead
-                        </button>
-                      )}
+                      ) : null}
                     </>
                   )}
                 </div>
@@ -738,7 +682,7 @@ const handleSideNav = (key) => {
 
                 {isDropped && (
                   <p className="ld-small-note muted">
-                    This lead is Dropped and cannot be edited, but Lead Engagement is still viewable.
+                    This lead is Dropped. It is read-only and cannot be reopened.
                   </p>
                 )}
               </div>
@@ -799,7 +743,7 @@ const handleSideNav = (key) => {
           </div>
 
           {/* =========================
-              DROP / REOPEN MODAL
+              DROP MODAL
              ========================= */}
           {dropModal.open && (
             <div className="ld-modalOverlay" role="dialog" aria-modal="true">
@@ -886,28 +830,6 @@ const handleSideNav = (key) => {
                       </button>
                     </div>
                   </>
-                )}
-
-                {dropModal.type === "reopen" && (
-                  <div className="ld-modalActions">
-                    <button
-                      type="button"
-                      className="ld-btn secondary"
-                      onClick={closeDropModal}
-                      disabled={dropBusy}
-                    >
-                      Close
-                    </button>
-                    <button
-                      type="button"
-                      className="ld-btn primary"
-                      onClick={attemptReopen}
-                      disabled={dropBusy}
-                      title="Re-open this lead"
-                    >
-                      {dropBusy ? "Re-opening..." : "Re-open"}
-                    </button>
-                  </div>
                 )}
               </div>
             </div>

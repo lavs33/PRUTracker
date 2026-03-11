@@ -175,6 +175,7 @@ function AgentTasksAll() {
         leadCode: t?.leadCode || "—",
         dueAt: t?.dueAt || null,
         completedAt: t?.completedAt || null,
+        wasDelayed: Boolean(t?.wasDelayed),
         createdAt: t?.createdAt || null,
         status: normalizedStatus,
         type: normalizedType,
@@ -216,7 +217,7 @@ function AgentTasksAll() {
   // Today / Tomorrow / This Week / Due Soon
   //
   // Requested rule:
-  // "Due This Week" = day after tomorrow → Saturday only
+  // "Due This Week" = day after tomorrow
   // (i.e., < upcoming Sunday 00:00)
   // =========================
   const openGroups = useMemo(() => {
@@ -251,7 +252,7 @@ function AgentTasksAll() {
       } else if (due >= tomorrowStart && due < dayAfterTomorrowStart) {
         groups.tomorrow.push(t);
       }
-      // Day after tomorrow up to Saturday
+      // Day after tomorrow
       else if (due >= dayAfterTomorrowStart && due < nextSundayStart) {
         groups.thisWeek.push(t);
       }
@@ -266,7 +267,7 @@ function AgentTasksAll() {
 
   const typePillClass = (type) => {
     const x = String(type || "").toUpperCase();
-    if (x === "APPROACH" || x === "FOLLOW_UP") return "task-pill urgent";
+    if (x === "APPROACH" || x === "FOLLOW_UP" || x === "APPOINTMENT" || x === "PRESENTATION") return "task-pill urgent";
     if (x === "UPDATE_CONTACT_INFO") return "task-pill info";
     return "task-pill";
   };
@@ -323,6 +324,15 @@ function AgentTasksAll() {
           <div className="meta-item">
             <div className="meta-label">Completed</div>
             <div className="meta-value">{formatDue(t.completedAt)}</div>
+          </div>
+        ) : null}
+
+        {uiStatus === "Done" ? (
+          <div className="meta-item">
+            <div className="meta-label">Fulfillment</div>
+            <div className="meta-value" style={{ color: t.wasDelayed ? "#B91C1C" : "#166534", fontWeight: 700 }}>
+              {t.wasDelayed ? "Delayed" : "On time"}
+            </div>
           </div>
         ) : null}
       </div>
@@ -464,7 +474,7 @@ function AgentTasksAll() {
                   {/* Subtitle updated to match new behavior */}
                   <Group
                     title="Due This Week"
-                    subtitle="Day after tomorrow – Sat"
+                    subtitle="Day after tomorrow"
                     count={openGroups.thisWeek.length}
                   >
                     {openGroups.thisWeek.length === 0 ? (

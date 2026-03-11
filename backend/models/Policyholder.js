@@ -74,6 +74,18 @@ const policyholderSchema = new mongoose.Schema(
     },
 
     /**
+     * productId (ObjectId reference to Product) - TEMPORARY until lead engagement is not finalized (policy issuance)
+     * ----------------------------------------
+     * Foreign-key style reference to Product catalog.
+     */
+    productId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Product",
+      required: true,
+      index: true,
+    },
+
+    /**
      * policyNumber (String)
      * ---------------------
      * Unique policy number issued by the insurer.
