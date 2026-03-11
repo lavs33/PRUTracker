@@ -21,6 +21,14 @@ function LandingPage() {
     <div className="mp-landing-container">
       <img src={logo} alt="PRUTracker Logo" className="mp-logo" />
 
+      <p className="mp-tagline">
+        Your centralized platform to manage clients and boost performance.
+      </p>
+
+      <p className="mp-welcome">
+        What would you like to do today?
+      </p>
+
       <div className="mp-role-buttons">
         <button onClick={() => handleRoleSelect("Agent")}>Agent</button>
         <button onClick={() => handleRoleSelect("AUM")}>AUM</button>
