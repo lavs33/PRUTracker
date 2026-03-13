@@ -156,6 +156,18 @@ const formatDate = (d) => {
   });
 };
 
+const formatDateOnly = (d) => {
+  if (!d) return "—";
+  const date = new Date(d);
+  if (isNaN(date.getTime())) return "—";
+
+  return date.toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+  });
+};
+
   if (!isReady) return null;
 
 const handleSideNav = (key) => {
@@ -374,7 +386,7 @@ const handleSideNav = (key) => {
                             {c.status || "—"}
                           </span>
                         </td>
-                        <td>{formatDate(c.lastPaidDate)}</td>
+                        <td>{formatDateOnly(c.lastPaidDate)}</td>
                       </tr>
                     ))}
 
