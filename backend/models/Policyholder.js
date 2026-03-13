@@ -57,18 +57,30 @@ const policyholderSchema = new mongoose.Schema(
     },
 
     /**
-     * leadId (ObjectId reference to Lead)
+     * leadEngagementId (ObjectId reference to LeadEngagement)
      * -----------------------------------
-     * References the Lead that converted into this policyholder.
+     * References the LeadEngagement that converted into this policyholder.
      *
      * required: true → ensures traceability from prospect → lead → policyholder.
-     * index: true → fast lookup by originating lead.
+     * index: true → fast lookup by originating lead engagement.
      *
-     * ref: "Lead" enables populate("leadId").
+     * ref: "LeadEngagement" enables populate("leadEngagementId").
      */
-    leadId: {
+    leadEngagementId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "Lead",
+      ref: "LeadEngagement",
+      required: true,
+      index: true,
+    },
+
+    /**
+     * productId (ObjectId reference to Product)
+     * ----------------------------------------
+     * Foreign-key style reference to Product catalog.
+     */
+    productId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Product",
       required: true,
       index: true,
     },
