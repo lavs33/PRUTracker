@@ -107,4 +107,15 @@ const applicationSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+
+applicationSchema.index(
+  { "recordApplicationSubmission.pruOneTransactionId": 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      "recordApplicationSubmission.pruOneTransactionId": { $type: "string", $ne: "" },
+    },
+  }
+);
+
 module.exports = mongoose.model("Application", applicationSchema);

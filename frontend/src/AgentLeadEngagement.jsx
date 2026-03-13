@@ -99,6 +99,11 @@ function AgentLeadEngagement() {
     sentToProspectAt: "",
     uploadedAt: "",
   });
+  const [applicationChosenProduct, setApplicationChosenProduct] = useState({
+    id: "",
+    productName: "",
+    description: "",
+  });
   const [proposalGenerateSaving, setProposalGenerateSaving] = useState(false);
   const [proposalGenerateError, setProposalGenerateError] = useState("");
   const [proposalGenerateFieldErrors, setProposalGenerateFieldErrors] = useState({});
@@ -167,6 +172,55 @@ function AgentLeadEngagement() {
   const [applicationSubmissionSaving, setApplicationSubmissionSaving] = useState(false);
   const [applicationSubmissionError, setApplicationSubmissionError] = useState("");
   const [applicationSubmissionScreenshotInputKey, setApplicationSubmissionScreenshotInputKey] = useState(0);
+  const [policyCurrentActivityKey, setPolicyCurrentActivityKey] = useState("Record Policy Application Status");
+  const [policyStatusForm, setPolicyStatusForm] = useState({
+    status: "",
+    issuanceDate: "",
+    notes: "",
+    savedAt: "",
+  });
+  const [policyStatusFieldErrors, setPolicyStatusFieldErrors] = useState({});
+  const [policyStatusSaving, setPolicyStatusSaving] = useState(false);
+  const [policyStatusError, setPolicyStatusError] = useState("");
+  const [policyInitialEorForm, setPolicyInitialEorForm] = useState({
+    eorNumber: "",
+    receiptDate: "",
+    eorFileDataUrl: "",
+    eorFileName: "",
+    uploadedAt: "",
+  });
+  const [policyInitialEorFieldErrors, setPolicyInitialEorFieldErrors] = useState({});
+  const [policyInitialEorSaving, setPolicyInitialEorSaving] = useState(false);
+  const [policyInitialEorError, setPolicyInitialEorError] = useState("");
+  const [policyInitialEorInputKey, setPolicyInitialEorInputKey] = useState(0);
+  const [policySummaryForm, setPolicySummaryForm] = useState({
+    policyNumber: "",
+    policySummaryFileDataUrl: "",
+    policySummaryFileName: "",
+    uploadedAt: "",
+  });
+  const [policySummaryFieldErrors, setPolicySummaryFieldErrors] = useState({});
+  const [policySummarySaving, setPolicySummarySaving] = useState(false);
+  const [policySummaryError, setPolicySummaryError] = useState("");
+  const [policySummaryInputKey, setPolicySummaryInputKey] = useState(0);
+  const [policyChosenProduct, setPolicyChosenProduct] = useState(null);
+  const [policyIssuanceAge, setPolicyIssuanceAge] = useState(null);
+  const [policyCoverageForm, setPolicyCoverageForm] = useState({
+    selectedPaymentTermLabel: "",
+    selectedPaymentTermType: "",
+    selectedPaymentTermYears: "",
+    selectedPaymentTermUntilAge: "",
+    coverageDurationLabel: "",
+    coverageDurationType: "",
+    coverageDurationYears: "",
+    coverageDurationUntilAge: "",
+    coverageStartDate: "",
+    policyEndDate: "",
+    savedAt: "",
+  });
+  const [policyCoverageFieldErrors, setPolicyCoverageFieldErrors] = useState({});
+  const [policyCoverageSaving, setPolicyCoverageSaving] = useState(false);
+  const [policyCoverageError, setPolicyCoverageError] = useState("");
   const [needsSectionOpen, setNeedsSectionOpen] = useState({
     basicInformation: true,
     needsPriorities: true,
@@ -371,6 +425,8 @@ function AgentLeadEngagement() {
       const appPremiumPayment = applicationStage?.recordPremiumPaymentTransfer || {};
       const appNeedsSelection = applicationStage?.needsAssessmentProductSelection || {};
       const appSubmission = applicationStage?.recordApplicationSubmission || {};
+      const appChosenProduct = applicationStage?.chosenProduct || null;
+      const policyStage = data?.engagement?.policy || {};
       const chosen = proposal?.chosenProduct || null;
       setProposalCurrentActivityKey(String(proposal?.currentActivityKey || "Generate Proposal").trim() || "Generate Proposal");
       setProposalGenerateForm({
@@ -423,6 +479,11 @@ function AgentLeadEngagement() {
         requestedFrequency: String(appNeedsSelection?.requestedFrequency || ""),
         methodForInitialPayment: String(appNeedsSelection?.methodForInitialPayment || ""),
       });
+      setApplicationChosenProduct({
+        id: String(appChosenProduct?._id || applicationStage?.chosenProductId || ""),
+        productName: String(appChosenProduct?.productName || ""),
+        description: String(appChosenProduct?.description || ""),
+      });
       setApplicationSubmissionForm({
         pruOneTransactionId: String(appSubmission?.pruOneTransactionId || ""),
         submissionScreenshotImageDataUrl: String(appSubmission?.submissionScreenshotImageDataUrl || ""),
@@ -431,6 +492,73 @@ function AgentLeadEngagement() {
       });
       setApplicationSubmissionFieldErrors({});
       setApplicationSubmissionError("");
+      setPolicyCurrentActivityKey(String(policyStage?.currentActivityKey || "Record Policy Application Status").trim() || "Record Policy Application Status");
+      setPolicyStatusForm({
+        status: String(policyStage?.recordPolicyApplicationStatus?.status || ""),
+        issuanceDate: policyStage?.recordPolicyApplicationStatus?.issuanceDate
+          ? toDateInputValue(policyStage.recordPolicyApplicationStatus.issuanceDate)
+          : "",
+        notes: String(policyStage?.recordPolicyApplicationStatus?.notes || ""),
+        savedAt: policyStage?.recordPolicyApplicationStatus?.savedAt || "",
+      });
+      setPolicyStatusFieldErrors({});
+      setPolicyStatusError("");
+      setPolicyInitialEorForm({
+        eorNumber: String(policyStage?.uploadInitialPremiumEor?.eorNumber || ""),
+        receiptDate: policyStage?.uploadInitialPremiumEor?.receiptDate ? toDateInputValue(policyStage.uploadInitialPremiumEor.receiptDate) : "",
+        eorFileDataUrl: String(policyStage?.uploadInitialPremiumEor?.eorFileDataUrl || ""),
+        eorFileName: String(policyStage?.uploadInitialPremiumEor?.eorFileName || ""),
+        uploadedAt: policyStage?.uploadInitialPremiumEor?.uploadedAt || "",
+      });
+      setPolicyInitialEorFieldErrors({});
+      setPolicyInitialEorError("");
+      setPolicySummaryForm({
+        policyNumber: String(policyStage?.uploadPolicySummary?.policyNumber || ""),
+        policySummaryFileDataUrl: String(policyStage?.uploadPolicySummary?.policySummaryFileDataUrl || ""),
+        policySummaryFileName: String(policyStage?.uploadPolicySummary?.policySummaryFileName || ""),
+        uploadedAt: policyStage?.uploadPolicySummary?.uploadedAt || "",
+      });
+      setPolicySummaryFieldErrors({});
+      setPolicySummaryError("");
+      setPolicyChosenProduct(policyStage?.chosenProduct || null);
+      setPolicyIssuanceAge(Number.isFinite(Number(policyStage?.issuanceAge)) ? Number(policyStage.issuanceAge) : null);
+      setPolicyCoverageForm({
+        selectedPaymentTermLabel: String(policyStage?.recordCoverageDurationDetails?.selectedPaymentTermLabel || ""),
+        selectedPaymentTermType: String(policyStage?.recordCoverageDurationDetails?.selectedPaymentTermType || ""),
+        selectedPaymentTermYears:
+          policyStage?.recordCoverageDurationDetails?.selectedPaymentTermYears !== null
+          && policyStage?.recordCoverageDurationDetails?.selectedPaymentTermYears !== undefined
+            ? String(policyStage.recordCoverageDurationDetails.selectedPaymentTermYears)
+            : "",
+        selectedPaymentTermUntilAge:
+          policyStage?.recordCoverageDurationDetails?.selectedPaymentTermUntilAge !== null
+          && policyStage?.recordCoverageDurationDetails?.selectedPaymentTermUntilAge !== undefined
+            ? String(policyStage.recordCoverageDurationDetails.selectedPaymentTermUntilAge)
+            : "",
+        coverageDurationLabel: String(policyStage?.recordCoverageDurationDetails?.coverageDurationLabel || ""),
+        coverageDurationType: String(policyStage?.recordCoverageDurationDetails?.coverageDurationType || ""),
+        coverageDurationYears:
+          policyStage?.recordCoverageDurationDetails?.coverageDurationYears !== null
+          && policyStage?.recordCoverageDurationDetails?.coverageDurationYears !== undefined
+            ? String(policyStage.recordCoverageDurationDetails.coverageDurationYears)
+            : "",
+        coverageDurationUntilAge:
+          policyStage?.recordCoverageDurationDetails?.coverageDurationUntilAge !== null
+          && policyStage?.recordCoverageDurationDetails?.coverageDurationUntilAge !== undefined
+            ? String(policyStage.recordCoverageDurationDetails.coverageDurationUntilAge)
+            : "",
+        coverageStartDate: policyStage?.recordCoverageDurationDetails?.coverageStartDate
+          ? toDateInputValue(policyStage.recordCoverageDurationDetails.coverageStartDate)
+          : "",
+        policyEndDate: policyStage?.recordCoverageDurationDetails?.policyEndDate
+          ? toDateInputValue(policyStage.recordCoverageDurationDetails.policyEndDate)
+          : (policyStage?.recordCoverageDurationDetails?.coverageEndDate
+            ? toDateInputValue(policyStage.recordCoverageDurationDetails.coverageEndDate)
+            : ""),
+        savedAt: policyStage?.recordCoverageDurationDetails?.savedAt || "",
+      });
+      setPolicyCoverageFieldErrors({});
+      setPolicyCoverageError("");
       setApplicationMeetingForm({
         meetingDate: applicationSubmissionMeeting?.startAt ? toDateInputValue(applicationSubmissionMeeting.startAt) : "",
         meetingStartTime: applicationSubmissionMeeting?.startAt
@@ -967,6 +1095,16 @@ function AgentLeadEngagement() {
     []
   );
 
+  const POLICY_ISSUANCE_STEPS_UI = useMemo(
+    () => [
+      { key: "Record Policy Application Status", label: "Record Policy Application Status" },
+      { key: "Upload Initial Premium eOR", label: "Upload Initial Premium eOR" },
+      { key: "Upload Policy Summary", label: "Upload Policy Summary" },
+      { key: "Record Coverage Duration Details", label: "Record Coverage Duration Details" },
+    ],
+    []
+  );
+
   const CHANNELS = useMemo(() => ["Call", "SMS", "WhatsApp", "Viber", "Telegram"], []);
   const cityOptions = useMemo(() => [...PH_CITY_REGION_OPTIONS].sort((a, b) => a.city.localeCompare(b.city)), []);
   const availableProductsByPriority = useMemo(() => {
@@ -1274,6 +1412,7 @@ function AgentLeadEngagement() {
   const showNeedsAssessmentPanel = viewStage === "Needs Assessment";
   const showProposalPanel = viewStage === "Proposal";
   const showApplicationPanel = viewStage === "Application";
+  const showPolicyIssuancePanel = viewStage === "Policy Issuance";
   const isNeedsAssessmentEditableNow = showNeedsAssessmentPanel && isViewingCurrentStage && stage === "Needs Assessment";
   const isProposalEditableNow = showProposalPanel && isViewingCurrentStage && stage === "Proposal";
 
@@ -1286,6 +1425,7 @@ function AgentLeadEngagement() {
   // Activity tracker only relevant when Contacting panel is shown
   const showContactingTracker = showContactingPanel;
   const showProposalTracker = showProposalPanel;
+  const showPolicyIssuanceTracker = showPolicyIssuancePanel;
 
   // Current activity (badge + tracker)
   const currentActivityKeyRaw = String(engagement?.currentActivityKey || "").trim();
@@ -1389,11 +1529,18 @@ function AgentLeadEngagement() {
     return APPLICATION_STEPS_UI.some((s) => s.key === raw) ? raw : fallback;
   }, [engagement?.application?.currentActivityKey, engagement?.currentActivityKey, APPLICATION_STEPS_UI]);
 
+  const policyIssuanceUiActivityKey = useMemo(() => {
+    const fallback = "Record Policy Application Status";
+    const raw = String(engagement?.policy?.currentActivityKey || policyCurrentActivityKey || engagement?.currentActivityKey || fallback).trim();
+    return POLICY_ISSUANCE_STEPS_UI.some((s) => s.key === raw) ? raw : fallback;
+  }, [engagement?.policy?.currentActivityKey, policyCurrentActivityKey, engagement?.currentActivityKey, POLICY_ISSUANCE_STEPS_UI]);
+
   const hasSavedApplicationAttendance = useMemo(() => {
     const attended = applicationAttendanceForm.attendanceChoice === "YES";
     const hasProof = Boolean(String(applicationAttendanceForm.attendanceProofImageDataUrl || "").trim());
-    return attended && hasProof;
-  }, [applicationAttendanceForm.attendanceChoice, applicationAttendanceForm.attendanceProofImageDataUrl]);
+    const hasSavedTimestamp = Boolean(String(applicationAttendanceForm.attendedAt || "").trim());
+    return attended && hasProof && hasSavedTimestamp;
+  }, [applicationAttendanceForm.attendanceChoice, applicationAttendanceForm.attendanceProofImageDataUrl, applicationAttendanceForm.attendedAt]);
 
   const requestedFrequencyFromNeedsAssessment = String(
     applicationNeedsPaymentSelection?.requestedFrequency ||
@@ -1415,20 +1562,23 @@ function AgentLeadEngagement() {
       String(applicationPremiumPaymentForm.methodForRenewalPayment || "").trim()
     );
     const hasProof = Boolean(String(applicationPremiumPaymentForm.paymentProofImageDataUrl || "").trim());
-    return hasAnnual && hasFrequency && hasRenewalMethod && hasProof;
+    const hasSavedTimestamp = Boolean(String(applicationPremiumPaymentForm.savedAt || "").trim());
+    return hasAnnual && hasFrequency && hasRenewalMethod && hasProof && hasSavedTimestamp;
   }, [
     applicationPremiumPaymentForm.totalAnnualPremiumPhp,
     applicationPremiumPaymentForm.totalFrequencyPremiumPhp,
     applicationPremiumPaymentForm.methodForRenewalPayment,
     applicationPremiumPaymentForm.paymentProofImageDataUrl,
+    applicationPremiumPaymentForm.savedAt,
     toNonNegativeNumber,
   ]);
 
   const hasSavedApplicationSubmission = useMemo(() => {
     const hasTxId = Boolean(String(applicationSubmissionForm.pruOneTransactionId || "").trim());
     const hasScreenshot = Boolean(String(applicationSubmissionForm.submissionScreenshotImageDataUrl || "").trim());
-    return hasTxId && hasScreenshot;
-  }, [applicationSubmissionForm.pruOneTransactionId, applicationSubmissionForm.submissionScreenshotImageDataUrl]);
+    const hasSavedTimestamp = Boolean(String(applicationSubmissionForm.savedAt || "").trim());
+    return hasTxId && hasScreenshot && hasSavedTimestamp;
+  }, [applicationSubmissionForm.pruOneTransactionId, applicationSubmissionForm.submissionScreenshotImageDataUrl, applicationSubmissionForm.savedAt]);
 
   const totalFrequencyPremiumLabel = useMemo(() => {
     const freq = String(requestedFrequencyFromNeedsAssessment || "").trim();
@@ -1721,7 +1871,11 @@ function AgentLeadEngagement() {
       ? proposalUiActivityKey
       : showApplicationPanel
       ? applicationUiActivityKey
+      : showPolicyIssuancePanel
+      ? policyIssuanceUiActivityKey
       : "";
+
+  const isLeadClosed = String(lead?.status || "").trim().toLowerCase() === "closed";
 
   const mainTitle = viewStage === "Not Started" ? "Not Started" : viewStage || "—";
 
@@ -2678,6 +2832,401 @@ function AgentLeadEngagement() {
     }
   };
 
+  const applicationSubmissionSavedDateInput = useMemo(() => {
+    const raw = applicationSubmissionForm?.savedAt ? new Date(applicationSubmissionForm.savedAt) : null;
+    if (!raw || Number.isNaN(raw.getTime())) return "";
+    return toDateInputValue(raw);
+  }, [applicationSubmissionForm?.savedAt]);
+
+  const todayDateInput = useMemo(() => toDateInputValue(new Date()), []);
+
+  const hasSavedPolicyApplicationStatus = useMemo(() => {
+    const status = String(policyStatusForm.status || "").trim();
+    if (!["Issued", "Declined"].includes(status)) return false;
+    if (!String(policyStatusForm.savedAt || "").trim()) return false;
+    if (status === "Issued" && !String(policyStatusForm.issuanceDate || "").trim()) return false;
+    return true;
+  }, [policyStatusForm.status, policyStatusForm.issuanceDate, policyStatusForm.savedAt]);
+
+  const submitPolicyApplicationStatus = async () => {
+    try {
+      setPolicyStatusError("");
+      setPolicyStatusFieldErrors({});
+
+      const status = String(policyStatusForm.status || "").trim();
+      const issuanceDate = String(policyStatusForm.issuanceDate || "").trim();
+      const notes = String(policyStatusForm.notes || "").trim();
+
+      if (!["Issued", "Declined"].includes(status)) {
+        setPolicyStatusFieldErrors({ status: "Please select policy application status." });
+        return;
+      }
+
+      if (status === "Issued") {
+        if (!issuanceDate) {
+          setPolicyStatusFieldErrors({ issuanceDate: "Issuance date is required for Issued status." });
+          return;
+        }
+        if (applicationSubmissionSavedDateInput && issuanceDate < applicationSubmissionSavedDateInput) {
+          setPolicyStatusFieldErrors({ issuanceDate: "Issuance date cannot be earlier than application submission date." });
+          return;
+        }
+        if (issuanceDate > todayDateInput) {
+          setPolicyStatusFieldErrors({ issuanceDate: "Issuance date cannot be in the future." });
+          return;
+        }
+      }
+
+      setPolicyStatusSaving(true);
+      const res = await fetch(`${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/policy-issuance/status?userId=${user.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          status,
+          issuanceDate: status === "Issued" ? issuanceDate : "",
+          notes,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.message || "Failed to save policy application status.");
+      await fetchEngagement();
+    } catch (err) {
+      const msg = String(err?.message || "Failed to save policy application status.");
+      if (msg.includes("Issued or Declined")) {
+        setPolicyStatusFieldErrors({ status: "Please select policy application status." });
+      } else if (msg.includes("Issuance date")) {
+        setPolicyStatusFieldErrors({ issuanceDate: msg });
+      } else {
+        setPolicyStatusError(msg);
+      }
+    } finally {
+      setPolicyStatusSaving(false);
+    }
+  };
+
+  const hasSavedPolicyInitialPremiumEor = useMemo(() => {
+    const hasNo = Boolean(String(policyInitialEorForm.eorNumber || "").trim());
+    const hasDate = Boolean(String(policyInitialEorForm.receiptDate || "").trim());
+    const hasFile = Boolean(String(policyInitialEorForm.eorFileDataUrl || "").trim());
+    const hasSaved = Boolean(String(policyInitialEorForm.uploadedAt || "").trim());
+    return hasNo && hasDate && hasFile && hasSaved;
+  }, [policyInitialEorForm.eorNumber, policyInitialEorForm.receiptDate, policyInitialEorForm.eorFileDataUrl, policyInitialEorForm.uploadedAt]);
+
+  const onPolicyInitialEorPicked = (file) => {
+    if (!file) {
+      setPolicyInitialEorForm((f) => ({ ...f, eorFileDataUrl: "", eorFileName: "" }));
+      return;
+    }
+    if (!/\.pdf$/i.test(file.name) && file.type !== "application/pdf") {
+      setPolicyInitialEorFieldErrors((prev) => ({ ...prev, eorFileDataUrl: "eOR file must be a PDF." }));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setPolicyInitialEorFieldErrors((prev) => ({ ...prev, eorFileDataUrl: "" }));
+      setPolicyInitialEorForm((f) => ({ ...f, eorFileDataUrl: String(reader.result || ""), eorFileName: file.name }));
+    };
+    reader.onerror = () => {
+      setPolicyInitialEorFieldErrors((prev) => ({ ...prev, eorFileDataUrl: "Failed to read eOR file." }));
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const submitPolicyInitialEor = async () => {
+    try {
+      setPolicyInitialEorError("");
+      setPolicyInitialEorFieldErrors({});
+      const eorNumber = String(policyInitialEorForm.eorNumber || "").trim();
+      const receiptDate = String(policyInitialEorForm.receiptDate || "").trim();
+      const eorFileDataUrl = String(policyInitialEorForm.eorFileDataUrl || "").trim();
+      const eorFileName = String(policyInitialEorForm.eorFileName || "").trim();
+
+      if (!eorNumber) {
+        setPolicyInitialEorFieldErrors({ eorNumber: "eOR number is required." });
+        return;
+      }
+      if (!receiptDate) {
+        setPolicyInitialEorFieldErrors({ receiptDate: "Receipt date is required." });
+        return;
+      }
+      if (!eorFileDataUrl) {
+        setPolicyInitialEorFieldErrors({ eorFileDataUrl: "eOR PDF file is required." });
+        return;
+      }
+
+      setPolicyInitialEorSaving(true);
+      const res = await fetch(`${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/policy-issuance/initial-premium-eor?userId=${user.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ eorNumber, receiptDate, eorFileDataUrl, eorFileName }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.message || "Failed to save Initial Premium eOR.");
+      await fetchEngagement();
+    } catch (err) {
+      const msg = String(err?.message || "Failed to save Initial Premium eOR.");
+      if (msg.includes("eOR number")) setPolicyInitialEorFieldErrors({ eorNumber: "eOR number is required." });
+      else if (msg.includes("Receipt date")) setPolicyInitialEorFieldErrors({ receiptDate: msg });
+      else if (msg.includes("PDF")) setPolicyInitialEorFieldErrors({ eorFileDataUrl: msg });
+      else setPolicyInitialEorError(msg);
+    } finally {
+      setPolicyInitialEorSaving(false);
+    }
+  };
+
+  const hasSavedPolicySummary = useMemo(() => {
+    const hasPolicyNo = /^\d{8}$/.test(String(policySummaryForm.policyNumber || "").trim());
+    const hasFile = Boolean(String(policySummaryForm.policySummaryFileDataUrl || "").trim());
+    const hasSaved = Boolean(String(policySummaryForm.uploadedAt || "").trim());
+    return hasPolicyNo && hasFile && hasSaved;
+  }, [policySummaryForm.policyNumber, policySummaryForm.policySummaryFileDataUrl, policySummaryForm.uploadedAt]);
+
+  const policyPaymentTermOptions = useMemo(() => {
+    const list = Array.isArray(policyChosenProduct?.paymentTermOptions) ? policyChosenProduct.paymentTermOptions : [];
+    return list
+      .map((opt) => ({
+        label: String(opt?.label || "").trim(),
+        type: String(opt?.type || "").trim(),
+        years: opt?.years ?? null,
+        minYears: opt?.minYears ?? null,
+        untilAge: opt?.untilAge ?? null,
+      }))
+      .filter((opt) => opt.label && opt.type);
+  }, [policyChosenProduct]);
+
+  const policyCoverageRule = useMemo(() => {
+    const r = policyChosenProduct?.coverageDurationRule || null;
+    if (!r) return null;
+    return {
+      label: String(r?.label || "").trim(),
+      type: String(r?.type || "").trim(),
+      years: r?.years ?? null,
+      minYears: r?.minYears ?? null,
+      untilAge: r?.untilAge ?? null,
+    };
+  }, [policyChosenProduct]);
+
+  const policyAgeRangeOptions = useMemo(() => {
+    const start = Number(policyIssuanceAge);
+    if (!Number.isFinite(start)) return [];
+    const maxFromPayment = policyPaymentTermOptions
+      .filter((opt) => opt.type === "RANGE_TO_AGE" && Number.isFinite(Number(opt.untilAge)))
+      .map((opt) => Number(opt.untilAge));
+    const maxFromCoverage = policyCoverageRule?.type === "RANGE_TO_AGE" && Number.isFinite(Number(policyCoverageRule?.untilAge))
+      ? [Number(policyCoverageRule.untilAge)]
+      : [];
+    const maxAge = Math.max(0, ...maxFromPayment, ...maxFromCoverage);
+    if (!maxAge || maxAge <= start) return [];
+    return Array.from({ length: maxAge - start }, (_, idx) => start + idx + 1);
+  }, [policyIssuanceAge, policyPaymentTermOptions, policyCoverageRule]);
+
+  useEffect(() => {
+    if (!policyPaymentTermOptions.length) return;
+    if (String(policyCoverageForm.selectedPaymentTermType || "").trim()) return;
+    if (policyPaymentTermOptions.length === 1) {
+      const only = policyPaymentTermOptions[0];
+      setPolicyCoverageForm((f) => ({
+        ...f,
+        selectedPaymentTermLabel: only.label,
+        selectedPaymentTermType: only.type,
+        selectedPaymentTermYears: only.years ?? "",
+        selectedPaymentTermUntilAge: only.untilAge ?? "",
+      }));
+    }
+  }, [policyPaymentTermOptions, policyCoverageForm.selectedPaymentTermType]);
+
+  useEffect(() => {
+    if (!policyCoverageRule?.type) return;
+    setPolicyCoverageForm((f) => ({
+      ...f,
+      coverageDurationLabel: policyCoverageRule.label,
+      coverageDurationType: policyCoverageRule.type,
+      coverageDurationYears: policyCoverageRule.type === "FIXED_YEARS" ? (policyCoverageRule.years ?? "") : "",
+      coverageDurationUntilAge:
+        policyCoverageRule.type === "UNTIL_AGE"
+          ? (policyCoverageRule.untilAge ?? "")
+          : (f.coverageDurationUntilAge || ""),
+    }));
+  }, [policyCoverageRule]);
+
+  const computedPolicyEndDate = useMemo(() => {
+    const issuanceRaw = String(policyStatusForm.issuanceDate || "").trim();
+    if (!issuanceRaw) return "";
+    const issuanceDate = new Date(`${issuanceRaw}T00:00:00`);
+    if (Number.isNaN(issuanceDate.getTime())) return "";
+
+    const type = String(policyCoverageForm.coverageDurationType || "").trim();
+    let yearsToAdd = null;
+    if (type === "FIXED_YEARS") {
+      const y = Number(policyCoverageForm.coverageDurationYears || "");
+      if (Number.isFinite(y) && y > 0) yearsToAdd = y;
+    } else if (type === "UNTIL_AGE") {
+      const untilAge = Number(policyCoverageForm.coverageDurationUntilAge || "");
+      if (Number.isFinite(untilAge) && Number.isFinite(policyIssuanceAge)) {
+        yearsToAdd = untilAge - Number(policyIssuanceAge);
+      }
+    } else if (type === "RANGE_TO_AGE") {
+      const untilAge = Number(policyCoverageForm.coverageDurationUntilAge || "");
+      if (Number.isFinite(untilAge) && Number.isFinite(policyIssuanceAge)) {
+        yearsToAdd = untilAge - Number(policyIssuanceAge);
+      }
+    }
+
+    if (!Number.isFinite(yearsToAdd) || yearsToAdd <= 0) return "";
+    const end = new Date(issuanceDate);
+    end.setFullYear(end.getFullYear() + yearsToAdd);
+    return toDateInputValue(end);
+  }, [policyStatusForm.issuanceDate, policyCoverageForm.coverageDurationType, policyCoverageForm.coverageDurationYears, policyCoverageForm.coverageDurationUntilAge, policyIssuanceAge]);
+
+  const hasSavedPolicyCoverageDetails = useMemo(() => {
+    return Boolean(String(policyCoverageForm.savedAt || "").trim());
+  }, [policyCoverageForm.savedAt]);
+
+  const isViewedStageFullyFinished = useMemo(() => {
+    if (!isViewingCurrentStage) return true;
+    if (showNeedsAssessmentPanel) return Boolean(proposalMeetingSaved?.startAt);
+    if (showProposalPanel) return Boolean(applicationMeetingSaved?.startAt);
+    if (showApplicationPanel) return hasSavedApplicationSubmission;
+    if (showPolicyIssuancePanel) return hasSavedPolicyCoverageDetails;
+    return false;
+  }, [
+    isViewingCurrentStage,
+    showNeedsAssessmentPanel,
+    proposalMeetingSaved?.startAt,
+    showProposalPanel,
+    applicationMeetingSaved?.startAt,
+    showApplicationPanel,
+    hasSavedApplicationSubmission,
+    showPolicyIssuancePanel,
+    hasSavedPolicyCoverageDetails,
+  ]);
+
+  const shouldShowStageActivityBadge =
+    !isLeadClosed && !isViewedStageFullyFinished && String(stageActivityBadge || "").trim() && stageActivityBadge !== "—";
+
+  const onPolicySummaryPicked = (file) => {
+    if (!file) {
+      setPolicySummaryForm((f) => ({ ...f, policySummaryFileDataUrl: "", policySummaryFileName: "" }));
+      return;
+    }
+    if (!/\.pdf$/i.test(file.name) && file.type !== "application/pdf") {
+      setPolicySummaryFieldErrors((prev) => ({ ...prev, policySummaryFileDataUrl: "Policy summary file must be a PDF." }));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setPolicySummaryFieldErrors((prev) => ({ ...prev, policySummaryFileDataUrl: "" }));
+      setPolicySummaryForm((f) => ({ ...f, policySummaryFileDataUrl: String(reader.result || ""), policySummaryFileName: file.name }));
+    };
+    reader.onerror = () => {
+      setPolicySummaryFieldErrors((prev) => ({ ...prev, policySummaryFileDataUrl: "Failed to read policy summary file." }));
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const submitPolicySummary = async () => {
+    try {
+      setPolicySummaryError("");
+      setPolicySummaryFieldErrors({});
+      const policyNumber = String(policySummaryForm.policyNumber || "").trim();
+      const policySummaryFileDataUrl = String(policySummaryForm.policySummaryFileDataUrl || "").trim();
+      const policySummaryFileName = String(policySummaryForm.policySummaryFileName || "").trim();
+
+      if (!/^\d{8}$/.test(policyNumber)) {
+        setPolicySummaryFieldErrors({ policyNumber: "Policy number must be exactly 8 digits." });
+        return;
+      }
+      if (!policySummaryFileDataUrl) {
+        setPolicySummaryFieldErrors({ policySummaryFileDataUrl: "Policy summary PDF is required." });
+        return;
+      }
+
+      setPolicySummarySaving(true);
+      const res = await fetch(`${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/policy-issuance/policy-summary?userId=${user.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ policyNumber, policySummaryFileDataUrl, policySummaryFileName }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.message || "Failed to save policy summary.");
+      await fetchEngagement();
+    } catch (err) {
+      const msg = String(err?.message || "Failed to save policy summary.");
+      if (msg.includes("8 digits")) setPolicySummaryFieldErrors({ policyNumber: "Policy number must be exactly 8 digits." });
+      else if (msg.includes("already exists")) setPolicySummaryFieldErrors({ policyNumber: "Policy number already exists." });
+      else if (msg.includes("PDF")) setPolicySummaryFieldErrors({ policySummaryFileDataUrl: msg });
+      else setPolicySummaryError(msg);
+    } finally {
+      setPolicySummarySaving(false);
+    }
+  };
+
+
+  const submitPolicyCoverageDetails = async () => {
+    try {
+      setPolicyCoverageError("");
+      setPolicyCoverageFieldErrors({});
+
+      const payload = {
+        selectedPaymentTermLabel: String(policyCoverageForm.selectedPaymentTermLabel || "").trim(),
+        selectedPaymentTermType: String(policyCoverageForm.selectedPaymentTermType || "").trim(),
+        selectedPaymentTermYears:
+          policyCoverageForm.selectedPaymentTermYears !== "" ? Number(policyCoverageForm.selectedPaymentTermYears) : null,
+        selectedPaymentTermUntilAge:
+          policyCoverageForm.selectedPaymentTermUntilAge !== "" ? Number(policyCoverageForm.selectedPaymentTermUntilAge) : null,
+        coverageDurationLabel: String(policyCoverageForm.coverageDurationLabel || "").trim(),
+        coverageDurationType: String(policyCoverageForm.coverageDurationType || "").trim(),
+        coverageDurationYears:
+          policyCoverageForm.coverageDurationYears !== "" ? Number(policyCoverageForm.coverageDurationYears) : null,
+        coverageDurationUntilAge:
+          policyCoverageForm.coverageDurationUntilAge !== "" ? Number(policyCoverageForm.coverageDurationUntilAge) : null,
+      };
+
+      if (!payload.selectedPaymentTermLabel || !payload.selectedPaymentTermType) {
+        setPolicyCoverageFieldErrors({ selectedPaymentTermLabel: "Please select payment term." });
+        return;
+      }
+      if (payload.selectedPaymentTermType === "RANGE_TO_AGE" && !Number.isFinite(payload.selectedPaymentTermUntilAge)) {
+        setPolicyCoverageFieldErrors({ selectedPaymentTermUntilAge: "Please select payment term until age." });
+        return;
+      }
+
+      if (!payload.coverageDurationLabel || !payload.coverageDurationType) {
+        setPolicyCoverageFieldErrors({ coverageDurationLabel: "Coverage duration is required." });
+        return;
+      }
+      if (payload.coverageDurationType === "RANGE_TO_AGE" && !Number.isFinite(payload.coverageDurationUntilAge)) {
+        setPolicyCoverageFieldErrors({ coverageDurationUntilAge: "Please select coverage duration until age." });
+        return;
+      }
+      if (!String(computedPolicyEndDate || "").trim()) {
+        setPolicyCoverageFieldErrors({ policyEndDate: "Unable to compute policy end date from selected coverage duration." });
+        return;
+      }
+
+      setPolicyCoverageSaving(true);
+      const res = await fetch(`${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/policy-issuance/coverage-duration?userId=${user.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.message || "Failed to save coverage duration details.");
+      await fetchEngagement();
+    } catch (err) {
+      const msg = String(err?.message || "Failed to save coverage duration details.");
+      if (msg.toLowerCase().includes("payment term")) {
+        setPolicyCoverageFieldErrors((prev) => ({ ...prev, selectedPaymentTermLabel: msg }));
+      } else if (msg.toLowerCase().includes("coverage")) {
+        setPolicyCoverageFieldErrors((prev) => ({ ...prev, coverageDurationLabel: msg }));
+      } else {
+        setPolicyCoverageError(msg);
+      }
+    } finally {
+      setPolicyCoverageSaving(false);
+    }
+  };
+
   const submitScheduleApplicationSubmission = async () => {
     try {
       setApplicationMeetingError("");
@@ -3101,7 +3650,7 @@ function AgentLeadEngagement() {
                 <section className="le-card">
                   <div className="le-cardHeader">
                     <h2 className="le-cardTitle">{mainTitle}</h2>
-                    {stageActivityBadge ? <span className="le-badge">{stageActivityBadge}</span> : null}
+                    {shouldShowStageActivityBadge ? <span className="le-badge">{stageActivityBadge}</span> : null}
                   </div>
 
                   {stage === "Not Started" && (
@@ -3183,8 +3732,36 @@ function AgentLeadEngagement() {
                     </div>
                   )}
 
+                  {showPolicyIssuanceTracker && (
+                    <div className="le-activityTracker">
+                      {POLICY_ISSUANCE_STEPS_UI.map((step, idx) => {
+                        const currentIdx = Math.max(0, POLICY_ISSUANCE_STEPS_UI.findIndex((x) => x.key === policyIssuanceUiActivityKey));
+                        const isDone = idx < currentIdx;
+                        const isActive = idx === currentIdx;
+                        return (
+                          <span key={step.key} className={`${isDone ? "done" : ""} ${isActive ? "active current" : ""}`.trim()}>
+                            {step.label}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+
                   {showApplicationPanel && (
                     <>
+                      <div className="le-block">
+                        <div className="le-attemptMeta">
+                          <div>
+                            <span className="le-metaLabel">Chosen Product</span>
+                            <span className="le-metaValue">{applicationChosenProduct.productName || applicationChosenProduct.id || "—"}</span>
+                          </div>
+                          <div>
+                            <span className="le-metaLabel">Product Description</span>
+                            <span className="le-metaValue">{applicationChosenProduct.description || "No product description available."}</span>
+                          </div>
+                        </div>
+                      </div>
+
                       <div className="le-block">
                         <div className="le-formRow">
                           <label className="le-label">Initial Quotation Proposal Preview:</label>
@@ -3515,7 +4092,7 @@ function AgentLeadEngagement() {
 
                       {hasSavedApplicationAttendance && hasSavedApplicationPremiumPaymentTransfer ? (
                         <div className="le-block">
-                          <h4 className="le-blockTitle">Record Application Submission</h4>
+                          <h4 className="le-blockTitle">{hasSavedApplicationSubmission ? "Application Submission Details" : "Record Application Submission"}</h4>
 
                           {hasSavedApplicationSubmission ? (
                             <>
@@ -3623,10 +4200,490 @@ function AgentLeadEngagement() {
                   )}
 
 
-                  {showContactingPanel && isContactingReadOnly && (
-                    <p className="le-muted" style={{ marginBottom: 10 }}>
-                      Contacting records are view-only at this stage. Add Attempt and edits are disabled.
-                    </p>
+
+                  {showPolicyIssuancePanel && (
+                    <>
+                      <div className="le-block">
+                        <h4 className="le-blockTitle">{hasSavedPolicyApplicationStatus ? "Policy Application Status Details" : "Record Policy Application Status"}</h4>
+
+                        {hasSavedPolicyApplicationStatus ? (
+                          <>
+                            <div className="le-formRow">
+                              <label className="le-label">Policy Application Status</label>
+                              <p className="le-smallNote">{policyStatusForm.status}</p>
+                            </div>
+                            {policyStatusForm.status === "Issued" ? (
+                              <div className="le-formRow">
+                                <label className="le-label">Issuance Date</label>
+                                <p className="le-smallNote">{policyStatusForm.issuanceDate || "—"}</p>
+                              </div>
+                            ) : null}
+                            {String(policyStatusForm.notes || "").trim() ? (
+                              <div className="le-formRow">
+                                <label className="le-label">Notes</label>
+                                <p className="le-smallNote">{policyStatusForm.notes}</p>
+                              </div>
+                            ) : null}
+                          </>
+                        ) : (
+                          <>
+                            <div className="le-formRow">
+                              <label className="le-label">Policy Application Status *</label>
+                              <select
+                                className={`le-input ${policyStatusFieldErrors.status ? "error" : ""}`}
+                                value={policyStatusForm.status}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  setPolicyStatusForm((f) => ({ ...f, status: v, issuanceDate: v === "Issued" ? f.issuanceDate : "" }));
+                                  setPolicyStatusFieldErrors((prev) => ({ ...prev, status: "", issuanceDate: "" }));
+                                }}
+                                disabled={policyStatusSaving}
+                              >
+                                <option value="">Select</option>
+                                <option value="Issued">Issued</option>
+                                <option value="Declined">Declined</option>
+                              </select>
+                              {policyStatusFieldErrors.status ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyStatusFieldErrors.status}</p> : null}
+                            </div>
+
+                            {policyStatusForm.status === "Issued" ? (
+                              <div className="le-formRow">
+                                <label className="le-label">Issuance Date *</label>
+                                <input
+                                  type="date"
+                                  className={`le-input ${policyStatusFieldErrors.issuanceDate ? "error" : ""}`}
+                                  value={policyStatusForm.issuanceDate}
+                                  onChange={(e) => {
+                                    setPolicyStatusForm((f) => ({ ...f, issuanceDate: e.target.value }));
+                                    setPolicyStatusFieldErrors((prev) => ({ ...prev, issuanceDate: "" }));
+                                  }}
+                                  min={applicationSubmissionSavedDateInput || undefined}
+                                  max={todayDateInput}
+                                  disabled={policyStatusSaving}
+                                />
+                                {policyStatusFieldErrors.issuanceDate ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyStatusFieldErrors.issuanceDate}</p> : null}
+                              </div>
+                            ) : null}
+
+                            <div className="le-formRow">
+                              <label className="le-label">Notes (Optional)</label>
+                              <textarea
+                                className="le-input"
+                                rows={3}
+                                value={policyStatusForm.notes}
+                                onChange={(e) => setPolicyStatusForm((f) => ({ ...f, notes: e.target.value }))}
+                                disabled={policyStatusSaving}
+                              />
+                            </div>
+
+                            {policyStatusError ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyStatusError}</p> : null}
+
+                            <div className="le-actions" style={{ marginTop: 10 }}>
+                              <button
+                                type="button"
+                                className="le-btn secondary"
+                                onClick={() => {
+                                  setPolicyStatusError("");
+                                  setPolicyStatusFieldErrors({});
+                                  setPolicyStatusForm({ status: "", issuanceDate: "", notes: "", savedAt: "" });
+                                }}
+                                disabled={policyStatusSaving}
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                type="button"
+                                className="le-btn primary"
+                                onClick={submitPolicyApplicationStatus}
+                                disabled={policyStatusSaving}
+                              >
+                                {policyStatusSaving ? "Saving..." : "Save Policy Application Status"}
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
+
+                      {hasSavedPolicyApplicationStatus && policyStatusForm.status === "Issued" ? (
+                        <div className="le-block">
+                          <h4 className="le-blockTitle">{hasSavedPolicyInitialPremiumEor ? "Initial Premium eOR Details" : "Upload Initial Premium eOR"}</h4>
+
+                          <div className="le-formRow">
+                            <label className="le-label">Method of Initial Payment</label>
+                            <p className="le-smallNote">{applicationNeedsPaymentSelection.methodForInitialPayment || "—"}</p>
+                          </div>
+                          <div className="le-formRow">
+                            <label className="le-label">{`${totalFrequencyPremiumLabel.replace("(in Php)", "")} Payment (Php)`}</label>
+                            <p className="le-smallNote">{applicationPremiumPaymentForm.totalFrequencyPremiumPhp || "—"}</p>
+                          </div>
+
+                          {hasSavedPolicyInitialPremiumEor ? (
+                            <>
+                              <div className="le-formRow">
+                                <label className="le-label">eOR Number</label>
+                                <p className="le-smallNote">{policyInitialEorForm.eorNumber || "—"}</p>
+                              </div>
+                              <div className="le-formRow">
+                                <label className="le-label">Receipt Date</label>
+                                <p className="le-smallNote">{policyInitialEorForm.receiptDate || "—"}</p>
+                              </div>
+                              <div className="le-formRow">
+                                <label className="le-label">Uploaded eOR File</label>
+                                <p className="le-smallNote">{policyInitialEorForm.eorFileName || "eOR.pdf"}</p>
+                              </div>
+                              {policyInitialEorForm.eorFileDataUrl ? (
+                                <div className="le-formRow">
+                                  <label className="le-label">Preview</label>
+                                  <iframe
+                                    title="Initial Premium eOR Preview"
+                                    src={policyInitialEorForm.eorFileDataUrl}
+                                    style={{ width: "100%", minHeight: 320, border: "1px solid #e5e7eb", borderRadius: 10 }}
+                                  />
+                                </div>
+                              ) : null}
+                            </>
+                          ) : (
+                            <>
+                              <div className="le-formRow">
+                                <label className="le-label">eOR Number *</label>
+                                <input
+                                  className="le-input"
+                                  value={policyInitialEorForm.eorNumber}
+                                  onChange={(e) => {
+                                    setPolicyInitialEorForm((f) => ({ ...f, eorNumber: e.target.value }));
+                                    setPolicyInitialEorFieldErrors((prev) => ({ ...prev, eorNumber: "" }));
+                                  }}
+                                  disabled={policyInitialEorSaving}
+                                />
+                                {policyInitialEorFieldErrors.eorNumber ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyInitialEorFieldErrors.eorNumber}</p> : null}
+                              </div>
+
+                              <div className="le-formRow">
+                                <label className="le-label">Receipt Date *</label>
+                                <input
+                                  type="date"
+                                  className={`le-input ${policyInitialEorFieldErrors.receiptDate ? "error" : ""}`}
+                                  value={policyInitialEorForm.receiptDate}
+                                  onChange={(e) => {
+                                    setPolicyInitialEorForm((f) => ({ ...f, receiptDate: e.target.value }));
+                                    setPolicyInitialEorFieldErrors((prev) => ({ ...prev, receiptDate: "" }));
+                                  }}
+                                  min={applicationSubmissionSavedDateInput || undefined}
+                                  max={policyStatusForm.issuanceDate || todayDateInput}
+                                  disabled={policyInitialEorSaving}
+                                />
+                                {policyInitialEorFieldErrors.receiptDate ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyInitialEorFieldErrors.receiptDate}</p> : null}
+                              </div>
+
+                              <div className="le-formRow">
+                                <label className="le-label">Upload eOR (PDF) *</label>
+                                <input
+                                  key={policyInitialEorInputKey}
+                                  type="file"
+                                  className="le-input"
+                                  accept="application/pdf,.pdf"
+                                  onChange={(e) => onPolicyInitialEorPicked(e.target.files?.[0] || null)}
+                                  disabled={policyInitialEorSaving}
+                                />
+                                {policyInitialEorForm.eorFileName ? <p className="le-smallNote">Selected file: {policyInitialEorForm.eorFileName}</p> : null}
+                                {policyInitialEorFieldErrors.eorFileDataUrl ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyInitialEorFieldErrors.eorFileDataUrl}</p> : null}
+                              </div>
+
+                              {policyInitialEorForm.eorFileDataUrl ? (
+                                <div className="le-formRow">
+                                  <label className="le-label">Preview</label>
+                                  <iframe
+                                    title="Initial Premium eOR Preview"
+                                    src={policyInitialEorForm.eorFileDataUrl}
+                                    style={{ width: "100%", minHeight: 320, border: "1px solid #e5e7eb", borderRadius: 10 }}
+                                  />
+                                </div>
+                              ) : null}
+
+                              {policyInitialEorError ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyInitialEorError}</p> : null}
+
+                              <div className="le-actions" style={{ marginTop: 10 }}>
+                                <button
+                                  type="button"
+                                  className="le-btn secondary"
+                                  onClick={() => {
+                                    setPolicyInitialEorError("");
+                                    setPolicyInitialEorFieldErrors({});
+                                    setPolicyInitialEorForm({ eorNumber: "", receiptDate: "", eorFileDataUrl: "", eorFileName: "", uploadedAt: "" });
+                                    setPolicyInitialEorInputKey((k) => k + 1);
+                                  }}
+                                  disabled={policyInitialEorSaving}
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  type="button"
+                                  className="le-btn primary"
+                                  onClick={submitPolicyInitialEor}
+                                  disabled={policyInitialEorSaving}
+                                >
+                                  {policyInitialEorSaving ? "Saving..." : "Save Initial Premium eOR"}
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      ) : null}
+
+
+                      {hasSavedPolicyInitialPremiumEor ? (
+                        <div className="le-block">
+                          <h4 className="le-blockTitle">{hasSavedPolicySummary ? "Policy Summary Details" : "Upload Policy Summary"}</h4>
+
+                          {hasSavedPolicySummary ? (
+                            <>
+                              <div className="le-formRow">
+                                <label className="le-label">Policy Number</label>
+                                <p className="le-smallNote">{policySummaryForm.policyNumber || "—"}</p>
+                              </div>
+                              <div className="le-formRow">
+                                <label className="le-label">Policy Summary File</label>
+                                <p className="le-smallNote">{policySummaryForm.policySummaryFileName || "PolicySummary.pdf"}</p>
+                              </div>
+                              {policySummaryForm.policySummaryFileDataUrl ? (
+                                <div className="le-formRow">
+                                  <label className="le-label">Preview</label>
+                                  <iframe
+                                    title="Policy Summary Preview"
+                                    src={policySummaryForm.policySummaryFileDataUrl}
+                                    style={{ width: "100%", minHeight: 320, border: "1px solid #e5e7eb", borderRadius: 10 }}
+                                  />
+                                </div>
+                              ) : null}
+                            </>
+                          ) : (
+                            <>
+                              <div className="le-formRow">
+                                <label className="le-label">Policy Number (8 digits) *</label>
+                                <input
+                                  className={`le-input ${policySummaryFieldErrors.policyNumber ? "error" : ""}`}
+                                  value={policySummaryForm.policyNumber}
+                                  onChange={(e) => {
+                                    const v = e.target.value.replace(/\D/g, "").slice(0, 8);
+                                    setPolicySummaryForm((f) => ({ ...f, policyNumber: v }));
+                                    setPolicySummaryFieldErrors((prev) => ({ ...prev, policyNumber: "" }));
+                                  }}
+                                  inputMode="numeric"
+                                  maxLength={8}
+                                  disabled={policySummarySaving}
+                                />
+                                {policySummaryFieldErrors.policyNumber ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policySummaryFieldErrors.policyNumber}</p> : null}
+                              </div>
+
+                              <div className="le-formRow">
+                                <label className="le-label">Upload Policy Summary (PDF) *</label>
+                                <input
+                                  key={policySummaryInputKey}
+                                  type="file"
+                                  className="le-input"
+                                  accept="application/pdf,.pdf"
+                                  onChange={(e) => onPolicySummaryPicked(e.target.files?.[0] || null)}
+                                  disabled={policySummarySaving}
+                                />
+                                {policySummaryForm.policySummaryFileName ? <p className="le-smallNote">Selected file: {policySummaryForm.policySummaryFileName}</p> : null}
+                                {policySummaryFieldErrors.policySummaryFileDataUrl ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policySummaryFieldErrors.policySummaryFileDataUrl}</p> : null}
+                              </div>
+
+                              {policySummaryForm.policySummaryFileDataUrl ? (
+                                <div className="le-formRow">
+                                  <label className="le-label">Preview</label>
+                                  <iframe
+                                    title="Policy Summary Preview"
+                                    src={policySummaryForm.policySummaryFileDataUrl}
+                                    style={{ width: "100%", minHeight: 320, border: "1px solid #e5e7eb", borderRadius: 10 }}
+                                  />
+                                </div>
+                              ) : null}
+
+                              {policySummaryError ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policySummaryError}</p> : null}
+
+                              <div className="le-actions" style={{ marginTop: 10 }}>
+                                <button
+                                  type="button"
+                                  className="le-btn secondary"
+                                  onClick={() => {
+                                    setPolicySummaryError("");
+                                    setPolicySummaryFieldErrors({});
+                                    setPolicySummaryForm({ policyNumber: "", policySummaryFileDataUrl: "", policySummaryFileName: "", uploadedAt: "" });
+                                    setPolicySummaryInputKey((k) => k + 1);
+                                  }}
+                                  disabled={policySummarySaving}
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  type="button"
+                                  className="le-btn primary"
+                                  onClick={submitPolicySummary}
+                                  disabled={policySummarySaving}
+                                >
+                                  {policySummarySaving ? "Saving..." : "Save Policy Summary"}
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      ) : null}
+
+
+                      {hasSavedPolicySummary ? (
+                        <div className="le-block">
+                          <h4 className="le-blockTitle">{hasSavedPolicyCoverageDetails ? "Coverage Duration Details" : "Record Coverage Duration Details"}</h4>
+
+                          <div className="le-formRow">
+                            <label className="le-label">Product Name</label>
+                            <p className="le-smallNote">{policyChosenProduct?.productName || "—"}</p>
+                          </div>
+
+                          <div className="le-grid2" style={{ gap: 12 }}>
+                            <div className="le-formRow">
+                              <label className="le-label">Policy Issuance Date</label>
+                              <p className="le-smallNote">{policyStatusForm.issuanceDate || "—"}</p>
+                            </div>
+                            <div className="le-formRow">
+                              <label className="le-label">Policy End Date</label>
+                              <p className="le-smallNote">{computedPolicyEndDate || policyCoverageForm.policyEndDate || "—"}</p>
+                              {policyCoverageFieldErrors.policyEndDate ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyCoverageFieldErrors.policyEndDate}</p> : null}
+                            </div>
+                          </div>
+
+                          {hasSavedPolicyCoverageDetails ? (
+                            <>
+                              <div className="le-formRow">
+                                <label className="le-label">Selected Payment Term</label>
+                                <p className="le-smallNote">{policyCoverageForm.selectedPaymentTermLabel || "—"}</p>
+                              </div>
+                              <div className="le-formRow">
+                                <label className="le-label">Coverage Duration</label>
+                                <p className="le-smallNote">{policyCoverageForm.coverageDurationLabel || "—"}</p>
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <div className="le-formRow">
+                                <label className="le-label">Payment Term *</label>
+                                {policyPaymentTermOptions.length > 1 ? (
+                                  <select
+                                    className={`le-input ${policyCoverageFieldErrors.selectedPaymentTermLabel ? "error" : ""}`}
+                                    value={policyCoverageForm.selectedPaymentTermLabel}
+                                    onChange={(e) => {
+                                      const picked = policyPaymentTermOptions.find((opt) => opt.label === e.target.value) || null;
+                                      setPolicyCoverageForm((f) => ({
+                                        ...f,
+                                        selectedPaymentTermLabel: picked?.label || "",
+                                        selectedPaymentTermType: picked?.type || "",
+                                        selectedPaymentTermYears: picked?.years ?? "",
+                                        selectedPaymentTermUntilAge: picked?.type === "RANGE_TO_AGE" ? "" : (picked?.untilAge ?? ""),
+                                      }));
+                                      setPolicyCoverageFieldErrors((prev) => ({ ...prev, selectedPaymentTermLabel: "", selectedPaymentTermUntilAge: "" }));
+                                    }}
+                                    disabled={policyCoverageSaving}
+                                  >
+                                    <option value="">Select payment term</option>
+                                    {policyPaymentTermOptions.map((opt) => (
+                                      <option key={`${opt.label}-${opt.type}-${opt.years || ""}-${opt.untilAge || ""}`} value={opt.label}>{opt.label}</option>
+                                    ))}
+                                  </select>
+                                ) : (
+                                  <p className="le-smallNote">{policyPaymentTermOptions[0]?.label || policyChosenProduct?.paymentTermLabel || "—"}</p>
+                                )}
+                                {policyCoverageFieldErrors.selectedPaymentTermLabel ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyCoverageFieldErrors.selectedPaymentTermLabel}</p> : null}
+                              </div>
+
+                              {policyCoverageForm.selectedPaymentTermType === "RANGE_TO_AGE" ? (
+                                <div className="le-formRow">
+                                  <label className="le-label">Payment Term Until Age *</label>
+                                  <select
+                                    className={`le-input ${policyCoverageFieldErrors.selectedPaymentTermUntilAge ? "error" : ""}`}
+                                    value={policyCoverageForm.selectedPaymentTermUntilAge}
+                                    onChange={(e) => {
+                                      setPolicyCoverageForm((f) => ({ ...f, selectedPaymentTermUntilAge: e.target.value }));
+                                      setPolicyCoverageFieldErrors((prev) => ({ ...prev, selectedPaymentTermUntilAge: "" }));
+                                    }}
+                                    disabled={policyCoverageSaving}
+                                  >
+                                    <option value="">Select age</option>
+                                    {policyAgeRangeOptions.map((age) => (
+                                      <option key={`pt-age-${age}`} value={age}>{age}</option>
+                                    ))}
+                                  </select>
+                                  {policyCoverageFieldErrors.selectedPaymentTermUntilAge ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyCoverageFieldErrors.selectedPaymentTermUntilAge}</p> : null}
+                                </div>
+                              ) : null}
+
+                              <div className="le-formRow">
+                                <label className="le-label">Coverage Duration</label>
+                                <p className="le-smallNote">{policyCoverageRule?.label || policyCoverageForm.coverageDurationLabel || "—"}</p>
+                                {policyCoverageFieldErrors.coverageDurationLabel ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyCoverageFieldErrors.coverageDurationLabel}</p> : null}
+                              </div>
+
+                              {policyCoverageRule?.type === "RANGE_TO_AGE" ? (
+                                <div className="le-formRow">
+                                  <label className="le-label">Coverage Until Age *</label>
+                                  <select
+                                    className={`le-input ${policyCoverageFieldErrors.coverageDurationUntilAge ? "error" : ""}`}
+                                    value={policyCoverageForm.coverageDurationUntilAge}
+                                    onChange={(e) => {
+                                      setPolicyCoverageForm((f) => ({ ...f, coverageDurationUntilAge: e.target.value }));
+                                      setPolicyCoverageFieldErrors((prev) => ({ ...prev, coverageDurationUntilAge: "" }));
+                                    }}
+                                    disabled={policyCoverageSaving}
+                                  >
+                                    <option value="">Select age</option>
+                                    {policyAgeRangeOptions.map((age) => (
+                                      <option key={`cd-age-${age}`} value={age}>{age}</option>
+                                    ))}
+                                  </select>
+                                  {policyCoverageFieldErrors.coverageDurationUntilAge ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyCoverageFieldErrors.coverageDurationUntilAge}</p> : null}
+                                </div>
+                              ) : null}
+
+                              {policyCoverageError ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyCoverageError}</p> : null}
+
+                              <div className="le-actions" style={{ marginTop: 10 }}>
+                                <button
+                                  type="button"
+                                  className="le-btn secondary"
+                                  onClick={() => {
+                                    setPolicyCoverageError("");
+                                    setPolicyCoverageFieldErrors({});
+                                    setPolicyCoverageForm((f) => ({
+                                      ...f,
+                                      selectedPaymentTermLabel: "",
+                                      selectedPaymentTermType: "",
+                                      selectedPaymentTermYears: "",
+                                      selectedPaymentTermUntilAge: "",
+                                      coverageDurationLabel: String(policyCoverageRule?.label || ""),
+                                      coverageDurationType: String(policyCoverageRule?.type || ""),
+                                      coverageDurationYears: policyCoverageRule?.type === "FIXED_YEARS" ? String(policyCoverageRule?.years ?? "") : "",
+                                      coverageDurationUntilAge: policyCoverageRule?.type === "UNTIL_AGE" ? String(policyCoverageRule?.untilAge ?? "") : "",
+                                      policyEndDate: "",
+                                      savedAt: "",
+                                    }));
+                                  }}
+                                  disabled={policyCoverageSaving}
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  type="button"
+                                  className="le-btn primary"
+                                  onClick={submitPolicyCoverageDetails}
+                                  disabled={policyCoverageSaving}
+                                >
+                                  {policyCoverageSaving ? "Saving..." : "Save Coverage Duration Details"}
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      ) : null}
+                    </>
                   )}
 
                   {showContactingPanel && (

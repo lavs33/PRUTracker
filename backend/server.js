@@ -1,4 +1,3 @@
-
 /**
  * =========================================================
  * PRUTracker Backend - Server Initialization
@@ -34,6 +33,7 @@ const ScheduledMeeting = require("./models/ScheduledMeeting");
 const NeedsAssessment = require("./models/NeedsAssessment");
 const Proposal = require("./models/Proposal");
 const Application = require("./models/Application");
+const Policy = require("./models/Policy");
 const Product = require("./models/Product");
 const Task = require("./models/Task");
 const Notification = require("./models/Notification");
@@ -405,6 +405,22 @@ async function getNextLeadCode() {
   }
 
   return `L-${String(nextNum).padStart(6, "0")}`;
+}
+
+
+async function getNextPolicyholderCode() {
+  const last = await Policyholder.findOne({ policyholderCode: { $regex: /^PH-\d{6}$/ } })
+    .sort({ policyholderCode: -1 })
+    .select("policyholderCode")
+    .lean();
+
+  let nextNum = 1;
+  if (last?.policyholderCode) {
+    const n = Number(String(last.policyholderCode).replace("PH-", ""));
+    if (Number.isFinite(n)) nextNum = n + 1;
+  }
+
+  return `PH-${String(nextNum).padStart(6, "0")}`;
 }
 
 /**
@@ -800,7 +816,7 @@ app.get("/api/prospects/recent", async (req, res) => {
    Important design rule:
    - Policyholder does NOT store assignedToUserId directly in this pipeline.
    - Agent filtering is done via:
-       Policyholder -> Lead -> Prospect.assignedToUserId
+       Policyholder -> LeadEngagement -> Lead -> Prospect.assignedToUserId
 =========================== */
 app.get("/api/policyholders/recent", async (req, res) => {
   try {
@@ -820,12 +836,13 @@ app.get("/api/policyholders/recent", async (req, res) => {
 
     /**
      * Aggregation pipeline overview:
-     * 1) Join Lead (policyholder.leadId → leads._id)
-     * 2) Join Prospect (lead.prospectId → prospects._id)
-     * 3) Filter to this agent via prospect.assignedToUserId
-     * 4) Compute stable policyholderNo per agent via policyholderCode ASC
-     * 5) Sort by lastPaidDate DESC to get "recently paid"
-     * 6) Use $facet to return total count + top N items in one query
+     * 1) Join LeadEngagement (policyholder.leadEngagementId → leadengagements._id)
+     * 2) Join Lead (leadEngagement.leadId → leads._id)
+     * 3) Join Prospect (lead.prospectId → prospects._id)
+     * 4) Filter to this agent via prospect.assignedToUserId
+     * 5) Compute stable policyholderNo per agent via policyholderCode ASC
+     * 6) Sort by lastPaidDate DESC to get "recently paid"
+     * 7) Use $facet to return total count + top N items in one query
      */
     const agg = await Policyholder.aggregate([
       /**
@@ -834,8 +851,21 @@ app.get("/api/policyholders/recent", async (req, res) => {
        */
       {
         $lookup: {
+          from: "leadengagements",
+          localField: "leadEngagementId",
+          foreignField: "_id",
+          as: "leadEngagement",
+        },
+      },
+      { $unwind: "$leadEngagement" },
+
+      /**
+       * Step 2: Lookup Lead via leadEngagement.leadId
+       */
+      {
+        $lookup: {
           from: "leads",
-          localField: "leadId",
+          localField: "leadEngagement.leadId",
           foreignField: "_id",
           as: "lead",
         },
@@ -843,7 +873,7 @@ app.get("/api/policyholders/recent", async (req, res) => {
       { $unwind: "$lead" },
 
       /**
-       * Step 2: Lookup Prospect via lead.prospectId
+       * Step 3: Lookup Prospect via lead.prospectId
        * - Needed for filtering by agent and returning name fields
        */
       {
@@ -857,19 +887,19 @@ app.get("/api/policyholders/recent", async (req, res) => {
       { $unwind: "$prospect" },
 
       /**
-       * Step 3: Filter policyholders to those belonging to THIS agent
+       * Step 4: Filter policyholders to those belonging to THIS agent
        * - Determined by prospect.assignedToUserId
        */
       { $match: { "prospect.assignedToUserId": userObjectId } },
 
       /**
-       * Step 4: Copy assignedToUserId into root document
+       * Step 5: Copy assignedToUserId into root document
        * - Makes it easier to use partitionBy in window fields
        */
       { $addFields: { assignedToUserId: "$prospect.assignedToUserId" } },
 
       /**
-       * Step 5: Compute stable policyholderNo per agent
+       * Step 6: Compute stable policyholderNo per agent
        * - Ranking is stable because it is based on policyholderCode ASC.
        * - partitionBy ensures ranking resets per agent.
        */
@@ -882,13 +912,13 @@ app.get("/api/policyholders/recent", async (req, res) => {
       },
 
       /**
-       * Step 6: Most recently paid ordering
+       * Step 7: Most recently paid ordering
        * - Sort by lastPaidDate DESC for "recent payments" view
        */
       { $sort: { lastPaidDate: -1 } },
 
       /**
-       * Step 7: Use $facet to return:
+       * Step 8: Use $facet to return:
        * - total count for agent
        * - limited list of items for UI
        *
@@ -915,7 +945,7 @@ app.get("/api/policyholders/recent", async (req, res) => {
         },
       },
       /**
-       * Step 8: Normalize output object structure
+       * Step 9: Normalize output object structure
        * - totalForThisUser defaults to 0 if no matches
        * - policyholders field contains the list
        */
@@ -964,6 +994,12 @@ const ACTIVITY_BY_STAGE = {
     "Record Prospect Attendance",
     "Present Proposal",
     "Schedule Application Submission",
+  ],
+  "Policy Issuance": [
+    "Record Policy Application Status",
+    "Upload Initial Premium eOR",
+    "Upload Policy Summary",
+    "Record Coverage Duration Details",
   ],
   // later:
   // "Needs Assessment": [...],
@@ -2746,7 +2782,7 @@ app.post("/api/leads", async (req, res) => {
 //
 // Purpose:
 // - Returns a lead’s details in the context of a prospect owned by the agent.
-// - Also attaches at most ONE Policyholder record linked to this lead (1:1 via leadId).
+// - Also attaches at most ONE Policyholder record linked to this lead engagement (1:1 via leadEngagementId).
 // - Computes a display-only agent-wide leadNo (rank across all leads under agent’s prospects).
 //
 // Security model:
@@ -2804,14 +2840,20 @@ app.get("/api/prospects/:prospectId/leads/:leadId/details", async (req, res) => 
       return res.status(404).json({ message: "Lead not found." });
     }
 
-    // Attach Policyholder (optional 1:1 via leadId)
+    // Attach Policyholder (optional 1:1 via leadEngagementId)
     // Security: policy must also belong to the agent (assignedToUserId match)
-    const policy = await Policyholder.findOne({
-      leadId: leadObjectId,
-      assignedToUserId: userObjectId,
-    })
-      .select("policyholderCode status createdAt") 
+    const leadEngagement = await LeadEngagement.findOne({ leadId: leadObjectId })
+      .select("_id")
       .lean();
+
+    const policy = leadEngagement
+      ? await Policyholder.findOne({
+          leadEngagementId: leadEngagement._id,
+          assignedToUserId: userObjectId,
+        })
+          .select("policyholderCode status createdAt")
+          .lean()
+      : null;
 
     /**
      * 3) Compute agent-wide leadNo (display-only)
@@ -3155,7 +3197,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
       assignedToUserId: userObjectId,
     })
       // Include fields the engagement UI needs (contact info + versioning + tags)
-      .select("firstName middleName lastName marketType source status phoneNumber contactInfoVersion email")
+      .select("firstName middleName lastName marketType source status phoneNumber contactInfoVersion email birthday")
       .lean();
 
     if (!prospect) {
@@ -3272,22 +3314,33 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
       .select("outcomeActivity chosenProductId recordProspectAttendance recordPremiumPaymentTransfer recordApplicationSubmission")
       .lean();
 
+    const policyDoc = await Policy.findOne({ leadEngagementId: engagement._id })
+      .select("chosenProductId outcomeActivity recordPolicyApplicationStatus uploadInitialPremiumEor uploadPolicySummary recordCoverageDurationDetails")
+      .lean();
+
     const proposalProductId = proposalDoc?.chosenProductId || null;
     const needsSelectedProductId = needsAssessment?.needsPriorities?.productSelection?.selectedProductId || null;
+    const policyProductId = policyDoc?.chosenProductId || null;
 
-    let selectedProduct = proposalProductId && mongoose.isValidObjectId(proposalProductId)
-      ? await Product.findById(proposalProductId)
-          .select("_id productName description")
+    let selectedProduct = policyProductId && mongoose.isValidObjectId(policyProductId)
+      ? await Product.findById(policyProductId)
+          .select("_id productName description paymentTermOptions paymentTermLabel coverageDurationRule coverageDurationLabel")
           .lean()
       : null;
 
-    if (!selectedProduct && needsSelectedProductId && mongoose.isValidObjectId(needsSelectedProductId)) {
-      selectedProduct = await Product.findById(needsSelectedProductId)
-        .select("_id productName description")
+    if (!selectedProduct && proposalProductId && mongoose.isValidObjectId(proposalProductId)) {
+      selectedProduct = await Product.findById(proposalProductId)
+        .select("_id productName description paymentTermOptions paymentTermLabel coverageDurationRule coverageDurationLabel")
         .lean();
     }
 
-    const selectedProductId = selectedProduct?._id || proposalProductId || needsSelectedProductId || null;
+    if (!selectedProduct && needsSelectedProductId && mongoose.isValidObjectId(needsSelectedProductId)) {
+      selectedProduct = await Product.findById(needsSelectedProductId)
+        .select("_id productName description paymentTermOptions paymentTermLabel coverageDurationRule coverageDurationLabel")
+        .lean();
+    }
+
+    const selectedProductId = selectedProduct?._id || policyProductId || proposalProductId || needsSelectedProductId || null;
 
     const applicationSubmissionMeeting = await ScheduledMeeting.findOne({
       leadEngagementId: engagement._id,
@@ -3317,6 +3370,20 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
       return String(proposalDoc?.outcomeActivity || "Generate Proposal").trim() || "Generate Proposal";
     })();
     const applicationCurrentActivityKey = String(applicationDoc?.outcomeActivity || "Record Prospect Attendance").trim() || "Record Prospect Attendance";
+    const policyCurrentActivityKey = String(policyDoc?.outcomeActivity || "Record Policy Application Status").trim() || "Record Policy Application Status";
+
+    const issuedAtRaw = policyDoc?.recordPolicyApplicationStatus?.issuanceDate || null;
+    const issuedAt = issuedAtRaw ? new Date(issuedAtRaw) : null;
+    const birthDate = prospect?.birthday ? new Date(prospect.birthday) : null;
+    const issuanceAge = (() => {
+      if (!issuedAt || !birthDate || Number.isNaN(issuedAt.getTime()) || Number.isNaN(birthDate.getTime())) return null;
+      let age = issuedAt.getFullYear() - birthDate.getFullYear();
+      const birthdayPassed =
+        issuedAt.getMonth() > birthDate.getMonth() ||
+        (issuedAt.getMonth() === birthDate.getMonth() && issuedAt.getDate() >= birthDate.getDate());
+      if (!birthdayPassed) age -= 1;
+      return age >= 0 ? age : null;
+    })();
 
     /**
      * 5) Derive currentActivityKey for UI badge/tracker:
@@ -3432,6 +3499,13 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
         application: {
           currentActivityKey: applicationCurrentActivityKey,
           chosenProductId: applicationDoc?.chosenProductId || null,
+          chosenProduct: applicationDoc?.chosenProductId || selectedProduct
+            ? {
+                _id: applicationDoc?.chosenProductId || selectedProduct?._id || null,
+                productName: selectedProduct?.productName || "",
+                description: selectedProduct?.description || "",
+              }
+            : null,
           outcomeActivity: applicationDoc?.outcomeActivity || "",
           recordProspectAttendance: {
             attended: Boolean(applicationDoc?.recordProspectAttendance?.attended),
@@ -3456,6 +3530,59 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
           needsAssessmentProductSelection: {
             requestedFrequency: String(needsAssessment?.needsPriorities?.productSelection?.requestedFrequency || ""),
             methodForInitialPayment: String(needsAssessment?.needsPriorities?.productSelection?.methodForInitialPayment || ""),
+          },
+        },
+
+        policy: {
+          currentActivityKey: policyCurrentActivityKey,
+          outcomeActivity: policyDoc?.outcomeActivity || "",
+          chosenProduct: policyDoc?.chosenProductId || selectedProduct
+            ? {
+                _id: policyDoc?.chosenProductId || selectedProduct?._id || null,
+                productName: selectedProduct?.productName || "",
+                description: selectedProduct?.description || "",
+                paymentTermOptions: Array.isArray(selectedProduct?.paymentTermOptions) ? selectedProduct.paymentTermOptions : [],
+                paymentTermLabel: selectedProduct?.paymentTermLabel || "",
+                coverageDurationRule: selectedProduct?.coverageDurationRule || null,
+                coverageDurationLabel: selectedProduct?.coverageDurationLabel || "",
+              }
+            : null,
+          issuanceAge: issuanceAge ?? null,
+          recordPolicyApplicationStatus: {
+            status: policyDoc?.recordPolicyApplicationStatus?.status || "",
+            issuanceDate: policyDoc?.recordPolicyApplicationStatus?.issuanceDate || null,
+            notes: policyDoc?.recordPolicyApplicationStatus?.notes || "",
+            savedAt: policyDoc?.recordPolicyApplicationStatus?.savedAt || null,
+          },
+          uploadInitialPremiumEor: {
+            eorNumber: policyDoc?.uploadInitialPremiumEor?.eorNumber || "",
+            receiptDate: policyDoc?.uploadInitialPremiumEor?.receiptDate || null,
+            eorFileName: policyDoc?.uploadInitialPremiumEor?.eorFileName || "",
+            eorFileMimeType: policyDoc?.uploadInitialPremiumEor?.eorFileMimeType || "",
+            eorFileDataUrl: policyDoc?.uploadInitialPremiumEor?.eorFileDataUrl || "",
+            uploadedAt: policyDoc?.uploadInitialPremiumEor?.uploadedAt || null,
+          },
+          uploadPolicySummary: {
+            policyNumber: policyDoc?.uploadPolicySummary?.policyNumber || "",
+            policySummaryFileName: policyDoc?.uploadPolicySummary?.policySummaryFileName || "",
+            policySummaryFileMimeType: policyDoc?.uploadPolicySummary?.policySummaryFileMimeType || "",
+            policySummaryFileDataUrl: policyDoc?.uploadPolicySummary?.policySummaryFileDataUrl || "",
+            uploadedAt: policyDoc?.uploadPolicySummary?.uploadedAt || null,
+          },
+          recordCoverageDurationDetails: {
+            policyNumber: policyDoc?.recordCoverageDurationDetails?.policyNumber || "",
+            selectedPaymentTermLabel: policyDoc?.recordCoverageDurationDetails?.selectedPaymentTermLabel || "",
+            selectedPaymentTermType: policyDoc?.recordCoverageDurationDetails?.selectedPaymentTermType || "",
+            selectedPaymentTermYears: policyDoc?.recordCoverageDurationDetails?.selectedPaymentTermYears ?? null,
+            selectedPaymentTermUntilAge: policyDoc?.recordCoverageDurationDetails?.selectedPaymentTermUntilAge ?? null,
+            coverageDurationLabel: policyDoc?.recordCoverageDurationDetails?.coverageDurationLabel || "",
+            coverageDurationType: policyDoc?.recordCoverageDurationDetails?.coverageDurationType || "",
+            coverageDurationYears: policyDoc?.recordCoverageDurationDetails?.coverageDurationYears ?? null,
+            coverageDurationUntilAge: policyDoc?.recordCoverageDurationDetails?.coverageDurationUntilAge ?? null,
+            coverageStartDate: policyDoc?.recordCoverageDurationDetails?.coverageStartDate || null,
+            coverageEndDate: policyDoc?.recordCoverageDurationDetails?.coverageEndDate || null,
+            policyEndDate: policyDoc?.recordCoverageDurationDetails?.policyEndDate || null,
+            savedAt: policyDoc?.recordCoverageDurationDetails?.savedAt || null,
           },
         },
 
@@ -4502,7 +4629,8 @@ app.get("/api/prospects/:prospectId/leads/:leadId/needs-assessment", async (req,
     }
 
     const allLeadIds = await Lead.find({ prospectId: prospectObjectId }).distinct("_id");
-    const policyholders = await Policyholder.find({ leadId: { $in: allLeadIds } })
+    const allLeadEngagementIds = await LeadEngagement.find({ leadId: { $in: allLeadIds } }).distinct("_id");
+    const policyholders = await Policyholder.find({ leadEngagementId: { $in: allLeadEngagementIds } })
       .select("policyNumber status productId")
       .populate("productId", "productName")
       .lean();
@@ -5470,7 +5598,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/generate", async (re
         .lean();
       const selectedProductId = chosenProductId || needsAssessment?.needsPriorities?.productSelection?.selectedProductId || null;
       const selectedProduct = selectedProductId && mongoose.isValidObjectId(selectedProductId)
-        ? await Product.findById(selectedProductId).select("_id productName description").session(session)
+        ? await Product.findById(selectedProductId).select("_id productName description paymentTermOptions paymentTermLabel coverageDurationRule coverageDurationLabel").session(session)
         : null;
 
       engagement.currentActivityKey = "Record Prospect Attendance";
@@ -5816,6 +5944,17 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/submission", asyn
     const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
     const leadObjectId = new mongoose.Types.ObjectId(leadId);
 
+    const addWorkingDays = (fromDate, daysToAdd) => {
+      const d = new Date(fromDate);
+      let added = 0;
+      while (added < daysToAdd) {
+        d.setDate(d.getDate() + 1);
+        const dow = d.getDay();
+        if (dow !== 0 && dow !== 6) added += 1;
+      }
+      return d;
+    };
+
     await session.withTransaction(async () => {
       const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).session(session);
       if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
@@ -5830,12 +5969,44 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/submission", asyn
         throw Object.assign(new Error("Lead is not in Application stage."), { status: 409 });
       }
 
+      const now = new Date();
+
+      const existingTxApplication = await Application.findOne({
+        "recordApplicationSubmission.pruOneTransactionId": txId,
+        leadEngagementId: { $ne: engagement._id },
+      })
+        .select("_id")
+        .session(session);
+      if (existingTxApplication) {
+        throw Object.assign(new Error("PRUOnePH Transaction ID already exists."), { status: 409 });
+      }
+
+      const existingApplication = await Application.findOne({ leadEngagementId: engagement._id })
+        .select("chosenProductId")
+        .session(session);
+
+      const proposal = await Proposal.findOne({ leadEngagementId: engagement._id })
+        .select("chosenProductId")
+        .session(session);
+      const needsAssessment = await NeedsAssessment.findOne({ leadEngagementId: engagement._id })
+        .select("needsPriorities.productSelection.selectedProductId")
+        .session(session);
+
+      const chosenProductIdRaw = existingApplication?.chosenProductId
+        || proposal?.chosenProductId
+        || needsAssessment?.needsPriorities?.productSelection?.selectedProductId
+        || null;
+      const chosenProductId = chosenProductIdRaw && mongoose.isValidObjectId(chosenProductIdRaw)
+        ? new mongoose.Types.ObjectId(chosenProductIdRaw)
+        : null;
+
       await Application.updateOne(
         { leadEngagementId: engagement._id },
         {
           $setOnInsert: { leadEngagementId: engagement._id },
           $set: {
             outcomeActivity: "Record Application Submission",
+            ...(chosenProductId ? { chosenProductId } : {}),
             recordApplicationSubmission: {
               pruOneTransactionId: txId,
               submissionScreenshotImageDataUrl: screenshotDataUrl,
@@ -5846,19 +6017,702 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/submission", asyn
         },
         { upsert: true, session }
       );
+
+      const applicationMeeting = await ScheduledMeeting.findOne({
+        leadEngagementId: engagement._id,
+        meetingType: "Application Submission",
+      }).session(session);
+      if (applicationMeeting && applicationMeeting.status !== "Completed") {
+        applicationMeeting.status = "Completed";
+        await applicationMeeting.save({ session });
+      }
+
+      const openApplicationTasks = await Task.find({
+        assignedToUserId: userObjectId,
+        prospectId: prospectObjectId,
+        leadEngagementId: engagement._id,
+        type: "APPOINTMENT",
+        status: "Open",
+        dedupeKey: `APPLICATION_SUBMISSION:${engagement._id}`,
+      }).session(session);
+
+      for (const t of openApplicationTasks) {
+        t.status = "Done";
+        t.completedAt = now;
+        await t.save({ session });
+      }
+
+      const followUpDueAt = addWorkingDays(now, 3);
+      followUpDueAt.setHours(18, 0, 0, 0);
+      const followUpDedupeKey = `POLICY_APPLICATION_STATUS_FOLLOW_UP:${engagement._id}`;
+      let followUpTask = await Task.findOne({
+        assignedToUserId: userObjectId,
+        dedupeKey: followUpDedupeKey,
+      }).session(session);
+
+      const fullName = `${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName}`.trim();
+      const followUpTitle = `Check policy application status for ${prospect.firstName}`;
+      const followUpDescription = `Follow up the policy application status for ${fullName} (Lead ${lead.leadCode || "—"}).`;
+
+      if (!followUpTask) {
+        followUpTask = await Task.create(
+          [{
+            assignedToUserId: userObjectId,
+            prospectId: prospectObjectId,
+            leadEngagementId: engagement._id,
+            type: "FOLLOW_UP",
+            title: followUpTitle,
+            description: followUpDescription,
+            dueAt: followUpDueAt,
+            status: "Open",
+            dedupeKey: followUpDedupeKey,
+          }],
+          { session }
+        ).then((docs) => docs[0]);
+
+        await createTaskAddedNotifications({
+          assignedToUserId: userObjectId,
+          task: followUpTask,
+          prospectFullName: fullName,
+          leadCode: lead.leadCode,
+          session,
+        });
+      } else if (followUpTask.status !== "Done") {
+        followUpTask.title = followUpTitle;
+        followUpTask.description = followUpDescription;
+        followUpTask.dueAt = followUpDueAt;
+        await followUpTask.save({ session });
+      }
+
+      await Policy.updateOne(
+        { leadEngagementId: engagement._id },
+        {
+          $setOnInsert: { leadEngagementId: engagement._id },
+          $set: {
+            outcomeActivity: "Record Policy Application Status",
+            ...(chosenProductId ? { chosenProductId } : {}),
+          },
+        },
+        { upsert: true, session }
+      );
+
+      engagement.currentStage = "Policy Issuance";
+      engagement.currentActivityKey = "Record Policy Application Status";
+      engagement.stageCompletedAt = now;
+      engagement.stageHistory = Array.isArray(engagement.stageHistory) ? engagement.stageHistory : [];
+
+      const openApplicationStage = [...engagement.stageHistory]
+        .reverse()
+        .find((h) => h?.stage === "Application" && !h?.completedAt);
+      if (openApplicationStage) {
+        openApplicationStage.completedAt = now;
+        openApplicationStage.reason = "Application submission details recorded and moved to Policy Issuance.";
+      }
+
+      engagement.stageHistory.push({
+        stage: "Policy Issuance",
+        startedAt: now,
+        completedAt: null,
+        reason: "Moved from Application after recording application submission details.",
+      });
+
+      await engagement.save({ session });
     });
 
     return res.json({
       message: "Application submission saved.",
-      currentActivityKey: "Record Application Submission",
+      currentActivityKey: "Record Policy Application Status",
+      currentStage: "Policy Issuance",
     });
   } catch (err) {
     console.error("Application submission save error:", err);
+    if (err?.code === 11000 && String(err?.message || "").includes("recordApplicationSubmission.pruOneTransactionId")) {
+      return res.status(409).json({ message: "PRUOnePH Transaction ID already exists." });
+    }
     return res.status(err?.status || 500).json({ message: err?.message || "Server error." });
   } finally {
     session.endSession();
   }
 });
+
+app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/status", async (req, res) => {
+  try {
+    const { userId } = req.query;
+    const { prospectId, leadId } = req.params;
+    const { status, issuanceDate, notes } = req.body || {};
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId) || !mongoose.isValidObjectId(prospectId) || !mongoose.isValidObjectId(leadId)) {
+      return res.status(400).json({ message: "Invalid id(s)." });
+    }
+
+    const normalizedStatus = String(status || "").trim();
+    if (!["Issued", "Declined"].includes(normalizedStatus)) {
+      return res.status(400).json({ message: "Policy application status must be Issued or Declined." });
+    }
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
+    const leadObjectId = new mongoose.Types.ObjectId(leadId);
+
+    const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).select("_id").lean();
+    if (!prospect) return res.status(404).json({ message: "Prospect not found." });
+
+    const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).select("_id").lean();
+    if (!lead) return res.status(404).json({ message: "Lead not found." });
+
+    const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).select("_id currentStage");
+    if (!engagement) return res.status(404).json({ message: "Lead engagement not found." });
+    if (engagement.currentStage !== "Policy Issuance") {
+      return res.status(409).json({ message: "Lead is not in Policy Issuance stage." });
+    }
+
+    const existingPolicyDoc = await Policy.findOne({ leadEngagementId: engagement._id })
+      .select("chosenProductId")
+      .lean();
+
+    const applicationDoc = await Application.findOne({ leadEngagementId: engagement._id })
+      .select("chosenProductId recordApplicationSubmission.savedAt")
+      .lean();
+
+    const proposalDoc = await Proposal.findOne({ leadEngagementId: engagement._id })
+      .select("chosenProductId")
+      .lean();
+
+    const needsAssessmentDoc = await NeedsAssessment.findOne({ leadEngagementId: engagement._id })
+      .select("needsPriorities.productSelection.selectedProductId")
+      .lean();
+
+    const fallbackChosenProductIdRaw = existingPolicyDoc?.chosenProductId
+      || applicationDoc?.chosenProductId
+      || proposalDoc?.chosenProductId
+      || needsAssessmentDoc?.needsPriorities?.productSelection?.selectedProductId
+      || null;
+    const fallbackChosenProductId = fallbackChosenProductIdRaw && mongoose.isValidObjectId(fallbackChosenProductIdRaw)
+      ? new mongoose.Types.ObjectId(fallbackChosenProductIdRaw)
+      : null;
+
+    const applicationSubmittedAt = applicationDoc?.recordApplicationSubmission?.savedAt
+      ? new Date(applicationDoc.recordApplicationSubmission.savedAt)
+      : null;
+
+    let issuanceDateValue = null;
+    if (normalizedStatus === "Issued") {
+      const issuanceDateRaw = String(issuanceDate || "").trim();
+      if (!issuanceDateRaw) {
+        return res.status(400).json({ message: "Issuance date is required when status is Issued." });
+      }
+      issuanceDateValue = new Date(`${issuanceDateRaw}T00:00:00`);
+      if (Number.isNaN(issuanceDateValue.getTime())) {
+        return res.status(400).json({ message: "Issuance date is invalid." });
+      }
+      const today = new Date();
+      today.setHours(23, 59, 59, 999);
+      if (issuanceDateValue > today) {
+        return res.status(400).json({ message: "Issuance date cannot be in the future." });
+      }
+      if (applicationSubmittedAt && issuanceDateValue < new Date(new Date(applicationSubmittedAt).setHours(0, 0, 0, 0))) {
+        return res.status(400).json({ message: "Issuance date cannot be earlier than application submission date." });
+      }
+    }
+
+    const nextActivityKey = normalizedStatus === "Issued" ? "Upload Initial Premium eOR" : "Record Policy Application Status";
+
+    await Policy.updateOne(
+      { leadEngagementId: engagement._id },
+      {
+        $setOnInsert: { leadEngagementId: engagement._id },
+        $set: {
+          outcomeActivity: nextActivityKey,
+          ...(fallbackChosenProductId ? { chosenProductId: fallbackChosenProductId } : {}),
+          recordPolicyApplicationStatus: {
+            status: normalizedStatus,
+            issuanceDate: issuanceDateValue,
+            notes: String(notes || "").trim(),
+            savedAt: new Date(),
+          },
+        },
+      },
+      { upsert: true }
+    );
+
+    await LeadEngagement.updateOne(
+      { _id: engagement._id },
+      { $set: { currentActivityKey: nextActivityKey } }
+    );
+
+    return res.json({ message: "Policy application status saved.", currentActivityKey: nextActivityKey });
+  } catch (err) {
+    console.error("Policy issuance status save error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+
+app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/initial-premium-eor", async (req, res) => {
+  try {
+    const { userId } = req.query;
+    const { prospectId, leadId } = req.params;
+    const { eorNumber, receiptDate, eorFileDataUrl, eorFileName } = req.body || {};
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId) || !mongoose.isValidObjectId(prospectId) || !mongoose.isValidObjectId(leadId)) {
+      return res.status(400).json({ message: "Invalid id(s)." });
+    }
+
+    const eorNo = String(eorNumber || "").trim();
+    const receiptDateRaw = String(receiptDate || "").trim();
+    const pdfDataUrl = String(eorFileDataUrl || "").trim();
+    const fileName = String(eorFileName || "").trim();
+
+    if (!eorNo) return res.status(400).json({ message: "eOR number is required." });
+    if (!receiptDateRaw) return res.status(400).json({ message: "Receipt date is required." });
+    if (!pdfDataUrl || !/^data:application\/pdf;base64,/i.test(pdfDataUrl)) {
+      return res.status(400).json({ message: "eOR file must be a PDF." });
+    }
+
+    const receiptDateValue = new Date(`${receiptDateRaw}T00:00:00`);
+    if (Number.isNaN(receiptDateValue.getTime())) {
+      return res.status(400).json({ message: "Receipt date is invalid." });
+    }
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
+    const leadObjectId = new mongoose.Types.ObjectId(leadId);
+
+    const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).select("_id").lean();
+    if (!prospect) return res.status(404).json({ message: "Prospect not found." });
+
+    const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).select("_id").lean();
+    if (!lead) return res.status(404).json({ message: "Lead not found." });
+
+    const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).select("_id currentStage");
+    if (!engagement) return res.status(404).json({ message: "Lead engagement not found." });
+    if (engagement.currentStage !== "Policy Issuance") {
+      return res.status(409).json({ message: "Lead is not in Policy Issuance stage." });
+    }
+
+    const applicationDoc = await Application.findOne({ leadEngagementId: engagement._id })
+      .select("recordApplicationSubmission.savedAt")
+      .lean();
+    const policyDoc = await Policy.findOne({ leadEngagementId: engagement._id })
+      .select("recordPolicyApplicationStatus.status recordPolicyApplicationStatus.issuanceDate")
+      .lean();
+
+    const applicationSubmittedAt = applicationDoc?.recordApplicationSubmission?.savedAt
+      ? new Date(applicationDoc.recordApplicationSubmission.savedAt)
+      : null;
+    const issuanceDate = policyDoc?.recordPolicyApplicationStatus?.issuanceDate
+      ? new Date(policyDoc.recordPolicyApplicationStatus.issuanceDate)
+      : null;
+    const status = String(policyDoc?.recordPolicyApplicationStatus?.status || "").trim();
+
+    if (status !== "Issued") {
+      return res.status(409).json({ message: "Policy application status must be Issued before uploading Initial Premium eOR." });
+    }
+    if (!applicationSubmittedAt || !issuanceDate) {
+      return res.status(409).json({ message: "Application submission date and policy issuance date are required before uploading Initial Premium eOR." });
+    }
+
+    const minDate = new Date(applicationSubmittedAt);
+    minDate.setHours(0, 0, 0, 0);
+    const maxDate = new Date(issuanceDate);
+    maxDate.setHours(23, 59, 59, 999);
+    if (receiptDateValue < minDate || receiptDateValue > maxDate) {
+      return res.status(400).json({ message: "Receipt date must be between application submission date and policy issuance date." });
+    }
+
+    await Policy.updateOne(
+      { leadEngagementId: engagement._id },
+      {
+        $setOnInsert: { leadEngagementId: engagement._id },
+        $set: {
+          outcomeActivity: "Upload Policy Summary",
+          uploadInitialPremiumEor: {
+            eorNumber: eorNo,
+            receiptDate: receiptDateValue,
+            eorFileDataUrl: pdfDataUrl,
+            eorFileName: fileName,
+            eorFileMimeType: "application/pdf",
+            uploadedAt: new Date(),
+          },
+        },
+      },
+      { upsert: true }
+    );
+
+    await LeadEngagement.updateOne(
+      { _id: engagement._id },
+      { $set: { currentActivityKey: "Upload Policy Summary" } }
+    );
+
+    return res.json({ message: "Initial premium eOR uploaded.", currentActivityKey: "Upload Policy Summary" });
+  } catch (err) {
+    console.error("Policy issuance initial premium eOR save error:", err);
+    if (err?.code === 11000 && String(err?.message || "").includes("uploadInitialPremiumEor.eorNumber")) {
+      return res.status(409).json({ message: "eOR number already exists." });
+    }
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+
+app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/policy-summary", async (req, res) => {
+  try {
+    const { userId } = req.query;
+    const { prospectId, leadId } = req.params;
+    const { policyNumber, policySummaryFileDataUrl, policySummaryFileName } = req.body || {};
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId) || !mongoose.isValidObjectId(prospectId) || !mongoose.isValidObjectId(leadId)) {
+      return res.status(400).json({ message: "Invalid id(s)." });
+    }
+
+    const policyNo = String(policyNumber || "").trim();
+    const pdfDataUrl = String(policySummaryFileDataUrl || "").trim();
+    const fileName = String(policySummaryFileName || "").trim();
+
+    if (!/^\d{8}$/.test(policyNo)) return res.status(400).json({ message: "Policy number must be exactly 8 digits." });
+    if (!pdfDataUrl || !/^data:application\/pdf;base64,/i.test(pdfDataUrl)) {
+      return res.status(400).json({ message: "Policy summary file must be a PDF." });
+    }
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
+    const leadObjectId = new mongoose.Types.ObjectId(leadId);
+
+    const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).select("_id").lean();
+    if (!prospect) return res.status(404).json({ message: "Prospect not found." });
+
+    const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).select("_id").lean();
+    if (!lead) return res.status(404).json({ message: "Lead not found." });
+
+    const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).select("_id currentStage");
+    if (!engagement) return res.status(404).json({ message: "Lead engagement not found." });
+    if (engagement.currentStage !== "Policy Issuance") {
+      return res.status(409).json({ message: "Lead is not in Policy Issuance stage." });
+    }
+
+    const existingPolicyNumber = await Policy.findOne({
+      "uploadPolicySummary.policyNumber": policyNo,
+      leadEngagementId: { $ne: engagement._id },
+    })
+      .select("_id")
+      .lean();
+    if (existingPolicyNumber) {
+      return res.status(409).json({ message: "Policy number already exists." });
+    }
+
+    await Policy.updateOne(
+      { leadEngagementId: engagement._id },
+      {
+        $setOnInsert: { leadEngagementId: engagement._id },
+        $set: {
+          outcomeActivity: "Record Coverage Duration Details",
+          uploadPolicySummary: {
+            policyNumber: policyNo,
+            policySummaryFileDataUrl: pdfDataUrl,
+            policySummaryFileName: fileName,
+            policySummaryFileMimeType: "application/pdf",
+            uploadedAt: new Date(),
+          },
+        },
+      },
+      { upsert: true }
+    );
+
+    await LeadEngagement.updateOne(
+      { _id: engagement._id },
+      { $set: { currentActivityKey: "Record Coverage Duration Details" } }
+    );
+
+    return res.json({ message: "Policy summary uploaded.", currentActivityKey: "Record Coverage Duration Details" });
+  } catch (err) {
+    console.error("Policy issuance policy summary save error:", err);
+    if (err?.code === 11000 && String(err?.message || "").includes("uploadPolicySummary.policyNumber")) {
+      return res.status(409).json({ message: "Policy number already exists." });
+    }
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+
+app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-duration", async (req, res) => {
+  const session = await mongoose.startSession();
+  try {
+    const { userId } = req.query;
+    const { prospectId, leadId } = req.params;
+    const {
+      selectedPaymentTermLabel,
+      selectedPaymentTermType,
+      selectedPaymentTermYears,
+      selectedPaymentTermUntilAge,
+      coverageDurationLabel,
+      coverageDurationType,
+      coverageDurationYears,
+      coverageDurationUntilAge,
+    } = req.body || {};
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId) || !mongoose.isValidObjectId(prospectId) || !mongoose.isValidObjectId(leadId)) {
+      return res.status(400).json({ message: "Invalid id(s)." });
+    }
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
+    const leadObjectId = new mongoose.Types.ObjectId(leadId);
+
+    let responsePayload = null;
+
+    await session.withTransaction(async () => {
+      const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId })
+        .select("_id birthday")
+        .session(session)
+        .lean();
+      if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
+
+      const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId })
+        .session(session);
+      if (!lead) throw Object.assign(new Error("Lead not found."), { status: 404 });
+
+      const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).select("_id currentStage").session(session);
+      if (!engagement) throw Object.assign(new Error("Lead engagement not found."), { status: 404 });
+      if (engagement.currentStage !== "Policy Issuance") {
+        throw Object.assign(new Error("Lead is not in Policy Issuance stage."), { status: 409 });
+      }
+
+      const policyDoc = await Policy.findOne({ leadEngagementId: engagement._id })
+        .select("chosenProductId uploadPolicySummary.policyNumber uploadInitialPremiumEor.receiptDate recordPolicyApplicationStatus.status recordPolicyApplicationStatus.issuanceDate")
+        .session(session)
+        .lean();
+      if (!policyDoc) throw Object.assign(new Error("Policy record not found."), { status: 404 });
+
+      const productId = policyDoc?.chosenProductId;
+      if (!productId || !mongoose.isValidObjectId(productId)) {
+        throw Object.assign(new Error("Chosen product is missing for this policy."), { status: 409 });
+      }
+
+      const product = await Product.findById(productId)
+        .select("paymentTermOptions coverageDurationRule")
+        .session(session)
+        .lean();
+      if (!product) throw Object.assign(new Error("Chosen product not found."), { status: 404 });
+
+      const issuanceDate = policyDoc?.recordPolicyApplicationStatus?.issuanceDate
+        ? new Date(policyDoc.recordPolicyApplicationStatus.issuanceDate)
+        : null;
+      if (!issuanceDate || Number.isNaN(issuanceDate.getTime())) {
+        throw Object.assign(new Error("Policy issuance date is required before saving coverage duration details."), { status: 409 });
+      }
+
+      const birthDate = prospect?.birthday ? new Date(prospect.birthday) : null;
+      if (!birthDate || Number.isNaN(birthDate.getTime())) {
+        throw Object.assign(new Error("Prospect birthday is required to compute age-based terms."), { status: 400 });
+      }
+
+      let issuanceAge = issuanceDate.getFullYear() - birthDate.getFullYear();
+      const hasBirthdayPassed =
+        issuanceDate.getMonth() > birthDate.getMonth() ||
+        (issuanceDate.getMonth() === birthDate.getMonth() && issuanceDate.getDate() >= birthDate.getDate());
+      if (!hasBirthdayPassed) issuanceAge -= 1;
+      if (issuanceAge < 0) throw Object.assign(new Error("Invalid prospect birthday for issuance-age computation."), { status: 400 });
+
+      const paymentOptions = Array.isArray(product?.paymentTermOptions) ? product.paymentTermOptions : [];
+      if (!paymentOptions.length) {
+        throw Object.assign(new Error("Chosen product has no payment-term options configured."), { status: 400 });
+      }
+
+      const normalizedPaymentType = String(selectedPaymentTermType || "").trim();
+      const normalizedCoverageType = String(coverageDurationType || "").trim();
+      const normalizedPaymentLabel = String(selectedPaymentTermLabel || "").trim();
+      const normalizedCoverageLabel = String(coverageDurationLabel || "").trim();
+
+      const paymentYears = selectedPaymentTermYears !== undefined && selectedPaymentTermYears !== null && selectedPaymentTermYears !== ""
+        ? Number(selectedPaymentTermYears)
+        : null;
+      const paymentUntilAge = selectedPaymentTermUntilAge !== undefined && selectedPaymentTermUntilAge !== null && selectedPaymentTermUntilAge !== ""
+        ? Number(selectedPaymentTermUntilAge)
+        : null;
+
+      const coverageUntilAge = coverageDurationUntilAge !== undefined && coverageDurationUntilAge !== null && coverageDurationUntilAge !== ""
+        ? Number(coverageDurationUntilAge)
+        : null;
+
+      const matchedPayment = paymentOptions.find((opt) => {
+        const optType = String(opt?.type || "").trim();
+        const optLabel = String(opt?.label || "").trim();
+        return (
+          optType === normalizedPaymentType
+          && optLabel === normalizedPaymentLabel
+          && (opt?.years ?? null) === (paymentYears ?? null)
+          && (opt?.untilAge ?? null) === (paymentUntilAge ?? null)
+        );
+      });
+      if (!matchedPayment) {
+        throw Object.assign(new Error("Selected payment term is invalid for the chosen product."), { status: 400 });
+      }
+
+      const coverageRule = product?.coverageDurationRule || null;
+      if (!coverageRule || !coverageRule.type) {
+        throw Object.assign(new Error("Coverage duration rule is not configured for the chosen product."), { status: 400 });
+      }
+
+      const coverageRuleType = String(coverageRule.type || "").trim();
+      const coverageRuleLabel = String(coverageRule.label || "").trim();
+      if (normalizedCoverageType !== coverageRuleType || normalizedCoverageLabel !== coverageRuleLabel) {
+        throw Object.assign(new Error("Coverage duration selection does not match product rule."), { status: 400 });
+      }
+
+      const computedCoverageUntilAge = coverageRuleType === "RANGE_TO_AGE" ? coverageUntilAge : (coverageRule?.untilAge ?? null);
+      const computedCoverageYears = coverageRuleType === "FIXED_YEARS" ? (coverageRule?.years ?? null) : null;
+
+      if (coverageRuleType === "RANGE_TO_AGE") {
+        const minAge = Math.max((Number(issuanceAge) || 0) + 1, Number(coverageRule?.minYears || 1));
+        const maxAge = Number(coverageRule?.untilAge || 0);
+        if (!Number.isFinite(coverageUntilAge) || coverageUntilAge < minAge || coverageUntilAge > maxAge) {
+          throw Object.assign(new Error(`Coverage duration age must be between ${minAge} and ${maxAge}.`), { status: 400 });
+        }
+      }
+
+      let yearsToAdd = null;
+      if (coverageRuleType === "FIXED_YEARS") {
+        yearsToAdd = Number(coverageRule?.years || 0);
+      } else if (coverageRuleType === "UNTIL_AGE") {
+        yearsToAdd = Number(coverageRule?.untilAge || 0) - issuanceAge;
+      } else if (coverageRuleType === "RANGE_TO_AGE") {
+        yearsToAdd = Number(coverageUntilAge || 0) - issuanceAge;
+      }
+
+      if (!Number.isFinite(yearsToAdd) || yearsToAdd <= 0) {
+        throw Object.assign(new Error("Unable to compute policy end date from selected coverage duration."), { status: 400 });
+      }
+
+      const policyEndDate = new Date(issuanceDate);
+      policyEndDate.setFullYear(policyEndDate.getFullYear() + yearsToAdd);
+      const now = new Date();
+
+      await Policy.updateOne(
+        { leadEngagementId: engagement._id },
+        {
+          $setOnInsert: { leadEngagementId: engagement._id },
+          $set: {
+            outcomeActivity: "Record Coverage Duration Details",
+            recordCoverageDurationDetails: {
+              policyNumber: String(policyDoc?.uploadPolicySummary?.policyNumber || ""),
+              selectedPaymentTermLabel: normalizedPaymentLabel,
+              selectedPaymentTermType: normalizedPaymentType,
+              selectedPaymentTermYears: paymentYears,
+              selectedPaymentTermUntilAge: paymentUntilAge,
+              coverageDurationLabel: normalizedCoverageLabel,
+              coverageDurationType: normalizedCoverageType,
+              coverageDurationYears: computedCoverageYears,
+              coverageDurationUntilAge: computedCoverageUntilAge,
+              coverageStartDate: issuanceDate,
+              coverageEndDate: policyEndDate,
+              policyEndDate,
+              savedAt: now,
+            },
+          },
+        },
+        { upsert: true, session }
+      );
+
+      await LeadEngagement.updateOne(
+        { _id: engagement._id },
+        { $set: { currentActivityKey: "Record Coverage Duration Details" } },
+        { session }
+      );
+
+      await Task.updateMany(
+        {
+          assignedToUserId: userObjectId,
+          prospectId: prospectObjectId,
+          leadEngagementId: engagement._id,
+          type: "FOLLOW_UP",
+          status: "Open",
+          dedupeKey: `POLICY_APPLICATION_STATUS_FOLLOW_UP:${engagement._id}`,
+        },
+        {
+          $set: {
+            status: "Done",
+            completedAt: now,
+          },
+        },
+        { session }
+      );
+
+      const policyStatus = String(policyDoc?.recordPolicyApplicationStatus?.status || "").trim();
+      if (policyStatus === "Issued") {
+        lead.status = "Closed";
+        await lead.save({ session });
+
+        const receiptDate = policyDoc?.uploadInitialPremiumEor?.receiptDate
+          ? new Date(policyDoc.uploadInitialPremiumEor.receiptDate)
+          : null;
+        const policyNumber = String(policyDoc?.uploadPolicySummary?.policyNumber || "").trim();
+        if (!receiptDate || Number.isNaN(receiptDate.getTime())) {
+          throw Object.assign(new Error("Initial premium receipt date is required to create policyholder."), { status: 409 });
+        }
+        if (!policyNumber) {
+          throw Object.assign(new Error("Policy number is required to create policyholder."), { status: 409 });
+        }
+
+        let existingPolicyholder = await Policyholder.findOne({ leadEngagementId: engagement._id }).session(session);
+        if (existingPolicyholder) {
+          existingPolicyholder.assignedToUserId = userObjectId;
+          existingPolicyholder.productId = new mongoose.Types.ObjectId(productId);
+          existingPolicyholder.policyNumber = policyNumber;
+          existingPolicyholder.lastPaidDate = receiptDate;
+          existingPolicyholder.status = "Active";
+          await existingPolicyholder.save({ session });
+        } else {
+          const MAX_TRIES = 5;
+          let lastErr = null;
+          for (let i = 0; i < MAX_TRIES; i += 1) {
+            try {
+              const policyholderCode = await getNextPolicyholderCode();
+              await Policyholder.create([
+                {
+                  policyholderCode,
+                  assignedToUserId: userObjectId,
+                  leadEngagementId: engagement._id,
+                  productId: new mongoose.Types.ObjectId(productId),
+                  policyNumber,
+                  lastPaidDate: receiptDate,
+                  status: "Active",
+                },
+              ], { session });
+              lastErr = null;
+              break;
+            } catch (err) {
+              lastErr = err;
+              if (!(err?.code === 11000 && String(err?.message || "").includes("policyholderCode"))) {
+                throw err;
+              }
+            }
+          }
+          if (lastErr) throw lastErr;
+        }
+      }
+
+      responsePayload = {
+        message: "Coverage duration details saved.",
+        currentActivityKey: "Record Coverage Duration Details",
+        policyEndDate,
+      };
+    });
+
+    return res.json(responsePayload || {
+      message: "Coverage duration details saved.",
+      currentActivityKey: "Record Coverage Duration Details",
+    });
+  } catch (err) {
+    console.error("Policy issuance coverage duration save error:", err);
+    return res.status(err?.status || 500).json({ message: err?.message || "Server error." });
+  } finally {
+    session.endSession();
+  }
+});
+
 
 app.post("/api/prospects/:prospectId/leads/:leadId/proposal/schedule-application", async (req, res) => {
   const session = await mongoose.startSession();
