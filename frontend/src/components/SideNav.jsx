@@ -18,6 +18,7 @@ function SideNav({ active, onNavigate }) {
     if (p.includes("/tasks")) return "tasks";
 
     if (p.includes("/prospects")) return "clients_all_prospects";
+    if (p.includes("/policyholders")) return "clients_all_policyholders";
     if (p.includes("/clients")) return "clients";
 
     return null;
