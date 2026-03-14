@@ -1,0 +1,295 @@
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
+import TopNav from "./components/TopNav";
+import SideNav from "./components/SideNav";
+import { logout } from "./utils/logout";
+import "./AgentProspectsAll.css";
+
+function AgentPolicyholdersAll() {
+  const navigate = useNavigate();
+  const { username } = useParams();
+
+  const user = useMemo(() => {
+    try {
+      return JSON.parse(localStorage.getItem("user"));
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const [isReady, setIsReady] = useState(false);
+
+  const [query, setQuery] = useState("");
+  const [productName, setProductName] = useState("");
+  const [status, setStatus] = useState("");
+  const [sortKey, setSortKey] = useState("policyholderNoAsc");
+
+  const PAGE_SIZE = 10;
+  const [page, setPage] = useState(1);
+
+  const [rows, setRows] = useState([]);
+  const [totalForThisUser, setTotalForThisUser] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+
+  const [loading, setLoading] = useState(true);
+  const [apiError, setApiError] = useState("");
+
+  useEffect(() => {
+    if (!user || user.username !== username) {
+      setIsReady(false);
+      navigate("/", { replace: true });
+      return;
+    }
+    setIsReady(true);
+  }, [user, username, navigate]);
+
+  useEffect(() => {
+    if (user) document.title = `${user.username} | All Policyholders`;
+  }, [user]);
+
+  useEffect(() => {
+    if (!isReady) return;
+
+    const controller = new AbortController();
+
+    const fetchPage = async () => {
+      try {
+        setLoading(true);
+        setApiError("");
+
+        if (!user?.id) {
+          setApiError("Missing user id. Please log in again.");
+          setRows([]);
+          setTotalForThisUser(0);
+          setTotalPages(1);
+          return;
+        }
+
+        const res = await fetch(
+          `http://localhost:5000/api/policyholders?userId=${user.id}&page=${page}&limit=${PAGE_SIZE}` +
+            `&q=${encodeURIComponent(query)}` +
+            `&productName=${encodeURIComponent(productName)}` +
+            `&status=${encodeURIComponent(status)}` +
+            `&sort=${encodeURIComponent(sortKey)}`,
+          { signal: controller.signal }
+        );
+
+        const data = await res.json();
+
+        if (!res.ok) {
+          setApiError(data.message || "Failed to fetch policyholders.");
+          setRows([]);
+          setTotalForThisUser(0);
+          setTotalPages(1);
+          return;
+        }
+
+        setRows(Array.isArray(data.policyholders) ? data.policyholders : []);
+        setTotalForThisUser(Number(data.totalForThisUser ?? 0));
+        setTotalPages(Number(data.totalPages ?? 1));
+      } catch (err) {
+        if (err.name !== "AbortError") {
+          setApiError("Cannot connect to server. Is backend running?");
+          setRows([]);
+          setTotalForThisUser(0);
+          setTotalPages(1);
+        }
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchPage();
+    return () => controller.abort();
+  }, [isReady, user?.id, page, query, productName, status, sortKey, PAGE_SIZE]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [query, productName, status, sortKey]);
+
+  const formatDateOnly = (v) => {
+    if (!v) return "—";
+    const d = new Date(v);
+    if (Number.isNaN(d.getTime())) return "—";
+    return d.toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "short",
+      day: "2-digit",
+    });
+  };
+
+  const shownCount = rows.length;
+  const totalCount = totalForThisUser;
+
+  const productOptions = useMemo(() => {
+    const set = new Set(rows.map((r) => String(r.productName || "").trim()).filter(Boolean));
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [rows]);
+
+  const resetFilters = () => {
+    setQuery("");
+    setProductName("");
+    setStatus("");
+    setSortKey("policyholderNoAsc");
+    setPage(1);
+  };
+
+  if (!isReady) return null;
+
+  const handleSideNav = (key) => {
+    if (!user) return navigate("/");
+
+    switch (key) {
+      case "clients":
+        navigate(`/agent/${user.username}/clients`);
+        break;
+      case "clients_all_prospects":
+        navigate(`/agent/${user.username}/prospects`);
+        break;
+      case "clients_all_policyholders":
+        navigate(`/agent/${user.username}/policyholders`);
+        break;
+      case "tasks":
+        navigate(`/agent/${user.username}/tasks`);
+        break;
+      case "tasks_all":
+        navigate(`/agent/${user.username}/tasks/all`);
+        break;
+      case "sales":
+        alert("Sales module coming soon");
+        break;
+      default:
+        break;
+    }
+  };
+
+  return (
+    <div className="page-shell">
+      <TopNav
+        user={user}
+        onLogoClick={() => navigate(`/agent/${user.username}`)}
+        onProfileClick={() => navigate(`/agent/${user.username}/profile`)}
+        onLogout={() => logout(navigate)}
+        onNotificationsClick={() => navigate(`/agent/${user.username}/notifications`)}
+      />
+
+      <div className="page-body">
+        <SideNav onNavigate={handleSideNav} />
+
+        <main className="page-content">
+          <h1 className="allpros-title">All Policyholders</h1>
+
+          <div className="content-card">
+            <div className="allpros-topbar">
+              <div className="allpros-searchWrap" style={{ flex: "1 1 320px" }}>
+                <input
+                  className="allpros-search"
+                  placeholder="Search policyholder code, name, policy number, product..."
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                />
+              </div>
+
+              <div className="allpros-controls">
+                <select className="allpros-select" value={productName} onChange={(e) => setProductName(e.target.value)}>
+                  <option value="">All Products</option>
+                  {productOptions.map((name) => (
+                    <option key={name} value={name}>{name}</option>
+                  ))}
+                </select>
+
+                <select className="allpros-select" value={status} onChange={(e) => setStatus(e.target.value)}>
+                  <option value="">All Statuses</option>
+                  <option value="Active">Active</option>
+                  <option value="Lapsed">Lapsed</option>
+                  <option value="Cancelled">Cancelled</option>
+                </select>
+
+                <select className="allpros-select" value={sortKey} onChange={(e) => setSortKey(e.target.value)}>
+                  <option value="policyholderNoAsc">Policyholder No. ↑</option>
+                  <option value="policyholderNoDesc">Policyholder No. ↓</option>
+                  <option value="policyholderCodeAsc">Policyholder Code A→Z</option>
+                  <option value="policyholderCodeDesc">Policyholder Code Z→A</option>
+                  <option value="lastNameAsc">Last Name A→Z</option>
+                  <option value="lastNameDesc">Last Name Z→A</option>
+                  <option value="ageAsc">Age Low→High</option>
+                  <option value="ageDesc">Age High→Low</option>
+                  <option value="lastPaidDateAsc">Last Paid Date Old→New</option>
+                  <option value="lastPaidDateDesc">Last Paid Date New→Old</option>
+                  <option value="nextPaymentDateAsc">Next Payment Date Old→New</option>
+                  <option value="nextPaymentDateDesc">Next Payment Date New→Old</option>
+                  <option value="dateCreatedAsc">Date Created Old→New</option>
+                  <option value="dateCreatedDesc">Date Created New→Old</option>
+                </select>
+
+                <button className="allpros-clearBtn" onClick={resetFilters}>Clear</button>
+              </div>
+            </div>
+
+            <div className="table-wrap">
+              {loading && <p className="ac-small-note" style={{ padding: "10px 0" }}>Loading policyholders...</p>}
+              {!loading && apiError && <p className="ac-small-note" style={{ color: "#DA291C" }}>{apiError}</p>}
+
+              {!loading && !apiError && (
+                <table className="prospects-table">
+                  <thead>
+                    <tr>
+                      <th>Policyholder No.</th>
+                      <th>Policyholder Code</th>
+                      <th>First Name</th>
+                      <th>Last Name</th>
+                      <th>Age</th>
+                      <th>Product Name</th>
+                      <th>Policy Number</th>
+                      <th>Status</th>
+                      <th>Last Paid Date</th>
+                      <th>Next Payment Date</th>
+                      <th>Date Created</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((p) => (
+                      <tr key={p._id} className="allpros-row">
+                        <td>{String(p.policyholderNo ?? 0).padStart(2, "0")}</td>
+                        <td className="mono">{p.policyholderCode || "—"}</td>
+                        <td>{p.firstName || "—"}</td>
+                        <td>{p.lastName || "—"}</td>
+                        <td>{p.age ?? "—"}</td>
+                        <td>{p.productName || "—"}</td>
+                        <td className="mono">{p.policyNumber || "—"}</td>
+                        <td>
+                          <span className={`status-pill ${p.status === "Active" ? "active" : "nurture"}`}>{p.status || "—"}</span>
+                        </td>
+                        <td>{formatDateOnly(p.lastPaidDate)}</td>
+                        <td>{formatDateOnly(p.nextPaymentDate)}</td>
+                        <td>{formatDateOnly(p.createdAt)}</td>
+                      </tr>
+                    ))}
+                    {rows.length === 0 && (
+                      <tr>
+                        <td colSpan="11" className="empty-row">No policyholders found.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            {!loading && !apiError && (
+              <div className="allpros-pagination">
+                <div className="muted">Showing {shownCount} of {totalCount}</div>
+                <div className="pager">
+                  <button className="pager-btn" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1}>Prev</button>
+                  <span className="pager-meta">Page {page} of {totalPages}</span>
+                  <button className="pager-btn" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page === totalPages}>Next</button>
+                </div>
+              </div>
+            )}
+          </div>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+export default AgentPolicyholdersAll;
