@@ -220,7 +220,7 @@ const handleSideNav = (key) => {
       break;
 
     case "clients_all_policyholders":
-      alert("All Policyholders page coming soon.");
+      navigate(`/agent/${user.username}/policyholders`);
       break;
 
     // TASKS
@@ -622,6 +622,23 @@ const handleSideNav = (key) => {
                     <span className="ld-status-pill">{lead.status || "—"}</span>
                   </div>
 
+                  <div className="ld-detailItem ld-detailItem-wide">
+                    <span className="ld-detailLabel">Lead Description</span>
+                    {!isEditing ? (
+                      <span className="ld-detailValue">{lead.description?.trim() ? lead.description : "—"}</span>
+                    ) : (
+                      <textarea
+                        className="ld-input"
+                        value={editDraft.description}
+                        onChange={(e) => setEditDraft((d) => ({ ...d, description: e.target.value }))}
+                        rows={3}
+                        placeholder="Add notes about this lead..."
+                        style={{ resize: "vertical" }}
+                        disabled={editBusy}
+                      />
+                    )}
+                  </div>
+
                   <div className="ld-detailItem">
                     <span className="ld-detailLabel">Date Created</span>
                     <span className="ld-detailValue">{formatDateTime(lead.createdAt)}</span>
@@ -725,17 +742,6 @@ const handleSideNav = (key) => {
                   )}
                 </div>
 
-                {!isEditing && (
-                  <button
-                    type="button"
-                    className="ld-actionBtn"
-                    onClick={startEngaging}
-                    title="Lead Engagement"
-                  >
-                    Lead Engagement →
-                  </button>
-                )}
-
                 {isDropped && (
                   <p className="ld-small-note muted">
                     This lead is Dropped and cannot be edited, but Lead Engagement is still viewable.
@@ -746,23 +752,18 @@ const handleSideNav = (key) => {
 
             <div className="ld-records">
               <div className="ld-recordsHeader">
-                <h2 className="ld-recordsTitle">Lead Description</h2>
+                <h2 className="ld-recordsTitle">Lead Engagement</h2>
               </div>
 
               <div className="ld-recordsBody">
-                {!isEditing ? (
-                  <p className="ld-descText">{lead.description?.trim() ? lead.description : "—"}</p>
-                ) : (
-                  <textarea
-                    className="ld-input"
-                    value={editDraft.description}
-                    onChange={(e) => setEditDraft((d) => ({ ...d, description: e.target.value }))}
-                    rows={4}
-                    placeholder="Add notes about this lead..."
-                    style={{ resize: "vertical" }}
-                    disabled={editBusy}
-                  />
-                )}
+                <button
+                  type="button"
+                  className="ld-engagementLink"
+                  onClick={startEngaging}
+                  title="Open Lead Engagement"
+                >
+                  Open Lead Engagement →
+                </button>
               </div>
             </div>
 

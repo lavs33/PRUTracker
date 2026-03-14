@@ -74,7 +74,7 @@ function AgentTasksAll() {
         navigate(`/agent/${user.username}/prospects`);
         break;
       case "clients_all_policyholders":
-        alert("All Policyholders page coming soon.");
+        navigate(`/agent/${user.username}/policyholders`);
         break;
       case "tasks":
         navigate(`/agent/${user.username}/tasks`);
@@ -175,6 +175,7 @@ function AgentTasksAll() {
         leadCode: t?.leadCode || "—",
         dueAt: t?.dueAt || null,
         completedAt: t?.completedAt || null,
+        wasDelayed: Boolean(t?.wasDelayed),
         createdAt: t?.createdAt || null,
         status: normalizedStatus,
         type: normalizedType,
@@ -323,6 +324,15 @@ function AgentTasksAll() {
           <div className="meta-item">
             <div className="meta-label">Completed</div>
             <div className="meta-value">{formatDue(t.completedAt)}</div>
+          </div>
+        ) : null}
+
+        {uiStatus === "Done" ? (
+          <div className="meta-item">
+            <div className="meta-label">Fulfillment</div>
+            <div className="meta-value" style={{ color: t.wasDelayed ? "#B91C1C" : "#166534", fontWeight: 700 }}>
+              {t.wasDelayed ? "Delayed" : "On time"}
+            </div>
           </div>
         ) : null}
       </div>
