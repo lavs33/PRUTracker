@@ -25,6 +25,7 @@ function AgentLeadDetails() {
   const [prospectName, setProspectName] = useState("—");
   const [prospectSourceType, setProspectSourceType] = useState(""); 
   const [lead, setLead] = useState(null);
+  const [leadEngagement, setLeadEngagement] = useState(null);
   const [policy, setPolicy] = useState(null);
 
   const DROP_REASONS = [
@@ -124,12 +125,24 @@ function AgentLeadDetails() {
     });
   };
 
+  const formatDateOnly = (d) => {
+    if (!d) return "—";
+    const date = new Date(d);
+    if (isNaN(date.getTime())) return "—";
+    return date.toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "short",
+      day: "2-digit",
+    });
+  };
+
   // reusable fetch
   const fetchLeadDetails = useCallback(
     async (signal) => {
       if (!user?.id) {
         setApiError("Missing user id. Please log in again.");
         setLead(null);
+        setLeadEngagement(null);
         setPolicy(null);
         return;
       }
@@ -137,6 +150,7 @@ function AgentLeadDetails() {
       if (!prospectId || !leadId) {
         setApiError("Missing prospectId or leadId.");
         setLead(null);
+        setLeadEngagement(null);
         setPolicy(null);
         return;
       }
@@ -165,6 +179,7 @@ function AgentLeadDetails() {
         leadNo: data?.leadMeta?.leadNo,
       });
 
+      setLeadEngagement(data?.leadEngagement || null);
       setPolicy(data?.policy || null);
     },
     [prospectId, leadId, user?.id]
@@ -185,6 +200,7 @@ function AgentLeadDetails() {
         if (err.name !== "AbortError") {
           setApiError("Cannot connect to server. Is backend running?");
           setLead(null);
+          setLeadEngagement(null);
           setPolicy(null);
         }
       } finally {
@@ -220,7 +236,7 @@ const handleSideNav = (key) => {
       break;
 
     case "clients_all_policyholders":
-      alert("All Policyholders page coming soon.");
+      navigate(`/agent/${user.username}/policyholders`);
       break;
 
     // TASKS
@@ -622,6 +638,23 @@ const handleSideNav = (key) => {
                     <span className="ld-status-pill">{lead.status || "—"}</span>
                   </div>
 
+                  <div className="ld-detailItem ld-detailItem-wide">
+                    <span className="ld-detailLabel">Lead Description</span>
+                    {!isEditing ? (
+                      <span className="ld-detailValue">{lead.description?.trim() ? lead.description : "—"}</span>
+                    ) : (
+                      <textarea
+                        className="ld-input"
+                        value={editDraft.description}
+                        onChange={(e) => setEditDraft((d) => ({ ...d, description: e.target.value }))}
+                        rows={3}
+                        placeholder="Add notes about this lead..."
+                        style={{ resize: "vertical" }}
+                        disabled={editBusy}
+                      />
+                    )}
+                  </div>
+
                   <div className="ld-detailItem">
                     <span className="ld-detailLabel">Date Created</span>
                     <span className="ld-detailValue">{formatDateTime(lead.createdAt)}</span>
@@ -725,17 +758,6 @@ const handleSideNav = (key) => {
                   )}
                 </div>
 
-                {!isEditing && (
-                  <button
-                    type="button"
-                    className="ld-actionBtn"
-                    onClick={startEngaging}
-                    title="Lead Engagement"
-                  >
-                    Lead Engagement →
-                  </button>
-                )}
-
                 {isDropped && (
                   <p className="ld-small-note muted">
                     This lead is Dropped and cannot be edited, but Lead Engagement is still viewable.
@@ -746,23 +768,30 @@ const handleSideNav = (key) => {
 
             <div className="ld-records">
               <div className="ld-recordsHeader">
-                <h2 className="ld-recordsTitle">Lead Description</h2>
+                <h2 className="ld-recordsTitle">Lead Engagement</h2>
               </div>
 
               <div className="ld-recordsBody">
-                {!isEditing ? (
-                  <p className="ld-descText">{lead.description?.trim() ? lead.description : "—"}</p>
-                ) : (
-                  <textarea
-                    className="ld-input"
-                    value={editDraft.description}
-                    onChange={(e) => setEditDraft((d) => ({ ...d, description: e.target.value }))}
-                    rows={4}
-                    placeholder="Add notes about this lead..."
-                    style={{ resize: "vertical" }}
-                    disabled={editBusy}
-                  />
-                )}
+                <button
+                  type="button"
+                  className="ld-policyCard"
+                  onClick={startEngaging}
+                  title="Open Lead Engagement"
+                >
+                  <div className="ld-policyTop">
+                    <div className="ld-policyCode">Lead Engagement for {lead.leadCode || "—"}</div>
+                    <div className="ld-policyDate">{formatDateOnly(leadEngagement?.updatedAt)}</div>
+                  </div>
+
+                  {lead.status !== "Closed" && (
+                    <div className="ld-policyBottom">
+                      <div className="ld-policyStatusRow">
+                        <span className="ld-policyStatusLabel">Current Stage</span>
+                        <span className="ld-policyStatusPill">{leadEngagement?.currentStage || "Not Started"}</span>
+                      </div>
+                    </div>
+                  )}
+                </button>
               </div>
             </div>
 
