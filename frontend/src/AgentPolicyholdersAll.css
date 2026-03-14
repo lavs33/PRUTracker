@@ -1,0 +1,208 @@
+.allpol-shell {
+  min-height: 100vh;
+  background-color: #DA291C;
+  display: flex;
+  flex-direction: column;
+}
+
+.allpol-body {
+  display: flex;
+  flex: 1;
+  background-color: #DA291C;
+}
+
+.allpol-content {
+  flex: 1;
+  padding: 22px;
+}
+
+.allpol-header {
+  margin-bottom: 16px;
+}
+
+.allpol-title {
+  margin: 0 0 12px 0;
+  font-size: 30px;
+  font-weight: 700;
+  color: #ffffff;
+  font-family: "FSAlbertArabic", sans-serif;
+}
+
+.allpol-controls {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+.allpol-search {
+  width: 100%;
+  max-width: 780px;
+  padding: 16px 18px;
+  border-radius: 12px;
+  border: none;
+  font-size: 18px;
+  font-weight: 700;
+  opacity: 0.6;
+  font-family: "FSAlbertArabic", sans-serif;
+}
+
+.allpol-sort {
+  max-width: 480px;
+  width: 100%;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: none;
+  font-family: "FSAlbertArabic", sans-serif;
+  font-size: 16px;
+  color: #5B6770;
+  background: #fff;
+}
+
+.allpol-chips {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.allpol-select {
+  background: #ffffff;
+  border: none;
+  padding: 14px 16px;
+  border-radius: 12px;
+  font-size: 16px;
+  font-family: "FSAlbertArabic", sans-serif;
+  font-weight: 400;
+  color: #5B6770;
+  min-width: 280px;
+}
+
+.allpol-clearBtn {
+  background: #ffffff;
+  border: none;
+  padding: 12px 20px;
+  border-radius: 999px;
+  font-size: 18px;
+  font-family: "FSAlbertArabic", sans-serif;
+  color: #5B6770;
+  cursor: pointer;
+}
+
+.allpol-clearBtn:hover {
+  background: #d7dae0;
+}
+
+.allpol-card {
+  background: #ffffff;
+  border-radius: 14px;
+  padding: 16px 18px;
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.08);
+}
+
+.allpol-tableWrap {
+  overflow-x: auto;
+}
+
+.allpol-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #ffffff;
+  table-layout: fixed;
+}
+
+.allpol-table th,
+.allpol-table td {
+  padding: 16px 12px;
+  text-align: center;
+  font-size: 16px;
+  white-space: normal;
+  word-break: break-word;
+  font-family: "FSAlbertArabic", sans-serif;
+  line-height: 1.45;
+}
+
+.allpol-table th {
+  background: #f3f4f6;
+  font-weight: 800;
+  color: #373a36;
+}
+
+.allpol-row:hover {
+  background: #f7fbfc;
+}
+
+.allpol-status {
+  display: inline-block;
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.allpol-status.active {
+  background-color: #dcfce7;
+  color: #166534;
+}
+
+.allpol-status.nurture {
+  background-color: #e5e7eb;
+  color: #374151;
+}
+
+.allpol-pagination {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 12px;
+}
+
+.allpol-pager {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.allpol-pagerBtn {
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: none;
+  font-size: 15px;
+  font-weight: 700;
+  font-family: "FSAlbertArabic", sans-serif;
+  cursor: pointer;
+}
+
+.allpol-pagerBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.allpol-pagerMeta {
+  font-size: 14px;
+  color: #373a36;
+  font-family: "FSAlbertArabic", sans-serif;
+  font-weight: 700;
+}
+
+.allpol-muted {
+  color: #6b6e6a;
+  font-family: "FSAlbertArabic", sans-serif;
+  font-size: 13px;
+}
+
+.allpol-mono {
+  font-family: monospace;
+  font-size: 13px;
+}
+
+.allpol-empty {
+  text-align: center;
+  padding: 14px;
+}
+
+.allpol-note {
+  font-size: 14px;
+  font-family: "FSAlbertArabic", sans-serif;
+  color: #6b6e6a;
+  font-weight: 600;
+  opacity: 0.75;
+}
