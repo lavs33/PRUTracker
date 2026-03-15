@@ -274,11 +274,14 @@ function AgentAddLead() {
       case "clients":
         navigate(`/agent/${user.username}/clients`);
         break;
+      case "clients_relationship":
+        navigate(`/agent/${user.username}/clients/relationship`);
+        break;
       case "clients_all_prospects":
         navigate(`/agent/${user.username}/prospects`);
         break;
       case "clients_all_policyholders":
-        alert("All Policyholders page coming soon.");
+        navigate(`/agent/${user.username}/policyholders`);
         break;
       case "tasks":
         navigate(`/agent/${user.username}/tasks`);
