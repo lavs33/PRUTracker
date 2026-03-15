@@ -25,6 +25,7 @@ function AgentLeadDetails() {
   const [prospectName, setProspectName] = useState("—");
   const [prospectSourceType, setProspectSourceType] = useState(""); 
   const [lead, setLead] = useState(null);
+  const [leadEngagement, setLeadEngagement] = useState(null);
   const [policy, setPolicy] = useState(null);
 
   const DROP_REASONS = [
@@ -39,7 +40,7 @@ function AgentLeadDetails() {
   const [dropBusy, setDropBusy] = useState(false);
   const [dropModal, setDropModal] = useState({
     open: false,
-    type: "", // "confirm" | "blocked" 
+    type: "", // "confirm" | "blocked" | "reopen"
     title: "",
     message: "",
   });
@@ -124,12 +125,14 @@ function AgentLeadDetails() {
     });
   };
 
+
   // reusable fetch
   const fetchLeadDetails = useCallback(
     async (signal) => {
       if (!user?.id) {
         setApiError("Missing user id. Please log in again.");
         setLead(null);
+        setLeadEngagement(null);
         setPolicy(null);
         return;
       }
@@ -137,6 +140,7 @@ function AgentLeadDetails() {
       if (!prospectId || !leadId) {
         setApiError("Missing prospectId or leadId.");
         setLead(null);
+        setLeadEngagement(null);
         setPolicy(null);
         return;
       }
@@ -165,6 +169,7 @@ function AgentLeadDetails() {
         leadNo: data?.leadMeta?.leadNo,
       });
 
+      setLeadEngagement(data?.leadEngagement || null);
       setPolicy(data?.policy || null);
     },
     [prospectId, leadId, user?.id]
@@ -185,6 +190,7 @@ function AgentLeadDetails() {
         if (err.name !== "AbortError") {
           setApiError("Cannot connect to server. Is backend running?");
           setLead(null);
+          setLeadEngagement(null);
           setPolicy(null);
         }
       } finally {
@@ -220,7 +226,7 @@ const handleSideNav = (key) => {
       break;
 
     case "clients_all_policyholders":
-      alert("All Policyholders page coming soon.");
+      navigate(`/agent/${user.username}/policyholders`);
       break;
 
     // TASKS
@@ -263,7 +269,7 @@ const handleSideNav = (key) => {
       openDropModal({
         type: "blocked",
         title: "Cannot Edit Lead",
-        message: "This lead is Dropped and cannot be edited. Dropped leads are final and cannot be reopened.",
+        message: "This lead is Dropped and cannot be edited. Please re-open lead for editing.",
       });
       return;
     }
@@ -352,7 +358,7 @@ const handleSideNav = (key) => {
     }
   };
 
-  // DROP
+  // DROP / REOPEN
   const onDropClick = () => {
     if (isClosed) {
       openDropModal({
@@ -368,7 +374,7 @@ const handleSideNav = (key) => {
       type: "confirm",
       title: "Drop Lead?",
       message:
-        "Dropping this lead is NOT reversible. Once dropped, it cannot be reopened and all lead details become read-only. Do you want to continue?",
+        "Dropping will mark this lead as Dropped. This action is used when the lead can no longer proceed. Do you want to continue?",
     });
   };
 
@@ -413,6 +419,45 @@ const handleSideNav = (key) => {
 
       closeDropModal();
       await fetchLeadDetails(); // refresh UI
+    } catch (err) {
+      openDropModal({
+        type: "blocked",
+        title: "Connection Error",
+        message: "Cannot connect to server. Is backend running?",
+      });
+    } finally {
+      setDropBusy(false);
+    }
+  };
+
+  const attemptReopen = async () => {
+    try {
+      setDropBusy(true);
+
+      const res = await fetch(
+        `http://localhost:5000/api/prospects/${prospectId}/leads/${leadId}?userId=${user.id}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            status: "Reopen", // command only
+          }),
+        }
+      );
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        openDropModal({
+          type: "blocked",
+          title: "Re-open Failed",
+          message: data.message || "Failed to re-open lead.",
+        });
+        return;
+      }
+
+      closeDropModal();
+      await fetchLeadDetails();
     } catch (err) {
       openDropModal({
         type: "blocked",
@@ -583,6 +628,23 @@ const handleSideNav = (key) => {
                     <span className="ld-status-pill">{lead.status || "—"}</span>
                   </div>
 
+                  <div className="ld-detailItem ld-detailItem-wide">
+                    <span className="ld-detailLabel">Lead Description</span>
+                    {!isEditing ? (
+                      <span className="ld-detailValue">{lead.description?.trim() ? lead.description : "—"}</span>
+                    ) : (
+                      <textarea
+                        className="ld-input"
+                        value={editDraft.description}
+                        onChange={(e) => setEditDraft((d) => ({ ...d, description: e.target.value }))}
+                        rows={3}
+                        placeholder="Add notes about this lead..."
+                        style={{ resize: "vertical" }}
+                        disabled={editBusy}
+                      />
+                    )}
+                  </div>
+
                   <div className="ld-detailItem">
                     <span className="ld-detailLabel">Date Created</span>
                     <span className="ld-detailValue">{formatDateTime(lead.createdAt)}</span>
@@ -618,7 +680,7 @@ const handleSideNav = (key) => {
               <div className="ld-right">
                 <div className="ld-actionsRow">
                   {/* LEFT: Edit OR Cancel/Save */}
-                  {!isEditing && !isDropped ? (
+                  {!isEditing ? (
                     <button
                       type="button"
                       className="ld-iconBtn"
@@ -628,7 +690,7 @@ const handleSideNav = (key) => {
                     >
                       ✎
                     </button>
-                  ) : !isDropped ? (
+                  ) : (
                     <>
                       <button
                         type="button"
@@ -649,9 +711,9 @@ const handleSideNav = (key) => {
                         {editBusy ? "Saving..." : "Save Changes"}
                       </button>
                     </>
-                  ) : null}
+                  )}
 
-                  {/* RIGHT: Drop ONLY when NOT editing and NOT dropped */}
+                  {/* RIGHT: Drop/Re-open ONLY when NOT editing */}
                   {!isEditing && (
                     <>
                       {!isDropped ? (
@@ -664,25 +726,31 @@ const handleSideNav = (key) => {
                         >
                           ⛔
                         </button>
-                      ) : null}
+                      ) : (
+                        <button
+                          type="button"
+                          className="ld-btn primary"
+                          onClick={() =>
+                            openDropModal({
+                              type: "reopen",
+                              title: "Re-open Lead?",
+                              message:
+                                "This will re-open the lead and return it to its previous status. Do you want to continue?",
+                            })
+                          }
+                          disabled={dropBusy}
+                          title="Re-open Lead"
+                        >
+                          Re-open Lead
+                        </button>
+                      )}
                     </>
                   )}
                 </div>
 
-                {!isEditing && (
-                  <button
-                    type="button"
-                    className="ld-actionBtn"
-                    onClick={startEngaging}
-                    title="Lead Engagement"
-                  >
-                    Lead Engagement →
-                  </button>
-                )}
-
                 {isDropped && (
                   <p className="ld-small-note muted">
-                    This lead is Dropped. It is read-only and cannot be reopened.
+                    This lead is Dropped and cannot be edited, but Lead Engagement is still viewable.
                   </p>
                 )}
               </div>
@@ -690,23 +758,30 @@ const handleSideNav = (key) => {
 
             <div className="ld-records">
               <div className="ld-recordsHeader">
-                <h2 className="ld-recordsTitle">Lead Description</h2>
+                <h2 className="ld-recordsTitle">Lead Engagement</h2>
               </div>
 
               <div className="ld-recordsBody">
-                {!isEditing ? (
-                  <p className="ld-descText">{lead.description?.trim() ? lead.description : "—"}</p>
-                ) : (
-                  <textarea
-                    className="ld-input"
-                    value={editDraft.description}
-                    onChange={(e) => setEditDraft((d) => ({ ...d, description: e.target.value }))}
-                    rows={4}
-                    placeholder="Add notes about this lead..."
-                    style={{ resize: "vertical" }}
-                    disabled={editBusy}
-                  />
-                )}
+                <button
+                  type="button"
+                  className="ld-policyCard"
+                  onClick={startEngaging}
+                  title="Open Lead Engagement"
+                >
+                  <div className="ld-policyTop">
+                    <div className="ld-policyCode">Lead Engagement for {lead.leadCode || "—"}</div>
+                    <div className="ld-policyDate">{formatDateShort(leadEngagement?.updatedAt)}</div>
+                  </div>
+
+                  {lead.status !== "Closed" && (
+                    <div className="ld-policyBottom">
+                      <div className="ld-policyStatusRow">
+                        <span className="ld-policyStatusLabel">Current Stage</span>
+                        <span className="ld-policyStatusPill">{leadEngagement?.currentStage || "Not Started"}</span>
+                      </div>
+                    </div>
+                  )}
+                </button>
               </div>
             </div>
 
@@ -743,7 +818,7 @@ const handleSideNav = (key) => {
           </div>
 
           {/* =========================
-              DROP MODAL
+              DROP / REOPEN MODAL
              ========================= */}
           {dropModal.open && (
             <div className="ld-modalOverlay" role="dialog" aria-modal="true">
@@ -830,6 +905,28 @@ const handleSideNav = (key) => {
                       </button>
                     </div>
                   </>
+                )}
+
+                {dropModal.type === "reopen" && (
+                  <div className="ld-modalActions">
+                    <button
+                      type="button"
+                      className="ld-btn secondary"
+                      onClick={closeDropModal}
+                      disabled={dropBusy}
+                    >
+                      Close
+                    </button>
+                    <button
+                      type="button"
+                      className="ld-btn primary"
+                      onClick={attemptReopen}
+                      disabled={dropBusy}
+                      title="Re-open this lead"
+                    >
+                      {dropBusy ? "Re-opening..." : "Re-open"}
+                    </button>
+                  </div>
                 )}
               </div>
             </div>

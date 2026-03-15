@@ -289,6 +289,36 @@ function buildProspectSearchMatch(qRaw) {
  * Used for:
  * - normalizing phone-like input before validation or storage.
  */
+function buildPolicyholderSearchMatch(qRaw) {
+  const q = String(qRaw || "").trim();
+  if (!q) return null;
+
+  const safeQ = escapeRegex(q);
+  const parts = safeQ.split(/\s+/).filter(Boolean);
+  const rxFull = new RegExp(safeQ, "i");
+
+  const or = [
+    { policyholderCode: { $regex: rxFull } },
+    { policyNumber: { $regex: rxFull } },
+    { "prospect.firstName": { $regex: rxFull } },
+    { "prospect.lastName": { $regex: rxFull } },
+    { "product.productName": { $regex: rxFull } },
+  ];
+
+  if (parts.length >= 2) {
+    or.push({
+      $and: parts.map((term) => {
+        const rx = new RegExp(term, "i");
+        return {
+          $or: [{ "prospect.firstName": { $regex: rx } }, { "prospect.lastName": { $regex: rx } }],
+        };
+      }),
+    });
+  }
+
+  return { $or: or };
+}
+
 function onlyDigits(v) {
   return String(v || "").replace(/\D/g, "");
 }
@@ -937,6 +967,7 @@ app.get("/api/policyholders/recent", async (req, res) => {
                 policyNumber: 1,
                 status: 1,
                 lastPaidDate: 1,
+                nextPaymentDate: 1,
                 firstName: "$prospect.firstName",
                 lastName: "$prospect.lastName",
               },
@@ -968,6 +999,208 @@ app.get("/api/policyholders/recent", async (req, res) => {
     return res.status(500).json({ message: "Server error." });
   }
 });
+
+/* ===========================
+   POLICYHOLDERS: ALL (Agent, paginated)
+   Endpoint: GET /api/policyholders
+=========================== */
+app.get("/api/policyholders", async (req, res) => {
+  try {
+    const {
+      userId,
+      page = 1,
+      limit = 10,
+      q = "",
+      productName = "",
+      status = "",
+      sort = "policyholderNoAsc",
+    } = req.query;
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId)) {
+      return res.status(400).json({ message: "Invalid userId." });
+    }
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const pageSize = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 50);
+    const skip = (pageNum - 1) * pageSize;
+
+    const searchMatch = buildPolicyholderSearchMatch(q);
+
+    const filterAnd = [];
+    if (String(productName || "").trim()) {
+      filterAnd.push({ "product.productName": String(productName).trim() });
+    }
+    if (String(status || "").trim()) {
+      filterAnd.push({ status: String(status).trim() });
+    }
+    const filterMatch = filterAnd.length ? { $and: filterAnd } : null;
+
+    const sortMap = {
+      policyholderNoAsc: { policyholderNo: 1 },
+      policyholderNoDesc: { policyholderNo: -1 },
+      policyholderCodeAsc: { policyholderCode: 1 },
+      policyholderCodeDesc: { policyholderCode: -1 },
+      lastNameAsc: { "prospect.lastName": 1, "prospect.firstName": 1 },
+      lastNameDesc: { "prospect.lastName": -1, "prospect.firstName": 1 },
+      ageAsc: { "prospect.age": 1, policyholderCode: 1 },
+      ageDesc: { "prospect.age": -1, policyholderCode: 1 },
+      lastPaidDateAsc: { lastPaidDate: 1, policyholderCode: 1 },
+      lastPaidDateDesc: { lastPaidDate: -1, policyholderCode: 1 },
+      nextPaymentDateAsc: { nextPaymentDate: 1, policyholderCode: 1 },
+      nextPaymentDateDesc: { nextPaymentDate: -1, policyholderCode: 1 },
+      dateCreatedAsc: { createdAt: 1, _id: 1 },
+      dateCreatedDesc: { createdAt: -1, _id: -1 },
+    };
+    const sortStage = sortMap[String(sort)] || sortMap.policyholderNoAsc;
+
+    const basePipeline = [
+      {
+        $lookup: {
+          from: "leadengagements",
+          localField: "leadEngagementId",
+          foreignField: "_id",
+          as: "leadEngagement",
+        },
+      },
+      { $unwind: "$leadEngagement" },
+      {
+        $lookup: {
+          from: "leads",
+          localField: "leadEngagement.leadId",
+          foreignField: "_id",
+          as: "lead",
+        },
+      },
+      { $unwind: "$lead" },
+      {
+        $lookup: {
+          from: "prospects",
+          localField: "lead.prospectId",
+          foreignField: "_id",
+          as: "prospect",
+        },
+      },
+      { $unwind: "$prospect" },
+      { $match: { "prospect.assignedToUserId": userObjectId } },
+      {
+        $lookup: {
+          from: "products",
+          localField: "productId",
+          foreignField: "_id",
+          as: "product",
+        },
+      },
+      { $unwind: { path: "$product", preserveNullAndEmptyArrays: true } },
+      { $addFields: { assignedToUserId: "$prospect.assignedToUserId" } },
+      {
+        $setWindowFields: {
+          partitionBy: "$assignedToUserId",
+          sortBy: { policyholderCode: 1 },
+          output: { policyholderNo: { $documentNumber: {} } },
+        },
+      },
+      ...(filterMatch ? [{ $match: filterMatch }] : []),
+      ...(searchMatch ? [{ $match: searchMatch }] : []),
+    ];
+
+    const countAgg = await Policyholder.aggregate([
+      ...basePipeline,
+      { $count: "count" },
+    ]);
+    const totalForThisUser = Number(countAgg?.[0]?.count || 0);
+
+    const productNamesForFilter = await Policyholder.aggregate([
+      {
+        $lookup: {
+          from: "leadengagements",
+          localField: "leadEngagementId",
+          foreignField: "_id",
+          as: "leadEngagement",
+        },
+      },
+      { $unwind: "$leadEngagement" },
+      {
+        $lookup: {
+          from: "leads",
+          localField: "leadEngagement.leadId",
+          foreignField: "_id",
+          as: "lead",
+        },
+      },
+      { $unwind: "$lead" },
+      {
+        $lookup: {
+          from: "prospects",
+          localField: "lead.prospectId",
+          foreignField: "_id",
+          as: "prospect",
+        },
+      },
+      { $unwind: "$prospect" },
+      { $match: { "prospect.assignedToUserId": userObjectId } },
+      {
+        $lookup: {
+          from: "products",
+          localField: "productId",
+          foreignField: "_id",
+          as: "product",
+        },
+      },
+      { $unwind: { path: "$product", preserveNullAndEmptyArrays: false } },
+      {
+        $group: {
+          _id: "$product.productName",
+        },
+      },
+      { $sort: { _id: 1 } },
+      {
+        $project: {
+          _id: 0,
+          name: "$_id",
+        },
+      },
+    ]).collation({ locale: "en", strength: 2 });
+
+    const policyholders = await Policyholder.aggregate([
+      ...basePipeline,
+      { $sort: sortStage },
+      { $skip: skip },
+      { $limit: pageSize },
+      {
+        $project: {
+          _id: 1,
+          policyholderNo: 1,
+          policyholderCode: 1,
+          policyNumber: 1,
+          status: 1,
+          lastPaidDate: 1,
+          nextPaymentDate: 1,
+          createdAt: 1,
+          firstName: "$prospect.firstName",
+          lastName: "$prospect.lastName",
+          age: "$prospect.age",
+          productName: "$product.productName",
+        },
+      },
+    ]).collation({ locale: "en", strength: 2 });
+
+    return res.json({
+      page: pageNum,
+      limit: pageSize,
+      totalForThisUser,
+      totalPages: Math.max(1, Math.ceil(totalForThisUser / pageSize)),
+      policyholders,
+      productNames: productNamesForFilter.map((x) => String(x?.name || "").trim()).filter(Boolean),
+      sortUsed: String(sort),
+    });
+  } catch (err) {
+    console.error("All policyholders error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
 
 /**
  * ACTIVITY_BY_STAGE
@@ -2843,7 +3076,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/details", async (req, res) => 
     // Attach Policyholder (optional 1:1 via leadEngagementId)
     // Security: policy must also belong to the agent (assignedToUserId match)
     const leadEngagement = await LeadEngagement.findOne({ leadId: leadObjectId })
-      .select("_id")
+      .select("_id currentStage updatedAt")
       .lean();
 
     const policy = leadEngagement
@@ -2909,6 +3142,13 @@ app.get("/api/prospects/:prospectId/leads/:leadId/details", async (req, res) => 
             : lead.source,
       },
       leadMeta: { leadNo },
+      leadEngagement: leadEngagement
+        ? {
+            _id: leadEngagement._id,
+            currentStage: leadEngagement.currentStage || "Not Started",
+            updatedAt: leadEngagement.updatedAt || null,
+          }
+        : null,
       // Policy is either a single object or null
       policy: policy
         ? {
@@ -3582,6 +3822,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
             coverageStartDate: policyDoc?.recordCoverageDurationDetails?.coverageStartDate || null,
             coverageEndDate: policyDoc?.recordCoverageDurationDetails?.coverageEndDate || null,
             policyEndDate: policyDoc?.recordCoverageDurationDetails?.policyEndDate || null,
+            nextPaymentDate: policyDoc?.recordCoverageDurationDetails?.nextPaymentDate || null,
             savedAt: policyDoc?.recordCoverageDurationDetails?.savedAt || null,
           },
         },
@@ -6588,6 +6829,55 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-dura
 
       const policyEndDate = new Date(issuanceDate);
       policyEndDate.setFullYear(policyEndDate.getFullYear() + yearsToAdd);
+
+      const receiptDate = policyDoc?.uploadInitialPremiumEor?.receiptDate
+        ? new Date(policyDoc.uploadInitialPremiumEor.receiptDate)
+        : null;
+
+      const needsAssessment = await NeedsAssessment.findOne({ leadEngagementId: engagement._id })
+        .select("needsPriorities.productSelection.requestedFrequency")
+        .session(session)
+        .lean();
+      const requestedFrequency = String(needsAssessment?.needsPriorities?.productSelection?.requestedFrequency || "").trim();
+
+      const monthsByFrequency = {
+        Monthly: 1,
+        Quarterly: 3,
+        "Half-yearly": 6,
+        Yearly: 12,
+      };
+      const recurringIntervalMonths = monthsByFrequency[requestedFrequency] ?? null;
+
+      let paymentTermEndDate = null;
+      if (normalizedPaymentType === "FIXED_YEARS") {
+        const years = Number(paymentYears || 0);
+        if (Number.isFinite(years) && years > 0) {
+          paymentTermEndDate = new Date(issuanceDate);
+          paymentTermEndDate.setFullYear(paymentTermEndDate.getFullYear() + years);
+        }
+      } else if (["UNTIL_AGE", "RANGE_TO_AGE"].includes(normalizedPaymentType)) {
+        const years = Number(paymentUntilAge || 0) - Number(issuanceAge || 0);
+        if (Number.isFinite(years) && years > 0) {
+          paymentTermEndDate = new Date(issuanceDate);
+          paymentTermEndDate.setFullYear(paymentTermEndDate.getFullYear() + years);
+        }
+      }
+
+      let nextPaymentDate = null;
+      if (
+        recurringIntervalMonths
+        && receiptDate
+        && !Number.isNaN(receiptDate.getTime())
+        && paymentTermEndDate
+        && !Number.isNaN(paymentTermEndDate.getTime())
+      ) {
+        const candidate = new Date(receiptDate);
+        candidate.setMonth(candidate.getMonth() + recurringIntervalMonths);
+        if (candidate < paymentTermEndDate) {
+          nextPaymentDate = candidate;
+        }
+      }
+
       const now = new Date();
 
       await Policy.updateOne(
@@ -6609,6 +6899,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-dura
               coverageStartDate: issuanceDate,
               coverageEndDate: policyEndDate,
               policyEndDate,
+              nextPaymentDate,
               savedAt: now,
             },
           },
@@ -6645,9 +6936,6 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-dura
         lead.status = "Closed";
         await lead.save({ session });
 
-        const receiptDate = policyDoc?.uploadInitialPremiumEor?.receiptDate
-          ? new Date(policyDoc.uploadInitialPremiumEor.receiptDate)
-          : null;
         const policyNumber = String(policyDoc?.uploadPolicySummary?.policyNumber || "").trim();
         if (!receiptDate || Number.isNaN(receiptDate.getTime())) {
           throw Object.assign(new Error("Initial premium receipt date is required to create policyholder."), { status: 409 });
@@ -6662,6 +6950,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-dura
           existingPolicyholder.productId = new mongoose.Types.ObjectId(productId);
           existingPolicyholder.policyNumber = policyNumber;
           existingPolicyholder.lastPaidDate = receiptDate;
+          existingPolicyholder.nextPaymentDate = nextPaymentDate;
           existingPolicyholder.status = "Active";
           await existingPolicyholder.save({ session });
         } else {
@@ -6678,6 +6967,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-dura
                   productId: new mongoose.Types.ObjectId(productId),
                   policyNumber,
                   lastPaidDate: receiptDate,
+                  nextPaymentDate,
                   status: "Active",
                 },
               ], { session });
@@ -6698,6 +6988,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-dura
         message: "Coverage duration details saved.",
         currentActivityKey: "Record Coverage Duration Details",
         policyEndDate,
+        nextPaymentDate,
       };
     });
 

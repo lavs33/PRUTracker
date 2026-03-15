@@ -123,9 +123,14 @@
   cursor: pointer;
 }
 
+.allpros-table th:nth-child(7),
+.allpros-table td:nth-child(7) {
+  width: 80px;
+}
+
 .allpros-table th:nth-child(8),
 .allpros-table td:nth-child(8) {
-  width: 110px;
+  width: 120px;
 }
 
 .allpros-table th:nth-child(9),

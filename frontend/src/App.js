@@ -5,7 +5,9 @@ import LoginPage from "./LoginPage";
 import AgentHome from "./AgentHome";
 import AgentProfile from "./AgentProfile";
 import AgentClients from "./AgentClients";
+import AgentClientsRelationship from "./AgentClientsRelationship";
 import AgentProspectsAll from "./AgentProspectsAll";
+import AgentPolicyholdersAll from "./AgentPolicyholdersAll";
 import AgentProspectDetails from "./AgentProspectDetails";
 import AgentProspectFullDetails from "./AgentProspectFullDetails";
 import AgentAddProspect from "./AgentAddProspect";
@@ -29,8 +31,10 @@ function App() {
         <Route path="/agent/:username" element={<AgentHome />} />
         <Route path="/agent/:username/profile" element={<AgentProfile />} />
         <Route path="/agent/:username/clients" element={<AgentClients />} />
+        <Route path="/agent/:username/clients/relationship" element={<AgentClientsRelationship />} />
       
         <Route path="/agent/:username/prospects" element={<AgentProspectsAll />} />
+        <Route path="/agent/:username/policyholders" element={<AgentPolicyholdersAll />} />
         <Route path="/agent/:username/prospects/new" element={<AgentAddProspect />} />
         <Route path="/agent/:username/prospects/:prospectId" element={<AgentProspectDetails />}  />
         <Route path="/agent/:username/prospects/:prospectId/full" element={<AgentProspectFullDetails />} />

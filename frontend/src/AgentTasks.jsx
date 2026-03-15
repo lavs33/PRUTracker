@@ -50,7 +50,7 @@ function AgentTasks() {
         break;
 
       case "clients_all_policyholders":
-        alert("All Policyholders page coming soon.");
+        navigate(`/agent/${user.username}/policyholders`);
         break;
 
       // TASKS
@@ -172,7 +172,7 @@ function AgentTasks() {
 
   const typePillClass = (type) => {
     const t = String(type || "").toUpperCase();
-    if (t === "APPROACH" || t === "FOLLOW_UP" || t === "APPOINTMENT" || t === "PRESENTATION") return "task-pill urgent";
+    if (t === "APPROACH" || t === "FOLLOW_UP") return "task-pill urgent";
     if (t === "UPDATE_CONTACT_INFO") return "task-pill info";
     return "task-pill";
   };

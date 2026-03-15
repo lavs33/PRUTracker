@@ -339,7 +339,7 @@ const handleSideNav = (key) => {
       break;
 
     case "clients_all_policyholders":
-      alert("All Policyholders page coming soon.");
+      navigate(`/agent/${user.username}/policyholders`);
       break;
 
     // TASKS

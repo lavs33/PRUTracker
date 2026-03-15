@@ -158,6 +158,10 @@ const policySchema = new mongoose.Schema(
         type: Date,
         default: null,
       },
+      nextPaymentDate: {
+        type: Date,
+        default: null,
+      },
       savedAt: {
         type: Date,
         default: null,

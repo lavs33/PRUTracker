@@ -216,6 +216,7 @@ function AgentLeadEngagement() {
     coverageDurationUntilAge: "",
     coverageStartDate: "",
     policyEndDate: "",
+    nextPaymentDate: "",
     savedAt: "",
   });
   const [policyCoverageFieldErrors, setPolicyCoverageFieldErrors] = useState({});
@@ -555,6 +556,9 @@ function AgentLeadEngagement() {
           : (policyStage?.recordCoverageDurationDetails?.coverageEndDate
             ? toDateInputValue(policyStage.recordCoverageDurationDetails.coverageEndDate)
             : ""),
+        nextPaymentDate: policyStage?.recordCoverageDurationDetails?.nextPaymentDate
+          ? toDateInputValue(policyStage.recordCoverageDurationDetails.nextPaymentDate)
+          : "",
         savedAt: policyStage?.recordCoverageDurationDetails?.savedAt || "",
       });
       setPolicyCoverageFieldErrors({});
@@ -1353,7 +1357,7 @@ function AgentLeadEngagement() {
         break;
 
       case "clients_all_policyholders":
-        alert("All Policyholders page coming soon.");
+        navigate(`/agent/${user.username}/policyholders`);
         break;
 
       // TASKS
@@ -3082,6 +3086,62 @@ function AgentLeadEngagement() {
     return Boolean(String(policyCoverageForm.savedAt || "").trim());
   }, [policyCoverageForm.savedAt]);
 
+  const computedNextPaymentDate = useMemo(() => {
+    const receiptRaw = String(policyInitialEorForm.receiptDate || "").trim();
+    if (!receiptRaw) return "";
+
+    const receiptDate = new Date(`${receiptRaw}T00:00:00`);
+    if (Number.isNaN(receiptDate.getTime())) return "";
+
+    const frequency = String(requestedFrequencyFromNeedsAssessment || "").trim();
+    const monthsByFrequency = {
+      Monthly: 1,
+      Quarterly: 3,
+      "Half-yearly": 6,
+      Yearly: 12,
+    };
+    const recurringIntervalMonths = monthsByFrequency[frequency] ?? null;
+    if (!recurringIntervalMonths) return "";
+
+    const issuanceRaw = String(policyStatusForm.issuanceDate || "").trim();
+    if (!issuanceRaw) return "";
+    const issuanceDate = new Date(`${issuanceRaw}T00:00:00`);
+    if (Number.isNaN(issuanceDate.getTime())) return "";
+
+    let paymentTermEndDate = null;
+    const paymentType = String(policyCoverageForm.selectedPaymentTermType || "").trim();
+    if (paymentType === "FIXED_YEARS") {
+      const years = Number(policyCoverageForm.selectedPaymentTermYears || "");
+      if (Number.isFinite(years) && years > 0) {
+        paymentTermEndDate = new Date(issuanceDate);
+        paymentTermEndDate.setFullYear(paymentTermEndDate.getFullYear() + years);
+      }
+    } else if (["UNTIL_AGE", "RANGE_TO_AGE"].includes(paymentType)) {
+      const untilAge = Number(policyCoverageForm.selectedPaymentTermUntilAge || "");
+      if (Number.isFinite(untilAge) && Number.isFinite(policyIssuanceAge)) {
+        const years = untilAge - Number(policyIssuanceAge);
+        if (years > 0) {
+          paymentTermEndDate = new Date(issuanceDate);
+          paymentTermEndDate.setFullYear(paymentTermEndDate.getFullYear() + years);
+        }
+      }
+    }
+    if (!paymentTermEndDate || Number.isNaN(paymentTermEndDate.getTime())) return "";
+
+    const candidate = new Date(receiptDate);
+    candidate.setMonth(candidate.getMonth() + recurringIntervalMonths);
+    if (candidate >= paymentTermEndDate) return "";
+    return toDateInputValue(candidate);
+  }, [
+    policyInitialEorForm.receiptDate,
+    requestedFrequencyFromNeedsAssessment,
+    policyStatusForm.issuanceDate,
+    policyCoverageForm.selectedPaymentTermType,
+    policyCoverageForm.selectedPaymentTermYears,
+    policyCoverageForm.selectedPaymentTermUntilAge,
+    policyIssuanceAge,
+  ]);
+
   const isViewedStageFullyFinished = useMemo(() => {
     if (!isViewingCurrentStage) return true;
     if (showNeedsAssessmentPanel) return Boolean(proposalMeetingSaved?.startAt);
@@ -4559,6 +4619,10 @@ function AgentLeadEngagement() {
                                 <p className="le-smallNote">{policyCoverageForm.selectedPaymentTermLabel || "—"}</p>
                               </div>
                               <div className="le-formRow">
+                                <label className="le-label">Next Payment Date</label>
+                                <p className="le-smallNote">{policyCoverageForm.nextPaymentDate || computedNextPaymentDate || "Not applicable"}</p>
+                              </div>
+                              <div className="le-formRow">
                                 <label className="le-label">Coverage Duration</label>
                                 <p className="le-smallNote">{policyCoverageForm.coverageDurationLabel || "—"}</p>
                               </div>
@@ -4615,6 +4679,11 @@ function AgentLeadEngagement() {
                                   {policyCoverageFieldErrors.selectedPaymentTermUntilAge ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyCoverageFieldErrors.selectedPaymentTermUntilAge}</p> : null}
                                 </div>
                               ) : null}
+
+                              <div className="le-formRow">
+                                <label className="le-label">Next Payment Date</label>
+                                <p className="le-smallNote">{policyCoverageForm.nextPaymentDate || computedNextPaymentDate || "Not applicable"}</p>
+                              </div>
 
                               <div className="le-formRow">
                                 <label className="le-label">Coverage Duration</label>
@@ -4684,6 +4753,12 @@ function AgentLeadEngagement() {
                         </div>
                       ) : null}
                     </>
+                  )}
+
+                  {showContactingPanel && isContactingReadOnly && (
+                    <p className="le-muted" style={{ marginBottom: 10 }}>
+                      Contacting records are view-only at this stage. Add Attempt and edits are disabled.
+                    </p>
                   )}
 
                   {showContactingPanel && (

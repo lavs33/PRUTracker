@@ -156,6 +156,18 @@ const formatDate = (d) => {
   });
 };
 
+const formatDateOnly = (d) => {
+  if (!d) return "—";
+  const date = new Date(d);
+  if (isNaN(date.getTime())) return "—";
+
+  return date.toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+  });
+};
+
   if (!isReady) return null;
 
 const handleSideNav = (key) => {
@@ -172,7 +184,7 @@ const handleSideNav = (key) => {
       break;
 
     case "clients_all_policyholders":
-      alert("All Policyholders page coming soon.");
+      navigate(`/agent/${user.username}/policyholders`);
       break;
 
     // TASKS
@@ -328,7 +340,7 @@ const handleSideNav = (key) => {
 
               <button
                 className="view-all-btn"
-                onClick={() => alert("View all policyholders page coming soon")}
+                onClick={() => navigate(`/agent/${user.username}/policyholders`)}
               >
                 View all policyholders
               </button>
@@ -357,6 +369,7 @@ const handleSideNav = (key) => {
                       <th>Policy Number</th>
                       <th>Status</th>
                       <th>Last Paid Date</th>
+                      <th>Next Payment Date</th>
                     </tr>
                   </thead>
 
@@ -374,13 +387,14 @@ const handleSideNav = (key) => {
                             {c.status || "—"}
                           </span>
                         </td>
-                        <td>{formatDate(c.lastPaidDate)}</td>
+                        <td>{formatDateOnly(c.lastPaidDate)}</td>
+                        <td>{formatDateOnly(c.nextPaymentDate)}</td>
                       </tr>
                     ))}
 
                     {recentPolicyholders.length === 0 && (
                       <tr>
-                        <td colSpan="6" className="empty-row">
+                        <td colSpan="7" className="empty-row">
                           No policyholders yet.
                         </td>
                       </tr>

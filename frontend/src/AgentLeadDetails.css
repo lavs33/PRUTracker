@@ -123,6 +123,10 @@
   padding: 10px 12px;
 }
 
+.ld-detailItem-wide{
+  grid-column: 1 / -1;
+}
+
 .ld-detailLabel{
   display:block;
   font-weight: 800;
@@ -228,6 +232,25 @@
   font-weight: 700;
   color:#373A36;
   line-height: 1.5;
+}
+
+.ld-engagementLink {
+  width: 100%;
+  text-align: left;
+  background: #ffffff;
+  border: 1px solid #eef0f2;
+  border-radius: 12px;
+  padding: 12px 14px;
+  cursor: pointer;
+  font-family: "FSAlbertArabic", sans-serif;
+  font-size: 15px;
+  font-weight: 800;
+  color: #373A36;
+}
+
+.ld-engagementLink:hover {
+  background: #fff7f7;
+  border-color: #f1c0bc;
 }
 
 .ld-status-pill {
@@ -488,5 +511,3 @@
   color: #DA291C;
   font-family: "FSAlbertArabic", sans-serif;
 }
-
-

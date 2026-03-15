@@ -122,6 +122,18 @@ const policyholderSchema = new mongoose.Schema(
     },
 
     /**
+     * nextPaymentDate (Date|null)
+     * ---------------------------
+     * Next expected payment date for recurring premium schedules.
+     * Null means no next payment is expected/applicable (e.g., one-time/fully paid term).
+     */
+    nextPaymentDate: {
+      type: Date,
+      default: null,
+      index: true,
+    },
+
+    /**
      * status (String enum)
      * --------------------
      * Lifecycle status of the policy.
