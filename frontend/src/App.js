@@ -5,7 +5,9 @@ import LoginPage from "./LoginPage";
 import AgentHome from "./AgentHome";
 import AgentProfile from "./AgentProfile";
 import AgentClients from "./AgentClients";
+import AgentClientsRelationship from "./AgentClientsRelationship";
 import AgentProspectsAll from "./AgentProspectsAll";
+import AgentPolicyholdersAll from "./AgentPolicyholdersAll";
 import AgentProspectDetails from "./AgentProspectDetails";
 import AgentProspectFullDetails from "./AgentProspectFullDetails";
 import AgentAddProspect from "./AgentAddProspect";
@@ -15,8 +17,10 @@ import AgentLeadEngagement from "./AgentLeadEngagement";
 
 import AgentTasks from "./AgentTasks";
 import AgentTasksAll from "./AgentTasksAll";
+import AgentTasksProgress from "./AgentTasksProgress";
 
 import AgentNotifications from "./AgentNotifications";
+import AgentSalesPerformance from "./AgentSalesPerformance";
 
 function App() {
   return (
@@ -29,8 +33,10 @@ function App() {
         <Route path="/agent/:username" element={<AgentHome />} />
         <Route path="/agent/:username/profile" element={<AgentProfile />} />
         <Route path="/agent/:username/clients" element={<AgentClients />} />
+        <Route path="/agent/:username/clients/relationship" element={<AgentClientsRelationship />} />
       
         <Route path="/agent/:username/prospects" element={<AgentProspectsAll />} />
+        <Route path="/agent/:username/policyholders" element={<AgentPolicyholdersAll />} />
         <Route path="/agent/:username/prospects/new" element={<AgentAddProspect />} />
         <Route path="/agent/:username/prospects/:prospectId" element={<AgentProspectDetails />}  />
         <Route path="/agent/:username/prospects/:prospectId/full" element={<AgentProspectFullDetails />} />
@@ -41,8 +47,10 @@ function App() {
         
         <Route path="/agent/:username/tasks" element={<AgentTasks />} />
         <Route path="/agent/:username/tasks/all" element={<AgentTasksAll />} />
+        <Route path="/agent/:username/tasks/progress" element={<AgentTasksProgress />} />
 
         <Route path="/agent/:username/notifications" element={<AgentNotifications />} />
+        <Route path="/agent/:username/sales/performance" element={<AgentSalesPerformance />} />
 
         <Route path="*" element={<Navigate to="/" />} />
       </Routes>
