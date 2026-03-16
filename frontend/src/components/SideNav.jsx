@@ -14,10 +14,14 @@ function SideNav({ active, onNavigate }) {
 
     if (p.includes("/notifications")) return null;
 
+    if (p.includes("/tasks/progress")) return "tasks_progress";
     if (p.includes("/tasks/all")) return "tasks_all";
     if (p.includes("/tasks")) return "tasks";
 
+    if (p.includes("/sales/performance")) return "sales_performance";
+    if (p.includes("/clients/relationship")) return "clients_relationship";
     if (p.includes("/prospects")) return "clients_all_prospects";
+    if (p.includes("/policyholders")) return "clients_all_policyholders";
     if (p.includes("/clients")) return "clients";
 
     return null;
@@ -64,28 +68,31 @@ function SideNav({ active, onNavigate }) {
         children: [
           { key: "clients_all_prospects", label: "All Prospects" },
           { key: "clients_all_policyholders", label: "All Policyholders" },
+          { key: "clients_relationship", label: "Clients Relationship" },
         ],
       },
       {
         key: "tasks",
         label: "Tasks",
         icon: <FaTasks size={22} />,
-        children: [{ key: "tasks_all", label: "All Tasks" }],
+        children: [{ key: "tasks_all", label: "All Tasks" }, { key: "tasks_progress", label: "Task Progress" }],
       },
-      { key: "sales", label: "Sales", icon: <FaChartLine size={22} />, children: [] },
+      { key: "sales", label: "Sales", icon: <FaChartLine size={22} />, children: [{ key: "sales_performance", label: "Sales Performance" }] },
     ],
     []
   );
 
-  const [openGroups, setOpenGroups] = useState({ clients: false, tasks: false });
+  const [openGroups, setOpenGroups] = useState({ clients: false, tasks: false, sales: false });
 
   useEffect(() => {
     const inClients = isGroupActive("clients");
     const inTasks = isGroupActive("tasks");
+    const inSales = isGroupActive("sales");
 
     setOpenGroups({
       clients: inClients,
       tasks: inTasks,
+      sales: inSales,
     });
     // DO NOT REMOVE THE LINE BELOW
     // eslint-disable-next-line react-hooks/exhaustive-deps
