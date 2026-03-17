@@ -29,6 +29,12 @@ const Policyholder = require("./models/Policyholder");
 const Lead = require("./models/Lead");
 const LeadEngagement = require("./models/LeadEngagement");
 const ContactAttempt = require("./models/ContactAttempt");
+const ScheduledMeeting = require("./models/ScheduledMeeting");
+const NeedsAssessment = require("./models/NeedsAssessment");
+const Proposal = require("./models/Proposal");
+const Application = require("./models/Application");
+const Policy = require("./models/Policy");
+const Product = require("./models/Product");
 const Task = require("./models/Task");
 const Notification = require("./models/Notification");
 
@@ -46,7 +52,8 @@ const app = express();
  * express.json() → Parses incoming JSON request bodies.
  */
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "6mb" }));
+app.use(express.urlencoded({ extended: true, limit: "6mb" }));
 
 /**
  * =========================
@@ -282,6 +289,36 @@ function buildProspectSearchMatch(qRaw) {
  * Used for:
  * - normalizing phone-like input before validation or storage.
  */
+function buildPolicyholderSearchMatch(qRaw) {
+  const q = String(qRaw || "").trim();
+  if (!q) return null;
+
+  const safeQ = escapeRegex(q);
+  const parts = safeQ.split(/\s+/).filter(Boolean);
+  const rxFull = new RegExp(safeQ, "i");
+
+  const or = [
+    { policyholderCode: { $regex: rxFull } },
+    { policyNumber: { $regex: rxFull } },
+    { "prospect.firstName": { $regex: rxFull } },
+    { "prospect.lastName": { $regex: rxFull } },
+    { "product.productName": { $regex: rxFull } },
+  ];
+
+  if (parts.length >= 2) {
+    or.push({
+      $and: parts.map((term) => {
+        const rx = new RegExp(term, "i");
+        return {
+          $or: [{ "prospect.firstName": { $regex: rx } }, { "prospect.lastName": { $regex: rx } }],
+        };
+      }),
+    });
+  }
+
+  return { $or: or };
+}
+
 function onlyDigits(v) {
   return String(v || "").replace(/\D/g, "");
 }
@@ -400,6 +437,22 @@ async function getNextLeadCode() {
   return `L-${String(nextNum).padStart(6, "0")}`;
 }
 
+
+async function getNextPolicyholderCode() {
+  const last = await Policyholder.findOne({ policyholderCode: { $regex: /^PH-\d{6}$/ } })
+    .sort({ policyholderCode: -1 })
+    .select("policyholderCode")
+    .lean();
+
+  let nextNum = 1;
+  if (last?.policyholderCode) {
+    const n = Number(String(last.policyholderCode).replace("PH-", ""));
+    if (Number.isFinite(n)) nextNum = n + 1;
+  }
+
+  return `PH-${String(nextNum).padStart(6, "0")}`;
+}
+
 /**
  * dateKeyInTZ(date, timeZone = "Asia/Manila")
  * -------------------------------------------
@@ -442,6 +495,117 @@ function isDueTodayInManila(dueAt) {
   const todayKey = dateKeyInTZ(new Date(), "Asia/Manila");
   const dueKey = dateKeyInTZ(dueAt, "Asia/Manila");
   return !!todayKey && todayKey === dueKey;
+}
+
+function formatTimeInManila(date) {
+  const d = new Date(date);
+  if (Number.isNaN(d.getTime())) return "";
+
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Manila",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  }).format(d);
+}
+
+function formatDateTimeInManila(date) {
+  const d = new Date(date);
+  if (Number.isNaN(d.getTime())) return "";
+
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Manila",
+    month: "short",
+    day: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  }).format(d);
+}
+
+async function createTaskAddedNotifications({
+  assignedToUserId,
+  task,
+  prospectFullName,
+  leadCode,
+  session,
+}) {
+  await Notification.create(
+    [
+      {
+        assignedToUserId,
+        type: "TASK_ADDED",
+        title: "New task added",
+        message: `${task.title} was created for ${prospectFullName} (Lead ${leadCode || "—"}).`,
+        status: "Unread",
+        entityType: "Task",
+        entityId: task._id,
+      },
+    ],
+    { session }
+  );
+
+  if (task?.dueAt && isDueTodayInManila(task.dueAt)) {
+    await Notification.create(
+      [
+        {
+          assignedToUserId,
+          type: "TASK_DUE_TODAY",
+          title: "Task due today",
+          message: `${task.title} for ${prospectFullName} (Lead ${leadCode || "—"}) is due today at ${formatTimeInManila(task.dueAt)}.`,
+          status: "Unread",
+          entityType: "Task",
+          entityId: task._id,
+          dedupeKey: `TASK_DUE_TODAY:${task._id}:${dateKeyInTZ(task.dueAt, "Asia/Manila")}`,
+        },
+      ],
+      { session }
+    );
+  }
+}
+
+async function ensureTaskMissedNotificationsForUser(userObjectId) {
+  const now = new Date();
+  const overdueTasks = await Task.find({
+    assignedToUserId: userObjectId,
+    status: "Open",
+    dueAt: { $lt: now },
+  })
+    .select("_id title dueAt")
+    .lean();
+
+  if (!overdueTasks.length) return;
+
+  const writes = overdueTasks
+    .map((task) => {
+      const dueKey = dateKeyInTZ(task.dueAt, "Asia/Manila");
+      if (!dueKey) return null;
+
+      const dedupeKey = `TASK_MISSED:${task._id}:${dueKey}`;
+      return {
+        updateOne: {
+          filter: { assignedToUserId: userObjectId, dedupeKey },
+          update: {
+            $setOnInsert: {
+              assignedToUserId: userObjectId,
+              type: "TASK_MISSED",
+              title: "Task missed",
+              message: `${task.title || "Task"} is now overdue.`,
+              status: "Unread",
+              entityType: "Task",
+              entityId: task._id,
+              dedupeKey,
+            },
+          },
+          upsert: true,
+        },
+      };
+    })
+    .filter(Boolean);
+
+  if (!writes.length) return;
+  await Notification.bulkWrite(writes, { ordered: false });
 }
 
 /**
@@ -682,7 +846,7 @@ app.get("/api/prospects/recent", async (req, res) => {
    Important design rule:
    - Policyholder does NOT store assignedToUserId directly in this pipeline.
    - Agent filtering is done via:
-       Policyholder -> Lead -> Prospect.assignedToUserId
+       Policyholder -> LeadEngagement -> Lead -> Prospect.assignedToUserId
 =========================== */
 app.get("/api/policyholders/recent", async (req, res) => {
   try {
@@ -702,12 +866,13 @@ app.get("/api/policyholders/recent", async (req, res) => {
 
     /**
      * Aggregation pipeline overview:
-     * 1) Join Lead (policyholder.leadId → leads._id)
-     * 2) Join Prospect (lead.prospectId → prospects._id)
-     * 3) Filter to this agent via prospect.assignedToUserId
-     * 4) Compute stable policyholderNo per agent via policyholderCode ASC
-     * 5) Sort by lastPaidDate DESC to get "recently paid"
-     * 6) Use $facet to return total count + top N items in one query
+     * 1) Join LeadEngagement (policyholder.leadEngagementId → leadengagements._id)
+     * 2) Join Lead (leadEngagement.leadId → leads._id)
+     * 3) Join Prospect (lead.prospectId → prospects._id)
+     * 4) Filter to this agent via prospect.assignedToUserId
+     * 5) Compute stable policyholderNo per agent via policyholderCode ASC
+     * 6) Sort by lastPaidDate DESC to get "recently paid"
+     * 7) Use $facet to return total count + top N items in one query
      */
     const agg = await Policyholder.aggregate([
       /**
@@ -716,8 +881,21 @@ app.get("/api/policyholders/recent", async (req, res) => {
        */
       {
         $lookup: {
+          from: "leadengagements",
+          localField: "leadEngagementId",
+          foreignField: "_id",
+          as: "leadEngagement",
+        },
+      },
+      { $unwind: "$leadEngagement" },
+
+      /**
+       * Step 2: Lookup Lead via leadEngagement.leadId
+       */
+      {
+        $lookup: {
           from: "leads",
-          localField: "leadId",
+          localField: "leadEngagement.leadId",
           foreignField: "_id",
           as: "lead",
         },
@@ -725,7 +903,7 @@ app.get("/api/policyholders/recent", async (req, res) => {
       { $unwind: "$lead" },
 
       /**
-       * Step 2: Lookup Prospect via lead.prospectId
+       * Step 3: Lookup Prospect via lead.prospectId
        * - Needed for filtering by agent and returning name fields
        */
       {
@@ -739,19 +917,19 @@ app.get("/api/policyholders/recent", async (req, res) => {
       { $unwind: "$prospect" },
 
       /**
-       * Step 3: Filter policyholders to those belonging to THIS agent
+       * Step 4: Filter policyholders to those belonging to THIS agent
        * - Determined by prospect.assignedToUserId
        */
       { $match: { "prospect.assignedToUserId": userObjectId } },
 
       /**
-       * Step 4: Copy assignedToUserId into root document
+       * Step 5: Copy assignedToUserId into root document
        * - Makes it easier to use partitionBy in window fields
        */
       { $addFields: { assignedToUserId: "$prospect.assignedToUserId" } },
 
       /**
-       * Step 5: Compute stable policyholderNo per agent
+       * Step 6: Compute stable policyholderNo per agent
        * - Ranking is stable because it is based on policyholderCode ASC.
        * - partitionBy ensures ranking resets per agent.
        */
@@ -764,13 +942,13 @@ app.get("/api/policyholders/recent", async (req, res) => {
       },
 
       /**
-       * Step 6: Most recently paid ordering
+       * Step 7: Most recently paid ordering
        * - Sort by lastPaidDate DESC for "recent payments" view
        */
       { $sort: { lastPaidDate: -1 } },
 
       /**
-       * Step 7: Use $facet to return:
+       * Step 8: Use $facet to return:
        * - total count for agent
        * - limited list of items for UI
        *
@@ -789,6 +967,7 @@ app.get("/api/policyholders/recent", async (req, res) => {
                 policyNumber: 1,
                 status: 1,
                 lastPaidDate: 1,
+                nextPaymentDate: 1,
                 firstName: "$prospect.firstName",
                 lastName: "$prospect.lastName",
               },
@@ -797,7 +976,7 @@ app.get("/api/policyholders/recent", async (req, res) => {
         },
       },
       /**
-       * Step 8: Normalize output object structure
+       * Step 9: Normalize output object structure
        * - totalForThisUser defaults to 0 if no matches
        * - policyholders field contains the list
        */
@@ -821,6 +1000,443 @@ app.get("/api/policyholders/recent", async (req, res) => {
   }
 });
 
+/* ===========================
+   CLIENTS: RELATIONSHIP DASHBOARD (Agent)
+   Endpoint: GET /api/clients/relationship/dashboard?userId=...
+=========================== */
+app.get("/api/clients/relationship/dashboard", async (req, res) => {
+  try {
+    const { userId } = req.query;
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId)) {
+      return res.status(400).json({ message: "Invalid userId." });
+    }
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const prospects = await Prospect.find({ assignedToUserId: userObjectId })
+      .select("_id marketType prospectType source status")
+      .lean();
+
+    const prospectIds = prospects.map((p) => p._id);
+    const leads = prospectIds.length
+      ? await Lead.find({ prospectId: { $in: prospectIds } }).select("_id prospectId").lean()
+      : [];
+    const leadIds = leads.map((l) => l._id);
+
+    const engagements = leadIds.length
+      ? await LeadEngagement.find({ leadId: { $in: leadIds } }).select("_id currentStage").lean()
+      : [];
+    const engagementIds = engagements.map((e) => e._id);
+
+    const policyholders = engagementIds.length
+      ? await Policyholder.find({ leadEngagementId: { $in: engagementIds } })
+          .select("status")
+          .lean()
+      : [];
+
+    const totalProspects = prospects.length;
+    const totalPolicyholders = policyholders.length;
+
+    const countBy = (arr, predicate) => arr.filter(predicate).length;
+    const toPct = (part, total) => (total ? Math.round((part / total) * 100) : 0);
+
+    const warm = countBy(prospects, (p) => p.marketType === "Warm");
+    const cold = countBy(prospects, (p) => p.marketType === "Cold");
+    const elite = countBy(prospects, (p) => p.prospectType === "Elite");
+    const ordinary = countBy(prospects, (p) => p.prospectType === "Ordinary");
+    const agentSourced = countBy(prospects, (p) => p.source === "Agent-Sourced");
+    const systemAssigned = countBy(prospects, (p) => p.source === "System-Assigned");
+
+    const prospectStatusCounts = ["Active", "Wrong Contact", "Dropped"].map((status) => ({
+      status,
+      value: countBy(prospects, (p) => p.status === status),
+    }));
+
+    const activePolicies = countBy(policyholders, (p) => p.status === "Active");
+    const lapsedPolicies = countBy(policyholders, (p) => p.status === "Lapsed");
+    const cancelledPolicies = countBy(policyholders, (p) => p.status === "Cancelled");
+
+    const stageLabels = ["Contacting", "Needs Assessment", "Proposal", "Application", "Policy Issuance"];
+    const totalEngagements = engagements.length;
+    const stageProgress = stageLabels.map((label) => {
+      const count = countBy(engagements, (e) => String(e.currentStage || "") === label);
+      return { label, count, value: toPct(count, totalEngagements) };
+    });
+
+    return res.json({
+      totals: { prospects: totalProspects, policyholders: totalPolicyholders, engagements: totalEngagements },
+      conversionRatePct: toPct(totalPolicyholders, totalProspects),
+      warmRatePct: toPct(warm, totalProspects),
+      sourceRatePct: toPct(agentSourced, totalProspects),
+      activePolicyRatePct: toPct(activePolicies, totalPolicyholders),
+      prospectMix: { warm, cold, elite, ordinary, agentSourced, systemAssigned },
+      prospectStatusCounts,
+      policyStatusCounts: {
+        active: activePolicies,
+        lapsed: lapsedPolicies,
+        cancelled: cancelledPolicies,
+      },
+      stageProgress,
+    });
+  } catch (err) {
+    console.error("Clients relationship dashboard error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+/* ===========================
+   SALES: PERFORMANCE DASHBOARD (Agent)
+   Endpoint: GET /api/sales/performance?userId=...
+=========================== */
+app.get("/api/sales/performance", async (req, res) => {
+  try {
+    const { userId } = req.query;
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId)) {
+      return res.status(400).json({ message: "Invalid userId." });
+    }
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+
+    const prospects = await Prospect.find({ assignedToUserId: userObjectId })
+      .select("_id source")
+      .lean();
+    const prospectIds = prospects.map((p) => p._id);
+
+    if (!prospectIds.length) {
+      return res.json({
+        totalLeads: 0,
+        convertedLeads: 0,
+        conversionRatePct: 0,
+        totalAnnualPremiumPhp: 0,
+        totalFrequencyPremiumPhp: 0,
+        frequencyPremiumBreakdown: {
+          monthlyPremiumPhp: 0,
+          quarterlyPremiumPhp: 0,
+          halfYearlyPremiumPhp: 0,
+          yearlyPremiumPhp: 0,
+        },
+        activePolicies: 0,
+        lapsedPolicies: 0,
+        cancelledPolicies: 0,
+        conversionBySource: { "Agent-Sourced": 0, "System-Assigned": 0 },
+        monthlyConvertedLeads: [],
+      });
+    }
+
+    const leads = await Lead.find({ prospectId: { $in: prospectIds } }).select("_id prospectId").lean();
+    const leadIds = leads.map((l) => l._id);
+
+    const engagements = leadIds.length
+      ? await LeadEngagement.find({ leadId: { $in: leadIds } }).select("_id leadId").lean()
+      : [];
+    const engagementIds = engagements.map((e) => e._id);
+
+    const policyholders = engagementIds.length
+      ? await Policyholder.find({ leadEngagementId: { $in: engagementIds } })
+          .select("leadEngagementId status createdAt")
+          .lean()
+      : [];
+
+    const applications = engagementIds.length
+      ? await Application.find({ leadEngagementId: { $in: engagementIds } })
+          .select("leadEngagementId recordPremiumPaymentTransfer.totalAnnualPremiumPhp recordPremiumPaymentTransfer.totalFrequencyPremiumPhp")
+          .lean()
+      : [];
+
+    const needsAssessments = engagementIds.length
+      ? await NeedsAssessment.find({ leadEngagementId: { $in: engagementIds } })
+          .select("leadEngagementId needsPriorities.productSelection.requestedFrequency")
+          .lean()
+      : [];
+
+    const totalLeads = leads.length;
+    const convertedLeads = policyholders.length;
+    const conversionRatePct = totalLeads ? Math.round((convertedLeads / totalLeads) * 100) : 0;
+
+    const totalAnnualPremiumPhp = applications.reduce(
+      (sum, a) => sum + Number(a?.recordPremiumPaymentTransfer?.totalAnnualPremiumPhp || 0),
+      0
+    );
+    const totalFrequencyPremiumPhp = applications.reduce(
+      (sum, a) => sum + Number(a?.recordPremiumPaymentTransfer?.totalFrequencyPremiumPhp || 0),
+      0
+    );
+
+    const engagementToFrequency = new Map(
+      needsAssessments.map((n) => [
+        String(n.leadEngagementId),
+        String(n?.needsPriorities?.productSelection?.requestedFrequency || "").trim(),
+      ])
+    );
+
+    const frequencyPremiumBreakdown = {
+      monthlyPremiumPhp: 0,
+      quarterlyPremiumPhp: 0,
+      halfYearlyPremiumPhp: 0,
+      yearlyPremiumPhp: 0,
+    };
+
+    for (const appDoc of applications) {
+      const premium = Number(appDoc?.recordPremiumPaymentTransfer?.totalFrequencyPremiumPhp || 0);
+      const freq = engagementToFrequency.get(String(appDoc?.leadEngagementId)) || "";
+
+      if (freq === "Monthly") frequencyPremiumBreakdown.monthlyPremiumPhp += premium;
+      if (freq === "Quarterly") frequencyPremiumBreakdown.quarterlyPremiumPhp += premium;
+      if (freq === "Half-yearly") frequencyPremiumBreakdown.halfYearlyPremiumPhp += premium;
+      if (freq === "Yearly") frequencyPremiumBreakdown.yearlyPremiumPhp += premium;
+    }
+
+    const activePolicies = policyholders.filter((p) => p.status === "Active").length;
+    const lapsedPolicies = policyholders.filter((p) => p.status === "Lapsed").length;
+    const cancelledPolicies = policyholders.filter((p) => p.status === "Cancelled").length;
+
+    const leadIdToProspect = new Map(leads.map((l) => [String(l._id), String(l.prospectId)]));
+    const engagementToLead = new Map(engagements.map((e) => [String(e._id), String(e.leadId)]));
+    const prospectToSource = new Map(prospects.map((p) => [String(p._id), String(p.source || "")]))
+
+    const conversionBySource = { "Agent-Sourced": 0, "System-Assigned": 0 };
+    for (const p of policyholders) {
+      const leadId = engagementToLead.get(String(p.leadEngagementId));
+      const prospectId = leadId ? leadIdToProspect.get(String(leadId)) : null;
+      const src = prospectId ? prospectToSource.get(String(prospectId)) : null;
+      if (src === "Agent-Sourced") conversionBySource["Agent-Sourced"] += 1;
+      if (src === "System-Assigned") conversionBySource["System-Assigned"] += 1;
+    }
+
+    const monthMap = new Map();
+    for (const p of policyholders) {
+      const d = new Date(p.createdAt);
+      if (Number.isNaN(d.getTime())) continue;
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      monthMap.set(key, (monthMap.get(key) || 0) + 1);
+    }
+    const monthlyConvertedLeads = [...monthMap.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .slice(-6)
+      .map(([month, converted]) => ({ month, converted }));
+
+    return res.json({
+      totalLeads,
+      convertedLeads,
+      conversionRatePct,
+      totalAnnualPremiumPhp,
+      totalFrequencyPremiumPhp,
+      frequencyPremiumBreakdown,
+      activePolicies,
+      lapsedPolicies,
+      cancelledPolicies,
+      conversionBySource,
+      monthlyConvertedLeads,
+    });
+  } catch (err) {
+    console.error("Sales performance error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+/* ===========================
+   POLICYHOLDERS: ALL (Agent, paginated)
+   Endpoint: GET /api/policyholders
+=========================== */
+app.get("/api/policyholders", async (req, res) => {
+  try {
+    const {
+      userId,
+      page = 1,
+      limit = 10,
+      q = "",
+      productName = "",
+      status = "",
+      sort = "policyholderNoAsc",
+    } = req.query;
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId)) {
+      return res.status(400).json({ message: "Invalid userId." });
+    }
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const pageSize = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 50);
+    const skip = (pageNum - 1) * pageSize;
+
+    const searchMatch = buildPolicyholderSearchMatch(q);
+
+    const filterAnd = [];
+    if (String(productName || "").trim()) {
+      filterAnd.push({ "product.productName": String(productName).trim() });
+    }
+    if (String(status || "").trim()) {
+      filterAnd.push({ status: String(status).trim() });
+    }
+    const filterMatch = filterAnd.length ? { $and: filterAnd } : null;
+
+    const sortMap = {
+      policyholderNoAsc: { policyholderNo: 1 },
+      policyholderNoDesc: { policyholderNo: -1 },
+      policyholderCodeAsc: { policyholderCode: 1 },
+      policyholderCodeDesc: { policyholderCode: -1 },
+      lastNameAsc: { "prospect.lastName": 1, "prospect.firstName": 1 },
+      lastNameDesc: { "prospect.lastName": -1, "prospect.firstName": 1 },
+      ageAsc: { "prospect.age": 1, policyholderCode: 1 },
+      ageDesc: { "prospect.age": -1, policyholderCode: 1 },
+      lastPaidDateAsc: { lastPaidDate: 1, policyholderCode: 1 },
+      lastPaidDateDesc: { lastPaidDate: -1, policyholderCode: 1 },
+      nextPaymentDateAsc: { nextPaymentDate: 1, policyholderCode: 1 },
+      nextPaymentDateDesc: { nextPaymentDate: -1, policyholderCode: 1 },
+      dateCreatedAsc: { createdAt: 1, _id: 1 },
+      dateCreatedDesc: { createdAt: -1, _id: -1 },
+    };
+    const sortStage = sortMap[String(sort)] || sortMap.policyholderNoAsc;
+
+    const basePipeline = [
+      {
+        $lookup: {
+          from: "leadengagements",
+          localField: "leadEngagementId",
+          foreignField: "_id",
+          as: "leadEngagement",
+        },
+      },
+      { $unwind: "$leadEngagement" },
+      {
+        $lookup: {
+          from: "leads",
+          localField: "leadEngagement.leadId",
+          foreignField: "_id",
+          as: "lead",
+        },
+      },
+      { $unwind: "$lead" },
+      {
+        $lookup: {
+          from: "prospects",
+          localField: "lead.prospectId",
+          foreignField: "_id",
+          as: "prospect",
+        },
+      },
+      { $unwind: "$prospect" },
+      { $match: { "prospect.assignedToUserId": userObjectId } },
+      {
+        $lookup: {
+          from: "products",
+          localField: "productId",
+          foreignField: "_id",
+          as: "product",
+        },
+      },
+      { $unwind: { path: "$product", preserveNullAndEmptyArrays: true } },
+      { $addFields: { assignedToUserId: "$prospect.assignedToUserId" } },
+      {
+        $setWindowFields: {
+          partitionBy: "$assignedToUserId",
+          sortBy: { policyholderCode: 1 },
+          output: { policyholderNo: { $documentNumber: {} } },
+        },
+      },
+      ...(filterMatch ? [{ $match: filterMatch }] : []),
+      ...(searchMatch ? [{ $match: searchMatch }] : []),
+    ];
+
+    const countAgg = await Policyholder.aggregate([
+      ...basePipeline,
+      { $count: "count" },
+    ]);
+    const totalForThisUser = Number(countAgg?.[0]?.count || 0);
+
+    const productNamesForFilter = await Policyholder.aggregate([
+      {
+        $lookup: {
+          from: "leadengagements",
+          localField: "leadEngagementId",
+          foreignField: "_id",
+          as: "leadEngagement",
+        },
+      },
+      { $unwind: "$leadEngagement" },
+      {
+        $lookup: {
+          from: "leads",
+          localField: "leadEngagement.leadId",
+          foreignField: "_id",
+          as: "lead",
+        },
+      },
+      { $unwind: "$lead" },
+      {
+        $lookup: {
+          from: "prospects",
+          localField: "lead.prospectId",
+          foreignField: "_id",
+          as: "prospect",
+        },
+      },
+      { $unwind: "$prospect" },
+      { $match: { "prospect.assignedToUserId": userObjectId } },
+      {
+        $lookup: {
+          from: "products",
+          localField: "productId",
+          foreignField: "_id",
+          as: "product",
+        },
+      },
+      { $unwind: { path: "$product", preserveNullAndEmptyArrays: false } },
+      {
+        $group: {
+          _id: "$product.productName",
+        },
+      },
+      { $sort: { _id: 1 } },
+      {
+        $project: {
+          _id: 0,
+          name: "$_id",
+        },
+      },
+    ]).collation({ locale: "en", strength: 2 });
+
+    const policyholders = await Policyholder.aggregate([
+      ...basePipeline,
+      { $sort: sortStage },
+      { $skip: skip },
+      { $limit: pageSize },
+      {
+        $project: {
+          _id: 1,
+          policyholderNo: 1,
+          policyholderCode: 1,
+          policyNumber: 1,
+          status: 1,
+          lastPaidDate: 1,
+          nextPaymentDate: 1,
+          createdAt: 1,
+          firstName: "$prospect.firstName",
+          lastName: "$prospect.lastName",
+          age: "$prospect.age",
+          productName: "$product.productName",
+        },
+      },
+    ]).collation({ locale: "en", strength: 2 });
+
+    return res.json({
+      page: pageNum,
+      limit: pageSize,
+      totalForThisUser,
+      totalPages: Math.max(1, Math.ceil(totalForThisUser / pageSize)),
+      policyholders,
+      productNames: productNamesForFilter.map((x) => String(x?.name || "").trim()).filter(Boolean),
+      sortUsed: String(sort),
+    });
+  } catch (err) {
+    console.error("All policyholders error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+
 /**
  * ACTIVITY_BY_STAGE
  * -----------------
@@ -841,9 +1457,20 @@ const ACTIVITY_BY_STAGE = {
     "Assess Interest",
     "Schedule Meeting",
   ],
+  Proposal: [
+    "Generate Proposal",
+    "Record Prospect Attendance",
+    "Present Proposal",
+    "Schedule Application Submission",
+  ],
+  "Policy Issuance": [
+    "Record Policy Application Status",
+    "Upload Initial Premium eOR",
+    "Upload Policy Summary",
+    "Record Coverage Duration Details",
+  ],
   // later:
   // "Needs Assessment": [...],
-  // "Proposal": [...],
   // ...
 };
 
@@ -1685,6 +2312,10 @@ app.put("/api/prospects/:prospectId", async (req, res) => {
         phoneNumber,
         email,
         sex,
+        civilStatus,
+        occupationCategory,
+        occupation,
+        address,
         birthday,
         age,
         marketType,
@@ -1739,6 +2370,51 @@ app.put("/api/prospects/:prospectId", async (req, res) => {
       // Sex (optional)
       if (sex && !["Male", "Female"].includes(sex)) {
         throw Object.assign(new Error("Invalid sex."), { status: 400 });
+      }
+
+      // Civil status (optional)
+      if (civilStatus && !["Single", "Married", "Widowed", "Separated", "Annulled"].includes(civilStatus)) {
+        throw Object.assign(new Error("Invalid civil status."), { status: 400 });
+      }
+
+      // Occupation category + occupation (optional in full-details edit)
+      const occupationCategoryProvided = Object.prototype.hasOwnProperty.call(req.body, "occupationCategory");
+      const occupationProvided = Object.prototype.hasOwnProperty.call(req.body, "occupation");
+      const rawOccupationCategory = String(occupationCategory ?? "").trim();
+      const cleanOccupation = String(occupation ?? "").trim();
+      let cleanOccupationCategory = rawOccupationCategory;
+      if (!cleanOccupationCategory && cleanOccupation) cleanOccupationCategory = "Employed";
+
+      if (cleanOccupationCategory && !["Employed", "Self-Employed", "Not Employed"].includes(cleanOccupationCategory)) {
+        throw Object.assign(new Error("Invalid occupation category."), { status: 400 });
+      }
+      if (["Employed", "Self-Employed"].includes(cleanOccupationCategory) && !cleanOccupation && occupationProvided) {
+        throw Object.assign(new Error("Occupation is required for employed/self-employed prospects."), { status: 400 });
+      }
+      if (cleanOccupation.length > 150) {
+        throw Object.assign(new Error("Occupation must be 150 characters or less."), { status: 400 });
+      }
+
+      // Address (Philippines only, optional in full-details edit)
+      const addressProvided = Object.prototype.hasOwnProperty.call(req.body, "address");
+      const addressIn = address && typeof address === "object" ? address : {};
+      const line = String(addressIn.line ?? "").trim();
+      const barangay = String(addressIn.barangay ?? "").trim();
+      const city = String(addressIn.city ?? "").trim();
+      const otherCity = String(addressIn.otherCity ?? "").trim();
+      const region = String(addressIn.region ?? "").trim();
+      const zipCode = String(addressIn.zipCode ?? "").trim();
+      const country = String(addressIn.country ?? "Philippines").trim() || "Philippines";
+
+      if (zipCode && !/^\d{4}$/.test(zipCode)) throw Object.assign(new Error("Zip code must be 4 digits."), { status: 400 });
+      if (country && country.toLowerCase() !== "philippines") {
+        throw Object.assign(new Error("Country must be Philippines."), { status: 400 });
+      }
+      if (city === "Other" && !otherCity) {
+        throw Object.assign(new Error("Other city is required when city is Other."), { status: 400 });
+      }
+      if (city && !region) {
+        throw Object.assign(new Error("Region is required when city is provided."), { status: 400 });
       }
 
       // ===========================
@@ -1902,6 +2578,31 @@ app.put("/api/prospects/:prospectId", async (req, res) => {
       existing.email = cleanEmail;
 
       existing.sex = sex ? sex : undefined;
+      existing.civilStatus = civilStatus ? civilStatus : undefined;
+
+      if (occupationCategoryProvided || occupationProvided) {
+        const nextOccupationCategory = occupationCategoryProvided
+          ? (cleanOccupationCategory || "Not Employed")
+          : (cleanOccupationCategory || existing.occupationCategory || "Not Employed");
+        existing.occupationCategory = nextOccupationCategory;
+        if (nextOccupationCategory === "Not Employed") {
+          existing.occupation = "";
+        } else if (occupationProvided) {
+          existing.occupation = cleanOccupation;
+        }
+      }
+
+      if (addressProvided) {
+        existing.address = {
+          line,
+          barangay,
+          city,
+          otherCity,
+          region,
+          zipCode,
+          country: "Philippines",
+        };
+      }
 
       existing.birthday = nextBirthday;
       existing.age = nextAge;
@@ -2440,16 +3141,25 @@ app.post("/api/leads", async (req, res) => {
           createdLeadDoc = createdLead;
 
           // 2) CREATE LEAD ENGAGEMENT (1:1 record controlling the engagement pipeline)
+          const engagementStartedAt = new Date();
+
           const engagementDocs = await LeadEngagement.create(
             [
               {
                 leadId: createdLead._id,
 
-                currentStage: "Not Started",
-                currentActivityKey: null,
-                stageStartedAt: null,
+                currentStage: "Contacting",
+                currentActivityKey: "Attempt Contact",
+                stageStartedAt: engagementStartedAt,
                 stageCompletedAt: null,
-                stageHistory: [],
+                stageHistory: [
+                  {
+                    stage: "Contacting",
+                    startedAt: engagementStartedAt,
+                    completedAt: null,
+                    reason: "Lead created.",
+                  },
+                ],
 
                 isBlocked: false,
 
@@ -2489,48 +3199,13 @@ app.post("/api/leads", async (req, res) => {
 
           const createdTask = taskDocs[0];
 
-          // 4) CREATE NOTIFICATION: TASK_ADDED (lets the agent know a new task exists)
-          await Notification.create(
-            [
-              {
-                assignedToUserId: userObjectId,
-
-                type: "TASK_ADDED",
-                title: "New task added",
-                message: `An Approach task was created for ${prospectFullName} (Lead ${leadCode}).`,
-
-                status: "Unread",
-
-                entityType: "Task",
-                entityId: createdTask._id,
-              },
-            ],
-            { session }
-          );
-
-
-          /**
-           * Optional: TASK_DUE_TODAY notification
-           * - Only created if due date is "today" in Asia/Manila timezone.
-           * - Includes a dedupeKey to avoid duplicate "due today" notifications per task per date.
-           */
-          if (isDueTodayInManila(due)) {
-            await Notification.create(
-              [
-                {
-                  assignedToUserId: userObjectId,
-                  type: "TASK_DUE_TODAY",
-                  title: "Task due today",
-                  message: `Approach task for ${prospectFullName} (Lead ${leadCode}) is due today at 6:00 PM.`,
-                  status: "Unread",
-                  entityType: "Task",
-                  entityId: createdTask._id,
-                  dedupeKey: `TASK_DUE_TODAY:${createdTask._id}:${dateKeyInTZ(due, "Asia/Manila")}`,
-                },
-              ],
-              { session }
-            );
-          }
+          await createTaskAddedNotifications({
+            assignedToUserId: userObjectId,
+            task: createdTask,
+            prospectFullName,
+            leadCode,
+            session,
+          });
         });
 
         // Transaction succeeded → return created lead
@@ -2575,7 +3250,7 @@ app.post("/api/leads", async (req, res) => {
 //
 // Purpose:
 // - Returns a lead’s details in the context of a prospect owned by the agent.
-// - Also attaches at most ONE Policyholder record linked to this lead (1:1 via leadId).
+// - Also attaches at most ONE Policyholder record linked to this lead engagement (1:1 via leadEngagementId).
 // - Computes a display-only agent-wide leadNo (rank across all leads under agent’s prospects).
 //
 // Security model:
@@ -2633,14 +3308,20 @@ app.get("/api/prospects/:prospectId/leads/:leadId/details", async (req, res) => 
       return res.status(404).json({ message: "Lead not found." });
     }
 
-    // Attach Policyholder (optional 1:1 via leadId)
+    // Attach Policyholder (optional 1:1 via leadEngagementId)
     // Security: policy must also belong to the agent (assignedToUserId match)
-    const policy = await Policyholder.findOne({
-      leadId: leadObjectId,
-      assignedToUserId: userObjectId,
-    })
-      .select("policyholderCode status createdAt") 
+    const leadEngagement = await LeadEngagement.findOne({ leadId: leadObjectId })
+      .select("_id currentStage updatedAt")
       .lean();
+
+    const policy = leadEngagement
+      ? await Policyholder.findOne({
+          leadEngagementId: leadEngagement._id,
+          assignedToUserId: userObjectId,
+        })
+          .select("policyholderCode status createdAt")
+          .lean()
+      : null;
 
     /**
      * 3) Compute agent-wide leadNo (display-only)
@@ -2696,6 +3377,13 @@ app.get("/api/prospects/:prospectId/leads/:leadId/details", async (req, res) => 
             : lead.source,
       },
       leadMeta: { leadNo },
+      leadEngagement: leadEngagement
+        ? {
+            _id: leadEngagement._id,
+            currentStage: leadEngagement.currentStage || "Not Started",
+            updatedAt: leadEngagement.updatedAt || null,
+          }
+        : null,
       // Policy is either a single object or null
       policy: policy
         ? {
@@ -2984,7 +3672,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
       assignedToUserId: userObjectId,
     })
       // Include fields the engagement UI needs (contact info + versioning + tags)
-      .select("firstName middleName lastName marketType source status phoneNumber contactInfoVersion email")
+      .select("firstName middleName lastName marketType source status phoneNumber contactInfoVersion email birthday")
       .lean();
 
     if (!prospect) {
@@ -3017,14 +3705,22 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
     let engagement = await LeadEngagement.findOne({ leadId: lead._id }).lean();
 
     if (!engagement) {
+      const startedAt = new Date();
       const created = await LeadEngagement.create({
         leadId: lead._id,
 
-        currentStage: "Not Started",
-        currentActivityKey: null,
-        stageStartedAt: null,
+        currentStage: "Contacting",
+        currentActivityKey: "Attempt Contact",
+        stageStartedAt: startedAt,
         stageCompletedAt: null,
-        stageHistory: [],
+        stageHistory: [
+          {
+            stage: "Contacting",
+            startedAt,
+            completedAt: null,
+            reason: "Auto-created missing engagement record.",
+          },
+        ],
 
         isBlocked: false,
 
@@ -3047,8 +3743,22 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
       leadEngagementId: engagement._id,
     })
       .sort({ attemptNo: 1 })
-      .select("attemptNo primaryChannel otherChannels response attemptedAt contactInfoVersion outcomeActivity notes")
+      .select(
+        "attemptNo primaryChannel otherChannels response attemptedAt contactInfoVersion outcomeActivity notes phoneValidation interestLevel preferredChannel preferredChannelOther"
+      )
       .lean();
+
+    const scheduledMeetings = await ScheduledMeeting.find({
+      leadEngagementId: engagement._id,
+      meetingType: "Needs Assessment",
+      status: { $ne: "Cancelled" },
+    })
+      .sort({ startAt: -1 })
+      .select("meetingType startAt endAt durationMin mode platform platformOther link inviteSent place status")
+      .lean();
+
+    const latestMeeting = scheduledMeetings[0] || null;
+    const lastAttemptNo = attempts.length ? attempts[attempts.length - 1].attemptNo : null;
 
     /**
      * 4.5) Load engagement-related tasks for the sidebar (may be empty)
@@ -3064,8 +3774,91 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
     })
       // Sort soonest due first; for ties, newest created first
       .sort({ dueAt: 1, createdAt: -1 })
-      .select("_id type title description dueAt status completedAt createdAt")
+      .select("_id type title description dueAt status completedAt wasDelayed createdAt")
       .lean();
+
+    const needsAssessment = await NeedsAssessment.findOne({ leadEngagementId: engagement._id })
+      .select("needsPriorities.productSelection.selectedProductId needsPriorities.productSelection.requestedFrequency needsPriorities.productSelection.methodForInitialPayment")
+      .lean();
+
+    const proposalDoc = await Proposal.findOne({ leadEngagementId: engagement._id })
+      .select("outcomeActivity chosenProductId generateProposal recordProspectAttendance presentProposal")
+      .lean();
+
+    const applicationDoc = await Application.findOne({ leadEngagementId: engagement._id })
+      .select("outcomeActivity chosenProductId recordProspectAttendance recordPremiumPaymentTransfer recordApplicationSubmission")
+      .lean();
+
+    const policyDoc = await Policy.findOne({ leadEngagementId: engagement._id })
+      .select("chosenProductId outcomeActivity recordPolicyApplicationStatus uploadInitialPremiumEor uploadPolicySummary recordCoverageDurationDetails")
+      .lean();
+
+    const proposalProductId = proposalDoc?.chosenProductId || null;
+    const needsSelectedProductId = needsAssessment?.needsPriorities?.productSelection?.selectedProductId || null;
+    const policyProductId = policyDoc?.chosenProductId || null;
+
+    let selectedProduct = policyProductId && mongoose.isValidObjectId(policyProductId)
+      ? await Product.findById(policyProductId)
+          .select("_id productName description paymentTermOptions paymentTermLabel coverageDurationRule coverageDurationLabel")
+          .lean()
+      : null;
+
+    if (!selectedProduct && proposalProductId && mongoose.isValidObjectId(proposalProductId)) {
+      selectedProduct = await Product.findById(proposalProductId)
+        .select("_id productName description paymentTermOptions paymentTermLabel coverageDurationRule coverageDurationLabel")
+        .lean();
+    }
+
+    if (!selectedProduct && needsSelectedProductId && mongoose.isValidObjectId(needsSelectedProductId)) {
+      selectedProduct = await Product.findById(needsSelectedProductId)
+        .select("_id productName description paymentTermOptions paymentTermLabel coverageDurationRule coverageDurationLabel")
+        .lean();
+    }
+
+    const selectedProductId = selectedProduct?._id || policyProductId || proposalProductId || needsSelectedProductId || null;
+
+    const applicationSubmissionMeeting = await ScheduledMeeting.findOne({
+      leadEngagementId: engagement._id,
+      meetingType: "Application Submission",
+      status: { $ne: "Cancelled" },
+    })
+      .select("meetingType startAt endAt durationMin mode platform platformOther link inviteSent place status")
+      .lean();
+
+    const proposalSaved = proposalDoc?.generateProposal || {};
+    const proposalAttendance = proposalDoc?.recordProspectAttendance || {};
+    const proposalPresentation = proposalDoc?.presentProposal || {};
+
+    const proposalCurrentActivityKey = (() => {
+      const stageNow = String(engagement?.currentStage || "").trim();
+      if (stageNow === "Proposal") {
+        return String(engagement?.currentActivityKey || proposalDoc?.outcomeActivity || "Generate Proposal").trim() || "Generate Proposal";
+      }
+
+      if (applicationSubmissionMeeting) return "Schedule Application Submission";
+      if (proposalPresentation?.presentedAt) return "Present Proposal";
+      if (proposalAttendance?.attended) return "Record Prospect Attendance";
+      if (proposalSaved?.proposalFileDataUrl || proposalSaved?.proposalFileName || proposalSaved?.uploadedAt || proposalSaved?.generatedAt) {
+        return "Generate Proposal";
+      }
+
+      return String(proposalDoc?.outcomeActivity || "Generate Proposal").trim() || "Generate Proposal";
+    })();
+    const applicationCurrentActivityKey = String(applicationDoc?.outcomeActivity || "Record Prospect Attendance").trim() || "Record Prospect Attendance";
+    const policyCurrentActivityKey = String(policyDoc?.outcomeActivity || "Record Policy Application Status").trim() || "Record Policy Application Status";
+
+    const issuedAtRaw = policyDoc?.recordPolicyApplicationStatus?.issuanceDate || null;
+    const issuedAt = issuedAtRaw ? new Date(issuedAtRaw) : null;
+    const birthDate = prospect?.birthday ? new Date(prospect.birthday) : null;
+    const issuanceAge = (() => {
+      if (!issuedAt || !birthDate || Number.isNaN(issuedAt.getTime()) || Number.isNaN(birthDate.getTime())) return null;
+      let age = issuedAt.getFullYear() - birthDate.getFullYear();
+      const birthdayPassed =
+        issuedAt.getMonth() > birthDate.getMonth() ||
+        (issuedAt.getMonth() === birthDate.getMonth() && issuedAt.getDate() >= birthDate.getDate());
+      if (!birthdayPassed) age -= 1;
+      return age >= 0 ? age : null;
+    })();
 
     /**
      * 5) Derive currentActivityKey for UI badge/tracker:
@@ -3103,6 +3896,25 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
       contactInfoVersionUsed: a.contactInfoVersion, 
       outcomeActivity: a.outcomeActivity || "Attempt Contact",
       notes: a.notes || "",
+      phoneValidation: a.phoneValidation || "",
+      interestLevel: a.interestLevel || "",
+      preferredChannel: a.preferredChannel || "",
+      preferredChannelOther: a.preferredChannelOther || "",
+      ...(function () {
+        const m = a.attemptNo === lastAttemptNo ? latestMeeting : null;
+        return {
+          meetingAt: m?.startAt || null,
+          meetingEndAt: m?.endAt || null,
+          meetingDurationMin: Number(m?.durationMin || 0) || null,
+          meetingMode: m?.mode || "",
+          meetingPlatform: m?.platform || "",
+          meetingPlatformOther: m?.platformOther || "",
+          meetingLink: m?.link || "",
+          meetingInviteSent: Boolean(m?.inviteSent),
+          meetingPlace: m?.place || "",
+          meetingStatus: m?.status || "",
+        };
+      })(),
     }));
 
     // Response combines Prospect + Lead + Engagement + Attempts + Tasks
@@ -3158,6 +3970,147 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
 
         // Always an array (empty if none)
         tasks: Array.isArray(tasks) ? tasks : [],
+
+        application: {
+          currentActivityKey: applicationCurrentActivityKey,
+          chosenProductId: applicationDoc?.chosenProductId || null,
+          chosenProduct: applicationDoc?.chosenProductId || selectedProduct
+            ? {
+                _id: applicationDoc?.chosenProductId || selectedProduct?._id || null,
+                productName: selectedProduct?.productName || "",
+                description: selectedProduct?.description || "",
+              }
+            : null,
+          outcomeActivity: applicationDoc?.outcomeActivity || "",
+          recordProspectAttendance: {
+            attended: Boolean(applicationDoc?.recordProspectAttendance?.attended),
+            attendedAt: applicationDoc?.recordProspectAttendance?.attendedAt || null,
+            attendanceProofImageDataUrl: applicationDoc?.recordProspectAttendance?.attendanceProofImageDataUrl || "",
+            attendanceProofFileName: applicationDoc?.recordProspectAttendance?.attendanceProofFileName || "",
+          },
+          recordPremiumPaymentTransfer: {
+            totalAnnualPremiumPhp: applicationDoc?.recordPremiumPaymentTransfer?.totalAnnualPremiumPhp ?? null,
+            totalFrequencyPremiumPhp: applicationDoc?.recordPremiumPaymentTransfer?.totalFrequencyPremiumPhp ?? null,
+            methodForRenewalPayment: applicationDoc?.recordPremiumPaymentTransfer?.methodForRenewalPayment || "",
+            paymentProofImageDataUrl: applicationDoc?.recordPremiumPaymentTransfer?.paymentProofImageDataUrl || "",
+            paymentProofFileName: applicationDoc?.recordPremiumPaymentTransfer?.paymentProofFileName || "",
+            savedAt: applicationDoc?.recordPremiumPaymentTransfer?.savedAt || null,
+          },
+          recordApplicationSubmission: {
+            pruOneTransactionId: applicationDoc?.recordApplicationSubmission?.pruOneTransactionId || "",
+            submissionScreenshotImageDataUrl: applicationDoc?.recordApplicationSubmission?.submissionScreenshotImageDataUrl || "",
+            submissionScreenshotFileName: applicationDoc?.recordApplicationSubmission?.submissionScreenshotFileName || "",
+            savedAt: applicationDoc?.recordApplicationSubmission?.savedAt || null,
+          },
+          needsAssessmentProductSelection: {
+            requestedFrequency: String(needsAssessment?.needsPriorities?.productSelection?.requestedFrequency || ""),
+            methodForInitialPayment: String(needsAssessment?.needsPriorities?.productSelection?.methodForInitialPayment || ""),
+          },
+        },
+
+        policy: {
+          currentActivityKey: policyCurrentActivityKey,
+          outcomeActivity: policyDoc?.outcomeActivity || "",
+          chosenProduct: policyDoc?.chosenProductId || selectedProduct
+            ? {
+                _id: policyDoc?.chosenProductId || selectedProduct?._id || null,
+                productName: selectedProduct?.productName || "",
+                description: selectedProduct?.description || "",
+                paymentTermOptions: Array.isArray(selectedProduct?.paymentTermOptions) ? selectedProduct.paymentTermOptions : [],
+                paymentTermLabel: selectedProduct?.paymentTermLabel || "",
+                coverageDurationRule: selectedProduct?.coverageDurationRule || null,
+                coverageDurationLabel: selectedProduct?.coverageDurationLabel || "",
+              }
+            : null,
+          issuanceAge: issuanceAge ?? null,
+          recordPolicyApplicationStatus: {
+            status: policyDoc?.recordPolicyApplicationStatus?.status || "",
+            issuanceDate: policyDoc?.recordPolicyApplicationStatus?.issuanceDate || null,
+            notes: policyDoc?.recordPolicyApplicationStatus?.notes || "",
+            savedAt: policyDoc?.recordPolicyApplicationStatus?.savedAt || null,
+          },
+          uploadInitialPremiumEor: {
+            eorNumber: policyDoc?.uploadInitialPremiumEor?.eorNumber || "",
+            receiptDate: policyDoc?.uploadInitialPremiumEor?.receiptDate || null,
+            eorFileName: policyDoc?.uploadInitialPremiumEor?.eorFileName || "",
+            eorFileMimeType: policyDoc?.uploadInitialPremiumEor?.eorFileMimeType || "",
+            eorFileDataUrl: policyDoc?.uploadInitialPremiumEor?.eorFileDataUrl || "",
+            uploadedAt: policyDoc?.uploadInitialPremiumEor?.uploadedAt || null,
+          },
+          uploadPolicySummary: {
+            policyNumber: policyDoc?.uploadPolicySummary?.policyNumber || "",
+            policySummaryFileName: policyDoc?.uploadPolicySummary?.policySummaryFileName || "",
+            policySummaryFileMimeType: policyDoc?.uploadPolicySummary?.policySummaryFileMimeType || "",
+            policySummaryFileDataUrl: policyDoc?.uploadPolicySummary?.policySummaryFileDataUrl || "",
+            uploadedAt: policyDoc?.uploadPolicySummary?.uploadedAt || null,
+          },
+          recordCoverageDurationDetails: {
+            policyNumber: policyDoc?.recordCoverageDurationDetails?.policyNumber || "",
+            selectedPaymentTermLabel: policyDoc?.recordCoverageDurationDetails?.selectedPaymentTermLabel || "",
+            selectedPaymentTermType: policyDoc?.recordCoverageDurationDetails?.selectedPaymentTermType || "",
+            selectedPaymentTermYears: policyDoc?.recordCoverageDurationDetails?.selectedPaymentTermYears ?? null,
+            selectedPaymentTermUntilAge: policyDoc?.recordCoverageDurationDetails?.selectedPaymentTermUntilAge ?? null,
+            coverageDurationLabel: policyDoc?.recordCoverageDurationDetails?.coverageDurationLabel || "",
+            coverageDurationType: policyDoc?.recordCoverageDurationDetails?.coverageDurationType || "",
+            coverageDurationYears: policyDoc?.recordCoverageDurationDetails?.coverageDurationYears ?? null,
+            coverageDurationUntilAge: policyDoc?.recordCoverageDurationDetails?.coverageDurationUntilAge ?? null,
+            coverageStartDate: policyDoc?.recordCoverageDurationDetails?.coverageStartDate || null,
+            coverageEndDate: policyDoc?.recordCoverageDurationDetails?.coverageEndDate || null,
+            policyEndDate: policyDoc?.recordCoverageDurationDetails?.policyEndDate || null,
+            nextPaymentDate: policyDoc?.recordCoverageDurationDetails?.nextPaymentDate || null,
+            savedAt: policyDoc?.recordCoverageDurationDetails?.savedAt || null,
+          },
+        },
+
+        proposal: {
+          currentActivityKey: proposalCurrentActivityKey,
+          chosenProduct: proposalDoc?.chosenProductId || selectedProduct
+            ? {
+                _id: proposalDoc?.chosenProductId || selectedProduct?._id || null,
+                productName: selectedProduct?.productName || "",
+                description: selectedProduct?.description || "",
+              }
+            : null,
+          generateProposal: {
+            productId: proposalDoc?.chosenProductId || selectedProduct?._id || null,
+            productName: selectedProduct?.productName || "",
+            productDescription: selectedProduct?.description || "",
+            proposalFileName: proposalSaved?.proposalFileName || "",
+            proposalFileMimeType: proposalSaved?.proposalFileMimeType || "",
+            proposalFileDataUrl: proposalSaved?.proposalFileDataUrl || "",
+            sentToProspectEmail: Boolean(proposalSaved?.sentToProspectEmail),
+            sentToProspectAt: proposalSaved?.sentToProspectAt || null,
+            uploadedAt: proposalSaved?.uploadedAt || proposalSaved?.generatedAt || null,
+          },
+          recordProspectAttendance: {
+            attended: Boolean(proposalAttendance?.attended),
+            attendedAt: proposalAttendance?.attendedAt || null,
+            attendanceProofImageDataUrl: proposalAttendance?.attendanceProofImageDataUrl || "",
+            attendanceProofFileName: proposalAttendance?.attendanceProofFileName || "",
+          },
+          presentProposal: {
+            proposalAccepted: proposalPresentation?.proposalAccepted || "",
+            initialQuotationNotes: proposalPresentation?.initialQuotationNotes || "",
+            presentedAt: proposalPresentation?.presentedAt || null,
+          },
+          applicationSubmissionMeeting: applicationSubmissionMeeting
+            ? {
+                meetingType: applicationSubmissionMeeting.meetingType,
+                startAt: applicationSubmissionMeeting.startAt || null,
+                endAt: applicationSubmissionMeeting.endAt || null,
+                durationMin: applicationSubmissionMeeting.durationMin ?? null,
+                mode: applicationSubmissionMeeting.mode || "",
+                platform: applicationSubmissionMeeting.platform || "",
+                platformOther: applicationSubmissionMeeting.platformOther || "",
+                link: applicationSubmissionMeeting.link || "",
+                inviteSent: Boolean(applicationSubmissionMeeting.inviteSent),
+                place: applicationSubmissionMeeting.place || "",
+                status: applicationSubmissionMeeting.status || "",
+              }
+            : null,
+          prospectEmail: prospect.email || "",
+          pruOneProposalUrl: "https://pruone.prulifeuk.com.ph/web",
+        },
       },
     });
   } catch (err) {
@@ -3297,16 +4250,24 @@ app.post("/api/prospects/:prospectId/leads/:leadId/contact-attempts", async (req
       let engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).session(session);
 
       if (!engagement) {
+        const startedAt = new Date();
         // Failsafe create if missing (prevents UI/flow break)
         engagement = await LeadEngagement.create(
           [
             {
               leadId: leadObjectId,
-              currentStage: "Not Started",
-              currentActivityKey: null,
-              stageStartedAt: null,
+              currentStage: "Contacting",
+              currentActivityKey: "Attempt Contact",
+              stageStartedAt: startedAt,
               stageCompletedAt: null,
-              stageHistory: [],
+              stageHistory: [
+                {
+                  stage: "Contacting",
+                  startedAt,
+                  completedAt: null,
+                  reason: "Auto-created during contact attempt.",
+                },
+              ],
               isBlocked: false,
               contactAttemptsCount: 0,
               lastContactAttemptNo: 0,
@@ -3455,45 +4416,38 @@ app.post("/api/prospects/:prospectId/leads/:leadId/contact-attempts", async (req
   }
 });
 
+async function getLatestRespondedAttemptForEngagement(leadEngagementId, session) {
+  return ContactAttempt.findOne({
+    leadEngagementId,
+    response: "Responded",
+  })
+    .sort({ attemptNo: -1 })
+    .session(session || null);
+}
+
 /* ===========================
-   VALIDATE CONTACT (Wrong Contact)
+   VALIDATE CONTACT: UPDATE CURRENT ATTEMPT (Agent)
    POST /api/prospects/:prospectId/leads/:leadId/validate-contact?userId=...
 
    Purpose:
-   - Handles the "Wrong Contact" validation outcome.
-   - When agent confirms wrong contact:
-     1) Prospect.status becomes "Wrong Contact"
-     2) Engagement becomes blocked (isBlocked = true)
-     3) Engagement.currentActivityKey is persisted as "Validate Contact" (tracker step)
-     4) Open APPROACH task (if any) is completed
-     5) Ensures an Open UPDATE_CONTACT_INFO task exists (create if missing)
-     6) Creates notifications only when UPDATE_CONTACT_INFO task was newly created
-
-   Inputs:
-   Body: { result: "WRONG_CONTACT" }  // Only supported value for now
-
-   Atomicity:
-   - All changes happen inside a MongoDB transaction.
-   - If anything fails mid-way, none of the changes commit.
+   - Updates the SAME latest responded ContactAttempt with phone validation result.
+   - Does NOT create a new ContactAttempt.
 =========================== */
 app.post("/api/prospects/:prospectId/leads/:leadId/validate-contact", async (req, res) => {
-  // Start session so Prospect + Engagement + Task + Notification changes commit together
   const session = await mongoose.startSession();
 
   try {
     const { userId } = req.query;
     const { prospectId, leadId } = req.params;
-    const { result } = req.body;
+    const result = String(req.body?.result || "").trim().toUpperCase();
 
-    // Basic required ID validation
     if (!userId) return res.status(400).json({ message: "Missing userId." });
     if (!mongoose.isValidObjectId(userId)) return res.status(400).json({ message: "Invalid userId." });
     if (!mongoose.isValidObjectId(prospectId)) return res.status(400).json({ message: "Invalid prospectId." });
     if (!mongoose.isValidObjectId(leadId)) return res.status(400).json({ message: "Invalid leadId." });
 
-    // Only support WRONG_CONTACT for now (future: CORRECT_CONTACT, etc.)
-    if (String(result) !== "WRONG_CONTACT") {
-      return res.status(400).json({ message: "Only WRONG_CONTACT is supported for now." });
+    if (!["CORRECT", "WRONG_CONTACT"].includes(result)) {
+      return res.status(400).json({ message: "result must be CORRECT or WRONG_CONTACT." });
     }
 
     const userObjectId = new mongoose.Types.ObjectId(userId);
@@ -3501,49 +4455,57 @@ app.post("/api/prospects/:prospectId/leads/:leadId/validate-contact", async (req
     const leadObjectId = new mongoose.Types.ObjectId(leadId);
 
     await session.withTransaction(async () => {
-      // 1) Authorization: prospect must belong to agent
       const prospect = await Prospect.findOne({
         _id: prospectObjectId,
         assignedToUserId: userObjectId,
       }).session(session);
-
       if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
 
-      // 2) Lead must belong to that prospect
       const lead = await Lead.findOne({
         _id: leadObjectId,
         prospectId: prospectObjectId,
       }).session(session);
-
       if (!lead) throw Object.assign(new Error("Lead not found."), { status: 404 });
 
-      // 3) Engagement must exist (this endpoint does not auto-create engagement)
-      const engagement = await LeadEngagement.findOne({
-        leadId: leadObjectId,
-      }).session(session);
+      const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).session(session);
+      if (!engagement) throw Object.assign(new Error("Engagement not found."), { status: 404 });
 
-      if (!engagement) {
-        throw Object.assign(new Error("Engagement not found."), { status: 404 });
+      const attempt = await ContactAttempt.findOne({
+        leadEngagementId: engagement._id,
+        response: "Responded",
+      })
+        .sort({ attemptNo: -1 })
+        .session(session);
+
+      if (!attempt) {
+        throw Object.assign(new Error("No responded contact attempt found to validate."), { status: 409 });
       }
 
-      // Guard: prevent repeating the flow if already blocked
-      // This avoids duplicate update tasks + duplicate notifications
+      if (String(attempt.phoneValidation || "").trim()) {
+        throw Object.assign(new Error("This attempt has already been validated."), { status: 409 });
+      }
+
+      attempt.phoneValidation = result;
+      attempt.outcomeActivity = "Validate Contact";
+      await attempt.save({ session });
+
+      if (result === "CORRECT") {
+        engagement.currentActivityKey = "Assess Interest";
+        await engagement.save({ session });
+        return;
+      }
+
       if (engagement.isBlocked) {
         throw Object.assign(new Error("Engagement is already blocked."), { status: 409 });
       }
 
-      // 4) Mark Prospect as Wrong Contact (this impacts Prospect-level UI + filtering)
       prospect.status = "Wrong Contact";
       await prospect.save({ session });
 
-      // 5) Block Engagement so no new attempts can be created until contact info is updated
-      // Also persist the tracker step explicitly as "Validate Contact"
       engagement.isBlocked = true;
       engagement.currentActivityKey = "Validate Contact";
       await engagement.save({ session });
 
-      // 6) Complete open APPROACH task (if exists)
-      // This prevents "Contact lead" tasks staying open after wrong contact is confirmed
       const openApproachTask = await Task.findOne({
         assignedToUserId: userObjectId,
         prospectId: prospectObjectId,
@@ -3558,7 +4520,6 @@ app.post("/api/prospects/:prospectId/leads/:leadId/validate-contact", async (req
         await openApproachTask.save({ session });
       }
 
-      // 7) Ensure there's an Open UPDATE_CONTACT_INFO task (create only if missing)
       let updateTask = await Task.findOne({
         assignedToUserId: userObjectId,
         prospectId: prospectObjectId,
@@ -3569,7 +4530,6 @@ app.post("/api/prospects/:prospectId/leads/:leadId/validate-contact", async (req
 
       let createdNewUpdateTask = false;
 
-      // If missing, create it with due date = now + 2 days
       if (!updateTask) {
         const due = new Date();
         due.setDate(due.getDate() + 2);
@@ -3582,7 +4542,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/validate-contact", async (req
               leadEngagementId: engagement._id,
               type: "UPDATE_CONTACT_INFO",
               title: "Update phone number",
-              description: `Phone number for this prospect was marked invalid. Update required before proceeding.`,
+              description: "Phone number for this prospect was marked invalid. Update required before proceeding.",
               dueAt: due,
               status: "Open",
             },
@@ -3593,17 +4553,10 @@ app.post("/api/prospects/:prospectId/leads/:leadId/validate-contact", async (req
         createdNewUpdateTask = true;
       }
 
-      // Display name used in notifications
-      const fullName = `${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${
-        prospect.lastName
-      }`.trim();
-
-      // Use the actual dueAt regardless of whether task existed or was created
+      const fullName = `${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName}`.trim();
       const dueAt = updateTask?.dueAt;
 
-      // 8) Notifications are only created if we just created the update task
       if (createdNewUpdateTask) {
-        // 8a) TASK_ADDED
         await Notification.create(
           [
             {
@@ -3619,7 +4572,6 @@ app.post("/api/prospects/:prospectId/leads/:leadId/validate-contact", async (req
           { session }
         );
 
-        // 8b) TASK_DUE_TODAY (only if due date is today in Asia/Manila)
         if (dueAt && isDueTodayInManila(dueAt)) {
           await Notification.create(
             [
@@ -3640,10 +4592,2972 @@ app.post("/api/prospects/:prospectId/leads/:leadId/validate-contact", async (req
       }
     });
 
-    return res.json({ message: "Marked as Wrong Contact. Update task created." });
+    return res.json({
+      message:
+        result === "CORRECT"
+          ? "Contact validated as correct. Proceed to Assess Interest."
+          : "Marked as Wrong Contact. Update task created.",
+    });
   } catch (err) {
     console.error("Validate contact error:", err);
     return res.status(err?.status || 500).json({ message: err.message || "Server error." });
+  } finally {
+    session.endSession();
+  }
+});
+
+app.post("/api/prospects/:prospectId/leads/:leadId/assess-interest", async (req, res) => {
+  const session = await mongoose.startSession();
+  try {
+    const { userId } = req.query;
+    const { prospectId, leadId } = req.params;
+    const { interestLevel, preferredChannel, preferredChannelOther } = req.body;
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId)) return res.status(400).json({ message: "Invalid userId." });
+    if (!mongoose.isValidObjectId(prospectId)) return res.status(400).json({ message: "Invalid prospectId." });
+    if (!mongoose.isValidObjectId(leadId)) return res.status(400).json({ message: "Invalid leadId." });
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+
+    await session.withTransaction(async () => {
+      const prospect = await Prospect.findOne({ _id: prospectId, assignedToUserId: userObjectId }).session(session);
+      if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
+
+      const lead = await Lead.findOne({ _id: leadId, prospectId }).session(session);
+      if (!lead) throw Object.assign(new Error("Lead not found."), { status: 404 });
+
+      const engagement = await LeadEngagement.findOne({ leadId }).session(session);
+      if (!engagement) throw Object.assign(new Error("Engagement not found."), { status: 404 });
+
+      if (engagement.currentActivityKey !== "Assess Interest") {
+        throw Object.assign(new Error("Assess Interest is not the current activity."), { status: 409 });
+      }
+
+      const lvl = String(interestLevel || "").trim().toUpperCase();
+      if (!["INTERESTED", "NOT_INTERESTED"].includes(lvl)) {
+        throw Object.assign(new Error("interestLevel must be INTERESTED or NOT_INTERESTED."), { status: 400 });
+      }
+
+      const attempt = await getLatestRespondedAttemptForEngagement(engagement._id, session);
+      if (!attempt) throw Object.assign(new Error("No responded contact attempt found."), { status: 409 });
+
+      attempt.interestLevel = lvl;
+      attempt.outcomeActivity = "Assess Interest";
+
+      if (lvl === "INTERESTED") {
+        const pc = String(preferredChannel || "").trim();
+        if (!["SMS", "WhatsApp", "Viber", "Telegram", "Other"].includes(pc)) {
+          throw Object.assign(new Error("Invalid preferredChannel."), { status: 400 });
+        }
+        attempt.preferredChannel = pc;
+        attempt.preferredChannelOther = pc === "Other" ? String(preferredChannelOther || "").trim() : undefined;
+
+        if (pc === "Other" && !attempt.preferredChannelOther) {
+          throw Object.assign(new Error("preferredChannelOther is required when preferredChannel is Other."), {
+            status: 400,
+          });
+        }
+
+        engagement.currentActivityKey = "Schedule Meeting";
+      } else {
+        attempt.preferredChannel = undefined;
+        attempt.preferredChannelOther = undefined;
+        engagement.currentActivityKey = "Assess Interest";
+      }
+
+      await attempt.save({ session });
+      await engagement.save({ session });
+    });
+
+    return res.json({ message: "Assess Interest saved." });
+  } catch (err) {
+    console.error("Assess interest error:", err);
+    return res.status(err?.status || 500).json({ message: err?.message || "Server error." });
+  } finally {
+    session.endSession();
+  }
+});
+
+
+
+function isValidHttpUrl(value) {
+  try {
+    const u = new URL(String(value || "").trim());
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function combineDateAndTimeLocal(dateStr, timeStr) {
+  const [y, m, d] = String(dateStr || "").split("-").map((n) => Number(n));
+  const [hh, mm] = String(timeStr || "").split(":").map((n) => Number(n));
+
+  if (!y || !m || !d || Number.isNaN(hh) || Number.isNaN(mm)) return null;
+  return new Date(y, m - 1, d, hh, mm, 0, 0);
+}
+
+function isMeetingSlotValidWindow(startAt, durationMin) {
+  if (!(startAt instanceof Date) || Number.isNaN(startAt.getTime())) return false;
+  if (![30, 60, 90, 120].includes(Number(durationMin))) return false;
+
+  const start = new Date(startAt.getTime());
+  const end = new Date(startAt.getTime() + Number(durationMin) * 60 * 1000);
+
+  const startMin = start.getHours() * 60 + start.getMinutes();
+  const endMin = end.getHours() * 60 + end.getMinutes();
+  return startMin >= 7 * 60 && endMin <= 21 * 60;
+}
+
+async function getAgentMeetingWindows(userObjectId, from, to, session) {
+  const leads = await Lead.find({})
+    .select("_id prospectId")
+    .session(session || null)
+    .lean();
+
+  const prospectIds = [...new Set(leads.map((l) => String(l.prospectId)).filter(Boolean))];
+  const prospects = prospectIds.length
+    ? await Prospect.find({ _id: { $in: prospectIds }, assignedToUserId: userObjectId })
+        .select("_id")
+        .session(session || null)
+        .lean()
+    : [];
+
+  const allowedProspectIds = new Set(prospects.map((p) => String(p._id)));
+  const leadIdsForAgent = leads
+    .filter((l) => allowedProspectIds.has(String(l.prospectId)))
+    .map((l) => l._id);
+
+  if (!leadIdsForAgent.length) return [];
+
+  const engagements = await LeadEngagement.find({ leadId: { $in: leadIdsForAgent } })
+    .select("_id")
+    .session(session || null)
+    .lean();
+
+  const engagementIds = engagements.map((e) => e._id);
+  if (!engagementIds.length) return [];
+
+  const q = {
+    leadEngagementId: { $in: engagementIds },
+    status: { $ne: "Cancelled" },
+  };
+
+  if (from || to) {
+    q.startAt = {};
+    if (from) q.startAt.$gte = from;
+    if (to) q.startAt.$lt = to;
+  }
+
+  const meetings = await ScheduledMeeting.find(q)
+    .select("startAt endAt durationMin")
+    .session(session || null)
+    .lean();
+
+  return meetings
+    .map((m) => {
+      const start = m.startAt ? new Date(m.startAt) : null;
+      if (!start || Number.isNaN(start.getTime())) return null;
+
+      let end = m.endAt ? new Date(m.endAt) : null;
+      if (!end || Number.isNaN(end.getTime())) {
+        const duration = Number(m.durationMin || 120);
+        end = new Date(start.getTime() + duration * 60 * 1000);
+      }
+
+      return { start, end };
+    })
+    .filter(Boolean);
+}
+
+function hasMeetingConflict(startAt, endAt, windows) {
+  return windows.some((w) => w.start < endAt && w.end > startAt);
+}
+
+app.get("/api/agents/:agentId/meeting-availability", async (req, res) => {
+  const session = await mongoose.startSession();
+  try {
+    const { userId } = req.query;
+    const { agentId } = req.params;
+    const days = Math.min(Math.max(Number(req.query.days || 30), 1), 60);
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId) || !mongoose.isValidObjectId(agentId)) {
+      return res.status(400).json({ message: "Invalid userId/agentId." });
+    }
+    if (String(userId) !== String(agentId)) {
+      return res.status(403).json({ message: "Forbidden." });
+    }
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    start.setDate(start.getDate() + 1);
+
+    const end = new Date(start);
+    end.setDate(end.getDate() + days);
+
+    const windows = await getAgentMeetingWindows(userObjectId, start, end, session);
+
+    return res.json({
+      fromDate: start.toISOString(),
+      toDate: end.toISOString(),
+      bookedWindows: windows.map((w) => ({ startAt: w.start.toISOString(), endAt: w.end.toISOString() })),
+    });
+  } catch (err) {
+    console.error("Meeting availability error:", err);
+    return res.status(500).json({ message: "Server error." });
+  } finally {
+    session.endSession();
+  }
+});
+
+app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req, res) => {
+  const session = await mongoose.startSession();
+  try {
+    const { userId } = req.query;
+    const { prospectId, leadId } = req.params;
+    const {
+      meetingAt,
+      meetingDate,
+      meetingStartTime,
+      meetingDurationMin,
+      meetingMode,
+      meetingPlatform,
+      meetingPlatformOther,
+      meetingLink,
+      meetingInviteSent,
+      meetingPlace,
+    } = req.body;
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId)) return res.status(400).json({ message: "Invalid userId." });
+    if (!mongoose.isValidObjectId(prospectId)) return res.status(400).json({ message: "Invalid prospectId." });
+    if (!mongoose.isValidObjectId(leadId)) return res.status(400).json({ message: "Invalid leadId." });
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
+    const leadObjectId = new mongoose.Types.ObjectId(leadId);
+
+    await session.withTransaction(async () => {
+      const prospect = await Prospect.findOne({
+        _id: prospectObjectId,
+        assignedToUserId: userObjectId,
+      }).session(session);
+      if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
+
+      const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).session(session);
+      if (!lead) throw Object.assign(new Error("Lead not found."), { status: 404 });
+
+      const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).session(session);
+      if (!engagement) throw Object.assign(new Error("Engagement not found."), { status: 404 });
+
+      if (engagement.currentActivityKey !== "Schedule Meeting") {
+        throw Object.assign(new Error("Schedule Meeting is not the current activity."), { status: 409 });
+      }
+
+      const durationMin = Number(meetingDurationMin || 120);
+      const dt = meetingDate && meetingStartTime
+        ? combineDateAndTimeLocal(meetingDate, meetingStartTime)
+        : new Date(meetingAt);
+
+      if (!dt || Number.isNaN(dt.getTime())) {
+        throw Object.assign(new Error("meeting date/time is required and must be valid."), { status: 400 });
+      }
+
+      const tomorrow = new Date();
+      tomorrow.setHours(0, 0, 0, 0);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+
+      const latestDay = new Date(tomorrow);
+      latestDay.setDate(latestDay.getDate() + 30);
+
+      if (dt < tomorrow || dt >= latestDay) {
+        throw Object.assign(new Error("Meeting date must be between tomorrow and the next 30 days."), { status: 400 });
+      }
+
+      if (!isMeetingSlotValidWindow(dt, durationMin)) {
+        throw Object.assign(
+          new Error("Meeting must start between 7:00 AM and 9:00 PM, and duration must be 30/60/90/120 minutes."),
+          { status: 400 }
+        );
+      }
+
+      const endAt = new Date(dt.getTime() + durationMin * 60 * 1000);
+
+      const windows = await getAgentMeetingWindows(userObjectId, null, null, session);
+      if (hasMeetingConflict(dt, endAt, windows)) {
+        throw Object.assign(new Error("Selected time slot conflicts with an existing meeting."), {
+          status: 409,
+          code: "MEETING_CONFLICT",
+        });
+      }
+
+      const mode = String(meetingMode || "").trim();
+      if (!["Online", "Face-to-face"].includes(mode)) {
+        throw Object.assign(new Error("meetingMode must be Online or Face-to-face."), { status: 400 });
+      }
+
+      const platform = String(meetingPlatform || "").trim();
+      const platformOther = String(meetingPlatformOther || "").trim();
+      const link = String(meetingLink || "").trim();
+      const place = String(meetingPlace || "").trim();
+
+      if (mode === "Online") {
+        if (!["Zoom", "Google Meet", "Other"].includes(platform)) {
+          throw Object.assign(new Error("Invalid meetingPlatform."), { status: 400 });
+        }
+        if (platform === "Other" && !platformOther) {
+          throw Object.assign(new Error("meetingPlatformOther is required when meetingPlatform is Other."), { status: 400 });
+        }
+        if (!link) throw Object.assign(new Error("meetingLink is required for online meeting."), { status: 400 });
+        if (!isValidHttpUrl(link)) {
+          throw Object.assign(new Error("meetingLink must be a valid http/https URL."), { status: 400 });
+        }
+        if (meetingInviteSent !== true) {
+          throw Object.assign(new Error("meetingInviteSent must be true before saving an online meeting."), {
+            status: 400,
+          });
+        }
+      } else {
+        if (!place) throw Object.assign(new Error("meetingPlace is required for face-to-face meeting."), { status: 400 });
+      }
+
+      const attempt = await getLatestRespondedAttemptForEngagement(engagement._id, session);
+      if (!attempt) throw Object.assign(new Error("No responded contact attempt found."), { status: 409 });
+
+      attempt.outcomeActivity = "Schedule Meeting";
+      await attempt.save({ session });
+
+      const meetingType = "Needs Assessment";
+      const existingMeeting = await ScheduledMeeting.findOne({
+        leadEngagementId: engagement._id,
+        meetingType,
+      }).session(session);
+
+      if (existingMeeting) {
+        existingMeeting.startAt = dt;
+        existingMeeting.endAt = endAt;
+        existingMeeting.durationMin = durationMin;
+        existingMeeting.mode = mode;
+        existingMeeting.platform = mode === "Online" ? platform : undefined;
+        existingMeeting.platformOther = mode === "Online" && platform === "Other" ? platformOther : undefined;
+        existingMeeting.link = mode === "Online" ? link : undefined;
+        existingMeeting.inviteSent = Boolean(meetingInviteSent);
+        existingMeeting.place = mode === "Face-to-face" ? place : undefined;
+        existingMeeting.status = "Scheduled";
+        await existingMeeting.save({ session });
+      } else {
+        await ScheduledMeeting.create(
+          [
+            {
+              leadEngagementId: engagement._id,
+              meetingType,
+              startAt: dt,
+              endAt,
+              durationMin,
+              mode,
+              platform: mode === "Online" ? platform : undefined,
+              platformOther: mode === "Online" && platform === "Other" ? platformOther : undefined,
+              link: mode === "Online" ? link : undefined,
+              inviteSent: Boolean(meetingInviteSent),
+              place: mode === "Face-to-face" ? place : undefined,
+              status: "Scheduled",
+            },
+          ],
+          { session }
+        );
+      }
+
+      const openApproachTask = await Task.findOne({
+        assignedToUserId: userObjectId,
+        prospectId: prospectObjectId,
+        leadEngagementId: engagement._id,
+        type: "APPROACH",
+        status: "Open",
+      }).session(session);
+
+      if (openApproachTask) {
+        openApproachTask.status = "Done";
+        openApproachTask.completedAt = new Date();
+        await openApproachTask.save({ session });
+      }
+
+      const appointmentDedupeKey = `APPOINTMENT:${engagement._id}`;
+      let appointmentTask = await Task.findOne({
+        assignedToUserId: userObjectId,
+        dedupeKey: appointmentDedupeKey,
+      }).session(session);
+
+      const appointmentTitle = `Meeting scheduled with ${prospect.firstName}`;
+      const appointmentDescription = `Attend scheduled meeting with ${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName} (Lead ${lead.leadCode || "—"}). Meeting window: ${formatDateTimeInManila(dt)} to ${formatDateTimeInManila(endAt)} (Asia/Manila).`;
+      const appointmentDueAt = new Date(endAt.getTime() + 15 * 60 * 1000);
+
+      if (!appointmentTask) {
+        appointmentTask = await Task.create(
+          [
+            {
+              assignedToUserId: userObjectId,
+              prospectId: prospectObjectId,
+              leadEngagementId: engagement._id,
+              type: "APPOINTMENT",
+              title: appointmentTitle,
+              description: appointmentDescription,
+              dueAt: appointmentDueAt,
+              status: "Open",
+              dedupeKey: appointmentDedupeKey,
+            },
+          ],
+          { session }
+        ).then((docs) => docs[0]);
+
+        const prospectFullName = `${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName}`.trim();
+        await createTaskAddedNotifications({
+          assignedToUserId: userObjectId,
+          task: appointmentTask,
+          prospectFullName,
+          leadCode: lead.leadCode,
+          session,
+        });
+      } else if (appointmentTask.status !== "Done") {
+        appointmentTask.title = appointmentTitle;
+        appointmentTask.description = appointmentDescription;
+        appointmentTask.dueAt = appointmentDueAt;
+        await appointmentTask.save({ session });
+      }
+
+      const now = new Date();
+      engagement.currentStage = "Needs Assessment";
+      engagement.currentActivityKey = "Record Prospect Attendance";
+      engagement.stageCompletedAt = now;
+      engagement.stageHistory = Array.isArray(engagement.stageHistory) ? engagement.stageHistory : [];
+
+      const openContacting = [...engagement.stageHistory]
+        .reverse()
+        .find((h) => h?.stage === "Contacting" && !h?.completedAt);
+      if (openContacting) {
+        openContacting.completedAt = now;
+        openContacting.reason = "Meeting scheduled successfully.";
+      }
+
+      engagement.stageHistory.push({
+        stage: "Needs Assessment",
+        startedAt: now,
+        completedAt: null,
+        reason: "Moved from Contacting after meeting schedule.",
+      });
+
+      engagement.stageStartedAt = now;
+      await engagement.save({ session });
+    });
+
+    return res.json({
+      message: "Meeting scheduled. Contacting completed and Needs Assessment activated.",
+    });
+  } catch (err) {
+    console.error("Schedule meeting error:", err);
+    return res.status(err?.status || 500).json({
+      message: err?.message || "Server error.",
+      code: err?.code,
+    });
+  } finally {
+    session.endSession();
+  }
+});
+
+
+
+app.get("/api/prospects/:prospectId/leads/:leadId/needs-assessment", async (req, res) => {
+  try {
+    const { userId } = req.query;
+    const { prospectId, leadId } = req.params;
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId) || !mongoose.isValidObjectId(prospectId) || !mongoose.isValidObjectId(leadId)) {
+      return res.status(400).json({ message: "Invalid id(s)." });
+    }
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
+    const leadObjectId = new mongoose.Types.ObjectId(leadId);
+
+    const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId })
+      .select("firstName middleName lastName sex civilStatus birthday age occupation occupationCategory address")
+      .lean();
+    if (!prospect) return res.status(404).json({ message: "Prospect not found." });
+
+    const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).select("_id").lean();
+    if (!lead) return res.status(404).json({ message: "Lead not found." });
+
+    const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).select("_id currentStage currentActivityKey").lean();
+    if (!engagement) return res.status(404).json({ message: "Lead engagement not found." });
+
+    let needsAssessment = await NeedsAssessment.findOne({ leadEngagementId: engagement._id })
+      .select("outcomeActivity attendanceConfirmed attendedAt attendanceProofImageDataUrl attendanceProofFileName dependents needsPriorities")
+      .lean();
+
+    if (!needsAssessment) {
+      const created = await NeedsAssessment.create({
+        leadEngagementId: engagement._id,
+      });
+      needsAssessment = created.toObject();
+    }
+
+    const allLeadIds = await Lead.find({ prospectId: prospectObjectId }).distinct("_id");
+    const allLeadEngagementIds = await LeadEngagement.find({ leadId: { $in: allLeadIds } }).distinct("_id");
+    const policyholders = await Policyholder.find({ leadEngagementId: { $in: allLeadEngagementIds } })
+      .select("policyNumber status productId")
+      .populate("productId", "productName")
+      .lean();
+
+    const existingPolicies = (policyholders || []).map((p) => ({
+      policyNumber: p.policyNumber || "",
+      productName: p?.productId?.productName || "",
+      status: p.status || "",
+    }));
+
+    const computedAge = prospect.birthday ? computeAgeFromBirthday(new Date(prospect.birthday)) : null;
+
+    const products = await Product.find({})
+      .select("_id productName productCategory description")
+      .sort({ productCategory: 1, productName: 1 })
+      .lean();
+
+    const proposalMeeting = await ScheduledMeeting.findOne({
+      leadEngagementId: engagement._id,
+      meetingType: "Proposal Presentation",
+    })
+      .select("meetingType startAt endAt durationMin mode platform platformOther link inviteSent place status")
+      .lean();
+
+    const needsSteps = [
+      "Record Prospect Attendance",
+      "Perform Needs Analysis",
+      "Schedule Proposal Presentation",
+    ];
+    const engagementActivity = String(engagement.currentActivityKey || "").trim();
+    const naOutcome = String(needsAssessment.outcomeActivity || "").trim();
+
+    let effectiveNeedsActivityKey;
+    if (needsSteps.includes(engagementActivity)) {
+      effectiveNeedsActivityKey = engagementActivity;
+    } else if (["Proposal", "Application", "Policy Issuance"].includes(String(engagement.currentStage || ""))) {
+      // Once lead has moved past Needs Assessment, keep this stage at its terminal activity.
+      effectiveNeedsActivityKey = "Schedule Proposal Presentation";
+    } else if (!needsAssessment.attendanceConfirmed) {
+      effectiveNeedsActivityKey = "Record Prospect Attendance";
+    } else if (["Perform Needs Analysis", "Schedule Proposal Presentation"].includes(naOutcome)) {
+      effectiveNeedsActivityKey = "Schedule Proposal Presentation";
+    } else if (naOutcome === "Record Prospect Attendance") {
+      effectiveNeedsActivityKey = "Perform Needs Analysis";
+    } else {
+      effectiveNeedsActivityKey = "Perform Needs Analysis";
+    }
+
+    return res.json({
+      prospectProfile: {
+        fullName: `${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName}`.trim(),
+        sex: prospect.sex || "",
+        civilStatus: prospect.civilStatus || "",
+        birthday: prospect.birthday || null,
+        age: computedAge ?? (prospect.age ?? null),
+        occupation: prospect.occupation || "",
+        occupationCategory: prospect.occupationCategory || "Not Employed",
+        address: prospect.address || {},
+      },
+      needsAssessment: {
+        currentActivityKey: effectiveNeedsActivityKey,
+        attendanceConfirmed: Boolean(needsAssessment.attendanceConfirmed),
+        attendedAt: needsAssessment.attendedAt || null,
+        attendanceProofImageDataUrl: String(needsAssessment.attendanceProofImageDataUrl || ""),
+        attendanceProofFileName: String(needsAssessment.attendanceProofFileName || ""),
+        outcomeActivity: needsAssessment.outcomeActivity || "",
+        dependents: Array.isArray(needsAssessment.dependents) ? needsAssessment.dependents : [],
+        needsPriorities: needsAssessment.needsPriorities || {},
+      },
+      existingPolicies,
+      products: Array.isArray(products) ? products : [],
+      proposalMeeting: proposalMeeting
+        ? {
+            meetingType: proposalMeeting.meetingType,
+            startAt: proposalMeeting.startAt || null,
+            endAt: proposalMeeting.endAt || null,
+            durationMin: proposalMeeting.durationMin ?? null,
+            mode: proposalMeeting.mode || "",
+            platform: proposalMeeting.platform || "",
+            platformOther: proposalMeeting.platformOther || "",
+            link: proposalMeeting.link || "",
+            inviteSent: Boolean(proposalMeeting.inviteSent),
+            place: proposalMeeting.place || "",
+            status: proposalMeeting.status || "",
+          }
+        : null,
+      engagement: {
+        currentStage: engagement.currentStage,
+        currentActivityKey: engagement.currentActivityKey || "",
+      },
+    });
+  } catch (err) {
+    console.error("Get needs assessment error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/attendance", async (req, res) => {
+  const session = await mongoose.startSession();
+  try {
+    const { userId } = req.query;
+    const { prospectId, leadId } = req.params;
+    const { attended, attendanceProofImageDataUrl, attendanceProofFileName } = req.body || {};
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId) || !mongoose.isValidObjectId(prospectId) || !mongoose.isValidObjectId(leadId)) {
+      return res.status(400).json({ message: "Invalid id(s)." });
+    }
+    if (attended !== true) {
+      return res.status(400).json({ message: "Prospect attendance must be marked attended." });
+    }
+
+    const proofDataUrl = String(attendanceProofImageDataUrl || "").trim();
+    const proofFileName = String(attendanceProofFileName || "").trim();
+    const dataUrlMatch = proofDataUrl.match(/^data:(image\/(?:jpeg|png));base64,([A-Za-z0-9+/=\s]+)$/i);
+    if (!dataUrlMatch) {
+      return res.status(400).json({ message: "Proof of attendance image is required and must be JPG, JPEG, or PNG." });
+    }
+    const proofBase64 = String(dataUrlMatch[2] || "").replace(/\s+/g, "");
+    const proofBytes = Math.floor((proofBase64.length * 3) / 4);
+    const MAX_PROOF_IMAGE_BYTES = 5 * 1024 * 1024;
+    if (proofBytes > MAX_PROOF_IMAGE_BYTES) {
+      return res.status(400).json({ message: "Proof of attendance image must be 5MB or smaller." });
+    }
+    if (proofFileName && !/\.(jpe?g|png)$/i.test(proofFileName)) {
+      return res.status(400).json({ message: "Proof of attendance file type must be JPG, JPEG, or PNG." });
+    }
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
+    const leadObjectId = new mongoose.Types.ObjectId(leadId);
+
+    await session.withTransaction(async () => {
+      const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).session(session);
+      if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
+
+      const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).session(session);
+      if (!lead) throw Object.assign(new Error("Lead not found."), { status: 404 });
+
+      const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).session(session);
+      if (!engagement) throw Object.assign(new Error("Lead engagement not found."), { status: 404 });
+
+      const na = (await NeedsAssessment.findOne({ leadEngagementId: engagement._id }).session(session)) ||
+        new NeedsAssessment({ leadEngagementId: engagement._id });
+
+      na.attendanceConfirmed = true;
+      na.attendedAt = new Date();
+      na.attendanceProofImageDataUrl = proofDataUrl;
+      na.attendanceProofFileName = proofFileName;
+      na.outcomeActivity = "Record Prospect Attendance";
+      await na.save({ session });
+
+      if (engagement.currentStage === "Needs Assessment") {
+        engagement.currentActivityKey = "Perform Needs Analysis";
+        await engagement.save({ session });
+      }
+    });
+
+    return res.json({ message: "Prospect attendance recorded.", currentActivityKey: "Perform Needs Analysis" });
+  } catch (err) {
+    console.error("Record attendance error:", err);
+    return res.status(err?.status || 500).json({ message: err?.message || "Server error." });
+  } finally {
+    session.endSession();
+  }
+});
+
+app.put("/api/prospects/:prospectId/leads/:leadId/needs-assessment", async (req, res) => {
+  const session = await mongoose.startSession();
+  try {
+    const { userId } = req.query;
+    const { prospectId, leadId } = req.params;
+    const { basicInformation, dependents, needsPriorities } = req.body || {};
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId) || !mongoose.isValidObjectId(prospectId) || !mongoose.isValidObjectId(leadId)) {
+      return res.status(400).json({ message: "Invalid id(s)." });
+    }
+
+    const normalizedDependents = Array.isArray(dependents) ? dependents : [];
+    for (let i = 0; i < normalizedDependents.length; i += 1) {
+      const d = normalizedDependents[i] || {};
+      if (!String(d.name || "").trim()) return res.status(400).json({ message: `Dependent #${i + 1}: name is required.` });
+      const age = Number(d.age);
+      if (!Number.isFinite(age) || age < 0 || age > 120) {
+        return res.status(400).json({ message: `Dependent #${i + 1}: age must be between 0 and 120.` });
+      }
+      if (!["Male", "Female"].includes(String(d.gender || ""))) {
+        return res.status(400).json({ message: `Dependent #${i + 1}: invalid gender.` });
+      }
+      if (!["Child", "Parent", "Sibling"].includes(String(d.relationship || ""))) {
+        return res.status(400).json({ message: `Dependent #${i + 1}: invalid relationship.` });
+      }
+    }
+
+    const toNonNegativeNumber = (v) => {
+      const n = Number(v);
+      return Number.isFinite(n) && n >= 0 ? n : null;
+    };
+    const hasAtMostTwoDecimals = (n) => Number.isFinite(n) && Math.abs(n * 100 - Math.round(n * 100)) < 1e-8;
+
+    const INCOME_BANDS = {
+      BELOW_15000: { requiresManual: true },
+      "15000_29999": { max: 29999 },
+      "30000_49999": { max: 49999 },
+      "50000_79999": { max: 79999 },
+      "80000_99999": { max: 99999 },
+      "100000_249999": { max: 249999 },
+      "250000_499999": { max: 499999 },
+      ABOVE_500000: { requiresManual: true },
+    };
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
+    const leadObjectId = new mongoose.Types.ObjectId(leadId);
+
+    await session.withTransaction(async () => {
+      const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).session(session);
+      if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
+
+      const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).session(session);
+      if (!lead) throw Object.assign(new Error("Lead not found."), { status: 404 });
+
+      const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).session(session);
+      if (!engagement) throw Object.assign(new Error("Lead engagement not found."), { status: 404 });
+
+      const na = (await NeedsAssessment.findOne({ leadEngagementId: engagement._id }).session(session)) ||
+        new NeedsAssessment({ leadEngagementId: engagement._id });
+
+      if (!na.attendanceConfirmed || engagement.currentActivityKey !== "Perform Needs Analysis") {
+        throw Object.assign(new Error("Record attendance first and proceed to Perform Needs Analysis."), { status: 409 });
+      }
+
+      const info = basicInformation || {};
+      const sex = String(info.sex || "").trim();
+      const civilStatus = String(info.civilStatus || "").trim();
+      const occupationCategory = String(info.occupationCategory || "").trim();
+      const occupation = String(info.occupation || "").trim();
+      const addressInfo = info.address && typeof info.address === "object" ? info.address : {};
+      const line = String(addressInfo.line || "").trim();
+      const barangay = String(addressInfo.barangay || "").trim();
+      const city = String(addressInfo.city || "").trim();
+      const otherCity = String(addressInfo.otherCity || "").trim();
+      const region = String(addressInfo.region || "").trim();
+      const zipCode = String(addressInfo.zipCode || "").trim();
+      const birthdayRaw = String(info.birthday || "").trim();
+
+      if (!["Male", "Female"].includes(sex)) {
+        throw Object.assign(new Error("Sex is required."), { status: 400 });
+      }
+      if (!["Single", "Married", "Widowed", "Separated", "Annulled"].includes(civilStatus)) {
+        throw Object.assign(new Error("Civil status is required."), { status: 400 });
+      }
+      if (!birthdayRaw) {
+        throw Object.assign(new Error("Birthday is required."), { status: 400 });
+      }
+      if (occupation.length > 150) {
+        throw Object.assign(new Error("Occupation must be 150 characters or less."), { status: 400 });
+      }
+      if (!["Employed", "Self-Employed", "Not Employed"].includes(occupationCategory)) {
+        throw Object.assign(new Error("Occupation category is required."), { status: 400 });
+      }
+      if (occupationCategory !== "Not Employed" && !occupation) {
+        throw Object.assign(new Error("Occupation is required for employed/self-employed prospects."), { status: 400 });
+      }
+
+      if (!line) throw Object.assign(new Error("Street address is required."), { status: 400 });
+      if (!barangay) throw Object.assign(new Error("Barangay is required."), { status: 400 });
+      if (!city) throw Object.assign(new Error("City is required."), { status: 400 });
+      if (city === "Other" && !otherCity) throw Object.assign(new Error("Other city is required."), { status: 400 });
+      if (city !== "Other" && otherCity) throw Object.assign(new Error("Other city should be blank unless city is Other."), { status: 400 });
+      if (!region) throw Object.assign(new Error("Region is required."), { status: 400 });
+      if (!zipCode) throw Object.assign(new Error("Zip code is required."), { status: 400 });
+      if (!/^\d{4}$/.test(zipCode)) throw Object.assign(new Error("Zip code must be 4 digits."), { status: 400 });
+
+      const np = needsPriorities && typeof needsPriorities === "object" ? needsPriorities : {};
+      const currentPriority = String(np.currentPriority || "").trim();
+      if (!["Protection", "Health", "Investment"].includes(currentPriority)) {
+        throw Object.assign(new Error("Current priority is required."), { status: 400 });
+      }
+
+      const monthlyIncomeBand = String(np.monthlyIncomeBand || "").trim();
+      if (!Object.prototype.hasOwnProperty.call(INCOME_BANDS, monthlyIncomeBand)) {
+        throw Object.assign(new Error("Approximate monthly income bracket is required."), { status: 400 });
+      }
+
+      const monthlyIncomeAmountInput = toNonNegativeNumber(np.monthlyIncomeAmount);
+      let approxIncome = null;
+      if (INCOME_BANDS[monthlyIncomeBand].requiresManual) {
+        if (monthlyIncomeAmountInput === null) {
+          throw Object.assign(new Error("Approximate monthly income amount is required for selected bracket."), { status: 400 });
+        }
+        if (monthlyIncomeBand === "BELOW_15000" && monthlyIncomeAmountInput >= 15000) {
+          throw Object.assign(new Error("Manual monthly income must be below Php 15,000 for selected bracket."), { status: 400 });
+        }
+        if (monthlyIncomeBand === "ABOVE_500000" && monthlyIncomeAmountInput <= 500000) {
+          throw Object.assign(new Error("Manual monthly income must be above Php 500,000 for selected bracket."), { status: 400 });
+        }
+        if (!hasAtMostTwoDecimals(monthlyIncomeAmountInput)) {
+          throw Object.assign(new Error("Manual monthly income amount must have at most 2 decimal places."), { status: 400 });
+        }
+        approxIncome = monthlyIncomeAmountInput;
+      } else {
+        approxIncome = INCOME_BANDS[monthlyIncomeBand].max;
+      }
+
+      const minPremium = toNonNegativeNumber(np.minPremium);
+      const maxPremium = toNonNegativeNumber(np.maxPremium);
+      if (minPremium === null) throw Object.assign(new Error("Minimum willing monthly premium is required."), { status: 400 });
+      if (maxPremium === null) throw Object.assign(new Error("Maximum willing monthly premium is required."), { status: 400 });
+      if (!hasAtMostTwoDecimals(minPremium)) throw Object.assign(new Error("Minimum willing monthly premium must have at most 2 decimal places."), { status: 400 });
+      if (!hasAtMostTwoDecimals(maxPremium)) throw Object.assign(new Error("Maximum willing monthly premium must have at most 2 decimal places."), { status: 400 });
+      if (minPremium > approxIncome) throw Object.assign(new Error("Minimum willing monthly premium cannot be higher than approximate monthly income."), { status: 400 });
+      if (maxPremium > approxIncome) throw Object.assign(new Error("Maximum willing monthly premium cannot be higher than approximate monthly income."), { status: 400 });
+      if (maxPremium < minPremium) throw Object.assign(new Error("Maximum willing monthly premium must be equal to or higher than minimum."), { status: 400 });
+
+      const productSelectionInput = np?.productSelection && typeof np.productSelection === "object" ? np.productSelection : {};
+      const selectedProductId = String(productSelectionInput.selectedProductId || "").trim();
+      const requestedFrequency = String(productSelectionInput.requestedFrequency || "Monthly").trim() || "Monthly";
+      const requestedPremiumPayment = toNonNegativeNumber(productSelectionInput.requestedPremiumPayment);
+      const methodForInitialPayment = String(productSelectionInput.methodForInitialPayment || "").trim();
+      if (!selectedProductId || !mongoose.isValidObjectId(selectedProductId)) {
+        throw Object.assign(new Error("Product Selection: product is required."), { status: 400 });
+      }
+      if (!["Monthly", "Quarterly", "Half-yearly", "Yearly"].includes(requestedFrequency)) {
+        throw Object.assign(new Error("Product Selection: requested frequency is invalid."), { status: 400 });
+      }
+      if (requestedPremiumPayment === null) {
+        throw Object.assign(new Error("Product Selection: requested premium payment is required."), { status: 400 });
+      }
+      if (!hasAtMostTwoDecimals(requestedPremiumPayment)) {
+        throw Object.assign(new Error("Product Selection: requested premium payment must have at most 2 decimal places."), { status: 400 });
+      }
+      if (!["Credit Card / Debit Card", "Mobile Wallet / GCash", "Dated Check", "Bills Payments"].includes(methodForInitialPayment)) {
+        throw Object.assign(new Error("Product Selection: method for initial payment is required."), { status: 400 });
+      }
+      const selectedProductDoc = await Product.findById(selectedProductId).select("productCategory").lean();
+      if (!selectedProductDoc) {
+        throw Object.assign(new Error("Product Selection: selected product not found."), { status: 400 });
+      }
+      if (String(selectedProductDoc.productCategory || "") !== currentPriority) {
+        throw Object.assign(new Error("Product Selection: selected product does not match the chosen priority."), { status: 400 });
+      }
+
+      const optionalRidersInput = Array.isArray(np?.optionalRiders) ? np.optionalRiders : [];
+      const optionalRiders = optionalRidersInput
+        .map((r) => ({
+          riderKey: String(r?.riderKey || "").trim(),
+          riderName: String(r?.riderName || "").trim(),
+          enabled: Boolean(r?.enabled),
+        }))
+        .filter((r) => r.riderKey && r.riderName);
+      const productRidersNotes = String(np?.productRidersNotes || "").trim();
+      if (productRidersNotes.length > 2000) {
+        throw Object.assign(new Error("Notes about selected product and riders must be 2000 characters or less."), { status: 400 });
+      }
+
+      const prioritiesPayload = {
+        currentPriority,
+        monthlyIncomeBand,
+        monthlyIncomeAmount: monthlyIncomeAmountInput,
+        minPremium,
+        maxPremium,
+        productSelection: {
+          selectedProductId: new mongoose.Types.ObjectId(selectedProductId),
+          requestedPremiumPayment,
+          requestedFrequency,
+          methodForInitialPayment,
+        },
+        optionalRiders,
+        productRidersNotes,
+        protection: {},
+        health: {},
+        investment: {},
+      };
+
+      const currentYear = new Date().getFullYear();
+      const ageForCompute = Number(info.age ?? prospect.age);
+
+      if (currentPriority === "Protection") {
+        const monthlySpend = toNonNegativeNumber(np?.protection?.monthlySpend);
+        const savingsForProtection = toNonNegativeNumber(np?.protection?.savingsForProtection);
+        if (monthlySpend === null) throw Object.assign(new Error("Protection: approximate monthly spend is required."), { status: 400 });
+        if (!hasAtMostTwoDecimals(monthlySpend)) throw Object.assign(new Error("Protection: monthly spend must have at most 2 decimal places."), { status: 400 });
+        if (monthlySpend > approxIncome) throw Object.assign(new Error("Protection: monthly spend cannot be higher than approximate monthly income."), { status: 400 });
+        if (savingsForProtection === null) throw Object.assign(new Error("Protection: savings for protection is required."), { status: 400 });
+        if (!hasAtMostTwoDecimals(savingsForProtection)) throw Object.assign(new Error("Protection: savings for protection must have at most 2 decimal places."), { status: 400 });
+
+        const numberOfDependents = normalizedDependents.length;
+        const yearsToProtectIncome = Number.isFinite(ageForCompute) ? Math.max(0, 60 - ageForCompute) : 0;
+        const protectionGap = (monthlySpend * 12 * yearsToProtectIncome) - savingsForProtection;
+
+        prioritiesPayload.protection = {
+          monthlySpend,
+          numberOfDependents,
+          yearsToProtectIncome,
+          savingsForProtection,
+          protectionGap,
+        };
+      }
+
+      if (currentPriority === "Health") {
+        const amountToCoverCriticalIllness = toNonNegativeNumber(np?.health?.amountToCoverCriticalIllness);
+        const savingsForCriticalIllness = toNonNegativeNumber(np?.health?.savingsForCriticalIllness);
+        if (amountToCoverCriticalIllness === null) throw Object.assign(new Error("Health: approximate amount to cover critical illness is required."), { status: 400 });
+        if (!hasAtMostTwoDecimals(amountToCoverCriticalIllness)) throw Object.assign(new Error("Health: amount to cover critical illness must have at most 2 decimal places."), { status: 400 });
+        if (savingsForCriticalIllness === null) throw Object.assign(new Error("Health: savings for critical illness is required."), { status: 400 });
+        if (!hasAtMostTwoDecimals(savingsForCriticalIllness)) throw Object.assign(new Error("Health: savings for critical illness must have at most 2 decimal places."), { status: 400 });
+        if (savingsForCriticalIllness > amountToCoverCriticalIllness) {
+          throw Object.assign(new Error("Health: savings for critical illness cannot be higher than amount to cover critical illness."), { status: 400 });
+        }
+        prioritiesPayload.health = {
+          amountToCoverCriticalIllness,
+          savingsForCriticalIllness,
+          criticalIllnessGap: amountToCoverCriticalIllness - savingsForCriticalIllness,
+        };
+      }
+
+      if (currentPriority === "Investment") {
+        const savingsPlan = String(np?.investment?.savingsPlan || "").trim();
+        const savingsPlanOther = String(np?.investment?.savingsPlanOther || "").trim();
+        const targetSavingsAmount = toNonNegativeNumber(np?.investment?.targetSavingsAmount);
+        const targetUtilizationYear = Number(np?.investment?.targetUtilizationYear);
+        const savingsForInvestment = toNonNegativeNumber(np?.investment?.savingsForInvestment);
+        const riskProfiler = np?.investment?.riskProfiler && typeof np.investment.riskProfiler === "object"
+          ? np.investment.riskProfiler
+          : {};
+        const fundChoice = np?.investment?.fundChoice && typeof np.investment.fundChoice === "object"
+          ? np.investment.fundChoice
+          : {};
+
+        const INVESTMENT_FUNDS = {
+          PRULINK_MONEY_MARKET_FUND: { fundName: "PRULink Money Market Fund", currency: "PHP", riskRating: 1 },
+          PRULINK_BOND_FUND: { fundName: "PRULink Bond Fund", currency: "PHP", riskRating: 1 },
+          PRULINK_MANAGED_FUND: { fundName: "PRULink Managed Fund", currency: "PHP", riskRating: 2 },
+          PRULINK_PROACTIVE_FUND: { fundName: "PRULink Proactive Fund", currency: "PHP", riskRating: 3 },
+          PRULINK_GROWTH_FUND: { fundName: "PRULink Growth Fund", currency: "PHP", riskRating: 3 },
+          PRULINK_EQUITY_FUND: { fundName: "PRULink Equity Fund", currency: "PHP", riskRating: 3 },
+          PRULINK_US_DOLLAR_BOND_FUND: { fundName: "PRULink US Dollar Bond Fund", currency: "USD", riskRating: 1 },
+          PRULINK_ASIAN_LOCAL_BOND_FUND: { fundName: "PRULink Asian Local Bond Fund", currency: "USD", riskRating: 2 },
+          PRULINK_CASH_FLOW_FUND: { fundName: "PRULink Cash Flow Fund", currency: "USD", riskRating: 2 },
+          PRULINK_ASIAN_BALANCED_FUND: { fundName: "PRULink Asian Balanced Fund", currency: "USD", riskRating: 2 },
+          PRULINK_ASIA_PACIFIC_EQUITY_FUND: { fundName: "PRULink Asia Pacific Equity Fund", currency: "USD", riskRating: 3 },
+          PRULINK_GLOBAL_EMERGING_MARKETS_DYNAMIC_FUND: { fundName: "PRULink Global Emerging Markets Dynamic Fund", currency: "USD", riskRating: 3 },
+        };
+
+        const horizon = String(riskProfiler.investmentHorizon || "").trim();
+        const goal = String(riskProfiler.investmentGoal || "").trim();
+        const experience = String(riskProfiler.marketExperience || "").trim();
+        const volatility = String(riskProfiler.volatilityReaction || "").trim();
+        const capitalLoss = String(riskProfiler.capitalLossAffordability || "").trim();
+        const tradeoff = String(riskProfiler.riskReturnTradeoff || "").trim();
+
+        const horizonScores = { LT_3: 0, BETWEEN_3_7: 2, BETWEEN_7_10: 3, AT_LEAST_10: 4 };
+        const goalScores = { CAPITAL_PRESERVATION: 1, STEADY_GROWTH: 2, SIGNIFICANT_APPRECIATION: 3 };
+        const expScores = { NONE: 0, I_ONLY: 2, II_ONLY: 4, BOTH: 4 };
+        const volScores = { FULL_WITHDRAW: 0, LESS_RISKY: 1, HOLD: 2, TOP_UPS: 4 };
+        const lossScores = { NO_LOSS: 0, UP_TO_5: 1, UP_TO_10: 2, ABOVE_10: 3 };
+        const tradeoffScores = { PORTFOLIO_A: 1, PORTFOLIO_B: 1, PORTFOLIO_C: 2, PORTFOLIO_D: 3 };
+
+        if (!["Home", "Vehicle", "Holiday", "Early Retirement", "Other"].includes(savingsPlan)) {
+          throw Object.assign(new Error("Investment: savings plan is required."), { status: 400 });
+        }
+        if (savingsPlan === "Other" && !savingsPlanOther) {
+          throw Object.assign(new Error("Investment: please specify other savings plan."), { status: 400 });
+        }
+        if (targetSavingsAmount === null) throw Object.assign(new Error("Investment: target savings amount is required."), { status: 400 });
+        if (!hasAtMostTwoDecimals(targetSavingsAmount)) throw Object.assign(new Error("Investment: target savings amount must have at most 2 decimal places."), { status: 400 });
+        if (!Number.isFinite(targetUtilizationYear)) throw Object.assign(new Error("Investment: target year to utilize savings is required."), { status: 400 });
+        if (!Number.isInteger(targetUtilizationYear)) throw Object.assign(new Error("Investment: target year must be a whole number."), { status: 400 });
+        if (targetUtilizationYear < currentYear + 2 || targetUtilizationYear > currentYear + 20) {
+          throw Object.assign(new Error("Investment: target year must be between 2 and 20 years from current year."), { status: 400 });
+        }
+        if (savingsForInvestment === null) throw Object.assign(new Error("Investment: savings for investment is required."), { status: 400 });
+        if (!hasAtMostTwoDecimals(savingsForInvestment)) throw Object.assign(new Error("Investment: savings for investment must have at most 2 decimal places."), { status: 400 });
+        if (savingsForInvestment > targetSavingsAmount) {
+          throw Object.assign(new Error("Investment: savings for investment cannot be higher than target savings amount."), { status: 400 });
+        }
+
+        if (!Object.prototype.hasOwnProperty.call(horizonScores, horizon)) {
+          throw Object.assign(new Error("Investment Risk Profiler: investment horizon is required."), { status: 400 });
+        }
+        if (!Object.prototype.hasOwnProperty.call(goalScores, goal)) {
+          throw Object.assign(new Error("Investment Risk Profiler: investment goal is required."), { status: 400 });
+        }
+        if (!Object.prototype.hasOwnProperty.call(expScores, experience)) {
+          throw Object.assign(new Error("Investment Risk Profiler: market experience is required."), { status: 400 });
+        }
+        if (!Object.prototype.hasOwnProperty.call(volScores, volatility)) {
+          throw Object.assign(new Error("Investment Risk Profiler: short-term volatility reaction is required."), { status: 400 });
+        }
+        if (!Object.prototype.hasOwnProperty.call(lossScores, capitalLoss)) {
+          throw Object.assign(new Error("Investment Risk Profiler: affordability to capital loss is required."), { status: 400 });
+        }
+        if (!Object.prototype.hasOwnProperty.call(tradeoffScores, tradeoff)) {
+          throw Object.assign(new Error("Investment Risk Profiler: risk and return trade-off is required."), { status: 400 });
+        }
+
+        const riskProfileScore =
+          horizonScores[horizon] +
+          goalScores[goal] +
+          expScores[experience] +
+          volScores[volatility] +
+          lossScores[capitalLoss] +
+          tradeoffScores[tradeoff];
+
+        const riskProfileCategory =
+          riskProfileScore <= 5
+            ? "NOT_RECOMMENDED"
+            : riskProfileScore <= 9
+            ? "CONSERVATIVE"
+            : riskProfileScore <= 15
+            ? "MODERATE"
+            : "AGGRESSIVE";
+
+        const suitableRiskRatingsByCategory = {
+          NOT_RECOMMENDED: [],
+          CONSERVATIVE: [1],
+          MODERATE: [1, 2],
+          AGGRESSIVE: [1, 2, 3],
+        };
+        const allowedRatings = suitableRiskRatingsByCategory[riskProfileCategory] || [];
+        const selectedFundsRaw = Array.isArray(fundChoice.selectedFunds) ? fundChoice.selectedFunds : [];
+        const normalizedSelectedFunds = [];
+
+        for (const row of selectedFundsRaw) {
+          const fundKey = String(row?.fundKey || "").trim();
+          if (!fundKey || !Object.prototype.hasOwnProperty.call(INVESTMENT_FUNDS, fundKey)) {
+            throw Object.assign(new Error("Fund Choice: invalid fund selection."), { status: 400 });
+          }
+          const allocationPercent = toNonNegativeNumber(row?.allocationPercent);
+          if (allocationPercent === null || allocationPercent > 100) {
+            throw Object.assign(new Error("Fund Choice: allocation per fund must be between 0 and 100."), { status: 400 });
+          }
+          if (!hasAtMostTwoDecimals(allocationPercent)) {
+            throw Object.assign(new Error("Fund Choice: allocation per fund must have at most 2 decimal places."), { status: 400 });
+          }
+          const meta = INVESTMENT_FUNDS[fundKey];
+          normalizedSelectedFunds.push({
+            fundKey,
+            fundName: meta.fundName,
+            currency: meta.currency,
+            riskRating: meta.riskRating,
+            allocationPercent,
+            isSuitable: allowedRatings.includes(meta.riskRating),
+          });
+        }
+
+        if (normalizedSelectedFunds.length === 0) {
+          throw Object.assign(new Error("Fund Choice: select at least one fund."), { status: 400 });
+        }
+
+        const totalAllocationPercent = normalizedSelectedFunds.reduce((sum, item) => sum + item.allocationPercent, 0);
+        if (Math.abs(totalAllocationPercent - 100) > 0.0001) {
+          throw Object.assign(new Error("Fund Choice: allocation in percentage must equal 100%."), { status: 400 });
+        }
+
+        const fundMatch = normalizedSelectedFunds.some((item) => !item.isSuitable) ? "No" : "Yes";
+        const mismatchReason = String(fundChoice.mismatchReason || "").trim();
+        if (fundMatch === "No" && !mismatchReason) {
+          throw Object.assign(new Error("Fund Choice: reason for mismatch is required when fund match is No."), { status: 400 });
+        }
+
+        prioritiesPayload.investment = {
+          savingsPlan,
+          savingsPlanOther: savingsPlan === "Other" ? savingsPlanOther : "",
+          targetSavingsAmount,
+          targetUtilizationYear,
+          savingsForInvestment,
+          savingsGap: targetSavingsAmount - savingsForInvestment,
+          riskProfiler: {
+            investmentHorizon: horizon,
+            investmentGoal: goal,
+            marketExperience: experience,
+            volatilityReaction: volatility,
+            capitalLossAffordability: capitalLoss,
+            riskReturnTradeoff: tradeoff,
+            riskProfileScore,
+            riskProfileCategory,
+          },
+          fundChoice: {
+            selectedFunds: normalizedSelectedFunds,
+            totalAllocationPercent,
+            fundMatch,
+            mismatchReason: fundMatch === "No" ? mismatchReason : "",
+          },
+        };
+      }
+
+      let nextBirthday = prospect.birthday;
+      let nextAge = prospect.age;
+      if (birthdayRaw) {
+        const b = new Date(birthdayRaw);
+        if (Number.isNaN(b.getTime())) throw Object.assign(new Error("Invalid birthday."), { status: 400 });
+        if (isFutureDateOnly(b)) throw Object.assign(new Error("Birthday cannot be in the future."), { status: 400 });
+        const computedAge = computeAgeFromBirthday(b);
+        if (computedAge === null || computedAge < 18 || computedAge > 70) {
+          throw Object.assign(new Error("Prospect age must be between 18 and 70 years old."), { status: 400 });
+        }
+        nextBirthday = b;
+        nextAge = computedAge;
+      }
+
+      prospect.sex = sex || prospect.sex;
+      prospect.civilStatus = civilStatus || prospect.civilStatus;
+      prospect.occupationCategory = occupationCategory;
+      prospect.occupation = occupationCategory === "Not Employed" ? "" : occupation;
+      prospect.address = {
+        line,
+        barangay,
+        city,
+        otherCity: city === "Other" ? otherCity : "",
+        region,
+        zipCode,
+        country: "Philippines",
+      };
+      prospect.birthday = nextBirthday;
+      prospect.age = nextAge;
+      await prospect.save({ session });
+
+      na.dependents = normalizedDependents.map((d) => ({
+        name: String(d.name || "").trim(),
+        age: Number(d.age),
+        gender: String(d.gender || ""),
+        relationship: String(d.relationship || ""),
+      }));
+      na.needsPriorities = prioritiesPayload;
+      na.outcomeActivity = "Perform Needs Analysis";
+      await na.save({ session });
+
+      if (engagement.currentStage === "Needs Assessment") {
+        engagement.currentActivityKey = "Schedule Proposal Presentation";
+        await engagement.save({ session });
+      }
+    });
+
+    return res.json({ message: "Needs analysis saved.", currentActivityKey: "Schedule Proposal Presentation" });
+  } catch (err) {
+    console.error("Save needs assessment error:", err);
+    return res.status(err?.status || 500).json({ message: err?.message || "Server error." });
+  } finally {
+    session.endSession();
+  }
+});
+
+app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/schedule-proposal", async (req, res) => {
+  const session = await mongoose.startSession();
+  try {
+    const { userId } = req.query;
+    const { prospectId, leadId } = req.params;
+    const {
+      meetingAt,
+      meetingDate,
+      meetingStartTime,
+      meetingDurationMin,
+      meetingMode,
+      meetingPlatform,
+      meetingPlatformOther,
+      meetingLink,
+      meetingInviteSent,
+      meetingPlace,
+    } = req.body;
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId) || !mongoose.isValidObjectId(prospectId) || !mongoose.isValidObjectId(leadId)) {
+      return res.status(400).json({ message: "Invalid id(s)." });
+    }
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
+    const leadObjectId = new mongoose.Types.ObjectId(leadId);
+
+    await session.withTransaction(async () => {
+      const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).session(session);
+      if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
+
+      const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).session(session);
+      if (!lead) throw Object.assign(new Error("Lead not found."), { status: 404 });
+
+      const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).session(session);
+      if (!engagement) throw Object.assign(new Error("Lead engagement not found."), { status: 404 });
+
+      const na = await NeedsAssessment.findOne({ leadEngagementId: engagement._id }).session(session);
+      if (!na || engagement.currentActivityKey !== "Schedule Proposal Presentation") {
+        throw Object.assign(new Error("Complete attendance and needs analysis first."), { status: 409 });
+      }
+
+      const durationMin = Number(meetingDurationMin || 120);
+      const dt = meetingDate && meetingStartTime
+        ? combineDateAndTimeLocal(meetingDate, meetingStartTime)
+        : new Date(meetingAt);
+
+      if (!dt || Number.isNaN(dt.getTime())) {
+        throw Object.assign(new Error("meeting date/time is required and must be valid."), { status: 400 });
+      }
+
+      const tomorrow = new Date();
+      tomorrow.setHours(0, 0, 0, 0);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      if (dt < tomorrow) throw Object.assign(new Error("meetingAt must be at least tomorrow."), { status: 400 });
+
+      if (![30, 60, 90, 120].includes(durationMin)) {
+        throw Object.assign(new Error("meetingDurationMin must be one of 30, 60, 90, 120."), { status: 400 });
+      }
+
+      const mode = String(meetingMode || "").trim();
+      if (!["Online", "Face-to-face"].includes(mode)) {
+        throw Object.assign(new Error("meetingMode must be Online or Face-to-face."), { status: 400 });
+      }
+
+      const platform = String(meetingPlatform || "").trim();
+      const platformOther = String(meetingPlatformOther || "").trim();
+      const link = String(meetingLink || "").trim();
+      const place = String(meetingPlace || "").trim();
+
+      if (mode === "Online") {
+        if (!["Zoom", "Google Meet", "Other"].includes(platform)) {
+          throw Object.assign(new Error("meetingPlatform is required for online meetings."), { status: 400 });
+        }
+        if (platform === "Other" && !platformOther) {
+          throw Object.assign(new Error("meetingPlatformOther is required when platform is Other."), { status: 400 });
+        }
+        if (!link || !isValidHttpUrl(link)) {
+          throw Object.assign(new Error("Valid meetingLink (http/https) is required for online meetings."), { status: 400 });
+        }
+        if (meetingInviteSent !== true) {
+          throw Object.assign(new Error("meetingInviteSent must be true for online meetings."), { status: 400 });
+        }
+      }
+
+      if (mode === "Face-to-face" && !place) {
+        throw Object.assign(new Error("meetingPlace is required for face-to-face meetings."), { status: 400 });
+      }
+
+      const endAt = new Date(dt.getTime() + durationMin * 60 * 1000);
+
+      const windows = await getAgentMeetingWindows(userObjectId, null, null, session);
+      const conflict = hasMeetingConflict(dt, endAt, windows);
+      if (conflict) {
+        throw Object.assign(new Error("Selected meeting time conflicts with another scheduled meeting."), {
+          status: 409,
+          code: "MEETING_SLOT_CONFLICT",
+        });
+      }
+
+      const meetingType = "Proposal Presentation";
+      const existingMeeting = await ScheduledMeeting.findOne({
+        leadEngagementId: engagement._id,
+        meetingType,
+      }).session(session);
+
+      if (existingMeeting) {
+        existingMeeting.startAt = dt;
+        existingMeeting.endAt = endAt;
+        existingMeeting.durationMin = durationMin;
+        existingMeeting.mode = mode;
+        existingMeeting.platform = mode === "Online" ? platform : undefined;
+        existingMeeting.platformOther = mode === "Online" && platform === "Other" ? platformOther : undefined;
+        existingMeeting.link = mode === "Online" ? link : undefined;
+        existingMeeting.inviteSent = Boolean(meetingInviteSent);
+        existingMeeting.place = mode === "Face-to-face" ? place : undefined;
+        existingMeeting.status = "Scheduled";
+        await existingMeeting.save({ session });
+      } else {
+        await ScheduledMeeting.create(
+          [{
+            leadEngagementId: engagement._id,
+            meetingType,
+            startAt: dt,
+            endAt,
+            durationMin,
+            mode,
+            platform: mode === "Online" ? platform : undefined,
+            platformOther: mode === "Online" && platform === "Other" ? platformOther : undefined,
+            link: mode === "Online" ? link : undefined,
+            inviteSent: Boolean(meetingInviteSent),
+            place: mode === "Face-to-face" ? place : undefined,
+            status: "Scheduled",
+          }],
+          { session }
+        );
+      }
+
+      const now = new Date();
+
+      const needsAssessmentMeeting = await ScheduledMeeting.findOne({
+        leadEngagementId: engagement._id,
+        meetingType: "Needs Assessment",
+      }).session(session);
+      if (needsAssessmentMeeting && needsAssessmentMeeting.status !== "Completed") {
+        needsAssessmentMeeting.status = "Completed";
+        await needsAssessmentMeeting.save({ session });
+      }
+
+      const openAppointmentTasks = await Task.find({
+        assignedToUserId: userObjectId,
+        prospectId: prospectObjectId,
+        leadEngagementId: engagement._id,
+        type: "APPOINTMENT",
+        status: "Open",
+      }).session(session);
+
+      for (const t of openAppointmentTasks) {
+        t.status = "Done";
+        t.completedAt = now;
+        await t.save({ session });
+      }
+
+      const presentationDedupeKey = `PRESENTATION:${engagement._id}`;
+      let presentationTask = await Task.findOne({
+        assignedToUserId: userObjectId,
+        dedupeKey: presentationDedupeKey,
+      }).session(session);
+
+      const presentationTitle = `Present proposal to ${prospect.firstName}`;
+      const presentationDescription = `Conduct proposal presentation for ${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName} (Lead ${lead.leadCode || "—"}). Meeting window: ${formatDateTimeInManila(dt)} to ${formatDateTimeInManila(endAt)} (Asia/Manila).`;
+      const presentationDueAt = new Date(endAt.getTime() + 15 * 60 * 1000);
+
+      if (!presentationTask) {
+        presentationTask = await Task.create(
+          [
+            {
+              assignedToUserId: userObjectId,
+              prospectId: prospectObjectId,
+              leadEngagementId: engagement._id,
+              type: "PRESENTATION",
+              title: presentationTitle,
+              description: presentationDescription,
+              dueAt: presentationDueAt,
+              status: "Open",
+              dedupeKey: presentationDedupeKey,
+            },
+          ],
+          { session }
+        ).then((docs) => docs[0]);
+
+        const prospectFullName = `${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName}`.trim();
+        await createTaskAddedNotifications({
+          assignedToUserId: userObjectId,
+          task: presentationTask,
+          prospectFullName,
+          leadCode: lead.leadCode,
+          session,
+        });
+      } else if (presentationTask.status !== "Done") {
+        presentationTask.title = presentationTitle;
+        presentationTask.description = presentationDescription;
+        presentationTask.dueAt = presentationDueAt;
+        await presentationTask.save({ session });
+      }
+
+      na.outcomeActivity = "Schedule Proposal Presentation";
+      await na.save({ session });
+
+      engagement.currentStage = "Proposal";
+      engagement.currentActivityKey = "Generate Proposal";
+      engagement.stageCompletedAt = now;
+      engagement.stageHistory = Array.isArray(engagement.stageHistory) ? engagement.stageHistory : [];
+
+      const openNeeds = [...engagement.stageHistory]
+        .reverse()
+        .find((h) => h?.stage === "Needs Assessment" && !h?.completedAt);
+      if (openNeeds) {
+        openNeeds.completedAt = now;
+        openNeeds.reason = "Proposal presentation meeting scheduled.";
+      }
+
+      engagement.stageHistory.push({
+        stage: "Proposal",
+        startedAt: now,
+        completedAt: null,
+        reason: "Moved from Needs Assessment after proposal presentation schedule.",
+      });
+      engagement.stageStartedAt = now;
+      await engagement.save({ session });
+
+      await Proposal.updateOne(
+        { leadEngagementId: engagement._id },
+        {
+          $setOnInsert: {
+            leadEngagementId: engagement._id,
+          },
+          $set: {
+            outcomeActivity: "Generate Proposal",
+          },
+        },
+        { upsert: true, session }
+      );
+    });
+
+    return res.json({ message: "Proposal presentation scheduled. Proposal stage activated." });
+  } catch (err) {
+    console.error("Schedule proposal presentation error:", err);
+    return res.status(err?.status || 500).json({ message: err?.message || "Server error.", code: err?.code });
+  } finally {
+    session.endSession();
+  }
+});
+
+app.post("/api/prospects/:prospectId/leads/:leadId/proposal/generate", async (req, res) => {
+  const session = await mongoose.startSession();
+  try {
+    const { userId } = req.query;
+    const { prospectId, leadId } = req.params;
+    const {
+      chosenProductId,
+      proposalFileName,
+      proposalFileMimeType,
+      proposalFileDataUrl,
+      sentToProspectEmail,
+    } = req.body || {};
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId) || !mongoose.isValidObjectId(prospectId) || !mongoose.isValidObjectId(leadId)) {
+      return res.status(400).json({ message: "Invalid id(s)." });
+    }
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
+    const leadObjectId = new mongoose.Types.ObjectId(leadId);
+
+    await session.withTransaction(async () => {
+      const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).session(session);
+      if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
+
+      const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).session(session);
+      if (!lead) throw Object.assign(new Error("Lead not found."), { status: 404 });
+
+      const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).session(session);
+      if (!engagement) throw Object.assign(new Error("Lead engagement not found."), { status: 404 });
+
+      if (engagement.currentStage !== "Proposal") {
+        throw Object.assign(new Error("Lead is not in Proposal stage."), { status: 409 });
+      }
+
+      const proposalDoc = await Proposal.findOne({ leadEngagementId: engagement._id })
+        .select("outcomeActivity")
+        .session(session)
+        .lean();
+
+      const activityKey = String(engagement.currentActivityKey || proposalDoc?.outcomeActivity || "Generate Proposal").trim() || "Generate Proposal";
+      if (activityKey !== "Generate Proposal") {
+        throw Object.assign(new Error("Generate Proposal is not the current activity."), { status: 409 });
+      }
+
+      const name = String(proposalFileName || "").trim();
+      const mime = String(proposalFileMimeType || "").trim().toLowerCase();
+      const dataUrl = String(proposalFileDataUrl || "").trim();
+      if (!name) throw Object.assign(new Error("proposalFileName is required."), { status: 400 });
+      if (!dataUrl) throw Object.assign(new Error("proposalFileDataUrl is required."), { status: 400 });
+      const looksPdfName = /\.pdf$/i.test(name);
+      const looksPdfMime = mime === "application/pdf";
+      const looksPdfDataUrl = /^data:application\/pdf;base64,/i.test(dataUrl);
+      if (!looksPdfName || (!looksPdfMime && !looksPdfDataUrl)) {
+        throw Object.assign(new Error("Proposal file must be a PDF."), { status: 400 });
+      }
+
+      if (sentToProspectEmail !== true) {
+        throw Object.assign(new Error("Please confirm proposal was sent to prospect email."), { status: 400 });
+      }
+
+      const needsAssessment = await NeedsAssessment.findOne({ leadEngagementId: engagement._id })
+        .select("needsPriorities.productSelection.selectedProductId")
+        .session(session)
+        .lean();
+      const selectedProductId = chosenProductId || needsAssessment?.needsPriorities?.productSelection?.selectedProductId || null;
+      const selectedProduct = selectedProductId && mongoose.isValidObjectId(selectedProductId)
+        ? await Product.findById(selectedProductId).select("_id productName description paymentTermOptions paymentTermLabel coverageDurationRule coverageDurationLabel").session(session)
+        : null;
+
+      engagement.currentActivityKey = "Record Prospect Attendance";
+      await engagement.save({ session });
+
+      await Proposal.updateOne(
+        { leadEngagementId: engagement._id },
+        {
+          $setOnInsert: { leadEngagementId: engagement._id },
+          $set: {
+            outcomeActivity: "Record Prospect Attendance",
+            chosenProductId: selectedProduct?._id || (mongoose.isValidObjectId(selectedProductId) ? new mongoose.Types.ObjectId(selectedProductId) : null),
+            generateProposal: {
+              proposalFileName: name,
+              proposalFileMimeType: "application/pdf",
+              proposalFileDataUrl: dataUrl,
+              sentToProspectEmail: true,
+              sentToProspectAt: new Date(),
+              uploadedAt: new Date(),
+            },
+          },
+        },
+        { upsert: true, session }
+      );
+    });
+
+    return res.json({
+      message: "Proposal generated and sent details saved.",
+      currentActivityKey: "Record Prospect Attendance",
+    });
+  } catch (err) {
+    console.error("Generate proposal error:", err);
+    return res.status(err?.status || 500).json({ message: err?.message || "Server error." });
+  } finally {
+    session.endSession();
+  }
+});
+
+
+
+app.post("/api/prospects/:prospectId/leads/:leadId/proposal/attendance", async (req, res) => {
+  const session = await mongoose.startSession();
+  try {
+    const { userId } = req.query;
+    const { prospectId, leadId } = req.params;
+    const { attended, attendanceProofImageDataUrl, attendanceProofFileName } = req.body || {};
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId) || !mongoose.isValidObjectId(prospectId) || !mongoose.isValidObjectId(leadId)) {
+      return res.status(400).json({ message: "Invalid id(s)." });
+    }
+
+    if (attended !== true) {
+      return res.status(400).json({ message: "Prospect attendance must be marked attended." });
+    }
+
+    const proofDataUrl = String(attendanceProofImageDataUrl || "").trim();
+    const proofFileName = String(attendanceProofFileName || "").trim();
+    if (!proofDataUrl) {
+      return res.status(400).json({ message: "Proof of attendance image is required and must be JPG, JPEG, or PNG." });
+    }
+
+    const isImageDataUrl = /^data:image\/(?:jpeg|png);base64,/i.test(proofDataUrl);
+    if (!isImageDataUrl) {
+      return res.status(400).json({ message: "Proof of attendance file type must be JPG, JPEG, or PNG." });
+    }
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
+    const leadObjectId = new mongoose.Types.ObjectId(leadId);
+
+    await session.withTransaction(async () => {
+      const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).session(session);
+      if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
+
+      const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).session(session);
+      if (!lead) throw Object.assign(new Error("Lead not found."), { status: 404 });
+
+      const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).session(session);
+      if (!engagement) throw Object.assign(new Error("Lead engagement not found."), { status: 404 });
+
+      if (engagement.currentStage !== "Proposal") {
+        throw Object.assign(new Error("Lead is not in Proposal stage."), { status: 409 });
+      }
+
+      if (engagement.currentActivityKey !== "Record Prospect Attendance") {
+        throw Object.assign(new Error("Record Prospect Attendance is not the current activity."), { status: 409 });
+      }
+
+      engagement.currentActivityKey = "Present Proposal";
+      await engagement.save({ session });
+
+      await Proposal.updateOne(
+        { leadEngagementId: engagement._id },
+        {
+          $setOnInsert: { leadEngagementId: engagement._id },
+          $set: {
+            outcomeActivity: "Record Prospect Attendance",
+            recordProspectAttendance: {
+              attended: true,
+              attendedAt: new Date(),
+              attendanceProofImageDataUrl: proofDataUrl,
+              attendanceProofFileName: proofFileName,
+            },
+          },
+        },
+        { upsert: true, session }
+      );
+    });
+
+    return res.json({
+      message: "Prospect attendance recorded.",
+      currentActivityKey: "Present Proposal",
+    });
+  } catch (err) {
+    console.error("Record proposal attendance error:", err);
+    return res.status(err?.status || 500).json({ message: err?.message || "Server error." });
+  } finally {
+    session.endSession();
+  }
+});
+
+
+app.post("/api/prospects/:prospectId/leads/:leadId/application/attendance", async (req, res) => {
+  const session = await mongoose.startSession();
+  try {
+    const { userId } = req.query;
+    const { prospectId, leadId } = req.params;
+    const { attended, attendanceProofImageDataUrl, attendanceProofFileName } = req.body || {};
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId) || !mongoose.isValidObjectId(prospectId) || !mongoose.isValidObjectId(leadId)) {
+      return res.status(400).json({ message: "Invalid id(s)." });
+    }
+
+    if (attended !== true) {
+      return res.status(400).json({ message: "Prospect attendance must be marked attended." });
+    }
+
+    const proofDataUrl = String(attendanceProofImageDataUrl || "").trim();
+    const proofFileName = String(attendanceProofFileName || "").trim();
+    if (!proofDataUrl) {
+      return res.status(400).json({ message: "Proof of attendance image is required and must be JPG, JPEG, or PNG." });
+    }
+    if (!/^data:image\/(?:jpeg|png);base64,/i.test(proofDataUrl)) {
+      return res.status(400).json({ message: "Proof of attendance file type must be JPG, JPEG, or PNG." });
+    }
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
+    const leadObjectId = new mongoose.Types.ObjectId(leadId);
+
+    await session.withTransaction(async () => {
+      const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).session(session);
+      if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
+
+      const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).session(session);
+      if (!lead) throw Object.assign(new Error("Lead not found."), { status: 404 });
+
+      const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).session(session);
+      if (!engagement) throw Object.assign(new Error("Lead engagement not found."), { status: 404 });
+
+      if (engagement.currentStage !== "Application") {
+        throw Object.assign(new Error("Lead is not in Application stage."), { status: 409 });
+      }
+
+      engagement.currentActivityKey = "Record Premium Payment Transfer";
+      await engagement.save({ session });
+
+      await Application.updateOne(
+        { leadEngagementId: engagement._id },
+        {
+          $setOnInsert: { leadEngagementId: engagement._id },
+          $set: {
+            outcomeActivity: "Record Premium Payment Transfer",
+            recordProspectAttendance: {
+              attended: true,
+              attendedAt: new Date(),
+              attendanceProofImageDataUrl: proofDataUrl,
+              attendanceProofFileName: proofFileName,
+            },
+          },
+        },
+        { upsert: true, session }
+      );
+    });
+
+    return res.json({
+      message: "Application prospect attendance saved.",
+      currentActivityKey: "Record Premium Payment Transfer",
+    });
+  } catch (err) {
+    console.error("Application attendance save error:", err);
+    return res.status(err?.status || 500).json({ message: err?.message || "Server error." });
+  } finally {
+    session.endSession();
+  }
+});
+
+app.post("/api/prospects/:prospectId/leads/:leadId/application/premium-payment-transfer", async (req, res) => {
+  const session = await mongoose.startSession();
+  try {
+    const { userId } = req.query;
+    const { prospectId, leadId } = req.params;
+    const {
+      totalAnnualPremiumPhp,
+      totalFrequencyPremiumPhp,
+      methodForRenewalPayment,
+      paymentProofImageDataUrl,
+      paymentProofFileName,
+    } = req.body || {};
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId) || !mongoose.isValidObjectId(prospectId) || !mongoose.isValidObjectId(leadId)) {
+      return res.status(400).json({ message: "Invalid id(s)." });
+    }
+
+    const toNonNegativeNumber = (v) => {
+      const n = Number(v);
+      return Number.isFinite(n) && n >= 0 ? n : null;
+    };
+    const hasAtMostTwoDecimals = (n) => Number.isFinite(n) && Math.abs(n * 100 - Math.round(n * 100)) < 1e-8;
+
+    const annualPremiumRaw = String(totalAnnualPremiumPhp ?? "").trim();
+    const frequencyPremiumRaw = String(totalFrequencyPremiumPhp ?? "").trim();
+    const annualPremium = toNonNegativeNumber(annualPremiumRaw);
+    const frequencyPremium = toNonNegativeNumber(frequencyPremiumRaw);
+    const renewalMethod = String(methodForRenewalPayment || "").trim();
+    const proofDataUrl = String(paymentProofImageDataUrl || "").trim();
+    const proofFileName = String(paymentProofFileName || "").trim();
+
+    if (!annualPremiumRaw || annualPremium === null) return res.status(400).json({ message: "Total annual premium is required." });
+    if (!frequencyPremiumRaw || frequencyPremium === null) return res.status(400).json({ message: "Total requested-frequency premium is required." });
+    if (!hasAtMostTwoDecimals(annualPremium)) return res.status(400).json({ message: "Total annual premium must have at most 2 decimal places." });
+    if (!hasAtMostTwoDecimals(frequencyPremium)) return res.status(400).json({ message: "Total requested-frequency premium must have at most 2 decimal places." });
+
+    const allowedPaymentMethods = ["Credit Card / Debit Card", "Mobile Wallet / GCash", "Dated Check", "Bills Payments"];
+    if (!allowedPaymentMethods.includes(renewalMethod)) {
+      return res.status(400).json({ message: "Method for renewal payment is required." });
+    }
+
+    if (!proofDataUrl) {
+      return res.status(400).json({ message: "Proof of payment image is required and must be JPG, JPEG, or PNG." });
+    }
+    if (!/^data:image\/(?:jpeg|png);base64,/i.test(proofDataUrl)) {
+      return res.status(400).json({ message: "Proof of payment file type must be JPG, JPEG, or PNG." });
+    }
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
+    const leadObjectId = new mongoose.Types.ObjectId(leadId);
+
+    await session.withTransaction(async () => {
+      const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).session(session);
+      if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
+
+      const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).session(session);
+      if (!lead) throw Object.assign(new Error("Lead not found."), { status: 404 });
+
+      const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).session(session);
+      if (!engagement) throw Object.assign(new Error("Lead engagement not found."), { status: 404 });
+
+      if (engagement.currentStage !== "Application") {
+        throw Object.assign(new Error("Lead is not in Application stage."), { status: 409 });
+      }
+
+      const needsAssessment = await NeedsAssessment.findOne({ leadEngagementId: engagement._id })
+        .select("needsPriorities.productSelection.requestedFrequency needsPriorities.productSelection.methodForInitialPayment")
+        .session(session);
+
+      const requestedFrequency = String(needsAssessment?.needsPriorities?.productSelection?.requestedFrequency || "").trim();
+      const initialPaymentMethod = String(needsAssessment?.needsPriorities?.productSelection?.methodForInitialPayment || "").trim();
+
+      if (!requestedFrequency) {
+        throw Object.assign(new Error("Requested frequency is missing from Needs Assessment."), { status: 409 });
+      }
+      if (!allowedPaymentMethods.includes(initialPaymentMethod)) {
+        throw Object.assign(new Error("Method for initial payment is missing from Needs Assessment."), { status: 409 });
+      }
+
+      engagement.currentActivityKey = "Record Application Submission";
+      await engagement.save({ session });
+
+      await Application.updateOne(
+        { leadEngagementId: engagement._id },
+        {
+          $setOnInsert: { leadEngagementId: engagement._id },
+          $set: {
+            outcomeActivity: "Record Application Submission",
+            recordPremiumPaymentTransfer: {
+              totalAnnualPremiumPhp: annualPremium,
+              totalFrequencyPremiumPhp: frequencyPremium,
+              methodForRenewalPayment: renewalMethod,
+              paymentProofImageDataUrl: proofDataUrl,
+              paymentProofFileName: proofFileName,
+              savedAt: new Date(),
+            },
+          },
+        },
+        { upsert: true, session }
+      );
+    });
+
+    return res.json({
+      message: "Premium payment transfer saved.",
+      currentActivityKey: "Record Application Submission",
+    });
+  } catch (err) {
+    console.error("Application premium payment transfer save error:", err);
+    return res.status(err?.status || 500).json({ message: err?.message || "Server error." });
+  } finally {
+    session.endSession();
+  }
+});
+
+app.post("/api/prospects/:prospectId/leads/:leadId/application/submission", async (req, res) => {
+  const session = await mongoose.startSession();
+  try {
+    const { userId } = req.query;
+    const { prospectId, leadId } = req.params;
+    const {
+      pruOneTransactionId,
+      submissionScreenshotImageDataUrl,
+      submissionScreenshotFileName,
+    } = req.body || {};
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId) || !mongoose.isValidObjectId(prospectId) || !mongoose.isValidObjectId(leadId)) {
+      return res.status(400).json({ message: "Invalid id(s)." });
+    }
+
+    const txId = String(pruOneTransactionId || "").trim();
+    const screenshotDataUrl = String(submissionScreenshotImageDataUrl || "").trim();
+    const screenshotFileName = String(submissionScreenshotFileName || "").trim();
+
+    if (!txId) return res.status(400).json({ message: "PRUOnePH Transaction ID is required." });
+    if (!screenshotDataUrl) return res.status(400).json({ message: "Submission screenshot is required and must be JPG, JPEG, or PNG." });
+    if (!/^data:image\/(?:jpeg|png);base64,/i.test(screenshotDataUrl)) {
+      return res.status(400).json({ message: "Submission screenshot file type must be JPG, JPEG, or PNG." });
+    }
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
+    const leadObjectId = new mongoose.Types.ObjectId(leadId);
+
+    const addWorkingDays = (fromDate, daysToAdd) => {
+      const d = new Date(fromDate);
+      let added = 0;
+      while (added < daysToAdd) {
+        d.setDate(d.getDate() + 1);
+        const dow = d.getDay();
+        if (dow !== 0 && dow !== 6) added += 1;
+      }
+      return d;
+    };
+
+    await session.withTransaction(async () => {
+      const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).session(session);
+      if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
+
+      const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).session(session);
+      if (!lead) throw Object.assign(new Error("Lead not found."), { status: 404 });
+
+      const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).session(session);
+      if (!engagement) throw Object.assign(new Error("Lead engagement not found."), { status: 404 });
+
+      if (engagement.currentStage !== "Application") {
+        throw Object.assign(new Error("Lead is not in Application stage."), { status: 409 });
+      }
+
+      const now = new Date();
+
+      const existingTxApplication = await Application.findOne({
+        "recordApplicationSubmission.pruOneTransactionId": txId,
+        leadEngagementId: { $ne: engagement._id },
+      })
+        .select("_id")
+        .session(session);
+      if (existingTxApplication) {
+        throw Object.assign(new Error("PRUOnePH Transaction ID already exists."), { status: 409 });
+      }
+
+      const existingApplication = await Application.findOne({ leadEngagementId: engagement._id })
+        .select("chosenProductId")
+        .session(session);
+
+      const proposal = await Proposal.findOne({ leadEngagementId: engagement._id })
+        .select("chosenProductId")
+        .session(session);
+      const needsAssessment = await NeedsAssessment.findOne({ leadEngagementId: engagement._id })
+        .select("needsPriorities.productSelection.selectedProductId")
+        .session(session);
+
+      const chosenProductIdRaw = existingApplication?.chosenProductId
+        || proposal?.chosenProductId
+        || needsAssessment?.needsPriorities?.productSelection?.selectedProductId
+        || null;
+      const chosenProductId = chosenProductIdRaw && mongoose.isValidObjectId(chosenProductIdRaw)
+        ? new mongoose.Types.ObjectId(chosenProductIdRaw)
+        : null;
+
+      await Application.updateOne(
+        { leadEngagementId: engagement._id },
+        {
+          $setOnInsert: { leadEngagementId: engagement._id },
+          $set: {
+            outcomeActivity: "Record Application Submission",
+            ...(chosenProductId ? { chosenProductId } : {}),
+            recordApplicationSubmission: {
+              pruOneTransactionId: txId,
+              submissionScreenshotImageDataUrl: screenshotDataUrl,
+              submissionScreenshotFileName: screenshotFileName,
+              savedAt: new Date(),
+            },
+          },
+        },
+        { upsert: true, session }
+      );
+
+      const applicationMeeting = await ScheduledMeeting.findOne({
+        leadEngagementId: engagement._id,
+        meetingType: "Application Submission",
+      }).session(session);
+      if (applicationMeeting && applicationMeeting.status !== "Completed") {
+        applicationMeeting.status = "Completed";
+        await applicationMeeting.save({ session });
+      }
+
+      const openApplicationTasks = await Task.find({
+        assignedToUserId: userObjectId,
+        prospectId: prospectObjectId,
+        leadEngagementId: engagement._id,
+        type: "APPOINTMENT",
+        status: "Open",
+        dedupeKey: `APPLICATION_SUBMISSION:${engagement._id}`,
+      }).session(session);
+
+      for (const t of openApplicationTasks) {
+        t.status = "Done";
+        t.completedAt = now;
+        await t.save({ session });
+      }
+
+      const followUpDueAt = addWorkingDays(now, 3);
+      followUpDueAt.setHours(18, 0, 0, 0);
+      const followUpDedupeKey = `POLICY_APPLICATION_STATUS_FOLLOW_UP:${engagement._id}`;
+      let followUpTask = await Task.findOne({
+        assignedToUserId: userObjectId,
+        dedupeKey: followUpDedupeKey,
+      }).session(session);
+
+      const fullName = `${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName}`.trim();
+      const followUpTitle = `Check policy application status for ${prospect.firstName}`;
+      const followUpDescription = `Follow up the policy application status for ${fullName} (Lead ${lead.leadCode || "—"}).`;
+
+      if (!followUpTask) {
+        followUpTask = await Task.create(
+          [{
+            assignedToUserId: userObjectId,
+            prospectId: prospectObjectId,
+            leadEngagementId: engagement._id,
+            type: "FOLLOW_UP",
+            title: followUpTitle,
+            description: followUpDescription,
+            dueAt: followUpDueAt,
+            status: "Open",
+            dedupeKey: followUpDedupeKey,
+          }],
+          { session }
+        ).then((docs) => docs[0]);
+
+        await createTaskAddedNotifications({
+          assignedToUserId: userObjectId,
+          task: followUpTask,
+          prospectFullName: fullName,
+          leadCode: lead.leadCode,
+          session,
+        });
+      } else if (followUpTask.status !== "Done") {
+        followUpTask.title = followUpTitle;
+        followUpTask.description = followUpDescription;
+        followUpTask.dueAt = followUpDueAt;
+        await followUpTask.save({ session });
+      }
+
+      await Policy.updateOne(
+        { leadEngagementId: engagement._id },
+        {
+          $setOnInsert: { leadEngagementId: engagement._id },
+          $set: {
+            outcomeActivity: "Record Policy Application Status",
+            ...(chosenProductId ? { chosenProductId } : {}),
+          },
+        },
+        { upsert: true, session }
+      );
+
+      engagement.currentStage = "Policy Issuance";
+      engagement.currentActivityKey = "Record Policy Application Status";
+      engagement.stageCompletedAt = now;
+      engagement.stageHistory = Array.isArray(engagement.stageHistory) ? engagement.stageHistory : [];
+
+      const openApplicationStage = [...engagement.stageHistory]
+        .reverse()
+        .find((h) => h?.stage === "Application" && !h?.completedAt);
+      if (openApplicationStage) {
+        openApplicationStage.completedAt = now;
+        openApplicationStage.reason = "Application submission details recorded and moved to Policy Issuance.";
+      }
+
+      engagement.stageHistory.push({
+        stage: "Policy Issuance",
+        startedAt: now,
+        completedAt: null,
+        reason: "Moved from Application after recording application submission details.",
+      });
+
+      await engagement.save({ session });
+    });
+
+    return res.json({
+      message: "Application submission saved.",
+      currentActivityKey: "Record Policy Application Status",
+      currentStage: "Policy Issuance",
+    });
+  } catch (err) {
+    console.error("Application submission save error:", err);
+    if (err?.code === 11000 && String(err?.message || "").includes("recordApplicationSubmission.pruOneTransactionId")) {
+      return res.status(409).json({ message: "PRUOnePH Transaction ID already exists." });
+    }
+    return res.status(err?.status || 500).json({ message: err?.message || "Server error." });
+  } finally {
+    session.endSession();
+  }
+});
+
+app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/status", async (req, res) => {
+  try {
+    const { userId } = req.query;
+    const { prospectId, leadId } = req.params;
+    const { status, issuanceDate, notes } = req.body || {};
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId) || !mongoose.isValidObjectId(prospectId) || !mongoose.isValidObjectId(leadId)) {
+      return res.status(400).json({ message: "Invalid id(s)." });
+    }
+
+    const normalizedStatus = String(status || "").trim();
+    if (!["Issued", "Declined"].includes(normalizedStatus)) {
+      return res.status(400).json({ message: "Policy application status must be Issued or Declined." });
+    }
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
+    const leadObjectId = new mongoose.Types.ObjectId(leadId);
+
+    const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).select("_id").lean();
+    if (!prospect) return res.status(404).json({ message: "Prospect not found." });
+
+    const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).select("_id").lean();
+    if (!lead) return res.status(404).json({ message: "Lead not found." });
+
+    const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).select("_id currentStage");
+    if (!engagement) return res.status(404).json({ message: "Lead engagement not found." });
+    if (engagement.currentStage !== "Policy Issuance") {
+      return res.status(409).json({ message: "Lead is not in Policy Issuance stage." });
+    }
+
+    const existingPolicyDoc = await Policy.findOne({ leadEngagementId: engagement._id })
+      .select("chosenProductId")
+      .lean();
+
+    const applicationDoc = await Application.findOne({ leadEngagementId: engagement._id })
+      .select("chosenProductId recordApplicationSubmission.savedAt")
+      .lean();
+
+    const proposalDoc = await Proposal.findOne({ leadEngagementId: engagement._id })
+      .select("chosenProductId")
+      .lean();
+
+    const needsAssessmentDoc = await NeedsAssessment.findOne({ leadEngagementId: engagement._id })
+      .select("needsPriorities.productSelection.selectedProductId")
+      .lean();
+
+    const fallbackChosenProductIdRaw = existingPolicyDoc?.chosenProductId
+      || applicationDoc?.chosenProductId
+      || proposalDoc?.chosenProductId
+      || needsAssessmentDoc?.needsPriorities?.productSelection?.selectedProductId
+      || null;
+    const fallbackChosenProductId = fallbackChosenProductIdRaw && mongoose.isValidObjectId(fallbackChosenProductIdRaw)
+      ? new mongoose.Types.ObjectId(fallbackChosenProductIdRaw)
+      : null;
+
+    const applicationSubmittedAt = applicationDoc?.recordApplicationSubmission?.savedAt
+      ? new Date(applicationDoc.recordApplicationSubmission.savedAt)
+      : null;
+
+    let issuanceDateValue = null;
+    if (normalizedStatus === "Issued") {
+      const issuanceDateRaw = String(issuanceDate || "").trim();
+      if (!issuanceDateRaw) {
+        return res.status(400).json({ message: "Issuance date is required when status is Issued." });
+      }
+      issuanceDateValue = new Date(`${issuanceDateRaw}T00:00:00`);
+      if (Number.isNaN(issuanceDateValue.getTime())) {
+        return res.status(400).json({ message: "Issuance date is invalid." });
+      }
+      const today = new Date();
+      today.setHours(23, 59, 59, 999);
+      if (issuanceDateValue > today) {
+        return res.status(400).json({ message: "Issuance date cannot be in the future." });
+      }
+      if (applicationSubmittedAt && issuanceDateValue < new Date(new Date(applicationSubmittedAt).setHours(0, 0, 0, 0))) {
+        return res.status(400).json({ message: "Issuance date cannot be earlier than application submission date." });
+      }
+    }
+
+    const nextActivityKey = normalizedStatus === "Issued" ? "Upload Initial Premium eOR" : "Record Policy Application Status";
+
+    await Policy.updateOne(
+      { leadEngagementId: engagement._id },
+      {
+        $setOnInsert: { leadEngagementId: engagement._id },
+        $set: {
+          outcomeActivity: nextActivityKey,
+          ...(fallbackChosenProductId ? { chosenProductId: fallbackChosenProductId } : {}),
+          recordPolicyApplicationStatus: {
+            status: normalizedStatus,
+            issuanceDate: issuanceDateValue,
+            notes: String(notes || "").trim(),
+            savedAt: new Date(),
+          },
+        },
+      },
+      { upsert: true }
+    );
+
+    await LeadEngagement.updateOne(
+      { _id: engagement._id },
+      { $set: { currentActivityKey: nextActivityKey } }
+    );
+
+    return res.json({ message: "Policy application status saved.", currentActivityKey: nextActivityKey });
+  } catch (err) {
+    console.error("Policy issuance status save error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+
+app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/initial-premium-eor", async (req, res) => {
+  try {
+    const { userId } = req.query;
+    const { prospectId, leadId } = req.params;
+    const { eorNumber, receiptDate, eorFileDataUrl, eorFileName } = req.body || {};
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId) || !mongoose.isValidObjectId(prospectId) || !mongoose.isValidObjectId(leadId)) {
+      return res.status(400).json({ message: "Invalid id(s)." });
+    }
+
+    const eorNo = String(eorNumber || "").trim();
+    const receiptDateRaw = String(receiptDate || "").trim();
+    const pdfDataUrl = String(eorFileDataUrl || "").trim();
+    const fileName = String(eorFileName || "").trim();
+
+    if (!eorNo) return res.status(400).json({ message: "eOR number is required." });
+    if (!receiptDateRaw) return res.status(400).json({ message: "Receipt date is required." });
+    if (!pdfDataUrl || !/^data:application\/pdf;base64,/i.test(pdfDataUrl)) {
+      return res.status(400).json({ message: "eOR file must be a PDF." });
+    }
+
+    const receiptDateValue = new Date(`${receiptDateRaw}T00:00:00`);
+    if (Number.isNaN(receiptDateValue.getTime())) {
+      return res.status(400).json({ message: "Receipt date is invalid." });
+    }
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
+    const leadObjectId = new mongoose.Types.ObjectId(leadId);
+
+    const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).select("_id").lean();
+    if (!prospect) return res.status(404).json({ message: "Prospect not found." });
+
+    const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).select("_id").lean();
+    if (!lead) return res.status(404).json({ message: "Lead not found." });
+
+    const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).select("_id currentStage");
+    if (!engagement) return res.status(404).json({ message: "Lead engagement not found." });
+    if (engagement.currentStage !== "Policy Issuance") {
+      return res.status(409).json({ message: "Lead is not in Policy Issuance stage." });
+    }
+
+    const applicationDoc = await Application.findOne({ leadEngagementId: engagement._id })
+      .select("recordApplicationSubmission.savedAt")
+      .lean();
+    const policyDoc = await Policy.findOne({ leadEngagementId: engagement._id })
+      .select("recordPolicyApplicationStatus.status recordPolicyApplicationStatus.issuanceDate")
+      .lean();
+
+    const applicationSubmittedAt = applicationDoc?.recordApplicationSubmission?.savedAt
+      ? new Date(applicationDoc.recordApplicationSubmission.savedAt)
+      : null;
+    const issuanceDate = policyDoc?.recordPolicyApplicationStatus?.issuanceDate
+      ? new Date(policyDoc.recordPolicyApplicationStatus.issuanceDate)
+      : null;
+    const status = String(policyDoc?.recordPolicyApplicationStatus?.status || "").trim();
+
+    if (status !== "Issued") {
+      return res.status(409).json({ message: "Policy application status must be Issued before uploading Initial Premium eOR." });
+    }
+    if (!applicationSubmittedAt || !issuanceDate) {
+      return res.status(409).json({ message: "Application submission date and policy issuance date are required before uploading Initial Premium eOR." });
+    }
+
+    const minDate = new Date(applicationSubmittedAt);
+    minDate.setHours(0, 0, 0, 0);
+    const maxDate = new Date(issuanceDate);
+    maxDate.setHours(23, 59, 59, 999);
+    if (receiptDateValue < minDate || receiptDateValue > maxDate) {
+      return res.status(400).json({ message: "Receipt date must be between application submission date and policy issuance date." });
+    }
+
+    await Policy.updateOne(
+      { leadEngagementId: engagement._id },
+      {
+        $setOnInsert: { leadEngagementId: engagement._id },
+        $set: {
+          outcomeActivity: "Upload Policy Summary",
+          uploadInitialPremiumEor: {
+            eorNumber: eorNo,
+            receiptDate: receiptDateValue,
+            eorFileDataUrl: pdfDataUrl,
+            eorFileName: fileName,
+            eorFileMimeType: "application/pdf",
+            uploadedAt: new Date(),
+          },
+        },
+      },
+      { upsert: true }
+    );
+
+    await LeadEngagement.updateOne(
+      { _id: engagement._id },
+      { $set: { currentActivityKey: "Upload Policy Summary" } }
+    );
+
+    return res.json({ message: "Initial premium eOR uploaded.", currentActivityKey: "Upload Policy Summary" });
+  } catch (err) {
+    console.error("Policy issuance initial premium eOR save error:", err);
+    if (err?.code === 11000 && String(err?.message || "").includes("uploadInitialPremiumEor.eorNumber")) {
+      return res.status(409).json({ message: "eOR number already exists." });
+    }
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+
+app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/policy-summary", async (req, res) => {
+  try {
+    const { userId } = req.query;
+    const { prospectId, leadId } = req.params;
+    const { policyNumber, policySummaryFileDataUrl, policySummaryFileName } = req.body || {};
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId) || !mongoose.isValidObjectId(prospectId) || !mongoose.isValidObjectId(leadId)) {
+      return res.status(400).json({ message: "Invalid id(s)." });
+    }
+
+    const policyNo = String(policyNumber || "").trim();
+    const pdfDataUrl = String(policySummaryFileDataUrl || "").trim();
+    const fileName = String(policySummaryFileName || "").trim();
+
+    if (!/^\d{8}$/.test(policyNo)) return res.status(400).json({ message: "Policy number must be exactly 8 digits." });
+    if (!pdfDataUrl || !/^data:application\/pdf;base64,/i.test(pdfDataUrl)) {
+      return res.status(400).json({ message: "Policy summary file must be a PDF." });
+    }
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
+    const leadObjectId = new mongoose.Types.ObjectId(leadId);
+
+    const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).select("_id").lean();
+    if (!prospect) return res.status(404).json({ message: "Prospect not found." });
+
+    const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).select("_id").lean();
+    if (!lead) return res.status(404).json({ message: "Lead not found." });
+
+    const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).select("_id currentStage");
+    if (!engagement) return res.status(404).json({ message: "Lead engagement not found." });
+    if (engagement.currentStage !== "Policy Issuance") {
+      return res.status(409).json({ message: "Lead is not in Policy Issuance stage." });
+    }
+
+    const existingPolicyNumber = await Policy.findOne({
+      "uploadPolicySummary.policyNumber": policyNo,
+      leadEngagementId: { $ne: engagement._id },
+    })
+      .select("_id")
+      .lean();
+    if (existingPolicyNumber) {
+      return res.status(409).json({ message: "Policy number already exists." });
+    }
+
+    await Policy.updateOne(
+      { leadEngagementId: engagement._id },
+      {
+        $setOnInsert: { leadEngagementId: engagement._id },
+        $set: {
+          outcomeActivity: "Record Coverage Duration Details",
+          uploadPolicySummary: {
+            policyNumber: policyNo,
+            policySummaryFileDataUrl: pdfDataUrl,
+            policySummaryFileName: fileName,
+            policySummaryFileMimeType: "application/pdf",
+            uploadedAt: new Date(),
+          },
+        },
+      },
+      { upsert: true }
+    );
+
+    await LeadEngagement.updateOne(
+      { _id: engagement._id },
+      { $set: { currentActivityKey: "Record Coverage Duration Details" } }
+    );
+
+    return res.json({ message: "Policy summary uploaded.", currentActivityKey: "Record Coverage Duration Details" });
+  } catch (err) {
+    console.error("Policy issuance policy summary save error:", err);
+    if (err?.code === 11000 && String(err?.message || "").includes("uploadPolicySummary.policyNumber")) {
+      return res.status(409).json({ message: "Policy number already exists." });
+    }
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+
+app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-duration", async (req, res) => {
+  const session = await mongoose.startSession();
+  try {
+    const { userId } = req.query;
+    const { prospectId, leadId } = req.params;
+    const {
+      selectedPaymentTermLabel,
+      selectedPaymentTermType,
+      selectedPaymentTermYears,
+      selectedPaymentTermUntilAge,
+      coverageDurationLabel,
+      coverageDurationType,
+      coverageDurationYears,
+      coverageDurationUntilAge,
+    } = req.body || {};
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId) || !mongoose.isValidObjectId(prospectId) || !mongoose.isValidObjectId(leadId)) {
+      return res.status(400).json({ message: "Invalid id(s)." });
+    }
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
+    const leadObjectId = new mongoose.Types.ObjectId(leadId);
+
+    let responsePayload = null;
+
+    await session.withTransaction(async () => {
+      const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId })
+        .select("_id birthday")
+        .session(session)
+        .lean();
+      if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
+
+      const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId })
+        .session(session);
+      if (!lead) throw Object.assign(new Error("Lead not found."), { status: 404 });
+
+      const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).select("_id currentStage").session(session);
+      if (!engagement) throw Object.assign(new Error("Lead engagement not found."), { status: 404 });
+      if (engagement.currentStage !== "Policy Issuance") {
+        throw Object.assign(new Error("Lead is not in Policy Issuance stage."), { status: 409 });
+      }
+
+      const policyDoc = await Policy.findOne({ leadEngagementId: engagement._id })
+        .select("chosenProductId uploadPolicySummary.policyNumber uploadInitialPremiumEor.receiptDate recordPolicyApplicationStatus.status recordPolicyApplicationStatus.issuanceDate")
+        .session(session)
+        .lean();
+      if (!policyDoc) throw Object.assign(new Error("Policy record not found."), { status: 404 });
+
+      const productId = policyDoc?.chosenProductId;
+      if (!productId || !mongoose.isValidObjectId(productId)) {
+        throw Object.assign(new Error("Chosen product is missing for this policy."), { status: 409 });
+      }
+
+      const product = await Product.findById(productId)
+        .select("paymentTermOptions coverageDurationRule")
+        .session(session)
+        .lean();
+      if (!product) throw Object.assign(new Error("Chosen product not found."), { status: 404 });
+
+      const issuanceDate = policyDoc?.recordPolicyApplicationStatus?.issuanceDate
+        ? new Date(policyDoc.recordPolicyApplicationStatus.issuanceDate)
+        : null;
+      if (!issuanceDate || Number.isNaN(issuanceDate.getTime())) {
+        throw Object.assign(new Error("Policy issuance date is required before saving coverage duration details."), { status: 409 });
+      }
+
+      const birthDate = prospect?.birthday ? new Date(prospect.birthday) : null;
+      if (!birthDate || Number.isNaN(birthDate.getTime())) {
+        throw Object.assign(new Error("Prospect birthday is required to compute age-based terms."), { status: 400 });
+      }
+
+      let issuanceAge = issuanceDate.getFullYear() - birthDate.getFullYear();
+      const hasBirthdayPassed =
+        issuanceDate.getMonth() > birthDate.getMonth() ||
+        (issuanceDate.getMonth() === birthDate.getMonth() && issuanceDate.getDate() >= birthDate.getDate());
+      if (!hasBirthdayPassed) issuanceAge -= 1;
+      if (issuanceAge < 0) throw Object.assign(new Error("Invalid prospect birthday for issuance-age computation."), { status: 400 });
+
+      const paymentOptions = Array.isArray(product?.paymentTermOptions) ? product.paymentTermOptions : [];
+      if (!paymentOptions.length) {
+        throw Object.assign(new Error("Chosen product has no payment-term options configured."), { status: 400 });
+      }
+
+      const normalizedPaymentType = String(selectedPaymentTermType || "").trim();
+      const normalizedCoverageType = String(coverageDurationType || "").trim();
+      const normalizedPaymentLabel = String(selectedPaymentTermLabel || "").trim();
+      const normalizedCoverageLabel = String(coverageDurationLabel || "").trim();
+
+      const paymentYears = selectedPaymentTermYears !== undefined && selectedPaymentTermYears !== null && selectedPaymentTermYears !== ""
+        ? Number(selectedPaymentTermYears)
+        : null;
+      const paymentUntilAge = selectedPaymentTermUntilAge !== undefined && selectedPaymentTermUntilAge !== null && selectedPaymentTermUntilAge !== ""
+        ? Number(selectedPaymentTermUntilAge)
+        : null;
+
+      const coverageUntilAge = coverageDurationUntilAge !== undefined && coverageDurationUntilAge !== null && coverageDurationUntilAge !== ""
+        ? Number(coverageDurationUntilAge)
+        : null;
+
+      const matchedPayment = paymentOptions.find((opt) => {
+        const optType = String(opt?.type || "").trim();
+        const optLabel = String(opt?.label || "").trim();
+        return (
+          optType === normalizedPaymentType
+          && optLabel === normalizedPaymentLabel
+          && (opt?.years ?? null) === (paymentYears ?? null)
+          && (opt?.untilAge ?? null) === (paymentUntilAge ?? null)
+        );
+      });
+      if (!matchedPayment) {
+        throw Object.assign(new Error("Selected payment term is invalid for the chosen product."), { status: 400 });
+      }
+
+      const coverageRule = product?.coverageDurationRule || null;
+      if (!coverageRule || !coverageRule.type) {
+        throw Object.assign(new Error("Coverage duration rule is not configured for the chosen product."), { status: 400 });
+      }
+
+      const coverageRuleType = String(coverageRule.type || "").trim();
+      const coverageRuleLabel = String(coverageRule.label || "").trim();
+      if (normalizedCoverageType !== coverageRuleType || normalizedCoverageLabel !== coverageRuleLabel) {
+        throw Object.assign(new Error("Coverage duration selection does not match product rule."), { status: 400 });
+      }
+
+      const computedCoverageUntilAge = coverageRuleType === "RANGE_TO_AGE" ? coverageUntilAge : (coverageRule?.untilAge ?? null);
+      const computedCoverageYears = coverageRuleType === "FIXED_YEARS" ? (coverageRule?.years ?? null) : null;
+
+      if (coverageRuleType === "RANGE_TO_AGE") {
+        const minAge = Math.max((Number(issuanceAge) || 0) + 1, Number(coverageRule?.minYears || 1));
+        const maxAge = Number(coverageRule?.untilAge || 0);
+        if (!Number.isFinite(coverageUntilAge) || coverageUntilAge < minAge || coverageUntilAge > maxAge) {
+          throw Object.assign(new Error(`Coverage duration age must be between ${minAge} and ${maxAge}.`), { status: 400 });
+        }
+      }
+
+      let yearsToAdd = null;
+      if (coverageRuleType === "FIXED_YEARS") {
+        yearsToAdd = Number(coverageRule?.years || 0);
+      } else if (coverageRuleType === "UNTIL_AGE") {
+        yearsToAdd = Number(coverageRule?.untilAge || 0) - issuanceAge;
+      } else if (coverageRuleType === "RANGE_TO_AGE") {
+        yearsToAdd = Number(coverageUntilAge || 0) - issuanceAge;
+      }
+
+      if (!Number.isFinite(yearsToAdd) || yearsToAdd <= 0) {
+        throw Object.assign(new Error("Unable to compute policy end date from selected coverage duration."), { status: 400 });
+      }
+
+      const policyEndDate = new Date(issuanceDate);
+      policyEndDate.setFullYear(policyEndDate.getFullYear() + yearsToAdd);
+
+      const receiptDate = policyDoc?.uploadInitialPremiumEor?.receiptDate
+        ? new Date(policyDoc.uploadInitialPremiumEor.receiptDate)
+        : null;
+
+      const needsAssessment = await NeedsAssessment.findOne({ leadEngagementId: engagement._id })
+        .select("needsPriorities.productSelection.requestedFrequency")
+        .session(session)
+        .lean();
+      const requestedFrequency = String(needsAssessment?.needsPriorities?.productSelection?.requestedFrequency || "").trim();
+
+      const monthsByFrequency = {
+        Monthly: 1,
+        Quarterly: 3,
+        "Half-yearly": 6,
+        Yearly: 12,
+      };
+      const recurringIntervalMonths = monthsByFrequency[requestedFrequency] ?? null;
+
+      let paymentTermEndDate = null;
+      if (normalizedPaymentType === "FIXED_YEARS") {
+        const years = Number(paymentYears || 0);
+        if (Number.isFinite(years) && years > 0) {
+          paymentTermEndDate = new Date(issuanceDate);
+          paymentTermEndDate.setFullYear(paymentTermEndDate.getFullYear() + years);
+        }
+      } else if (["UNTIL_AGE", "RANGE_TO_AGE"].includes(normalizedPaymentType)) {
+        const years = Number(paymentUntilAge || 0) - Number(issuanceAge || 0);
+        if (Number.isFinite(years) && years > 0) {
+          paymentTermEndDate = new Date(issuanceDate);
+          paymentTermEndDate.setFullYear(paymentTermEndDate.getFullYear() + years);
+        }
+      }
+
+      let nextPaymentDate = null;
+      if (
+        recurringIntervalMonths
+        && receiptDate
+        && !Number.isNaN(receiptDate.getTime())
+        && paymentTermEndDate
+        && !Number.isNaN(paymentTermEndDate.getTime())
+      ) {
+        const candidate = new Date(receiptDate);
+        candidate.setMonth(candidate.getMonth() + recurringIntervalMonths);
+        if (candidate < paymentTermEndDate) {
+          nextPaymentDate = candidate;
+        }
+      }
+
+      const now = new Date();
+
+      await Policy.updateOne(
+        { leadEngagementId: engagement._id },
+        {
+          $setOnInsert: { leadEngagementId: engagement._id },
+          $set: {
+            outcomeActivity: "Record Coverage Duration Details",
+            recordCoverageDurationDetails: {
+              policyNumber: String(policyDoc?.uploadPolicySummary?.policyNumber || ""),
+              selectedPaymentTermLabel: normalizedPaymentLabel,
+              selectedPaymentTermType: normalizedPaymentType,
+              selectedPaymentTermYears: paymentYears,
+              selectedPaymentTermUntilAge: paymentUntilAge,
+              coverageDurationLabel: normalizedCoverageLabel,
+              coverageDurationType: normalizedCoverageType,
+              coverageDurationYears: computedCoverageYears,
+              coverageDurationUntilAge: computedCoverageUntilAge,
+              coverageStartDate: issuanceDate,
+              coverageEndDate: policyEndDate,
+              policyEndDate,
+              nextPaymentDate,
+              savedAt: now,
+            },
+          },
+        },
+        { upsert: true, session }
+      );
+
+      await LeadEngagement.updateOne(
+        { _id: engagement._id },
+        { $set: { currentActivityKey: "Record Coverage Duration Details" } },
+        { session }
+      );
+
+      await Task.updateMany(
+        {
+          assignedToUserId: userObjectId,
+          prospectId: prospectObjectId,
+          leadEngagementId: engagement._id,
+          type: "FOLLOW_UP",
+          status: "Open",
+          dedupeKey: `POLICY_APPLICATION_STATUS_FOLLOW_UP:${engagement._id}`,
+        },
+        {
+          $set: {
+            status: "Done",
+            completedAt: now,
+          },
+        },
+        { session }
+      );
+
+      const policyStatus = String(policyDoc?.recordPolicyApplicationStatus?.status || "").trim();
+      if (policyStatus === "Issued") {
+        lead.status = "Closed";
+        await lead.save({ session });
+
+        const policyNumber = String(policyDoc?.uploadPolicySummary?.policyNumber || "").trim();
+        if (!receiptDate || Number.isNaN(receiptDate.getTime())) {
+          throw Object.assign(new Error("Initial premium receipt date is required to create policyholder."), { status: 409 });
+        }
+        if (!policyNumber) {
+          throw Object.assign(new Error("Policy number is required to create policyholder."), { status: 409 });
+        }
+
+        let existingPolicyholder = await Policyholder.findOne({ leadEngagementId: engagement._id }).session(session);
+        if (existingPolicyholder) {
+          existingPolicyholder.assignedToUserId = userObjectId;
+          existingPolicyholder.productId = new mongoose.Types.ObjectId(productId);
+          existingPolicyholder.policyNumber = policyNumber;
+          existingPolicyholder.lastPaidDate = receiptDate;
+          existingPolicyholder.nextPaymentDate = nextPaymentDate;
+          existingPolicyholder.status = "Active";
+          await existingPolicyholder.save({ session });
+        } else {
+          const MAX_TRIES = 5;
+          let lastErr = null;
+          for (let i = 0; i < MAX_TRIES; i += 1) {
+            try {
+              const policyholderCode = await getNextPolicyholderCode();
+              await Policyholder.create([
+                {
+                  policyholderCode,
+                  assignedToUserId: userObjectId,
+                  leadEngagementId: engagement._id,
+                  productId: new mongoose.Types.ObjectId(productId),
+                  policyNumber,
+                  lastPaidDate: receiptDate,
+                  nextPaymentDate,
+                  status: "Active",
+                },
+              ], { session });
+              lastErr = null;
+              break;
+            } catch (err) {
+              lastErr = err;
+              if (!(err?.code === 11000 && String(err?.message || "").includes("policyholderCode"))) {
+                throw err;
+              }
+            }
+          }
+          if (lastErr) throw lastErr;
+        }
+      }
+
+      responsePayload = {
+        message: "Coverage duration details saved.",
+        currentActivityKey: "Record Coverage Duration Details",
+        policyEndDate,
+        nextPaymentDate,
+      };
+    });
+
+    return res.json(responsePayload || {
+      message: "Coverage duration details saved.",
+      currentActivityKey: "Record Coverage Duration Details",
+    });
+  } catch (err) {
+    console.error("Policy issuance coverage duration save error:", err);
+    return res.status(err?.status || 500).json({ message: err?.message || "Server error." });
+  } finally {
+    session.endSession();
+  }
+});
+
+
+app.post("/api/prospects/:prospectId/leads/:leadId/proposal/schedule-application", async (req, res) => {
+  const session = await mongoose.startSession();
+  try {
+    const { userId } = req.query;
+    const { prospectId, leadId } = req.params;
+    const {
+      meetingAt,
+      meetingDate,
+      meetingStartTime,
+      meetingDurationMin,
+      meetingMode,
+      meetingPlatform,
+      meetingPlatformOther,
+      meetingLink,
+      meetingInviteSent,
+      meetingPlace,
+    } = req.body || {};
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId) || !mongoose.isValidObjectId(prospectId) || !mongoose.isValidObjectId(leadId)) {
+      return res.status(400).json({ message: "Invalid id(s)." });
+    }
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
+    const leadObjectId = new mongoose.Types.ObjectId(leadId);
+
+    await session.withTransaction(async () => {
+      const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).session(session);
+      if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
+
+      const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).session(session);
+      if (!lead) throw Object.assign(new Error("Lead not found."), { status: 404 });
+
+      const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).session(session);
+      if (!engagement) throw Object.assign(new Error("Lead engagement not found."), { status: 404 });
+
+      if (engagement.currentStage !== "Proposal") {
+        throw Object.assign(new Error("Lead is not in Proposal stage."), { status: 409 });
+      }
+
+      if (engagement.currentActivityKey !== "Schedule Application Submission") {
+        throw Object.assign(new Error("Schedule Application Submission is not the current activity."), { status: 409 });
+      }
+
+      const durationMin = Number(meetingDurationMin || 120);
+      const dt = meetingDate && meetingStartTime
+        ? combineDateAndTimeLocal(meetingDate, meetingStartTime)
+        : new Date(meetingAt);
+
+      if (!dt || Number.isNaN(dt.getTime())) {
+        throw Object.assign(new Error("meeting date/time is required and must be valid."), { status: 400 });
+      }
+
+      const tomorrow = new Date();
+      tomorrow.setHours(0, 0, 0, 0);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      if (dt < tomorrow) throw Object.assign(new Error("meetingAt must be at least tomorrow."), { status: 400 });
+
+      if (![30, 60, 90, 120].includes(durationMin)) {
+        throw Object.assign(new Error("meetingDurationMin must be one of 30, 60, 90, 120."), { status: 400 });
+      }
+
+      const mode = String(meetingMode || "").trim();
+      if (!["Online", "Face-to-face"].includes(mode)) {
+        throw Object.assign(new Error("meetingMode must be Online or Face-to-face."), { status: 400 });
+      }
+
+      const platform = String(meetingPlatform || "").trim();
+      const platformOther = String(meetingPlatformOther || "").trim();
+      const link = String(meetingLink || "").trim();
+      const place = String(meetingPlace || "").trim();
+
+      if (mode === "Online") {
+        if (!["Zoom", "Google Meet", "Other"].includes(platform)) {
+          throw Object.assign(new Error("meetingPlatform is required for online meetings."), { status: 400 });
+        }
+        if (platform === "Other" && !platformOther) {
+          throw Object.assign(new Error("meetingPlatformOther is required when platform is Other."), { status: 400 });
+        }
+        if (!link || !isValidHttpUrl(link)) {
+          throw Object.assign(new Error("Valid meetingLink (http/https) is required for online meetings."), { status: 400 });
+        }
+        if (meetingInviteSent !== true) {
+          throw Object.assign(new Error("meetingInviteSent must be true for online meetings."), { status: 400 });
+        }
+      }
+
+      if (mode === "Face-to-face" && !place) {
+        throw Object.assign(new Error("meetingPlace is required for face-to-face meetings."), { status: 400 });
+      }
+
+      const endAt = new Date(dt.getTime() + durationMin * 60 * 1000);
+
+      const windows = await getAgentMeetingWindows(userObjectId, null, null, session);
+      const conflict = hasMeetingConflict(dt, endAt, windows);
+      if (conflict) {
+        throw Object.assign(new Error("Selected meeting time conflicts with another scheduled meeting."), {
+          status: 409,
+          code: "MEETING_SLOT_CONFLICT",
+        });
+      }
+
+      const meetingType = "Application Submission";
+      const existingMeeting = await ScheduledMeeting.findOne({
+        leadEngagementId: engagement._id,
+        meetingType,
+      }).session(session);
+
+      if (existingMeeting) {
+        existingMeeting.startAt = dt;
+        existingMeeting.endAt = endAt;
+        existingMeeting.durationMin = durationMin;
+        existingMeeting.mode = mode;
+        existingMeeting.platform = mode === "Online" ? platform : undefined;
+        existingMeeting.platformOther = mode === "Online" && platform === "Other" ? platformOther : undefined;
+        existingMeeting.link = mode === "Online" ? link : undefined;
+        existingMeeting.inviteSent = Boolean(meetingInviteSent);
+        existingMeeting.place = mode === "Face-to-face" ? place : undefined;
+        existingMeeting.status = "Scheduled";
+        await existingMeeting.save({ session });
+      } else {
+        await ScheduledMeeting.create(
+          [{
+            leadEngagementId: engagement._id,
+            meetingType,
+            startAt: dt,
+            endAt,
+            durationMin,
+            mode,
+            platform: mode === "Online" ? platform : undefined,
+            platformOther: mode === "Online" && platform === "Other" ? platformOther : undefined,
+            link: mode === "Online" ? link : undefined,
+            inviteSent: Boolean(meetingInviteSent),
+            place: mode === "Face-to-face" ? place : undefined,
+            status: "Scheduled",
+          }],
+          { session }
+        );
+      }
+
+      const now = new Date();
+
+      const proposalPresentationMeeting = await ScheduledMeeting.findOne({
+        leadEngagementId: engagement._id,
+        meetingType: "Proposal Presentation",
+      }).session(session);
+      if (proposalPresentationMeeting && proposalPresentationMeeting.status !== "Completed") {
+        proposalPresentationMeeting.status = "Completed";
+        await proposalPresentationMeeting.save({ session });
+      }
+
+      const openPresentationTasks = await Task.find({
+        assignedToUserId: userObjectId,
+        prospectId: prospectObjectId,
+        leadEngagementId: engagement._id,
+        type: "PRESENTATION",
+        status: "Open",
+      }).session(session);
+
+      for (const t of openPresentationTasks) {
+        t.status = "Done";
+        t.completedAt = now;
+        await t.save({ session });
+      }
+
+      const applicationDedupeKey = `APPLICATION_SUBMISSION:${engagement._id}`;
+      let applicationTask = await Task.findOne({
+        assignedToUserId: userObjectId,
+        dedupeKey: applicationDedupeKey,
+      }).session(session);
+
+      const appointmentTitle = `Apply for policy with ${prospect.firstName}`;
+      const appointmentDescription = `Assist ${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName} in policy application submission (Lead ${lead.leadCode || "—"}). Meeting window: ${formatDateTimeInManila(dt)} to ${formatDateTimeInManila(endAt)} (Asia/Manila).`;
+      const appointmentDueAt = new Date(endAt.getTime() + 15 * 60 * 1000);
+
+      if (!applicationTask) {
+        applicationTask = await Task.create(
+          [{
+            assignedToUserId: userObjectId,
+            prospectId: prospectObjectId,
+            leadEngagementId: engagement._id,
+            type: "APPOINTMENT",
+            title: appointmentTitle,
+            description: appointmentDescription,
+            dueAt: appointmentDueAt,
+            status: "Open",
+            dedupeKey: applicationDedupeKey,
+          }],
+          { session }
+        ).then((docs) => docs[0]);
+
+        const prospectFullName = `${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName}`.trim();
+        await createTaskAddedNotifications({
+          assignedToUserId: userObjectId,
+          task: applicationTask,
+          prospectFullName,
+          leadCode: lead.leadCode,
+          session,
+        });
+      } else if (applicationTask.status !== "Done") {
+        applicationTask.title = appointmentTitle;
+        applicationTask.description = appointmentDescription;
+        applicationTask.dueAt = appointmentDueAt;
+        await applicationTask.save({ session });
+      }
+
+      engagement.currentStage = "Application";
+      engagement.currentActivityKey = "Schedule Application Submission";
+      engagement.stageCompletedAt = now;
+      engagement.stageHistory = Array.isArray(engagement.stageHistory) ? engagement.stageHistory : [];
+
+      const openProposalStage = [...engagement.stageHistory]
+        .reverse()
+        .find((h) => h?.stage === "Proposal" && !h?.completedAt);
+      if (openProposalStage) {
+        openProposalStage.completedAt = now;
+        openProposalStage.reason = "Application submission meeting scheduled.";
+      }
+
+      engagement.stageHistory.push({
+        stage: "Application",
+        startedAt: now,
+        completedAt: null,
+        reason: "Moved from Proposal after scheduling application submission.",
+      });
+      engagement.stageStartedAt = now;
+      await engagement.save({ session });
+
+      await Proposal.updateOne(
+        { leadEngagementId: engagement._id },
+        {
+          $setOnInsert: { leadEngagementId: engagement._id },
+          $set: { outcomeActivity: "Schedule Application Submission" },
+        },
+        { upsert: true, session }
+      );
+    });
+
+    return res.json({
+      message: "Application submission meeting scheduled.",
+      currentActivityKey: "Schedule Application Submission",
+      currentStage: "Application",
+    });
+  } catch (err) {
+    console.error("Schedule application submission error:", err);
+    return res.status(err?.status || 500).json({ message: err?.message || "Server error.", code: err?.code });
+  } finally {
+    session.endSession();
+  }
+});
+
+app.post("/api/prospects/:prospectId/leads/:leadId/proposal/presentation", async (req, res) => {
+  const session = await mongoose.startSession();
+  try {
+    const { userId } = req.query;
+    const { prospectId, leadId } = req.params;
+    const { proposalAccepted, initialQuotationNotes } = req.body || {};
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId) || !mongoose.isValidObjectId(prospectId) || !mongoose.isValidObjectId(leadId)) {
+      return res.status(400).json({ message: "Invalid id(s)." });
+    }
+
+    const accepted = String(proposalAccepted || "").trim().toUpperCase();
+    if (!["YES", "NO"].includes(accepted)) {
+      return res.status(400).json({ message: "Please select whether proposal is accepted (Yes/No)." });
+    }
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
+    const leadObjectId = new mongoose.Types.ObjectId(leadId);
+
+    await session.withTransaction(async () => {
+      const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).session(session);
+      if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
+
+      const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).session(session);
+      if (!lead) throw Object.assign(new Error("Lead not found."), { status: 404 });
+
+      const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).session(session);
+      if (!engagement) throw Object.assign(new Error("Lead engagement not found."), { status: 404 });
+
+      if (engagement.currentStage !== "Proposal") {
+        throw Object.assign(new Error("Lead is not in Proposal stage."), { status: 409 });
+      }
+
+      if (engagement.currentActivityKey !== "Present Proposal") {
+        throw Object.assign(new Error("Present Proposal is not the current activity."), { status: 409 });
+      }
+
+      engagement.currentActivityKey = "Schedule Application Submission";
+      await engagement.save({ session });
+
+      await Proposal.updateOne(
+        { leadEngagementId: engagement._id },
+        {
+          $setOnInsert: { leadEngagementId: engagement._id },
+          $set: {
+            outcomeActivity: "Present Proposal",
+            presentProposal: {
+              proposalAccepted: accepted,
+              initialQuotationNotes: accepted === "YES" ? String(initialQuotationNotes || "").trim() : "",
+              presentedAt: new Date(),
+            },
+          },
+        },
+        { upsert: true, session }
+      );
+    });
+
+    return res.json({
+      message: "Proposal presentation details saved.",
+      currentActivityKey: "Schedule Application Submission",
+    });
+  } catch (err) {
+    console.error("Save proposal presentation error:", err);
+    return res.status(err?.status || 500).json({ message: err?.message || "Server error." });
   } finally {
     session.endSession();
   }
@@ -3673,10 +7587,11 @@ app.get("/api/tasks/summary", async (req, res) => {
     }
 
     const userObjectId = new mongoose.Types.ObjectId(userId);
+    await ensureTaskMissedNotificationsForUser(userObjectId);
 
     // Fetch only OPEN tasks for dashboard (Done tasks are excluded entirely)
     let openTasks = await Task.find({ assignedToUserId: userObjectId, status: "Open" })
-      .select("assignedToUserId prospectId leadEngagementId type title description dueAt status completedAt createdAt")
+      .select("assignedToUserId prospectId leadEngagementId type title description dueAt status completedAt wasDelayed createdAt")
       .lean();
 
     // Optional: attach prospectName + leadId + leadCode for UI routing/display
@@ -3739,6 +7654,109 @@ app.get("/api/tasks/summary", async (req, res) => {
 });
 
 // ===========================
+// TASKS: PROGRESS DASHBOARD (Agent)
+// GET /api/tasks/progress?userId=...
+// ===========================
+app.get("/api/tasks/progress", async (req, res) => {
+  try {
+    const { userId } = req.query;
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId)) {
+      return res.status(400).json({ message: "Invalid userId." });
+    }
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    await ensureTaskMissedNotificationsForUser(userObjectId);
+
+    let tasks = await Task.find({ assignedToUserId: userObjectId })
+      .select("_id type title dueAt status completedAt wasDelayed createdAt")
+      .lean();
+
+    tasks = await attachTaskRefs(tasks);
+
+    const now = Date.now();
+    const normalized = tasks.map((t) => {
+      const status = String(t?.status || "Open").toLowerCase() === "done" ? "Done" : "Open";
+      const type = String(t?.type || "CUSTOM").toUpperCase().trim();
+      const dueAtMs = new Date(t?.dueAt).getTime();
+      return {
+        ...t,
+        status,
+        type,
+        dueAtMs,
+        wasDelayed: Boolean(t?.wasDelayed),
+      };
+    });
+
+    const open = normalized.filter((t) => t.status === "Open");
+    const done = normalized.filter((t) => t.status === "Done");
+    const overdue = open.filter((t) => Number.isFinite(t.dueAtMs) && t.dueAtMs < now);
+    const dueSoon = open
+      .filter((t) => Number.isFinite(t.dueAtMs) && t.dueAtMs >= now)
+      .sort((a, b) => a.dueAtMs - b.dueAtMs)
+      .slice(0, 5)
+      .map((t) => ({
+        _id: t._id,
+        title: t.title,
+        type: t.type,
+        dueAt: t.dueAt,
+      }));
+
+    const delayedDone = done.filter((t) => t.wasDelayed);
+    const onTimeDone = done.filter((t) => !t.wasDelayed);
+
+    const leadWorkloadMap = new Map();
+    for (const t of normalized) {
+      if (!t?.leadEngagementId) continue;
+      const key = String(t.leadEngagementId);
+      const row = leadWorkloadMap.get(key) || {
+        leadEngagementId: key,
+        leadCode: t?.leadCode || "—",
+        prospectName: t?.prospectName || "—",
+        total: 0,
+        open: 0,
+        overdue: 0,
+      };
+
+      row.total += 1;
+      if (t.status === "Open") row.open += 1;
+      if (t.status === "Open" && Number.isFinite(t.dueAtMs) && t.dueAtMs < now) row.overdue += 1;
+      leadWorkloadMap.set(key, row);
+    }
+
+    const leadWorkloadRows = [...leadWorkloadMap.values()]
+      .sort((a, b) => b.open - a.open || b.total - a.total)
+      .slice(0, 8);
+
+    const TASK_TYPES = ["APPROACH", "FOLLOW_UP", "UPDATE_CONTACT_INFO", "APPOINTMENT", "PRESENTATION", "CUSTOM"];
+    const typeCounts = TASK_TYPES.map((type) => ({
+      type,
+      total: normalized.filter((t) => t.type === type).length,
+      done: normalized.filter((t) => t.type === type && t.status === "Done").length,
+    }));
+
+    const completionRate = normalized.length ? Math.round((done.length / normalized.length) * 100) : 0;
+    const onTimeRate = done.length ? Math.round((onTimeDone.length / done.length) * 100) : 0;
+
+    return res.json({
+      totalTasks: normalized.length,
+      openTasks: open.length,
+      doneTasks: done.length,
+      overdueTasks: overdue.length,
+      delayedDoneTasks: delayedDone.length,
+      completionRate,
+      onTimeRate,
+      typeCounts,
+      dueSoon,
+      leadWorkloadRows,
+    });
+  } catch (err) {
+    console.error("Task progress dashboard error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+// ===========================
 // TASKS: LIST (Agent)
 // GET /api/tasks?userId=...&status=Open|Done&type=APPROACH&includeRefs=1
 //
@@ -3763,6 +7781,7 @@ app.get("/api/tasks", async (req, res) => {
     }
 
     const userObjectId = new mongoose.Types.ObjectId(userId);
+    await ensureTaskMissedNotificationsForUser(userObjectId);
 
     // Base query always scoped to the user
     const query = { assignedToUserId: userObjectId };
@@ -3801,7 +7820,7 @@ app.get("/api/tasks", async (req, res) => {
     let tasks = await Task.find(query)
       .sort({ dueAt: 1, createdAt: -1 })
       .select(
-        "assignedToUserId prospectId leadEngagementId type title description dueAt status completedAt createdAt"
+        "assignedToUserId prospectId leadEngagementId type title description dueAt status completedAt wasDelayed createdAt"
       )
       .lean();
 
@@ -3904,6 +7923,7 @@ app.get("/api/notifications", async (req, res) => {
     if (!mongoose.isValidObjectId(userId)) return res.status(400).json({ message: "Invalid userId." });
 
     const uid = new mongoose.Types.ObjectId(userId);
+    await ensureTaskMissedNotificationsForUser(uid);
 
     // Always scope notifications to this user
     const query = { assignedToUserId: uid };
@@ -4101,6 +8121,7 @@ app.get("/api/notifications/unread-count", async (req, res) => {
     if (!mongoose.isValidObjectId(userId)) return res.status(400).json({ message: "Invalid userId." });
 
     const uid = new mongoose.Types.ObjectId(userId);
+    await ensureTaskMissedNotificationsForUser(uid);
 
     // Base query: user-scoped + Unread only
     const q = { assignedToUserId: uid, status: "Unread" };
@@ -4140,6 +8161,7 @@ app.get("/api/notifications/counts", async (req, res) => {
     if (!mongoose.isValidObjectId(userId)) return res.status(400).json({ message: "Invalid userId." });
 
     const uid = new mongoose.Types.ObjectId(userId);
+    await ensureTaskMissedNotificationsForUser(uid);
 
     // Base query always user-scoped
     const qBase = { assignedToUserId: uid };
@@ -4165,6 +8187,15 @@ app.get("/api/notifications/counts", async (req, res) => {
 // Start the HTTP server.
 // - Uses environment PORT if provided (deployment-friendly)
 // - Defaults to 5000 locally
+app.use((err, req, res, next) => {
+  if (err?.type === "entity.too.large" || err?.status === 413) {
+    return res.status(413).json({
+      message: "Uploaded payload is too large. Please use a proof image that is 5MB or smaller.",
+    });
+  }
+  return next(err);
+});
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
