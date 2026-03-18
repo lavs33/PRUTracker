@@ -11,7 +11,6 @@ const TASK_TYPES = [
   "UPDATE_CONTACT_INFO",
   "APPOINTMENT",
   "PRESENTATION",
-  "CUSTOM",
 ];
 
 // Date helpers OUTSIDE component
@@ -70,17 +69,30 @@ function AgentTasksAll() {
       case "clients":
         navigate(`/agent/${user.username}/clients`);
         break;
+      case "clients_relationship":
+        navigate(`/agent/${user.username}/clients/relationship`);
+        break;
       case "clients_all_prospects":
         navigate(`/agent/${user.username}/prospects`);
         break;
       case "clients_all_policyholders":
-        alert("All Policyholders page coming soon.");
+        navigate(`/agent/${user.username}/policyholders`);
         break;
       case "tasks":
         navigate(`/agent/${user.username}/tasks`);
         break;
+      case "tasks_progress":
+        navigate(`/agent/${user.username}/tasks/progress`);
+        break;
       case "tasks_all":
         navigate(`/agent/${user.username}/tasks/all`);
+        break;
+
+      case "tasks_workload":
+        navigate(`/agent/${user.username}/tasks/workload`);
+        break;
+      case "sales_performance":
+        navigate(`/agent/${user.username}/sales/performance`);
         break;
       case "sales":
         alert("Sales module coming soon");
@@ -165,7 +177,7 @@ function AgentTasksAll() {
     const arr = Array.isArray(tasksRaw) ? tasksRaw : [];
 
     return arr.map((t) => {
-      const normalizedType = String(t?.type || "CUSTOM").toUpperCase().trim();
+      const normalizedType = String(t?.type || "UPDATE_CONTACT_INFO").toUpperCase().trim();
       const normalizedStatus =
         String(t?.status || "Open").toLowerCase() === "done" ? "Done" : "Open";
 
@@ -175,6 +187,7 @@ function AgentTasksAll() {
         leadCode: t?.leadCode || "—",
         dueAt: t?.dueAt || null,
         completedAt: t?.completedAt || null,
+        wasDelayed: Boolean(t?.wasDelayed),
         createdAt: t?.createdAt || null,
         status: normalizedStatus,
         type: normalizedType,
@@ -323,6 +336,15 @@ function AgentTasksAll() {
           <div className="meta-item">
             <div className="meta-label">Completed</div>
             <div className="meta-value">{formatDue(t.completedAt)}</div>
+          </div>
+        ) : null}
+
+        {uiStatus === "Done" ? (
+          <div className="meta-item">
+            <div className="meta-label">Fulfillment</div>
+            <div className="meta-value" style={{ color: t.wasDelayed ? "#B91C1C" : "#166534", fontWeight: 700 }}>
+              {t.wasDelayed ? "Delayed" : "On time"}
+            </div>
           </div>
         ) : null}
       </div>

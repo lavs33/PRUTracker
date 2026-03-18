@@ -1,0 +1,56 @@
+.sp-shell { min-height: 100vh; background: #da291c; }
+.sp-body { display: flex; background: #da291c; }
+.sp-content { flex: 1; padding: 26px; }
+.sp-title { margin: 0 0 18px; color: #fff; font: 700 30px "FSAlbertArabic", sans-serif; }
+
+.sp-kpis { display:grid; grid-template-columns: repeat(5, minmax(0,1fr)); gap:10px; margin-bottom:12px; }
+.sp-kpi { background:#fff; border:1px solid #eef0f2; border-radius:12px; padding:10px 12px; display:grid; gap:4px; }
+.sp-kpi span { color:#6b6e6a; font:700 12px "FSAlbertArabic", sans-serif; }
+.sp-kpi strong { color:#373a36; font:900 20px "FSAlbertArabic", sans-serif; }
+
+.sp-grid { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.sp-card { background:#fff; border:1px solid #eef0f2; border-radius:12px; padding:12px; }
+.sp-card h3 { margin:0 0 10px; color:#373a36; font:800 16px "FSAlbertArabic", sans-serif; }
+.sp-wide { grid-column: 1 / -1; }
+
+.sp-frequencyCard { margin-bottom: 12px; }
+.sp-frequencyGrid { display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:8px; }
+.sp-frequencyGrid div { border:1px solid #eef0f2; border-radius:10px; padding:10px; }
+.sp-frequencyGrid span { display:block; color:#6b6e6a; font:700 12px "FSAlbertArabic", sans-serif; }
+.sp-frequencyGrid strong { color:#373a36; font:900 18px "FSAlbertArabic", sans-serif; }
+
+.sp-progressRow { display:grid; grid-template-columns: 190px 1fr 56px; align-items:center; gap:8px; }
+.sp-progressRow label, .sp-progressRow b { color:#373a36; font:700 13px "FSAlbertArabic", sans-serif; }
+.sp-track { height:12px; border-radius:999px; background:#f1f2f4; overflow:hidden; }
+.sp-track span { display:block; height:100%; background: linear-gradient(90deg, #da291c, #f05f55); }
+
+.sp-stackBar { width:100%; height:18px; border-radius:999px; overflow:hidden; background:#f1f2f4; display:flex; margin-bottom:10px; }
+.sp-stackBar .agent { background:#da291c; }
+.sp-stackBar .system { background:#2f80ed; }
+.sp-legend { display:grid; gap:6px; color:#373a36; font:700 13px "FSAlbertArabic", sans-serif; }
+.dot { width:10px; height:10px; border-radius:999px; display:inline-block; margin-right:8px; }
+.dot.agent { background:#da291c; }
+.dot.system { background:#2f80ed; }
+
+.sp-statusGrid { display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:8px; }
+.sp-statusGrid div { border:1px solid #eef0f2; border-radius:10px; padding:10px; text-align:center; }
+.sp-statusGrid span { display:block; color:#6b6e6a; font:700 12px "FSAlbertArabic", sans-serif; }
+.sp-statusGrid strong { color:#373a36; font:900 20px "FSAlbertArabic", sans-serif; }
+
+.sp-bars { display:flex; align-items:flex-end; gap:10px; min-height:180px; }
+.sp-barCol { width:72px; display:grid; justify-items:center; gap:4px; }
+.sp-barWrap { width:34px; height:140px; border-radius:8px; background:#f1f2f4; display:flex; align-items:flex-end; overflow:hidden; }
+.sp-barWrap span { width:100%; background: linear-gradient(180deg,#f05f55,#da291c); }
+.sp-barCol strong { color:#373a36; font:800 13px "FSAlbertArabic", sans-serif; }
+.sp-barCol small { color:#6b6e6a; font:700 11px "FSAlbertArabic", sans-serif; }
+
+.sp-muted { margin:0; color:#6b6e6a; font:700 13px "FSAlbertArabic", sans-serif; }
+
+@media (max-width: 1200px) { .sp-kpis { grid-template-columns: repeat(3, minmax(0,1fr)); } }
+@media (max-width: 860px) {
+  .sp-grid { grid-template-columns: 1fr; }
+  .sp-kpis { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .sp-progressRow { grid-template-columns: 1fr; }
+  .sp-statusGrid { grid-template-columns: 1fr; }
+  .sp-frequencyGrid { grid-template-columns: 1fr; }
+}
