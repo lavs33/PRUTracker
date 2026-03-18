@@ -1,0 +1,283 @@
+.cr-page-shell {
+  background-color: #da291c;
+  min-height: 100vh;
+}
+
+.cr-page-body {
+  display: flex;
+  background-color: #da291c;
+}
+
+.cr-page-content {
+  flex: 1;
+  padding: 26px;
+}
+
+.cr-module-title {
+  margin: 0 0 18px 0;
+  font-size: 30px;
+  font-weight: 700;
+  color: white;
+  font-family: "FSAlbertArabic", sans-serif;
+}
+
+.cr-content-card {
+  background: white;
+  border-radius: 14px;
+  padding: 22px 26px;
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.08);
+}
+
+.cr-muted {
+  margin: 0;
+  color: #6b6e6a;
+  font-size: 13px;
+  font-family: "FSAlbertArabic", sans-serif;
+}
+
+.cr-dashboard-card {
+  margin-bottom: 18px;
+}
+
+.cr-kpis {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.cr-kpiTile {
+  border: 1px solid #eef0f2;
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: #fafafa;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cr-kpiLabel {
+  font-family: "FSAlbertArabic", sans-serif;
+  font-size: 12px;
+  color: #6b6e6a;
+  font-weight: 700;
+}
+
+.cr-kpiValue {
+  font-family: "FSAlbertArabic", sans-serif;
+  font-size: 22px;
+  color: #373a36;
+  font-weight: 900;
+}
+
+.cr-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.cr-panel {
+  border: 1px solid #eef0f2;
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.cr-panel-wide {
+  grid-column: 1 / -1;
+}
+
+.cr-panelTitle {
+  margin: 0 0 10px 0;
+  font-family: "FSAlbertArabic", sans-serif;
+  font-size: 16px;
+  color: #373a36;
+  font-weight: 800;
+}
+
+.cr-chartRows {
+  display: grid;
+  gap: 8px;
+}
+
+.cr-rowLabel {
+  font-size: 13px;
+  font-weight: 800;
+  font-family: "FSAlbertArabic", sans-serif;
+  color: #373a36;
+}
+
+.cr-rowMeta {
+  font-size: 12px;
+  color: #6b6e6a;
+  font-family: "FSAlbertArabic", sans-serif;
+}
+
+.cr-progressTrack {
+  width: 100%;
+  height: 10px;
+  background: #f1f2f4;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.cr-progressTrack > span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #da291c, #f05f55);
+}
+
+.cr-progressTrack.alt > span {
+  background: linear-gradient(90deg, #1f4c8f, #4e7cc7);
+}
+
+.cr-progressTrack.stage {
+  height: 12px;
+}
+
+.cr-stackBar {
+  width: 100%;
+  height: 18px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: #f1f2f4;
+  display: flex;
+  margin-bottom: 10px;
+}
+
+.cr-stackBar span {
+  display: block;
+  height: 100%;
+}
+
+.cr-stackBar .agent {
+  background: #da291c;
+}
+
+.cr-stackBar .system {
+  background: #2f80ed;
+}
+
+.cr-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  font-family: "FSAlbertArabic", sans-serif;
+  color: #373a36;
+}
+
+.cr-legend span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  display: inline-block;
+}
+
+.dot.agent {
+  background: #da291c;
+}
+
+.dot.system {
+  background: #2f80ed;
+}
+
+.cr-statusGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.cr-statusCard {
+  border-radius: 10px;
+  background: #f7f7f8;
+  padding: 10px;
+  text-align: center;
+  font-family: "FSAlbertArabic", sans-serif;
+}
+
+.cr-statusCard span {
+  display: block;
+  color: #6b6e6a;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.cr-statusCard strong {
+  color: #373a36;
+  font-size: 20px;
+}
+
+.cr-healthGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.cr-healthGrid div {
+  border-radius: 10px;
+  border: 1px solid #eef0f2;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-family: "FSAlbertArabic", sans-serif;
+}
+
+.cr-healthGrid span {
+  color: #6b6e6a;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.cr-healthGrid strong {
+  color: #373a36;
+  font-size: 18px;
+}
+
+.cr-funnel {
+  display: grid;
+  gap: 10px;
+}
+
+.cr-stageBlock {
+  display: grid;
+  gap: 6px;
+}
+
+.cr-stageTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-family: "FSAlbertArabic", sans-serif;
+  font-size: 13px;
+  color: #373a36;
+  font-weight: 800;
+}
+
+@media (max-width: 1200px) {
+  .cr-kpis {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 860px) {
+  .cr-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .cr-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .cr-statusGrid,
+  .cr-healthGrid {
+    grid-template-columns: 1fr;
+  }
+}
