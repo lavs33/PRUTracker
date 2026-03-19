@@ -45,12 +45,16 @@ function AgentTasks() {
         navigate(`/agent/${user.username}/clients`);
         break;
 
+      case "clients_relationship":
+        navigate(`/agent/${user.username}/clients/relationship`);
+        break;
+
       case "clients_all_prospects":
         navigate(`/agent/${user.username}/prospects`);
         break;
 
       case "clients_all_policyholders":
-        alert("All Policyholders page coming soon.");
+        navigate(`/agent/${user.username}/policyholders`);
         break;
 
       // TASKS
@@ -58,11 +62,21 @@ function AgentTasks() {
         navigate(`/agent/${user.username}/tasks`);
         break;
 
+      case "tasks_progress":
+        navigate(`/agent/${user.username}/tasks/progress`);
+        break;
       case "tasks_all":
         navigate(`/agent/${user.username}/tasks/all`);
         break;
 
+      case "tasks_workload":
+        navigate(`/agent/${user.username}/tasks/workload`);
+        break;
+
       // SALES
+      case "sales_performance":
+        navigate(`/agent/${user.username}/sales/performance`);
+        break;
       case "sales":
         alert("Sales module coming soon");
         break;
@@ -106,11 +120,12 @@ function AgentTasks() {
         leadCode: t?.leadCode || "—",
         dueAt: t?.dueAt || null,
         createdAt: t?.createdAt || null,
+        wasDelayed: Boolean(t?.wasDelayed),
 
         status: normalizedStatus, // DB status (Open/Done)
         uiStatus, // ✅ UI status (Open/Overdue/Done)
 
-        type: String(t?.type || "CUSTOM").toUpperCase().trim(),
+        type: String(t?.type || "UPDATE_CONTACT_INFO").toUpperCase().trim(),
         title: t?.title || "Untitled task",
         description: t?.description || "",
         leadId: t?.leadId || null, // ✅ comes from backend includeRefs=1 for engagement tasks
@@ -226,6 +241,17 @@ function AgentTasks() {
           <div className="task-value">{formatDue(t.dueAt)}</div>
         </div>
       </div>
+
+      {t.uiStatus === "Done" ? (
+        <div className="task-meta" style={{ marginTop: 8 }}>
+          <div>
+            <div className="task-label">Fulfillment</div>
+            <div className="task-value" style={{ color: t.wasDelayed ? "#B91C1C" : "#166534", fontWeight: 700 }}>
+              {t.wasDelayed ? "Delayed" : "On time"}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {String(t.description || "").trim() ? <div className="task-note">{t.description}</div> : null}
 
