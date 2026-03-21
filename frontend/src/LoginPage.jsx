@@ -4,6 +4,24 @@ import { FaArrowLeft } from "react-icons/fa";
 import "./LoginPage.css";
 import logo from "./assets/prutracker-landing-logo.png";
 
+function buildPreviewManager(roleType, username) {
+  const normalizedRole = String(roleType || "").trim().toUpperCase();
+  const normalizedUsername = String(username || normalizedRole).trim().toUpperCase();
+
+  return {
+    id: `preview-${normalizedRole.toLowerCase()}-${normalizedUsername.toLowerCase()}`,
+    role: normalizedRole,
+    username: normalizedUsername,
+    firstName: normalizedRole === "AUM" ? "Assistant" : "Unit",
+    middleName: "",
+    lastName: normalizedRole === "AUM" ? "Manager" : "Leader",
+    unitName: "Diamond Unit",
+    branchName: "Metro Manila",
+    areaName: "NCR",
+    displayPhoto: "",
+  };
+}
+
 function LoginPage() {
   const navigate = useNavigate();
   const role = localStorage.getItem("role");
@@ -20,7 +38,6 @@ function LoginPage() {
     if (!role) navigate("/");
   }, [role, navigate]);
 
-
   const rolePrefixMap = {
     Agent: "AG",
     AUM: "AUM",
@@ -30,6 +47,7 @@ function LoginPage() {
 
   const handleBack = () => {
     localStorage.removeItem("role");
+    localStorage.removeItem("managerPortalUser");
     navigate("/");
   };
 
@@ -38,6 +56,13 @@ function LoginPage() {
 
     if (!username || !password) {
       setError("Please enter username and password.");
+      return;
+    }
+
+    if (role === "AUM" || role === "UM") {
+      const previewUser = buildPreviewManager(role, username);
+      localStorage.setItem("managerPortalUser", JSON.stringify(previewUser));
+      navigate(`/${role.toLowerCase()}/${previewUser.username}`);
       return;
     }
 
@@ -55,88 +80,77 @@ function LoginPage() {
         return;
       }
 
-      // Save logged-in user info
       localStorage.setItem("user", JSON.stringify(data.user));
-
-      // Navigate using react-router
       navigate(`/agent/${data.user.username}`);
     } catch (err) {
       setError("Cannot connect to server. Is backend running?");
     }
   };
 
+  const onKeyDown = (e) => {
+    if (e.key === "Enter") handleLogin();
+  };
+
   return (
-    <div className="lp-landing-container">
-
-      <button className="lp-back-top" onClick={handleBack}>
-        <FaArrowLeft size={30} />
-      </button>
-
-      <img src={logo} alt="PRUTracker Logo" className="lp-logo" />
-
-      <div style={{ width: "350px", marginTop: "100px" }}>
-
-        <input
-          placeholder={`${rolePrefixMap[role]} Code`}
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          style={inputStyle}
-        />
-
-        <br /><br />
-
-        <input
-          type="password"
-          placeholder="Password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          style={inputStyle}
-        />
-
-        <br /><br />
-
-        <button
-          style={buttonStyle}
-          onClick={handleLogin}
-          onMouseEnter={(e) => (e.target.style.backgroundColor = "#B9D3DC")}
-          onMouseLeave={(e) => (e.target.style.backgroundColor = "#FFFFFF")}
-        >
-          Log-in
+    <div className="lp-page">
+      <header className="lp-header">
+        <button className="lp-back-btn" onClick={handleBack} aria-label="Back to role selection">
+          <FaArrowLeft size={15} />
+          <span>Back</span>
         </button>
+      </header>
 
-        {error && (
-          <p style={{ color: "white", fontSize: "18px", marginTop: "15px" }}>
-            {error}
+      <main className="lp-main">
+        <section className="lp-left">
+          <img src={logo} alt="PRUTracker Logo" className="lp-logo" />
+          <p className="lp-kicker">Secure Sign-In</p>
+          <h1>Welcome back to PRUTracker</h1>
+          <p className="lp-description">
+            Continue to your role dashboard to manage client relationships, monitor activity, and track performance.
           </p>
-        )}
-      </div>
+
+          <div className="lp-meta">
+            <div>
+              <span>Selected role</span>
+              <strong>{role || "—"}</strong>
+            </div>
+            <div>
+              <span>Access type</span>
+              <strong>Internal platform</strong>
+            </div>
+          </div>
+        </section>
+
+        <section className="lp-card" onKeyDown={onKeyDown}>
+          <h2>Log in</h2>
+          <p className="lp-role-line">Role: {role || "Not selected"}</p>
+
+          <label htmlFor="username">{rolePrefixMap[role] || "User"} Code</label>
+          <input
+            id="username"
+            placeholder={`Enter ${rolePrefixMap[role] || "user"} code`}
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+          />
+
+          <label htmlFor="password">Password</label>
+          <input
+            id="password"
+            type="password"
+            placeholder="Enter password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+
+          <button className="lp-login-btn" onClick={handleLogin}>
+            Log in
+          </button>
+
+          {error && <p className="lp-error">{error}</p>}
+        </section>
+      </main>
     </div>
   );
 }
-
-const inputStyle = {
-  width: "100%",
-  padding: "14px",
-  fontSize: "16px",
-  borderRadius: "6px",
-  border: "none",
-  fontFamily: "FSAlbertArabic, sans-serif",
-};
-
-const buttonStyle = {
-  width: "40%",
-  padding: "14px",
-  fontSize: "18px",
-  backgroundColor: "#FFFFFF",
-  color: "#373A36",
-  border: "none",
-  borderRadius: "6px",
-  cursor: "pointer",
-  fontWeight: 700,
-  fontFamily: "FSAlbertArabic, sans-serif",
-  display: "block",
-  margin: "0 auto",
-  transition: "all 0.25s ease",
-};
 
 export default LoginPage;
