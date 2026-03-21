@@ -29,6 +29,9 @@ const ACTIVITIES = [
   "Assess Interest",
   "Schedule Meeting",
 ];
+const PHONE_VALIDATION = ["CORRECT", "WRONG_CONTACT"];
+const INTEREST_LEVEL = ["INTERESTED", "NOT_INTERESTED"];
+const PREFERRED_CHANNEL = ["SMS", "WhatsApp", "Viber", "Telegram", "Other"];
 
 /**
  * contactAttemptSchema
@@ -209,6 +212,32 @@ const contactAttemptSchema = new mongoose.Schema(
       trim: true, 
       maxlength: 500,
     },
+
+    phoneValidation: {
+      type: String,
+      enum: PHONE_VALIDATION,
+      default: undefined,
+    },
+
+    interestLevel: {
+      type: String,
+      enum: INTEREST_LEVEL,
+      default: undefined,
+    },
+
+    preferredChannel: {
+      type: String,
+      enum: PREFERRED_CHANNEL,
+      default: undefined,
+    },
+
+    preferredChannelOther: {
+      type: String,
+      default: "",
+      trim: true,
+      maxlength: 100,
+    },
+
   },
     /**
      * timestamps: true
