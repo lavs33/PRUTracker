@@ -82,6 +82,39 @@ const agentSchema = new mongoose.Schema(
       ref: "Unit",
       required: true,
     },
+
+    isPromoted: {
+      type: Boolean,
+      default: false,
+    },
+
+    promotedToRole: {
+      type: String,
+      enum: ["AUM", "UM", "BM", null],
+      default: null,
+    },
+
+    datePromoted: {
+      type: Date,
+      default: null,
+    },
+
+    promotionHistory: {
+      type: [
+        {
+          role: {
+            type: String,
+            enum: ["AUM", "UM", "BM"],
+            required: true,
+          },
+          datePromoted: {
+            type: Date,
+            required: true,
+          },
+        },
+      ],
+      default: [],
+    },
   },
     /**
      * timestamps: true
