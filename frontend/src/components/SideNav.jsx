@@ -14,10 +14,14 @@ function SideNav({ active, onNavigate }) {
 
     if (p.includes("/notifications")) return null;
 
+    if (p.includes("/tasks/progress")) return "tasks_progress";
     if (p.includes("/tasks/all")) return "tasks_all";
     if (p.includes("/tasks")) return "tasks";
 
+    if (p.includes("/sales/performance")) return "sales_performance";
+    if (p.includes("/clients/relationship")) return "clients_relationship";
     if (p.includes("/prospects")) return "clients_all_prospects";
+    if (p.includes("/policyholders")) return "clients_all_policyholders";
     if (p.includes("/clients")) return "clients";
 
     return null;
@@ -64,15 +68,19 @@ function SideNav({ active, onNavigate }) {
         children: [
           { key: "clients_all_prospects", label: "All Prospects" },
           { key: "clients_all_policyholders", label: "All Policyholders" },
+          { key: "clients_relationship", label: "Clients Relationship" },
         ],
       },
       {
         key: "tasks",
         label: "Tasks",
         icon: <FaTasks size={22} />,
-        children: [{ key: "tasks_all", label: "All Tasks" }],
+        children: [
+          { key: "tasks_all", label: "All Tasks" },
+          { key: "tasks_progress", label: "Task Progress" },
+        ],
       },
-      { key: "sales", label: "Sales", icon: <FaChartLine size={22} />, children: [] },
+      { key: "sales_performance", label: "Sales Performance", icon: <FaChartLine size={22} /> },
     ],
     []
   );
@@ -82,7 +90,6 @@ function SideNav({ active, onNavigate }) {
   useEffect(() => {
     const inClients = isGroupActive("clients");
     const inTasks = isGroupActive("tasks");
-
     setOpenGroups({
       clients: inClients,
       tasks: inTasks,
@@ -101,6 +108,16 @@ function SideNav({ active, onNavigate }) {
   return (
     <aside className={`side-nav ${collapsed ? "collapsed" : ""}`}>
       <div className="side-nav-top">
+        <div className="side-nav-brand">
+          <span className="side-nav-eyebrow">CRM Workspace</span>
+          {!collapsed && (
+            <>
+              <strong className="side-nav-brandTitle">Agent Command Center</strong>
+              <small className="side-nav-brandMeta">Pipeline, tasks, and sales visibility</small>
+            </>
+          )}
+        </div>
+
         <button
           type="button"
           className="side-nav-collapseBtn"
@@ -113,6 +130,8 @@ function SideNav({ active, onNavigate }) {
       </div>
 
       <div className="side-nav-list">
+        {!collapsed && <div className="side-nav-sectionLabel">Navigation</div>}
+
         {items.map((item) => {
           const groupActive = isGroupActive(item.key);
           const groupSubActive = isGroupSubActive(item.key);
@@ -132,7 +151,10 @@ function SideNav({ active, onNavigate }) {
 
                 {!collapsed && (
                   <div className="side-nav-labelRow">
-                    <div className="side-nav-label">{item.label}</div>
+                    <div className="side-nav-labelBlock">
+                      <div className="side-nav-label">{item.label}</div>
+                      {hasChildren ? <div className="side-nav-caption">{`${item.children.length} views`}</div> : null}
+                    </div>
 
                     {hasChildren ? (
                       <button
