@@ -267,6 +267,12 @@
   gap: 10px;
 }
 
+.le-blockHeader.withTopBorder {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid #eef0f2;
+}
+
 .le-blockTitle {
   margin: 0;
   font-size: 18px;
@@ -300,6 +306,16 @@
   color: #6b6e6a;
   font-size: 13px;
   font-weight: 800;
+}
+
+
+.le-attemptSectionHeader {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed #e6e7ea;
+  font-size: 13px;
+  font-weight: 900;
+  color: #373a36;
 }
 
 .le-attemptMeta {
@@ -337,6 +353,16 @@
   font-family: "FSAlbertArabic", sans-serif;
   font-weight: 700;
   opacity: 0.75;
+}
+
+
+.le-activitySectionHeader {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px dashed #e6e7ea;
+  font-size: 13px;
+  font-weight: 900;
+  color: #373a36;
 }
 
 .le-formRow {
@@ -837,4 +863,56 @@
   background: #e9fff0;
   border-color: #c9f5d6;
   color: #157a3a;
+}
+
+.le-toggleBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #d1d5db;
+  background: #ffffff;
+  border-radius: 999px;
+  padding: 4px 10px 4px 4px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.le-toggleBtn:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.le-toggleTrack {
+  width: 38px;
+  height: 22px;
+  border-radius: 999px;
+  background: #d1d5db;
+  padding: 2px;
+  display: inline-flex;
+  align-items: center;
+  transition: background-color 0.2s ease;
+}
+
+.le-toggleThumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+  transform: translateX(0);
+  transition: transform 0.2s ease;
+}
+
+.le-toggleBtn.is-on .le-toggleTrack {
+  background: #da291c;
+}
+
+.le-toggleBtn.is-on .le-toggleThumb {
+  transform: translateX(16px);
+}
+
+.le-toggleText {
+  font-size: 13px;
+  font-weight: 800;
+  color: #1f2937;
 }
