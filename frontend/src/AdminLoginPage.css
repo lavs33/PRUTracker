@@ -1,0 +1,229 @@
+@font-face {
+  font-family: "FSAlbertArabic";
+  src: url("./assets/fonts/FSAlbertArabic-Light.ttf") format("truetype");
+  font-weight: 300;
+}
+
+@font-face {
+  font-family: "FSAlbertArabic";
+  src: url("./assets/fonts/FSAlbertArabic-Regular.ttf") format("truetype");
+  font-weight: 400;
+}
+
+@font-face {
+  font-family: "FSAlbertArabic";
+  src: url("./assets/fonts/FSAlbertArabic-Bold.ttf") format("truetype");
+  font-weight: 700;
+}
+
+@font-face {
+  font-family: "FSAlbertArabic";
+  src: url("./assets/fonts/FSAlbertArabic-ExtraBold.ttf") format("truetype");
+  font-weight: 800;
+}
+
+.alp-page {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.14), transparent 30%),
+    linear-gradient(180deg, #2f3441 0%, #191c24 100%);
+  color: #fff;
+  font-family: "FSAlbertArabic", sans-serif;
+}
+
+.alp-header {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 18px 28px 0;
+}
+
+.alp-back-btn {
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  border-radius: 999px;
+  padding: 9px 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.alp-back-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.alp-main {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 18px 28px 54px;
+  display: grid;
+  grid-template-columns: 1.15fr 0.85fr;
+  gap: 28px;
+  align-items: center;
+}
+
+.alp-left {
+  max-width: 760px;
+}
+
+.alp-logo {
+  width: min(360px, 62vw);
+}
+
+.alp-kicker {
+  margin: 18px 0 8px;
+  font-size: 13px;
+  font-weight: 700;
+  opacity: 0.92;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.alp-left h1 {
+  margin: 0;
+  font-size: clamp(34px, 4.8vw, 58px);
+  line-height: 1.05;
+  font-weight: 800;
+}
+
+.alp-description {
+  margin: 14px 0 0;
+  font-size: clamp(16px, 1.7vw, 22px);
+  line-height: 1.45;
+  max-width: 640px;
+}
+
+.alp-meta {
+  margin-top: 18px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  max-width: 480px;
+}
+
+.alp-meta div {
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+
+.alp-meta span {
+  display: block;
+  font-size: 11px;
+  opacity: 0.9;
+}
+
+.alp-meta strong {
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.alp-card {
+  background: rgba(255, 255, 255, 0.98);
+  color: #373a36;
+  border-radius: 16px;
+  border: 1px solid #eceff2;
+  box-shadow: 0 18px 38px rgba(6, 8, 16, 0.4);
+  padding: 24px;
+  display: grid;
+  gap: 10px;
+}
+
+.alp-card h2 {
+  margin: 0;
+  color: #222733;
+  font-size: 29px;
+  font-weight: 800;
+}
+
+.alp-role-line {
+  margin: -4px 0 2px;
+  color: #69707b;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.alp-card label {
+  font-size: 13px;
+  font-weight: 700;
+  color: #464b46;
+}
+
+.alp-card input {
+  width: 100%;
+  border: 1px solid #d8dde3;
+  background: #fff;
+  border-radius: 10px;
+  padding: 12px 12px;
+  font-family: "FSAlbertArabic", sans-serif;
+  font-size: 15px;
+  color: #373a36;
+  outline: none;
+}
+
+.alp-card input:focus {
+  border-color: #2f3441;
+  box-shadow: 0 0 0 3px rgba(47, 52, 65, 0.12);
+}
+
+.alp-login-btn {
+  margin-top: 8px;
+  border: none;
+  border-radius: 10px;
+  background: #2f3441;
+  color: #fff;
+  padding: 12px 14px;
+  font-size: 16px;
+  font-weight: 800;
+  font-family: "FSAlbertArabic", sans-serif;
+  cursor: pointer;
+}
+
+.alp-login-btn:hover {
+  background: #202530;
+}
+
+.alp-error {
+  margin: 0;
+  font-size: 13px;
+  color: #8f1020;
+  font-weight: 700;
+}
+
+.alp-success {
+  margin: 0;
+  font-size: 13px;
+  color: #1d5a36;
+  font-weight: 700;
+}
+
+@media (max-width: 980px) {
+  .alp-main {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .alp-card {
+    max-width: 560px;
+  }
+}
+
+@media (max-width: 680px) {
+  .alp-header,
+  .alp-main {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .alp-meta {
+    grid-template-columns: 1fr;
+  }
+
+  .alp-card {
+    padding: 18px;
+  }
+}
