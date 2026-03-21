@@ -1,0 +1,836 @@
+@font-face {
+  font-family: "FSAlbertArabic";
+  src: url("./assets/fonts/FSAlbertArabic-Light.ttf") format("truetype");
+  font-weight: 300;
+}
+
+@font-face {
+  font-family: "FSAlbertArabic";
+  src: url("./assets/fonts/FSAlbertArabic-Regular.ttf") format("truetype");
+  font-weight: 400;
+}
+
+@font-face {
+  font-family: "FSAlbertArabic";
+  src: url("./assets/fonts/FSAlbertArabic-Bold.ttf") format("truetype");
+  font-weight: 700;
+}
+
+@font-face {
+  font-family: "FSAlbertArabic";
+  src: url("./assets/fonts/FSAlbertArabic-ExtraBold.ttf") format("truetype");
+  font-weight: 800;
+}
+
+.aop-page {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.12), transparent 28%),
+    linear-gradient(180deg, #2f3441 0%, #191c24 100%);
+  color: #fff;
+  font-family: "FSAlbertArabic", sans-serif;
+}
+
+.aop-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: rgba(25, 28, 36, 0.9);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.aop-header-inner {
+  max-width: 1320px;
+  margin: 0 auto;
+  padding: 16px 28px;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 18px;
+  align-items: center;
+}
+
+.aop-header-inner.no-back {
+  grid-template-columns: 1fr auto;
+}
+
+.aop-header-user button {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  border-radius: 999px;
+  padding: 10px 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.aop-header-user button:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.aop-header-brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.aop-logo {
+  width: 170px;
+}
+
+.aop-header-brand p,
+.aop-header-brand strong,
+.aop-header-user span {
+  margin: 0;
+}
+
+.aop-header-brand p {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  opacity: 0.82;
+}
+
+.aop-header-brand strong {
+  display: block;
+  font-size: 18px;
+}
+
+.aop-header-user {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.aop-header-user-meta {
+  display: grid;
+  gap: 2px;
+}
+
+.aop-header-user span {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.aop-header-user small {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 12px;
+}
+
+.aop-main {
+  max-width: 1320px;
+  margin: 0 auto;
+  padding: 30px 28px 60px;
+}
+
+.aop-hero {
+  display: grid;
+  grid-template-columns: 1.2fr 0.8fr;
+  gap: 22px;
+  align-items: start;
+}
+
+.aop-kicker {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.88;
+}
+
+.aop-hero h1 {
+  margin: 0;
+  font-size: clamp(32px, 4vw, 54px);
+  line-height: 1.05;
+}
+
+.aop-description {
+  margin: 16px 0 0;
+  max-width: 760px;
+  font-size: 18px;
+  line-height: 1.55;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.aop-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.aop-summary-grid article {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 18px;
+  padding: 18px;
+  display: grid;
+  gap: 8px;
+}
+
+.aop-summary-grid svg {
+  color: #f2859e;
+  font-size: 20px;
+}
+
+.aop-summary-grid span {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  opacity: 0.82;
+}
+
+.aop-summary-grid strong {
+  font-size: 34px;
+  line-height: 1;
+}
+
+.aop-section {
+  margin-top: 34px;
+}
+
+.aop-section-tight {
+  margin-top: 0;
+}
+
+.aop-section-head h2 {
+  margin: 0;
+  font-size: 28px;
+}
+
+.aop-section-head p {
+  margin: 8px 0 0;
+  color: rgba(255, 255, 255, 0.84);
+}
+
+.aop-toolbar {
+  margin-top: 18px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.aop-workspace {
+  margin-top: 34px;
+  display: grid;
+  grid-template-columns: minmax(260px, 300px) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.aop-workspace.nav-collapsed {
+  grid-template-columns: 88px minmax(0, 1fr);
+}
+
+.aop-content-shell {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 28px;
+  padding: 24px;
+}
+
+.aop-form-grid {
+  margin-top: 20px;
+  display: grid;
+  gap: 16px;
+}
+
+.aop-form-grid.two-up {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+}
+
+.aop-toolbar-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.aop-action-btn {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  border-radius: 12px;
+  padding: 11px 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.aop-action-btn.active {
+  background: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.28);
+}
+
+.aop-action-btn.danger {
+  border-color: rgba(255, 171, 171, 0.28);
+  background: rgba(142, 22, 35, 0.24);
+}
+
+.aop-search {
+  min-width: min(360px, 100%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  padding: 12px 14px;
+}
+
+.aop-search input,
+.aop-form-card input,
+.aop-form-card select {
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-family: "FSAlbertArabic", sans-serif;
+  font-size: 14px;
+  outline: none;
+}
+
+.aop-search input::placeholder,
+.aop-form-card input::placeholder {
+  color: rgba(255, 255, 255, 0.52);
+}
+
+.aop-feedback,
+.aop-empty-state,
+.aop-nested-empty {
+  margin-top: 18px;
+  border-radius: 16px;
+  padding: 14px 16px;
+}
+
+.aop-feedback.success {
+  background: rgba(26, 102, 58, 0.22);
+  border: 1px solid rgba(82, 191, 129, 0.28);
+}
+
+.aop-feedback.error {
+  background: rgba(141, 22, 35, 0.24);
+  border: 1px solid rgba(255, 172, 172, 0.3);
+}
+
+.aop-management-grid {
+  margin-top: 18px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.aop-management-grid.single {
+  grid-template-columns: minmax(0, 520px);
+}
+
+.aop-form-card {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 20px;
+  padding: 18px;
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+
+.aop-inline-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.aop-inline-grid > div {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.aop-inline-grid.three-up {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.aop-inline-grid.four-up {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.aop-form-card.danger {
+  background: rgba(141, 22, 35, 0.2);
+  border-color: rgba(255, 172, 172, 0.28);
+}
+
+.aop-form-head {
+  display: flex;
+  align-items: start;
+  gap: 12px;
+}
+
+.aop-form-head > div {
+  flex: 1;
+}
+
+.aop-form-head h3,
+.aop-form-head p {
+  margin: 0;
+}
+
+.aop-form-head p {
+  margin-top: 4px;
+  color: rgba(255, 255, 255, 0.76);
+  font-size: 13px;
+}
+
+.aop-form-card label {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.aop-form-card input,
+.aop-form-card select {
+  box-sizing: border-box;
+  display: block;
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: rgba(12, 15, 22, 0.28);
+}
+
+.aop-form-card select option {
+  color: #222733;
+}
+
+.aop-form-card button {
+  box-sizing: border-box;
+  width: 100%;
+  border: none;
+  border-radius: 12px;
+  background: #fff;
+  color: #222733;
+  padding: 12px 14px;
+  font-family: "FSAlbertArabic", sans-serif;
+  font-weight: 800;
+  cursor: pointer;
+  margin-top: 4px;
+}
+
+.aop-form-note {
+  border: 1px dashed rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 14px;
+  padding: 12px 14px;
+  color: rgba(255, 255, 255, 0.82);
+  line-height: 1.5;
+}
+
+.aop-close-btn {
+  border: 1px solid rgba(255, 255, 255, 0.16) !important;
+  background: rgba(255, 255, 255, 0.08) !important;
+  color: #fff !important;
+  padding: 10px 12px !important;
+  font-weight: 700 !important;
+}
+
+.aop-warning-box {
+  border: 1px solid rgba(255, 172, 172, 0.28);
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  padding: 12px;
+}
+
+.aop-warning-box strong,
+.aop-warning-box p {
+  margin: 0;
+}
+
+.aop-warning-box p {
+  margin-top: 6px;
+  line-height: 1.5;
+}
+
+.aop-preview-card {
+  margin-top: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(12, 15, 22, 0.24);
+  border-radius: 16px;
+  padding: 14px;
+}
+
+.aop-preview-head {
+  display: grid;
+  gap: 4px;
+}
+
+.aop-preview-head strong,
+.aop-preview-head span {
+  margin: 0;
+}
+
+.aop-preview-head span {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 13px;
+}
+
+.aop-preview-grid {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.aop-preview-grid div,
+.aop-preview-empty {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  padding: 12px;
+}
+
+.aop-preview-grid span {
+  display: block;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.66);
+}
+
+.aop-preview-grid strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 14px;
+}
+
+.aop-preview-empty {
+  margin: 12px 0 0;
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.aop-empty-state,
+.aop-nested-empty {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px dashed rgba(255, 255, 255, 0.18);
+}
+
+.aop-nested-empty.light {
+  color: rgba(255, 255, 255, 0.84);
+}
+
+.aop-area-list {
+  margin-top: 18px;
+  display: grid;
+  gap: 18px;
+}
+
+.aop-area-card {
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 24px;
+  padding: 20px;
+}
+
+.aop-area-head,
+.aop-branch-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 14px;
+}
+
+.aop-area-head p,
+.aop-branch-head p,
+.aop-unit-head p {
+  margin: 0 0 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  opacity: 0.76;
+}
+
+.aop-area-head h3,
+.aop-branch-head h4,
+.aop-unit-head h5 {
+  margin: 0;
+}
+
+.aop-area-head span {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.aop-branch-list {
+  margin-top: 18px;
+  display: grid;
+  gap: 14px;
+}
+
+.aop-branch-card {
+  background: rgba(12, 15, 22, 0.34);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 18px;
+  padding: 18px;
+}
+
+.aop-assignment-card {
+  min-width: 180px;
+  background: rgba(242, 133, 158, 0.14);
+  border: 1px solid rgba(242, 133, 158, 0.28);
+  border-radius: 14px;
+  padding: 10px 12px;
+}
+
+.aop-assignment-card span,
+.aop-assignment-grid span,
+.aop-agent-label {
+  display: block;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  opacity: 0.78;
+}
+
+.aop-assignment-card strong,
+.aop-assignment-grid strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 14px;
+}
+
+.aop-timestamp-row {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.aop-timestamp-row div {
+  min-width: 0;
+}
+
+.aop-timestamp-row span {
+  display: block;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.68;
+}
+
+.aop-timestamp-row strong {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.aop-unit-grid {
+  margin-top: 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+}
+
+.aop-unit-card {
+  background: rgba(255, 255, 255, 0.96);
+  color: #30343d;
+  border-radius: 18px;
+  padding: 16px;
+  box-shadow: 0 16px 32px rgba(6, 8, 16, 0.18);
+}
+
+.aop-assignment-grid {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.aop-assignment-grid .aop-assignment-card,
+.aop-agent-list-wrap {
+  background: #f7f8fb;
+  border: 1px solid #e4e8ee;
+  border-radius: 14px;
+  padding: 12px;
+}
+
+.aop-agent-list-wrap {
+  margin-top: 14px;
+}
+
+.aop-agent-list {
+  margin: 10px 0 0;
+  padding-left: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+
+.aop-agent-empty,
+.aop-agent-list li {
+  line-height: 1.45;
+}
+
+.aop-agent-list li {
+  background: #fff;
+  border: 1px solid #e4e8ee;
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.aop-agent-list li > span {
+  display: block;
+  font-weight: 700;
+}
+
+.aop-agent-empty {
+  margin: 10px 0 0;
+  color: #6f7783;
+}
+
+.aop-directory-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.aop-directory-card {
+  background: rgba(12, 15, 22, 0.24);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  padding: 14px;
+}
+
+.aop-directory-list {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 10px;
+}
+
+.aop-directory-list li {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  padding: 12px;
+}
+
+.aop-directory-list li > span,
+.aop-directory-list li > small {
+  display: block;
+}
+
+.aop-directory-list li > span {
+  font-weight: 700;
+}
+
+.aop-directory-list li > small {
+  margin-top: 4px;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.aop-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(7, 10, 18, 0.72);
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  z-index: 90;
+}
+
+.aop-modal {
+  width: min(100%, 460px);
+  background: #fff;
+  color: #222733;
+  border-radius: 22px;
+  padding: 22px;
+  box-shadow: 0 28px 56px rgba(6, 8, 16, 0.28);
+}
+
+.aop-modal h3,
+.aop-modal p {
+  margin: 0;
+}
+
+.aop-modal p {
+  margin-top: 10px;
+  line-height: 1.6;
+}
+
+.aop-modal button {
+  margin-top: 18px;
+  width: 100%;
+  border: none;
+  border-radius: 12px;
+  background: #222733;
+  color: #fff;
+  padding: 12px 14px;
+  font-family: "FSAlbertArabic", sans-serif;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+@media (max-width: 1100px) {
+  .aop-hero,
+  .aop-management-grid,
+  .aop-workspace,
+  .aop-form-grid.two-up {
+    grid-template-columns: 1fr;
+  }
+
+  .aop-inline-grid,
+  .aop-inline-grid.three-up,
+  .aop-inline-grid.four-up,
+  .aop-preview-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 840px) {
+  .aop-header-inner,
+  .aop-header-inner.no-back {
+    grid-template-columns: 1fr;
+  }
+
+  .aop-header-brand,
+  .aop-header-user,
+  .aop-branch-head,
+  .aop-area-head {
+    justify-content: space-between;
+    flex-wrap: wrap;
+  }
+
+  .aop-assignment-card,
+  .aop-search {
+    width: 100%;
+  }
+}
+
+@media (max-width: 680px) {
+  .aop-main,
+  .aop-header-inner {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .aop-summary-grid,
+  .aop-assignment-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .aop-logo {
+    width: 145px;
+  }
+}
