@@ -1,0 +1,77 @@
+.manager-side-nav {
+  width: 260px;
+  min-width: 260px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 24px;
+  background: linear-gradient(180deg, rgba(22, 27, 39, 0.94), rgba(14, 18, 28, 0.94));
+  padding: 20px 18px;
+  display: grid;
+  gap: 18px;
+}
+
+.manager-side-nav__head {
+  display: grid;
+  gap: 6px;
+}
+
+.manager-side-nav__eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.66);
+}
+
+.manager-side-nav__head strong {
+  font-size: 20px;
+  color: #fff;
+}
+
+.manager-side-nav__head small {
+  color: rgba(255, 255, 255, 0.72);
+  line-height: 1.5;
+}
+
+.manager-side-nav__list {
+  display: grid;
+  gap: 10px;
+}
+
+.manager-side-nav__item {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.9);
+  border-radius: 16px;
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font: inherit;
+  cursor: pointer;
+  transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+}
+
+.manager-side-nav__item:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.manager-side-nav__item.active {
+  border-color: rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.manager-side-nav__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+}
+
+@media (max-width: 1080px) {
+  .manager-side-nav {
+    width: 100%;
+    min-width: 0;
+  }
+}
