@@ -123,6 +123,10 @@
   padding: 10px 12px;
 }
 
+.ld-detailItem-wide{
+  grid-column: 1 / -1;
+}
+
 .ld-detailLabel{
   display:block;
   font-weight: 800;
@@ -177,22 +181,6 @@
   color: #f3b4b4;
 }
 
-.ld-actionBtn {
-  background: rgba(218, 41, 28, 0.813);
-  border: none;
-  color: #ffffff;
-  padding: 11px 14px;
-  border-radius: 12px;
-  cursor: pointer;
-  font-weight: 800;
-  font-family: "FSAlbertArabic", sans-serif;
-  font-size: 15px;
-  margin-top: 50px;
-}
-
-.ld-actionBtn:hover {
-  filter: brightness(0.9);
-}
 
 .ld-records {
   margin-top: 18px;
@@ -229,6 +217,7 @@
   color:#373A36;
   line-height: 1.5;
 }
+
 
 .ld-status-pill {
   display: inline-block;

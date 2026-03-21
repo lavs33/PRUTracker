@@ -66,18 +66,28 @@ function AgentNotifications() {
       case "clients":
         navigate(`/agent/${user.username}/clients`);
         break;
+      case "clients_relationship":
+        navigate(`/agent/${user.username}/clients/relationship`);
+        break;
       case "clients_all_prospects":
         navigate(`/agent/${user.username}/prospects`);
         break;
       case "clients_all_policyholders":
-        alert("All Policyholders page coming soon.");
+        navigate(`/agent/${user.username}/policyholders`);
         break;
 
       case "tasks":
         navigate(`/agent/${user.username}/tasks`);
         break;
+      case "tasks_progress":
+        navigate(`/agent/${user.username}/tasks/progress`);
+        break;
       case "tasks_all":
         navigate(`/agent/${user.username}/tasks/all`);
+        break;
+
+      case "tasks_workload":
+        navigate(`/agent/${user.username}/tasks/workload`);
         break;
 
       // notifications route exists for bell
@@ -85,6 +95,9 @@ function AgentNotifications() {
         navigate(`/agent/${user.username}/notifications`);
         break;
 
+      case "sales_performance":
+        navigate(`/agent/${user.username}/sales/performance`);
+        break;
       case "sales":
         alert("Sales module coming soon");
         break;
