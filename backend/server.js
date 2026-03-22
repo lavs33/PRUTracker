@@ -6387,7 +6387,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
       .lean();
 
     const needsAssessment = await NeedsAssessment.findOne({ leadEngagementId: engagement._id })
-      .select("needsPriorities.productSelection.selectedProductId needsPriorities.productSelection.requestedFrequency needsPriorities.productSelection.methodForInitialPayment")
+      .select("needsPriorities.productSelection.selectedProductId needsPriorities.productSelection.requestedFrequency")
       .lean();
 
     const proposalDoc = await Proposal.findOne({ leadEngagementId: engagement._id })
@@ -6600,6 +6600,9 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
           recordPremiumPaymentTransfer: {
             totalAnnualPremiumPhp: applicationDoc?.recordPremiumPaymentTransfer?.totalAnnualPremiumPhp ?? null,
             totalFrequencyPremiumPhp: applicationDoc?.recordPremiumPaymentTransfer?.totalFrequencyPremiumPhp ?? null,
+            methodForInitialPayment:
+              applicationDoc?.recordPremiumPaymentTransfer?.methodForInitialPayment
+              || "",
             methodForRenewalPayment: applicationDoc?.recordPremiumPaymentTransfer?.methodForRenewalPayment || "",
             paymentProofImageDataUrl: applicationDoc?.recordPremiumPaymentTransfer?.paymentProofImageDataUrl || "",
             paymentProofFileName: applicationDoc?.recordPremiumPaymentTransfer?.paymentProofFileName || "",
@@ -6613,7 +6616,6 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
           },
           needsAssessmentProductSelection: {
             requestedFrequency: String(needsAssessment?.needsPriorities?.productSelection?.requestedFrequency || ""),
-            methodForInitialPayment: String(needsAssessment?.needsPriorities?.productSelection?.methodForInitialPayment || ""),
           },
         },
 
@@ -7950,7 +7952,7 @@ app.put("/api/prospects/:prospectId/leads/:leadId/needs-assessment", async (req,
       }
 
       const info = basicInformation || {};
-      const sex = String(info.sex || "").trim();
+      const sex = String(info.sex || prospect.sex || "").trim();
       const civilStatus = String(info.civilStatus || "").trim();
       const occupationCategory = String(info.occupationCategory || "").trim();
       const occupation = String(info.occupation || "").trim();
@@ -8036,7 +8038,6 @@ app.put("/api/prospects/:prospectId/leads/:leadId/needs-assessment", async (req,
       const selectedProductId = String(productSelectionInput.selectedProductId || "").trim();
       const requestedFrequency = String(productSelectionInput.requestedFrequency || "Monthly").trim() || "Monthly";
       const requestedPremiumPayment = toNonNegativeNumber(productSelectionInput.requestedPremiumPayment);
-      const methodForInitialPayment = String(productSelectionInput.methodForInitialPayment || "").trim();
       if (!selectedProductId || !mongoose.isValidObjectId(selectedProductId)) {
         throw Object.assign(new Error("Product Selection: product is required."), { status: 400 });
       }
@@ -8048,9 +8049,6 @@ app.put("/api/prospects/:prospectId/leads/:leadId/needs-assessment", async (req,
       }
       if (!hasAtMostTwoDecimals(requestedPremiumPayment)) {
         throw Object.assign(new Error("Product Selection: requested premium payment must have at most 2 decimal places."), { status: 400 });
-      }
-      if (!["Credit Card / Debit Card", "Mobile Wallet / GCash", "Dated Check", "Bills Payments"].includes(methodForInitialPayment)) {
-        throw Object.assign(new Error("Product Selection: method for initial payment is required."), { status: 400 });
       }
       const selectedProductDoc = await Product.findById(selectedProductId).select("productCategory").lean();
       if (!selectedProductDoc) {
@@ -8083,7 +8081,6 @@ app.put("/api/prospects/:prospectId/leads/:leadId/needs-assessment", async (req,
           selectedProductId: new mongoose.Types.ObjectId(selectedProductId),
           requestedPremiumPayment,
           requestedFrequency,
-          methodForInitialPayment,
         },
         optionalRiders,
         productRidersNotes,
@@ -8891,6 +8888,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/premium-payment-t
     const {
       totalAnnualPremiumPhp,
       totalFrequencyPremiumPhp,
+      methodForInitialPayment,
       methodForRenewalPayment,
       paymentProofImageDataUrl,
       paymentProofFileName,
@@ -8911,6 +8909,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/premium-payment-t
     const frequencyPremiumRaw = String(totalFrequencyPremiumPhp ?? "").trim();
     const annualPremium = toNonNegativeNumber(annualPremiumRaw);
     const frequencyPremium = toNonNegativeNumber(frequencyPremiumRaw);
+    const initialPaymentMethod = String(methodForInitialPayment || "").trim();
     const renewalMethod = String(methodForRenewalPayment || "").trim();
     const proofDataUrl = String(paymentProofImageDataUrl || "").trim();
     const proofFileName = String(paymentProofFileName || "").trim();
@@ -8921,6 +8920,9 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/premium-payment-t
     if (!hasAtMostTwoDecimals(frequencyPremium)) return res.status(400).json({ message: "Total requested-frequency premium must have at most 2 decimal places." });
 
     const allowedPaymentMethods = ["Credit Card / Debit Card", "Mobile Wallet / GCash", "Dated Check", "Bills Payments"];
+    if (!allowedPaymentMethods.includes(initialPaymentMethod)) {
+      return res.status(400).json({ message: "Method for initial payment is required." });
+    }
     if (!allowedPaymentMethods.includes(renewalMethod)) {
       return res.status(400).json({ message: "Method for renewal payment is required." });
     }
@@ -8951,17 +8953,13 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/premium-payment-t
       }
 
       const needsAssessment = await NeedsAssessment.findOne({ leadEngagementId: engagement._id })
-        .select("needsPriorities.productSelection.requestedFrequency needsPriorities.productSelection.methodForInitialPayment")
+        .select("needsPriorities.productSelection.requestedFrequency")
         .session(session);
 
       const requestedFrequency = String(needsAssessment?.needsPriorities?.productSelection?.requestedFrequency || "").trim();
-      const initialPaymentMethod = String(needsAssessment?.needsPriorities?.productSelection?.methodForInitialPayment || "").trim();
 
       if (!requestedFrequency) {
         throw Object.assign(new Error("Requested frequency is missing from Needs Assessment."), { status: 409 });
-      }
-      if (!allowedPaymentMethods.includes(initialPaymentMethod)) {
-        throw Object.assign(new Error("Method for initial payment is missing from Needs Assessment."), { status: 409 });
       }
 
       engagement.currentActivityKey = "Record Application Submission";
@@ -8976,6 +8974,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/premium-payment-t
             recordPremiumPaymentTransfer: {
               totalAnnualPremiumPhp: annualPremium,
               totalFrequencyPremiumPhp: frequencyPremium,
+              methodForInitialPayment: initialPaymentMethod,
               methodForRenewalPayment: renewalMethod,
               paymentProofImageDataUrl: proofDataUrl,
               paymentProofFileName: proofFileName,
@@ -9625,12 +9624,28 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-dura
       const matchedPayment = paymentOptions.find((opt) => {
         const optType = String(opt?.type || "").trim();
         const optLabel = String(opt?.label || "").trim();
-        return (
-          optType === normalizedPaymentType
-          && optLabel === normalizedPaymentLabel
-          && (opt?.years ?? null) === (paymentYears ?? null)
-          && (opt?.untilAge ?? null) === (paymentUntilAge ?? null)
-        );
+        if (optType !== normalizedPaymentType || optLabel !== normalizedPaymentLabel) {
+          return false;
+        }
+
+        if (normalizedPaymentType === "FIXED_YEARS") {
+          return (opt?.years ?? null) === (paymentYears ?? null);
+        }
+
+        if (normalizedPaymentType === "UNTIL_AGE") {
+          return (opt?.untilAge ?? null) === (paymentUntilAge ?? null);
+        }
+
+        if (normalizedPaymentType === "RANGE_TO_AGE") {
+          const optionMaxAge = Number(opt?.untilAge);
+          const optionMinYears = Number(opt?.minYears);
+          const computedMinAge = Number.isFinite(optionMinYears)
+            ? issuanceAge + optionMinYears
+            : issuanceAge + 1;
+          return Number.isFinite(paymentUntilAge) && paymentUntilAge >= computedMinAge && paymentUntilAge <= optionMaxAge;
+        }
+
+        return (opt?.years ?? null) === (paymentYears ?? null) && (opt?.untilAge ?? null) === (paymentUntilAge ?? null);
       });
       if (!matchedPayment) {
         throw Object.assign(new Error("Selected payment term is invalid for the chosen product."), { status: 400 });
