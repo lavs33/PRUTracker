@@ -419,6 +419,529 @@ async function findActiveManagerForScope(managerType, { branchId = "", unitId = 
   return managers.find((manager) => matchesManagerScope(manager, managerType, { branchId, unitId })) || null;
 }
 
+async function getManagerScopeContext(user) {
+  const normalizedRole = String(user?.role || "").trim().toUpperCase();
+  const ManagerModel = getManagerModelByType(normalizedRole);
+
+  if (!ManagerModel) {
+    return { error: { status: 400, message: "Invalid manager role." } };
+  }
+
+  const manager = await ManagerModel.findOne({ userId: user._id }).populate(buildManagerPopulateQuery(normalizedRole)).lean();
+
+  if (!manager) {
+    return {
+      error: {
+        status: 403,
+        message: "No active manager assignment was found for this account. Please contact Admin.",
+      },
+    };
+  }
+
+  if (manager.isBlocked === true) {
+    return {
+      error: {
+        status: 403,
+        message: "This manager account has been replaced and can no longer access the portal.",
+      },
+    };
+  }
+
+  const profile = getManagerProfile(manager);
+
+  return {
+    role: normalizedRole,
+    manager,
+    profile,
+    managerAgentId: String(profile.agent?._id || ""),
+    unitId: String(profile.unit?._id || ""),
+    branchId: String(profile.branch?._id || ""),
+    unitName: profile.unit?.unitName || "",
+    branchName: profile.branch?.branchName || "",
+    areaName: profile.area?.areaName || "",
+  };
+}
+
+async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDatePreset = "ALL" } = {}) {
+  const context = await getManagerScopeContext(user);
+  if (context.error) return context;
+
+  const buildPresetContext = (presetRaw = "ALL") => {
+    const preset = String(presetRaw || "ALL").trim().toUpperCase();
+    const now = new Date();
+    if (preset === "30D") {
+      const startDate = new Date(now);
+      startDate.setDate(startDate.getDate() - 30);
+      return { key: "30d", startDate, periodLabel: "Last 30 days" };
+    }
+    if (preset === "90D") {
+      const startDate = new Date(now);
+      startDate.setDate(startDate.getDate() - 90);
+      return { key: "90d", startDate, periodLabel: "Last 90 days" };
+    }
+    return { key: "ALL", startDate: null, periodLabel: "All time" };
+  };
+
+  const taskContext = buildPresetContext(taskDatePreset);
+  const salesContext = buildPresetContext(salesDatePreset);
+
+  const isWithinPreset = (value, presetContext, fallbackValue = null) => {
+    if (!presetContext?.startDate) return true;
+    const candidates = [value, fallbackValue];
+    for (const candidate of candidates) {
+      const candidateDate = new Date(candidate);
+      if (!Number.isNaN(candidateDate.getTime())) {
+        return candidateDate >= presetContext.startDate;
+      }
+    }
+    return false;
+  };
+
+  const createMetricsMap = (agents) =>
+    new Map(
+      agents.map((agent) => {
+        const assignedUserId = String(agent?.userId?._id || "");
+        const fullName = [agent?.userId?.firstName, agent?.userId?.middleName, agent?.userId?.lastName]
+          .filter(Boolean)
+          .join(" ")
+          .trim();
+
+        return [
+          assignedUserId,
+          {
+            id: String(agent?._id || assignedUserId),
+            userId: assignedUserId,
+            username: agent?.userId?.username || "",
+            name: fullName || agent?.userId?.username || "—",
+            unit: agent?.unitId?.unitName || "",
+            branch: agent?.unitId?.branchId?.branchName || "",
+            area: agent?.unitId?.branchId?.areaId?.areaName || "",
+            displayPhoto: agent?.userId?.displayPhoto || "",
+            totalTasks: 0,
+            openTasks: 0,
+            overdueTasks: 0,
+            closedTasks: 0,
+            delayedDoneTasks: 0,
+            completionRate: 0,
+            nextDueAt: null,
+            lastCompletedAt: null,
+            topTaskType: "—",
+            leads: 0,
+            converted: 0,
+            totalPolicies: 0,
+            activePolicies: 0,
+            lapsedPolicies: 0,
+            cancelledPolicies: 0,
+            annualPremium: 0,
+            frequencyPremium: 0,
+            monthlyPremium: 0,
+            quarterlyPremium: 0,
+            halfYearlyPremium: 0,
+            yearlyPremium: 0,
+            latestLeadCreatedAt: null,
+            latestPolicyIssuedAt: null,
+            latestPolicyStatus: "—",
+            taskTypeCounts: new Map(),
+            convertedLeadIds: new Set(),
+          },
+        ];
+      })
+    );
+
+  const buildRows = (metricsByUserId) =>
+    [...metricsByUserId.values()].map((metrics) => {
+      const topTaskTypeEntry = [...metrics.taskTypeCounts.entries()].sort(
+        (left, right) => right[1] - left[1] || String(left[0]).localeCompare(String(right[0]))
+      )[0];
+      const completionRate = metrics.totalTasks ? Math.round((metrics.closedTasks / metrics.totalTasks) * 100) : 0;
+      const conversionRate = metrics.leads ? Math.round((metrics.convertedLeadIds.size / metrics.leads) * 100) : 0;
+
+      return {
+        id: metrics.id,
+        userId: metrics.userId,
+        username: metrics.username,
+        name: metrics.name,
+        unit: metrics.unit,
+        branch: metrics.branch,
+        area: metrics.area,
+        displayPhoto: metrics.displayPhoto,
+        totalTasks: metrics.totalTasks,
+        openTasks: metrics.openTasks,
+        overdueTasks: metrics.overdueTasks,
+        closedTasks: metrics.closedTasks,
+        delayedDoneTasks: metrics.delayedDoneTasks,
+        completionRate,
+        nextDueAt: metrics.nextDueAt,
+        lastCompletedAt: metrics.lastCompletedAt,
+        topTaskType: topTaskTypeEntry?.[0] || "—",
+        leads: metrics.leads,
+        converted: metrics.convertedLeadIds.size,
+        conversionRate,
+        totalPolicies: metrics.totalPolicies,
+        activePolicies: metrics.activePolicies,
+        lapsedPolicies: metrics.lapsedPolicies,
+        cancelledPolicies: metrics.cancelledPolicies,
+        annualPremium: metrics.annualPremium,
+        frequencyPremium: metrics.frequencyPremium,
+        monthlyPremium: metrics.monthlyPremium,
+        quarterlyPremium: metrics.quarterlyPremium,
+        halfYearlyPremium: metrics.halfYearlyPremium,
+        yearlyPremium: metrics.yearlyPremium,
+        latestLeadCreatedAt: metrics.latestLeadCreatedAt,
+        latestPolicyIssuedAt: metrics.latestPolicyIssuedAt,
+        latestPolicyStatus: metrics.latestPolicyStatus,
+      };
+    });
+
+  const summarizeRows = (rows) => {
+    const summary = rows.reduce(
+      (accumulator, row) => ({
+        totalAgents: accumulator.totalAgents + 1,
+        totalOpenTasks: accumulator.totalOpenTasks + Number(row.openTasks || 0),
+        totalOverdueTasks: accumulator.totalOverdueTasks + Number(row.overdueTasks || 0),
+        totalClosedTasks: accumulator.totalClosedTasks + Number(row.closedTasks || 0),
+        totalLeads: accumulator.totalLeads + Number(row.leads || 0),
+        totalConverted: accumulator.totalConverted + Number(row.converted || 0),
+        totalPolicies: accumulator.totalPolicies + Number(row.totalPolicies || 0),
+        activePolicies: accumulator.activePolicies + Number(row.activePolicies || 0),
+        totalAnnualPremium: accumulator.totalAnnualPremium + Number(row.annualPremium || 0),
+        totalFrequencyPremium: accumulator.totalFrequencyPremium + Number(row.frequencyPremium || 0),
+        frequencyPremiumBreakdown: {
+          monthlyPremium: accumulator.frequencyPremiumBreakdown.monthlyPremium + Number(row.monthlyPremium || 0),
+          quarterlyPremium: accumulator.frequencyPremiumBreakdown.quarterlyPremium + Number(row.quarterlyPremium || 0),
+          halfYearlyPremium: accumulator.frequencyPremiumBreakdown.halfYearlyPremium + Number(row.halfYearlyPremium || 0),
+          yearlyPremium: accumulator.frequencyPremiumBreakdown.yearlyPremium + Number(row.yearlyPremium || 0),
+        },
+      }),
+      {
+        totalAgents: 0,
+        totalOpenTasks: 0,
+        totalOverdueTasks: 0,
+        totalClosedTasks: 0,
+        totalLeads: 0,
+        totalConverted: 0,
+        totalPolicies: 0,
+        activePolicies: 0,
+        totalAnnualPremium: 0,
+        totalFrequencyPremium: 0,
+        frequencyPremiumBreakdown: {
+          monthlyPremium: 0,
+          quarterlyPremium: 0,
+          halfYearlyPremium: 0,
+          yearlyPremium: 0,
+        },
+      }
+    );
+
+    summary.conversionRate = summary.totalLeads ? Math.round((summary.totalConverted / summary.totalLeads) * 100) : 0;
+    summary.completionRate = summary.totalOpenTasks + summary.totalClosedTasks
+      ? Math.round((summary.totalClosedTasks / (summary.totalOpenTasks + summary.totalClosedTasks)) * 100)
+      : 0;
+    summary.activePolicyRate = summary.totalPolicies ? Math.round((summary.activePolicies / summary.totalPolicies) * 100) : 0;
+    return summary;
+  };
+
+  const normalizeFrequencyKey = (frequencyValue) => {
+    const normalized = String(frequencyValue || "").trim().toLowerCase();
+    if (normalized === "monthly") return "monthlyPremium";
+    if (normalized === "quarterly") return "quarterlyPremium";
+    if (normalized === "half-yearly" || normalized === "half yearly" || normalized === "semi-annual" || normalized === "semi annual") {
+      return "halfYearlyPremium";
+    }
+    if (normalized === "yearly" || normalized === "annual" || normalized === "annually") return "yearlyPremium";
+    return null;
+  };
+
+  const agentQuery = {};
+  if (context.role === "BM") {
+    const branchUnits = await Unit.find({ branchId: context.branchId }).select("_id").lean();
+    agentQuery.unitId = { $in: branchUnits.map((unit) => unit._id) };
+  } else {
+    agentQuery.unitId = context.unitId;
+  }
+
+  const scopedAgents = await Agent.find(agentQuery)
+    .populate({
+      path: "userId",
+      select: "username firstName middleName lastName displayPhoto role",
+    })
+    .populate({
+      path: "unitId",
+      select: "unitName branchId",
+      populate: {
+        path: "branchId",
+        select: "branchName areaId",
+        populate: {
+          path: "areaId",
+          select: "areaName",
+        },
+      },
+    })
+    .lean();
+
+  const scopedUserIds = scopedAgents.map((agent) => agent.userId?._id).filter(Boolean);
+  const allMetricsByUserId = createMetricsMap(scopedAgents);
+  const taskMetricsByUserId = createMetricsMap(scopedAgents);
+  const salesMetricsByUserId = createMetricsMap(scopedAgents);
+
+  const [tasks, prospects] = await Promise.all([
+    scopedUserIds.length
+      ? Task.find({ assignedToUserId: { $in: scopedUserIds } })
+          .select("assignedToUserId type title dueAt status completedAt wasDelayed createdAt")
+          .lean()
+      : [],
+    scopedUserIds.length
+      ? Prospect.find({ assignedToUserId: { $in: scopedUserIds } })
+          .select("_id assignedToUserId")
+          .lean()
+      : [],
+  ]);
+
+  const nowMs = Date.now();
+  const applyTaskMetrics = (taskList, metricsByUserId) => {
+    for (const task of taskList) {
+      const assignedUserId = String(task?.assignedToUserId || "");
+      const metrics = metricsByUserId.get(assignedUserId);
+      if (!metrics) continue;
+
+      metrics.totalTasks += 1;
+      const taskType = String(task?.type || "").trim().toUpperCase() || "UNSPECIFIED";
+      metrics.taskTypeCounts.set(taskType, Number(metrics.taskTypeCounts.get(taskType) || 0) + 1);
+
+      const normalizedStatus = String(task?.status || "Open").toLowerCase() === "done" ? "Done" : "Open";
+      const dueAtMs = new Date(task?.dueAt).getTime();
+      const completedAtMs = new Date(task?.completedAt).getTime();
+
+      if (normalizedStatus === "Done") {
+        metrics.closedTasks += 1;
+        if (task?.wasDelayed) metrics.delayedDoneTasks += 1;
+        if (Number.isFinite(completedAtMs) && (!metrics.lastCompletedAt || completedAtMs > new Date(metrics.lastCompletedAt).getTime())) {
+          metrics.lastCompletedAt = task.completedAt;
+        }
+        continue;
+      }
+
+      metrics.openTasks += 1;
+      if (Number.isFinite(dueAtMs) && dueAtMs < nowMs) metrics.overdueTasks += 1;
+      if (Number.isFinite(dueAtMs) && (!metrics.nextDueAt || dueAtMs < new Date(metrics.nextDueAt).getTime())) {
+        metrics.nextDueAt = task.dueAt;
+      }
+    }
+  };
+
+  applyTaskMetrics(tasks, allMetricsByUserId);
+  applyTaskMetrics(
+    tasks.filter((task) => isWithinPreset(task?.dueAt, taskContext, task?.createdAt)),
+    taskMetricsByUserId
+  );
+
+  const prospectIds = prospects.map((prospect) => prospect._id);
+  const prospectIdToAssignedUserId = new Map(
+    prospects.map((prospect) => [String(prospect._id), String(prospect.assignedToUserId || "")])
+  );
+
+  const leads = prospectIds.length
+    ? await Lead.find({ prospectId: { $in: prospectIds } })
+        .select("_id prospectId createdAt")
+        .lean()
+    : [];
+  const leadIds = leads.map((lead) => lead._id);
+  const leadIdToAssignedUserId = new Map(
+    leads.map((lead) => [String(lead._id), prospectIdToAssignedUserId.get(String(lead.prospectId)) || ""])
+  );
+
+  const engagements = leadIds.length
+    ? await LeadEngagement.find({ leadId: { $in: leadIds } })
+        .select("_id leadId")
+        .lean()
+    : [];
+  const engagementIds = engagements.map((engagement) => engagement._id);
+  const engagementIdToAssignedUserId = new Map(
+    engagements.map((engagement) => [String(engagement._id), leadIdToAssignedUserId.get(String(engagement.leadId)) || ""])
+  );
+  const engagementIdToLeadId = new Map(
+    engagements.map((engagement) => [String(engagement._id), String(engagement.leadId || "")])
+  );
+
+  const [policyholders, applications, needsAssessments] = await Promise.all([
+    scopedUserIds.length
+      ? Policyholder.find({ assignedToUserId: { $in: scopedUserIds } })
+          .select("assignedToUserId leadEngagementId status createdAt")
+          .lean()
+      : [],
+    engagementIds.length
+      ? Application.find({ leadEngagementId: { $in: engagementIds } })
+          .select("leadEngagementId recordPremiumPaymentTransfer.totalAnnualPremiumPhp recordPremiumPaymentTransfer.totalFrequencyPremiumPhp")
+          .lean()
+      : [],
+    engagementIds.length
+      ? NeedsAssessment.find({ leadEngagementId: { $in: engagementIds } })
+          .select("leadEngagementId needsPriorities.productSelection.requestedFrequency")
+          .lean()
+      : [],
+  ]);
+
+  const engagementIdToFrequency = new Map(
+    needsAssessments.map((needsAssessment) => [
+      String(needsAssessment?.leadEngagementId || ""),
+      String(needsAssessment?.needsPriorities?.productSelection?.requestedFrequency || "").trim(),
+    ])
+  );
+
+  const applySalesMetrics = ({ leadList, metricsByUserId, policyholderList, applicationList }) => {
+    for (const lead of leadList) {
+      const assignedUserId = leadIdToAssignedUserId.get(String(lead._id)) || "";
+      const metrics = metricsByUserId.get(assignedUserId);
+      if (!metrics) continue;
+
+      metrics.leads += 1;
+      const leadCreatedAtMs = new Date(lead?.createdAt).getTime();
+      if (Number.isFinite(leadCreatedAtMs) && (!metrics.latestLeadCreatedAt || leadCreatedAtMs > new Date(metrics.latestLeadCreatedAt).getTime())) {
+        metrics.latestLeadCreatedAt = lead.createdAt;
+      }
+    }
+
+    for (const policyholder of policyholderList) {
+      const assignedUserId = String(
+        policyholder?.assignedToUserId || engagementIdToAssignedUserId.get(String(policyholder?.leadEngagementId || "")) || ""
+      );
+      const metrics = metricsByUserId.get(assignedUserId);
+      if (!metrics) continue;
+
+      metrics.totalPolicies += 1;
+      const policyStatus = String(policyholder?.status || "").trim();
+      if (policyStatus === "Active") metrics.activePolicies += 1;
+      else if (policyStatus === "Lapsed") metrics.lapsedPolicies += 1;
+      else if (policyStatus === "Cancelled") metrics.cancelledPolicies += 1;
+
+      const leadId = engagementIdToLeadId.get(String(policyholder?.leadEngagementId || ""));
+      if (leadId) metrics.convertedLeadIds.add(leadId);
+
+      const policyCreatedAtMs = new Date(policyholder?.createdAt).getTime();
+      if (Number.isFinite(policyCreatedAtMs) && (!metrics.latestPolicyIssuedAt || policyCreatedAtMs > new Date(metrics.latestPolicyIssuedAt).getTime())) {
+        metrics.latestPolicyIssuedAt = policyholder.createdAt;
+        metrics.latestPolicyStatus = policyStatus || "—";
+      }
+    }
+
+    for (const application of applicationList) {
+      const engagementId = String(application?.leadEngagementId || "");
+      const assignedUserId = engagementIdToAssignedUserId.get(engagementId) || "";
+      const metrics = metricsByUserId.get(assignedUserId);
+      if (!metrics) continue;
+
+      const annualPremium = Number(application?.recordPremiumPaymentTransfer?.totalAnnualPremiumPhp || 0);
+      const frequencyPremium = Number(application?.recordPremiumPaymentTransfer?.totalFrequencyPremiumPhp || 0);
+      metrics.annualPremium += annualPremium;
+      metrics.frequencyPremium += frequencyPremium;
+
+      const frequencyKey = normalizeFrequencyKey(engagementIdToFrequency.get(engagementId));
+      if (frequencyKey) metrics[frequencyKey] += frequencyPremium;
+    }
+  };
+
+  applySalesMetrics({
+    leadList: leads,
+    metricsByUserId: allMetricsByUserId,
+    policyholderList: policyholders,
+    applicationList: applications,
+  });
+
+  const salesLeadIds = new Set(
+    leads
+      .filter((lead) => isWithinPreset(lead?.createdAt, salesContext))
+      .map((lead) => String(lead._id))
+  );
+  const filteredLeads = leads.filter((lead) => salesLeadIds.has(String(lead._id)));
+  const filteredEngagementIds = new Set(
+    engagements
+      .filter((engagement) => salesLeadIds.has(String(engagement.leadId || "")))
+      .map((engagement) => String(engagement._id))
+  );
+
+  applySalesMetrics({
+    leadList: filteredLeads,
+    metricsByUserId: salesMetricsByUserId,
+    policyholderList: policyholders.filter((policyholder) => filteredEngagementIds.has(String(policyholder?.leadEngagementId || ""))),
+    applicationList: applications.filter((application) => filteredEngagementIds.has(String(application?.leadEngagementId || ""))),
+  });
+
+  const allRows = buildRows(allMetricsByUserId);
+  const taskRows = buildRows(taskMetricsByUserId);
+  const salesRows = buildRows(salesMetricsByUserId);
+
+  const byName = (left, right) => String(left.name).localeCompare(String(right.name)) || String(left.username).localeCompare(String(right.username));
+  const agents = allRows
+    .map((row) => ({
+      id: row.id,
+      userId: row.userId,
+      username: row.username,
+      name: row.name,
+      unit: row.unit,
+      branch: row.branch,
+      area: row.area,
+      displayPhoto: row.displayPhoto,
+      openTasks: row.openTasks,
+      overdueTasks: row.overdueTasks,
+      closedTasks: row.closedTasks,
+      leads: row.leads,
+      converted: row.converted,
+      annualPremium: row.annualPremium,
+    }))
+    .sort(byName);
+
+  const sortedTaskRows = [...taskRows].sort((left, right) => {
+    if (right.overdueTasks !== left.overdueTasks) return right.overdueTasks - left.overdueTasks;
+    if (right.openTasks !== left.openTasks) return right.openTasks - left.openTasks;
+    if (right.totalTasks !== left.totalTasks) return right.totalTasks - left.totalTasks;
+    return byName(left, right);
+  });
+
+  const sortedSalesRows = [...salesRows].sort((left, right) => {
+    if (right.annualPremium !== left.annualPremium) return right.annualPremium - left.annualPremium;
+    if (right.converted !== left.converted) return right.converted - left.converted;
+    if (right.leads !== left.leads) return right.leads - left.leads;
+    return byName(left, right);
+  });
+
+  return {
+    payload: {
+      manager: {
+        id: String(user._id),
+        role: context.role,
+        username: user.username,
+        firstName: user.firstName,
+        middleName: user.middleName || "",
+        lastName: user.lastName,
+        displayPhoto: user.displayPhoto || "",
+      },
+      scope: {
+        role: context.role,
+        unitId: context.unitId,
+        branchId: context.branchId,
+        unitName: context.unitName,
+        branchName: context.branchName,
+        areaName: context.areaName,
+      },
+      reportContext: {
+        generatedAt: new Date(),
+        taskDatePreset: taskContext.key,
+        salesDatePreset: salesContext.key,
+        taskPeriodLabel: taskContext.periodLabel,
+        salesPeriodLabel: salesContext.periodLabel,
+      },
+      summary: summarizeRows(allRows),
+      taskSummary: summarizeRows(taskRows),
+      salesSummary: summarizeRows(salesRows),
+      agents,
+      taskRows: sortedTaskRows,
+      salesRows: sortedSalesRows,
+    },
+  };
+}
+
+
+
 /**
  * =========================
  * Global Middleware
@@ -610,6 +1133,37 @@ app.post("/api/auth/login", async (req, res) => {
      * Global Error Handling for Login Route
      */
     console.error("Login error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+
+app.get("/api/manager/portal", async (req, res) => {
+  try {
+    const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId)) {
+      return res.status(400).json({ message: "Invalid userId." });
+    }
+
+    const user = await User.findById(userId)
+      .select("username firstName middleName lastName displayPhoto role")
+      .lean();
+
+    if (!user) return res.status(404).json({ message: "User not found." });
+    if (!["AUM", "UM", "BM"].includes(String(user.role || "").trim().toUpperCase())) {
+      return res.status(403).json({ message: "This account does not have manager portal access." });
+    }
+
+    const result = await buildManagerPortalPayload(user, { taskDatePreset, salesDatePreset });
+    if (result.error) {
+      return res.status(result.error.status).json({ message: result.error.message });
+    }
+
+    return res.json(result.payload);
+  } catch (err) {
+    console.error("Manager portal data error:", err);
     return res.status(500).json({ message: "Server error." });
   }
 });
@@ -2464,7 +3018,7 @@ app.get("/api/policyholders/recent", async (req, res) => {
 =========================== */
 app.get("/api/agent/home", async (req, res) => {
   try {
-    const { userId } = req.query;
+    const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     if (!userId) return res.status(400).json({ message: "Missing userId." });
     if (!mongoose.isValidObjectId(userId)) {
       return res.status(400).json({ message: "Invalid userId." });
@@ -4038,7 +4592,7 @@ app.post("/api/prospects", async (req, res) => {
 =========================== */
 app.get("/api/prospects/:prospectId/details", async (req, res) => {
   try {
-    const { userId } = req.query;
+    const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId } = req.params;
 
     /**
@@ -4199,7 +4753,7 @@ app.get("/api/prospects/:prospectId/details", async (req, res) => {
  */
 app.get("/api/prospects/next-no", async (req, res) => {
   try {
-    const { userId } = req.query;
+    const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
 
     // Validate required scope parameter
     if (!userId) return res.status(400).json({ message: "Missing userId." });
@@ -4236,7 +4790,7 @@ app.get("/api/prospects/next-no", async (req, res) => {
 app.get("/api/prospects/:prospectId/full", async (req, res) => {
   try {
     const { prospectId } = req.params;
-    const { userId } = req.query;
+    const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
 
     // Validate identifiers
     if (!userId) return res.status(400).json({ message: "Missing userId." });
@@ -4321,7 +4875,7 @@ app.put("/api/prospects/:prospectId", async (req, res) => {
 
   try {
     const { prospectId } = req.params;
-    const { userId } = req.query;
+    const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
 
     // Validate identifiers
     if (!userId) return res.status(400).json({ message: "Missing userId." });
@@ -5037,7 +5591,7 @@ app.post("/api/leads", async (req, res) => {
   const session = await mongoose.startSession();
 
   try {
-    const { userId } = req.query;
+    const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
 
     // Validate agent scope parameter
     if (!userId) return res.status(400).json({ message: "Missing userId." });
@@ -5315,7 +5869,7 @@ app.post("/api/leads", async (req, res) => {
 // 4) Attach policy only if it belongs to agent too (assignedToUserId match)
 app.get("/api/prospects/:prospectId/leads/:leadId/details", async (req, res) => {
   try {
-    const { userId } = req.query;
+    const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
 
     // Validate required query param
@@ -5481,7 +6035,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/details", async (req, res) => 
 =========================== */
 app.put("/api/prospects/:prospectId/leads/:leadId", async (req, res) => {
   try {
-    const { userId } = req.query;
+    const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
 
     // Validate required agent scope + ObjectId format
@@ -5705,7 +6259,7 @@ app.put("/api/prospects/:prospectId/leads/:leadId", async (req, res) => {
 app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) => {
   try {
     const { prospectId, leadId } = req.params;
-    const { userId } = req.query;
+    const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
 
     // Validate required IDs
     if (!userId) return res.status(400).json({ message: "Missing userId." });
@@ -6209,7 +6763,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/contact-attempts", async (req
   const session = await mongoose.startSession();
  
   try {
-    const { userId } = req.query;
+    const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
 
     // Validate required query + params
@@ -6492,7 +7046,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/validate-contact", async (req
   const session = await mongoose.startSession();
 
   try {
-    const { userId } = req.query;
+    const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
     const result = String(req.body?.result || "").trim().toUpperCase();
 
@@ -6664,7 +7218,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/validate-contact", async (req
 app.post("/api/prospects/:prospectId/leads/:leadId/assess-interest", async (req, res) => {
   const session = await mongoose.startSession();
   try {
-    const { userId } = req.query;
+    const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
     const { interestLevel, preferredChannel, preferredChannelOther } = req.body;
 
@@ -6833,7 +7387,7 @@ function hasMeetingConflict(startAt, endAt, windows) {
 app.get("/api/agents/:agentId/meeting-availability", async (req, res) => {
   const session = await mongoose.startSession();
   try {
-    const { userId } = req.query;
+    const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { agentId } = req.params;
     const days = Math.min(Math.max(Number(req.query.days || 30), 1), 60);
 
@@ -6871,7 +7425,7 @@ app.get("/api/agents/:agentId/meeting-availability", async (req, res) => {
 app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req, res) => {
   const session = await mongoose.startSession();
   try {
-    const { userId } = req.query;
+    const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
     const {
       meetingAt,
@@ -7125,7 +7679,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
 
 app.get("/api/prospects/:prospectId/leads/:leadId/needs-assessment", async (req, res) => {
   try {
-    const { userId } = req.query;
+    const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
 
     if (!userId) return res.status(400).json({ message: "Missing userId." });
@@ -7262,7 +7816,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/needs-assessment", async (req,
 app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/attendance", async (req, res) => {
   const session = await mongoose.startSession();
   try {
-    const { userId } = req.query;
+    const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
     const { attended, attendanceProofImageDataUrl, attendanceProofFileName } = req.body || {};
 
@@ -7332,7 +7886,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/attendance",
 app.put("/api/prospects/:prospectId/leads/:leadId/needs-assessment", async (req, res) => {
   const session = await mongoose.startSession();
   try {
-    const { userId } = req.query;
+    const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
     const { basicInformation, dependents, needsPriorities } = req.body || {};
 
@@ -7810,7 +8364,7 @@ app.put("/api/prospects/:prospectId/leads/:leadId/needs-assessment", async (req,
 app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/schedule-proposal", async (req, res) => {
   const session = await mongoose.startSession();
   try {
-    const { userId } = req.query;
+    const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
     const {
       meetingAt,
@@ -8064,7 +8618,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/schedule-pro
 app.post("/api/prospects/:prospectId/leads/:leadId/proposal/generate", async (req, res) => {
   const session = await mongoose.startSession();
   try {
-    const { userId } = req.query;
+    const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
     const {
       chosenProductId,
@@ -8173,7 +8727,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/generate", async (re
 app.post("/api/prospects/:prospectId/leads/:leadId/proposal/attendance", async (req, res) => {
   const session = await mongoose.startSession();
   try {
-    const { userId } = req.query;
+    const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
     const { attended, attendanceProofImageDataUrl, attendanceProofFileName } = req.body || {};
 
@@ -8256,7 +8810,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/attendance", async (
 app.post("/api/prospects/:prospectId/leads/:leadId/application/attendance", async (req, res) => {
   const session = await mongoose.startSession();
   try {
-    const { userId } = req.query;
+    const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
     const { attended, attendanceProofImageDataUrl, attendanceProofFileName } = req.body || {};
 
@@ -8332,7 +8886,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/attendance", asyn
 app.post("/api/prospects/:prospectId/leads/:leadId/application/premium-payment-transfer", async (req, res) => {
   const session = await mongoose.startSession();
   try {
-    const { userId } = req.query;
+    const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
     const {
       totalAnnualPremiumPhp,
@@ -8448,7 +9002,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/premium-payment-t
 app.post("/api/prospects/:prospectId/leads/:leadId/application/submission", async (req, res) => {
   const session = await mongoose.startSession();
   try {
-    const { userId } = req.query;
+    const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
     const {
       pruOneTransactionId,
@@ -8668,7 +9222,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/submission", asyn
 
 app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/status", async (req, res) => {
   try {
-    const { userId } = req.query;
+    const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
     const { status, issuanceDate, notes } = req.body || {};
     if (!userId) return res.status(400).json({ message: "Missing userId." });
@@ -8781,7 +9335,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/status", asyn
 
 app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/initial-premium-eor", async (req, res) => {
   try {
-    const { userId } = req.query;
+    const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
     const { eorNumber, receiptDate, eorFileDataUrl, eorFileName } = req.body || {};
 
@@ -8889,7 +9443,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/initial-premi
 
 app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/policy-summary", async (req, res) => {
   try {
-    const { userId } = req.query;
+    const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
     const { policyNumber, policySummaryFileDataUrl, policySummaryFileName } = req.body || {};
 
@@ -8970,7 +9524,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/policy-summar
 app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-duration", async (req, res) => {
   const session = await mongoose.startSession();
   try {
-    const { userId } = req.query;
+    const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
     const {
       selectedPaymentTermLabel,
@@ -9298,7 +9852,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-dura
 app.post("/api/prospects/:prospectId/leads/:leadId/proposal/schedule-application", async (req, res) => {
   const session = await mongoose.startSession();
   try {
-    const { userId } = req.query;
+    const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
     const {
       meetingAt,
@@ -9550,7 +10104,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/schedule-application
 app.post("/api/prospects/:prospectId/leads/:leadId/proposal/presentation", async (req, res) => {
   const session = await mongoose.startSession();
   try {
-    const { userId } = req.query;
+    const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
     const { proposalAccepted, initialQuotationNotes } = req.body || {};
 
@@ -10174,7 +10728,7 @@ app.get("/api/notifications", async (req, res) => {
 app.patch("/api/notifications/:id/read", async (req, res) => {
   try {
     const { id } = req.params;
-    const { userId } = req.query;
+    const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
 
     // Validate required IDs
     if (!userId) return res.status(400).json({ message: "Missing userId." });
