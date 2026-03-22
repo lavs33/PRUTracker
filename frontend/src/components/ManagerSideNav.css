@@ -1,34 +1,90 @@
 .manager-side-nav {
-  width: 260px;
-  min-width: 260px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 24px;
-  background: linear-gradient(180deg, rgba(22, 27, 39, 0.94), rgba(14, 18, 28, 0.94));
-  padding: 20px 18px;
+  width: 280px;
+  min-width: 280px;
+  border: 1px solid rgba(218, 41, 28, 0.14);
+  border-radius: 28px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(255, 245, 245, 0.98) 100%);
+  box-shadow: 0 22px 44px rgba(153, 27, 27, 0.1);
+  padding: 20px 16px;
   display: grid;
   gap: 18px;
+  transition: width 0.2s ease, min-width 0.2s ease, padding 0.2s ease;
+}
+
+.manager-side-nav.collapsed {
+  width: 94px;
+  min-width: 94px;
+  padding-inline: 12px;
 }
 
 .manager-side-nav__head {
   display: grid;
-  gap: 6px;
+  gap: 14px;
+}
+
+.manager-side-nav__topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .manager-side-nav__eyebrow {
   font-size: 11px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.66);
+  color: #b91c1c;
+  font-weight: 800;
 }
 
-.manager-side-nav__head strong {
-  font-size: 20px;
+.manager-side-nav__toggle {
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(218, 41, 28, 0.18);
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff;
+  color: #991b1b;
+  cursor: pointer;
+}
+
+.manager-side-nav__toggle:hover {
+  background: #fee2e2;
+}
+
+.manager-side-nav__branding {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 20px;
+  background: linear-gradient(135deg, #da291c 0%, #ef4444 100%);
   color: #fff;
 }
 
-.manager-side-nav__head small {
-  color: rgba(255, 255, 255, 0.72);
-  line-height: 1.5;
+.manager-side-nav__brand-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.18);
+  flex: 0 0 auto;
+}
+
+.manager-side-nav__branding strong {
+  display: block;
+  font-size: 20px;
+}
+
+.manager-side-nav__branding small {
+  display: block;
+  margin-top: 4px;
+  color: rgba(255, 255, 255, 0.88);
+  line-height: 1.45;
 }
 
 .manager-side-nav__list {
@@ -38,28 +94,32 @@
 
 .manager-side-nav__item {
   width: 100%;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.05);
-  color: rgba(255, 255, 255, 0.9);
-  border-radius: 16px;
+  border: 1px solid rgba(218, 41, 28, 0.08);
+  background: #fff;
+  color: #1f2937;
+  border-radius: 18px;
   padding: 14px 16px;
   display: flex;
   align-items: center;
   gap: 12px;
   font: inherit;
+  font-weight: 700;
   cursor: pointer;
-  transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+  transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease, color 0.18s ease;
 }
 
 .manager-side-nav__item:hover {
   transform: translateY(-1px);
-  border-color: rgba(255, 255, 255, 0.2);
-  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(218, 41, 28, 0.28);
+  background: #fff5f5;
+  color: #b91c1c;
 }
 
 .manager-side-nav__item.active {
-  border-color: rgba(255, 255, 255, 0.3);
-  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(218, 41, 28, 0.22);
+  background: linear-gradient(135deg, #fee2e2 0%, #fff1f2 100%);
+  color: #991b1b;
+  box-shadow: inset 0 0 0 1px rgba(218, 41, 28, 0.08);
 }
 
 .manager-side-nav__icon {
@@ -67,10 +127,30 @@
   align-items: center;
   justify-content: center;
   width: 24px;
+  flex: 0 0 auto;
+}
+
+.manager-side-nav.collapsed .manager-side-nav__eyebrow {
+  display: none;
+}
+
+.manager-side-nav.collapsed .manager-side-nav__topline {
+  justify-content: center;
+}
+
+.manager-side-nav.collapsed .manager-side-nav__branding {
+  justify-content: center;
+  padding-inline: 0;
+}
+
+.manager-side-nav.collapsed .manager-side-nav__item {
+  justify-content: center;
+  padding-inline: 12px;
 }
 
 @media (max-width: 1080px) {
-  .manager-side-nav {
+  .manager-side-nav,
+  .manager-side-nav.collapsed {
     width: 100%;
     min-width: 0;
   }

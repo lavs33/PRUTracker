@@ -4,7 +4,7 @@
   top: 0;
   z-index: 20;
   display: flex;
-  align-items: stretch;
+  align-items: center;
   justify-content: space-between;
   gap: 14px;
   padding: 12px 18px;
@@ -114,7 +114,7 @@
 .tn-right {
   flex: 0 0 auto;
   display: flex;
-  align-items: stretch;
+  align-items: center;
   gap: 10px;
 }
 
@@ -260,9 +260,11 @@
 }
 
 .tn-profile-actions {
-  display: grid;
-  gap: 6px;
-  justify-items: end;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: nowrap;
   font-family: "FSAlbertArabic", sans-serif;
 }
 
@@ -313,15 +315,17 @@
   box-shadow: 0 6px 12px rgba(185, 28, 28, 0.32);
 }
 
-@media (max-width: 1400px) {
-  .top-nav:not(.top-nav--compact) {
-    flex-direction: column;
-  }
-
+@media (max-width: 1180px) {
   .top-nav--compact {
     gap: 12px;
   }
 
+  .top-nav:not(.top-nav--compact) {
+    flex-wrap: wrap;
+    align-items: stretch;
+  }
+
+  .top-nav:not(.top-nav--compact) .tn-command-shell,
   .top-nav:not(.top-nav--compact) .tn-right {
     width: 100%;
   }
