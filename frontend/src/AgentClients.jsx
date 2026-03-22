@@ -168,6 +168,13 @@ const formatDateOnly = (d) => {
   });
 };
 
+const openPolicyholderLeadDetails = (policyholder) => {
+  const prospectId = String(policyholder?.prospectId || "").trim();
+  const leadId = String(policyholder?.leadId || "").trim();
+  if (!prospectId || !leadId) return;
+  navigate(`/agent/${user.username}/prospects/${prospectId}/leads/${leadId}`);
+};
+
   if (!isReady) return null;
 
 const handleSideNav = (key) => {
@@ -381,8 +388,28 @@ const handleSideNav = (key) => {
                   </thead>
 
                   <tbody>
-                    {recentPolicyholders.map((c) => (
-                      <tr key={c._id} className="prospect-row">
+                    {recentPolicyholders.map((c) => {
+                      const canOpenLeadDetails = Boolean(
+                        String(c?.prospectId || "").trim() && String(c?.leadId || "").trim()
+                      );
+
+                      return (
+                        <tr
+                          key={c._id}
+                          className={`prospect-row ${canOpenLeadDetails ? "prospect-row--clickable" : ""}`.trim()}
+                          onClick={canOpenLeadDetails ? () => openPolicyholderLeadDetails(c) : undefined}
+                          onKeyDown={canOpenLeadDetails
+                            ? (e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                  e.preventDefault();
+                                  openPolicyholderLeadDetails(c);
+                                }
+                              }
+                            : undefined}
+                          role={canOpenLeadDetails ? "link" : undefined}
+                          tabIndex={canOpenLeadDetails ? 0 : undefined}
+                          title={canOpenLeadDetails ? "Open lead details" : undefined}
+                        >
                         <td>{String(c.policyholderNo ?? 0).padStart(2, "0")}</td>
                         <td>{c.firstName || "—"}</td>
                         <td>{c.lastName || "—"}</td>
@@ -396,8 +423,9 @@ const handleSideNav = (key) => {
                         </td>
                         <td>{formatDateOnly(c.lastPaidDate)}</td>
                         <td>{formatDateOnly(c.nextPaymentDate)}</td>
-                      </tr>
-                    ))}
+                        </tr>
+                      );
+                    })}
 
                     {recentPolicyholders.length === 0 && (
                       <tr>
