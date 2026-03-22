@@ -35,6 +35,7 @@ function App() {
         <Route path="/admin/organization" element={<AdminOrganizationPage />} />
         <Route path="/aum/:username" element={<ManagerPortal roleType="AUM" />} />
         <Route path="/um/:username" element={<ManagerPortal roleType="UM" />} />
+        <Route path="/bm/:username" element={<ManagerPortal roleType="BM" />} />
 
         {/* Agent routes (guard handled inside pages) */}
         <Route path="/agent/:username" element={<AgentHome />} />

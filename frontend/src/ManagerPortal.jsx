@@ -4,59 +4,25 @@ import TopNav from "./components/TopNav";
 import ManagerSideNav from "./components/ManagerSideNav";
 import "./ManagerPortal.css";
 
-const AGENT_ROWS = [
-  { username: "AG000101", name: "Angel Dela Cruz", unit: "Diamond Unit", branch: "Metro Manila", status: "Top Performer", openTasks: 5, overdueTasks: 1, closedTasks: 24, leads: 42, converted: 10, annualPremium: 315000 },
-  { username: "AG000102", name: "Miguel Santos", unit: "Diamond Unit", branch: "Metro Manila", status: "Healthy Pipeline", openTasks: 7, overdueTasks: 0, closedTasks: 19, leads: 37, converted: 8, annualPremium: 248000 },
-  { username: "AG000103", name: "Rina Bautista", unit: "Diamond Unit", branch: "Metro Manila", status: "Needs Follow-up", openTasks: 9, overdueTasks: 3, closedTasks: 14, leads: 31, converted: 5, annualPremium: 173000 },
-  { username: "AG000104", name: "Paolo Reyes", unit: "Diamond Unit", branch: "Metro Manila", status: "Recovery Mode", openTasks: 11, overdueTasks: 4, closedTasks: 11, leads: 26, converted: 4, annualPremium: 121000 },
-  { username: "AG000105", name: "Kris Mariano", unit: "Diamond Unit", branch: "Metro Manila", status: "Top Performer", openTasks: 4, overdueTasks: 0, closedTasks: 28, leads: 44, converted: 11, annualPremium: 364000 },
-  { username: "AG000106", name: "Elaine Rivera", unit: "Diamond Unit", branch: "Metro Manila", status: "New Momentum", openTasks: 6, overdueTasks: 1, closedTasks: 17, leads: 29, converted: 6, annualPremium: 190000 },
-];
-
-function buildScopeData(roleType) {
-  const isUM = roleType === "UM";
-  const agents = isUM
-    ? [
-        ...AGENT_ROWS,
-        { username: "AG000107", name: "Marco Lim", unit: "Diamond Unit", branch: "Metro Manila", status: "Healthy Pipeline", openTasks: 8, overdueTasks: 2, closedTasks: 15, leads: 33, converted: 7, annualPremium: 207000 },
-        { username: "AG000108", name: "Bea Navarro", unit: "Diamond Unit", branch: "Metro Manila", status: "Needs Follow-up", openTasks: 10, overdueTasks: 3, closedTasks: 12, leads: 22, converted: 3, annualPremium: 98000 },
-      ]
-    : AGENT_ROWS;
-
-  const totalAgents = agents.length;
-  const totalOpenTasks = agents.reduce((sum, agent) => sum + agent.openTasks, 0);
-  const totalOverdueTasks = agents.reduce((sum, agent) => sum + agent.overdueTasks, 0);
-  const totalClosedTasks = agents.reduce((sum, agent) => sum + agent.closedTasks, 0);
-  const totalLeads = agents.reduce((sum, agent) => sum + agent.leads, 0);
-  const totalConverted = agents.reduce((sum, agent) => sum + agent.converted, 0);
-  const totalAnnualPremium = agents.reduce((sum, agent) => sum + agent.annualPremium, 0);
-  const conversionRate = totalLeads ? Math.round((totalConverted / totalLeads) * 100) : 0;
-  const completionRate = totalOpenTasks + totalClosedTasks ? Math.round((totalClosedTasks / (totalOpenTasks + totalClosedTasks)) * 100) : 0;
-
-  return {
-    summary: {
-      totalAgents,
-      totalOpenTasks,
-      totalOverdueTasks,
-      totalClosedTasks,
-      totalLeads,
-      totalConverted,
-      totalAnnualPremium,
-      conversionRate,
-      completionRate,
-    },
-    agents,
-    salesRows: agents
-      .map((agent) => ({
-        ...agent,
-        conversionRate: agent.leads ? Math.round((agent.converted / agent.leads) * 100) : 0,
-      }))
-      .sort((a, b) => b.annualPremium - a.annualPremium),
-  };
-}
+const API_BASE = "http://localhost:5000";
 
 function formatMoney(value) {
   return `₱ ${Number(value || 0).toLocaleString("en-PH")}`;
+}
+
+function getPortalHeading(roleType) {
+  if (roleType === "AUM") return "Assistant Unit Manager Command Center";
+  if (roleType === "UM") return "Unit Manager Command Center";
+  if (roleType === "BM") return "Branch Manager Command Center";
+  return "Manager Command Center";
+}
+
+function getScopeLabel(scope = {}) {
+  if (scope.role === "BM") {
+    return [scope.branchName, scope.areaName].filter(Boolean).join(" • ") || "Branch scope";
+  }
+
+  return [scope.unitName, scope.branchName, scope.areaName].filter(Boolean).join(" • ") || "Unit scope";
 }
 
 function ManagerPortal({ roleType }) {
@@ -65,6 +31,9 @@ function ManagerPortal({ roleType }) {
   const normalizedRole = String(roleType || "").trim().toUpperCase();
   const [activeView, setActiveView] = useState("dashboard");
   const [agentSearch, setAgentSearch] = useState("");
+  const [portalData, setPortalData] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
 
   const user = useMemo(() => {
     try {
@@ -90,18 +59,49 @@ function ManagerPortal({ roleType }) {
     document.title = `PRUTracker | ${normalizedRole} Portal`;
   }, [normalizedRole]);
 
-  const scopeData = useMemo(() => buildScopeData(normalizedRole), [normalizedRole]);
+  useEffect(() => {
+    if (!user?.id || user.role !== normalizedRole) return;
+
+    const controller = new AbortController();
+
+    const fetchPortalData = async () => {
+      setIsLoading(true);
+      setLoadError("");
+
+      try {
+        const res = await fetch(`${API_BASE}/api/manager/portal?userId=${user.id}`, {
+          signal: controller.signal,
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+          throw new Error(data?.message || "Failed to load manager portal data.");
+        }
+
+        setPortalData(data);
+      } catch (err) {
+        if (err.name === "AbortError") return;
+        setLoadError(err.message || "Failed to load manager portal data.");
+      } finally {
+        if (!controller.signal.aborted) setIsLoading(false);
+      }
+    };
+
+    fetchPortalData();
+    return () => controller.abort();
+  }, [normalizedRole, user?.id, user?.role]);
 
   const filteredAgents = useMemo(() => {
+    const agents = Array.isArray(portalData?.agents) ? portalData.agents : [];
     const query = agentSearch.trim().toLowerCase();
-    if (!query) return scopeData.agents;
+    if (!query) return agents;
 
-    return scopeData.agents.filter((agent) =>
+    return agents.filter((agent) =>
       [agent.username, agent.name, agent.unit, agent.branch, agent.status].some((value) =>
         String(value || "").toLowerCase().includes(query)
       )
     );
-  }, [agentSearch, scopeData.agents]);
+  }, [agentSearch, portalData?.agents]);
 
   const handleLogout = () => {
     localStorage.removeItem("managerPortalUser");
@@ -109,12 +109,33 @@ function ManagerPortal({ roleType }) {
     navigate("/login", { replace: true });
   };
 
+  const summary = portalData?.summary || {
+    totalAgents: 0,
+    totalOpenTasks: 0,
+    totalOverdueTasks: 0,
+    totalClosedTasks: 0,
+    totalLeads: 0,
+    totalConverted: 0,
+    totalAnnualPremium: 0,
+    conversionRate: 0,
+    completionRate: 0,
+  };
+
   const summaryCards = [
-    { label: "Agents in Scope", value: scopeData.summary.totalAgents },
-    { label: "Open Tasks", value: scopeData.summary.totalOpenTasks },
-    { label: "Conversion Rate", value: `${scopeData.summary.conversionRate}%` },
-    { label: "Annual Premium", value: formatMoney(scopeData.summary.totalAnnualPremium) },
+    { label: "Agents in Scope", value: summary.totalAgents },
+    { label: "Open Tasks", value: summary.totalOpenTasks },
+    { label: "Conversion Rate", value: `${summary.conversionRate}%` },
+    { label: "Annual Premium", value: formatMoney(summary.totalAnnualPremium) },
   ];
+
+  const rankingAgents = useMemo(
+    () => [...(portalData?.agents || [])].sort((a, b) => b.overdueTasks + b.openTasks - (a.overdueTasks + a.openTasks)),
+    [portalData?.agents]
+  );
+
+  const salesRows = portalData?.salesRows || [];
+  const scopeLabel = getScopeLabel(portalData?.scope || {});
+  const emptyAgents = !isLoading && !loadError && filteredAgents.length === 0;
 
   return (
     <div className="manager-portal">
@@ -133,10 +154,10 @@ function ManagerPortal({ roleType }) {
           <section className="manager-hero">
             <div>
               <p className="manager-hero__eyebrow">{normalizedRole} Portal</p>
-              <h1>{normalizedRole === "AUM" ? "Assistant Unit Manager" : "Unit Manager"} Command Center</h1>
+              <h1>{getPortalHeading(normalizedRole)}</h1>
               <p>
-                Frontend-first workspace for team monitoring, unit execution visibility, and manager-level coaching
-                decisions before backend data wiring.
+                Live backend summary for {scopeLabel}. Use this workspace to monitor agent workload, conversion output,
+                and coaching priorities from current records.
               </p>
             </div>
             <div className="manager-hero__cards">
@@ -149,39 +170,42 @@ function ManagerPortal({ roleType }) {
             </div>
           </section>
 
-          {activeView === "dashboard" && (
+          {isLoading && <section className="manager-panel manager-feedback">Loading manager portal data...</section>}
+          {loadError && <section className="manager-panel manager-feedback manager-feedback--error">{loadError}</section>}
+
+          {!isLoading && !loadError && activeView === "dashboard" && (
             <section className="manager-panel">
               <div className="manager-panel__head">
-                <h2>Unit Overview</h2>
-                <p>High-level pulse of agent workload and sales momentum.</p>
+                <h2>{normalizedRole === "BM" ? "Branch Overview" : "Unit Overview"}</h2>
+                <p>High-level pulse of agent workload and sales momentum across the current manager scope.</p>
               </div>
               <div className="manager-kpi-grid">
                 <div>
                   <span>Completed Tasks</span>
-                  <strong>{scopeData.summary.totalClosedTasks}</strong>
+                  <strong>{summary.totalClosedTasks}</strong>
                 </div>
                 <div>
                   <span>Overdue Tasks</span>
-                  <strong>{scopeData.summary.totalOverdueTasks}</strong>
+                  <strong>{summary.totalOverdueTasks}</strong>
                 </div>
                 <div>
                   <span>Leads Managed</span>
-                  <strong>{scopeData.summary.totalLeads}</strong>
+                  <strong>{summary.totalLeads}</strong>
                 </div>
                 <div>
                   <span>Converted Leads</span>
-                  <strong>{scopeData.summary.totalConverted}</strong>
+                  <strong>{summary.totalConverted}</strong>
                 </div>
               </div>
             </section>
           )}
 
-          {activeView === "agents" && (
+          {!isLoading && !loadError && activeView === "agents" && (
             <section className="manager-panel">
               <div className="manager-panel__head split">
                 <div>
                   <h2>Agents in Scope</h2>
-                  <p>Search and review agents under the current manager scope.</p>
+                  <p>Search and review live agent workload and sales output inside the current manager scope.</p>
                 </div>
                 <label className="manager-search" htmlFor="manager-agents-search">
                   <input
@@ -211,7 +235,7 @@ function ManagerPortal({ roleType }) {
                   </thead>
                   <tbody>
                     {filteredAgents.map((agent) => (
-                      <tr key={agent.username}>
+                      <tr key={agent.id}>
                         <td>{agent.username}</td>
                         <td>{agent.name}</td>
                         <td>{agent.status}</td>
@@ -226,32 +250,34 @@ function ManagerPortal({ roleType }) {
                   </tbody>
                 </table>
               </div>
+
+              {emptyAgents && <div className="manager-empty-state">No agents matched this search yet.</div>}
             </section>
           )}
 
-          {activeView === "task_progress" && (
+          {!isLoading && !loadError && activeView === "task_progress" && (
             <section className="manager-grid">
               <article className="manager-panel">
                 <div className="manager-panel__head">
-                  <h2>Unit Task Progress Dashboard</h2>
+                  <h2>{normalizedRole === "BM" ? "Branch Task Progress Dashboard" : "Unit Task Progress Dashboard"}</h2>
                   <p>Aggregated view of task execution across agents in scope.</p>
                 </div>
                 <div className="manager-kpi-grid">
                   <div>
                     <span>Open Tasks</span>
-                    <strong>{scopeData.summary.totalOpenTasks}</strong>
+                    <strong>{summary.totalOpenTasks}</strong>
                   </div>
                   <div>
                     <span>Done Tasks</span>
-                    <strong>{scopeData.summary.totalClosedTasks}</strong>
+                    <strong>{summary.totalClosedTasks}</strong>
                   </div>
                   <div>
                     <span>Overdue Tasks</span>
-                    <strong>{scopeData.summary.totalOverdueTasks}</strong>
+                    <strong>{summary.totalOverdueTasks}</strong>
                   </div>
                   <div>
                     <span>Completion Rate</span>
-                    <strong>{scopeData.summary.completionRate}%</strong>
+                    <strong>{summary.completionRate}%</strong>
                   </div>
                 </div>
               </article>
@@ -262,56 +288,12 @@ function ManagerPortal({ roleType }) {
                   <p>Agents needing the fastest task coaching.</p>
                 </div>
                 <div className="manager-rank-list">
-                  {[...scopeData.agents]
-                    .sort((a, b) => (b.overdueTasks + b.openTasks) - (a.overdueTasks + a.openTasks))
-                    .map((agent) => (
-                      <div key={agent.username}>
-                        <strong>{agent.name}</strong>
-                        <span>{agent.overdueTasks} overdue · {agent.openTasks} open</span>
-                      </div>
-                    ))}
-                </div>
-              </article>
-            </section>
-          )}
-
-          {activeView === "sales_performance" && (
-            <section className="manager-grid">
-              <article className="manager-panel">
-                <div className="manager-panel__head">
-                  <h2>Unit Sales Performance Dashboard</h2>
-                  <p>Sales outcome snapshot for the current manager scope.</p>
-                </div>
-                <div className="manager-kpi-grid">
-                  <div>
-                    <span>Total Leads</span>
-                    <strong>{scopeData.summary.totalLeads}</strong>
-                  </div>
-                  <div>
-                    <span>Converted Leads</span>
-                    <strong>{scopeData.summary.totalConverted}</strong>
-                  </div>
-                  <div>
-                    <span>Conversion Rate</span>
-                    <strong>{scopeData.summary.conversionRate}%</strong>
-                  </div>
-                  <div>
-                    <span>Annual Premium</span>
-                    <strong>{formatMoney(scopeData.summary.totalAnnualPremium)}</strong>
-                  </div>
-                </div>
-              </article>
-
-              <article className="manager-panel">
-                <div className="manager-panel__head">
-                  <h2>Agent Sales Ranking</h2>
-                  <p>Top premium contribution inside the unit scope.</p>
-                </div>
-                <div className="manager-rank-list">
-                  {scopeData.salesRows.map((agent) => (
-                    <div key={agent.username}>
+                  {rankingAgents.map((agent) => (
+                    <div key={agent.id}>
                       <strong>{agent.name}</strong>
-                      <span>{formatMoney(agent.annualPremium)} · {agent.conversionRate}% conversion</span>
+                      <span>
+                        {agent.overdueTasks} overdue · {agent.openTasks} open
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -319,6 +301,51 @@ function ManagerPortal({ roleType }) {
             </section>
           )}
 
+          {!isLoading && !loadError && activeView === "sales_performance" && (
+            <section className="manager-grid">
+              <article className="manager-panel">
+                <div className="manager-panel__head">
+                  <h2>{normalizedRole === "BM" ? "Branch Sales Performance Dashboard" : "Unit Sales Performance Dashboard"}</h2>
+                  <p>Sales outcome snapshot for the current manager scope.</p>
+                </div>
+                <div className="manager-kpi-grid">
+                  <div>
+                    <span>Total Leads</span>
+                    <strong>{summary.totalLeads}</strong>
+                  </div>
+                  <div>
+                    <span>Converted Leads</span>
+                    <strong>{summary.totalConverted}</strong>
+                  </div>
+                  <div>
+                    <span>Conversion Rate</span>
+                    <strong>{summary.conversionRate}%</strong>
+                  </div>
+                  <div>
+                    <span>Annual Premium</span>
+                    <strong>{formatMoney(summary.totalAnnualPremium)}</strong>
+                  </div>
+                </div>
+              </article>
+
+              <article className="manager-panel">
+                <div className="manager-panel__head">
+                  <h2>Agent Sales Ranking</h2>
+                  <p>Top premium contribution inside the active manager scope.</p>
+                </div>
+                <div className="manager-rank-list">
+                  {salesRows.map((agent) => (
+                    <div key={agent.id}>
+                      <strong>{agent.name}</strong>
+                      <span>
+                        {formatMoney(agent.annualPremium)} · {agent.conversionRate}% conversion
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </article>
+            </section>
+          )}
         </main>
       </div>
     </div>

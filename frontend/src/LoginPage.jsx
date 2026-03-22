@@ -4,23 +4,7 @@ import { FaArrowLeft } from "react-icons/fa";
 import "./LoginPage.css";
 import logo from "./assets/prutracker-landing-logo.png";
 
-function buildPreviewManager(roleType, username) {
-  const normalizedRole = String(roleType || "").trim().toUpperCase();
-  const normalizedUsername = String(username || normalizedRole).trim().toUpperCase();
-
-  return {
-    id: `preview-${normalizedRole.toLowerCase()}-${normalizedUsername.toLowerCase()}`,
-    role: normalizedRole,
-    username: normalizedUsername,
-    firstName: normalizedRole === "AUM" ? "Assistant" : "Unit",
-    middleName: "",
-    lastName: normalizedRole === "AUM" ? "Manager" : "Leader",
-    unitName: "Diamond Unit",
-    branchName: "Metro Manila",
-    areaName: "NCR",
-    displayPhoto: "",
-  };
-}
+const API_BASE = "http://localhost:5000";
 
 function LoginPage() {
   const navigate = useNavigate();
@@ -33,6 +17,7 @@ function LoginPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     if (!role) navigate("/");
@@ -47,6 +32,7 @@ function LoginPage() {
 
   const handleBack = () => {
     localStorage.removeItem("role");
+    localStorage.removeItem("user");
     localStorage.removeItem("managerPortalUser");
     navigate("/");
   };
@@ -54,23 +40,19 @@ function LoginPage() {
   const handleLogin = async () => {
     setError("");
 
-    if (!username || !password) {
+    const normalizedUsername = username.trim();
+    if (!normalizedUsername || !password) {
       setError("Please enter username and password.");
       return;
     }
 
-    if (role === "AUM" || role === "UM") {
-      const previewUser = buildPreviewManager(role, username);
-      localStorage.setItem("managerPortalUser", JSON.stringify(previewUser));
-      navigate(`/${role.toLowerCase()}/${previewUser.username}`);
-      return;
-    }
+    setIsSubmitting(true);
 
     try {
-      const res = await fetch("http://localhost:5000/api/auth/login", {
+      const res = await fetch(`${API_BASE}/api/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ role, username, password }),
+        body: JSON.stringify({ role, username: normalizedUsername, password }),
       });
 
       const data = await res.json();
@@ -80,10 +62,20 @@ function LoginPage() {
         return;
       }
 
+      if (["AUM", "UM", "BM"].includes(data.user?.role)) {
+        localStorage.removeItem("user");
+        localStorage.setItem("managerPortalUser", JSON.stringify(data.user));
+        navigate(`/${data.user.role.toLowerCase()}/${data.user.username}`);
+        return;
+      }
+
+      localStorage.removeItem("managerPortalUser");
       localStorage.setItem("user", JSON.stringify(data.user));
       navigate(`/agent/${data.user.username}`);
     } catch (err) {
       setError("Cannot connect to server. Is backend running?");
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -142,8 +134,8 @@ function LoginPage() {
             onChange={(e) => setPassword(e.target.value)}
           />
 
-          <button className="lp-login-btn" onClick={handleLogin}>
-            Log in
+          <button className="lp-login-btn" onClick={handleLogin} disabled={isSubmitting}>
+            {isSubmitting ? "Signing in..." : "Log in"}
           </button>
 
           {error && <p className="lp-error">{error}</p>}

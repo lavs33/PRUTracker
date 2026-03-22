@@ -419,6 +419,300 @@ async function findActiveManagerForScope(managerType, { branchId = "", unitId = 
   return managers.find((manager) => matchesManagerScope(manager, managerType, { branchId, unitId })) || null;
 }
 
+async function getManagerScopeContext(user) {
+  const normalizedRole = String(user?.role || "").trim().toUpperCase();
+  const ManagerModel = getManagerModelByType(normalizedRole);
+
+  if (!ManagerModel) {
+    return { error: { status: 400, message: "Invalid manager role." } };
+  }
+
+  const manager = await ManagerModel.findOne({ userId: user._id }).populate(buildManagerPopulateQuery(normalizedRole)).lean();
+
+  if (!manager) {
+    return {
+      error: {
+        status: 403,
+        message: "No active manager assignment was found for this account. Please contact Admin.",
+      },
+    };
+  }
+
+  if (manager.isBlocked === true) {
+    return {
+      error: {
+        status: 403,
+        message: "This manager account has been replaced and can no longer access the portal.",
+      },
+    };
+  }
+
+  const profile = getManagerProfile(manager);
+
+  return {
+    role: normalizedRole,
+    manager,
+    profile,
+    managerAgentId: String(profile.agent?._id || ""),
+    unitId: String(profile.unit?._id || ""),
+    branchId: String(profile.branch?._id || ""),
+    unitName: profile.unit?.unitName || "",
+    branchName: profile.branch?.branchName || "",
+    areaName: profile.area?.areaName || "",
+  };
+}
+
+async function buildManagerPortalPayload(user) {
+  const context = await getManagerScopeContext(user);
+  if (context.error) return context;
+
+  const agentQuery = {};
+
+  if (context.role === "BM") {
+    const branchUnits = await Unit.find({ branchId: context.branchId }).select("_id").lean();
+    const unitIds = branchUnits.map((unit) => unit._id);
+    agentQuery.unitId = { $in: unitIds };
+  } else {
+    agentQuery.unitId = context.unitId;
+  }
+
+  let scopedAgents = await Agent.find(agentQuery)
+    .populate({
+      path: "userId",
+      select: "username firstName middleName lastName displayPhoto role",
+    })
+    .populate({
+      path: "unitId",
+      select: "unitName branchId",
+      populate: {
+        path: "branchId",
+        select: "branchName areaId",
+        populate: {
+          path: "areaId",
+          select: "areaName",
+        },
+      },
+    })
+    .lean();
+
+  scopedAgents = scopedAgents.filter((agent) => String(agent?._id || "") !== context.managerAgentId);
+
+  const scopedUserIds = scopedAgents.map((agent) => agent.userId?._id).filter(Boolean);
+  const scopedUserIdStrings = scopedUserIds.map((value) => String(value));
+
+  const [tasks, prospects] = await Promise.all([
+    scopedUserIds.length
+      ? Task.find({ assignedToUserId: { $in: scopedUserIds } })
+          .select("assignedToUserId status dueAt")
+          .lean()
+      : [],
+    scopedUserIds.length
+      ? Prospect.find({ assignedToUserId: { $in: scopedUserIds } })
+          .select("_id assignedToUserId")
+          .lean()
+      : [],
+  ]);
+
+  const prospectIds = prospects.map((prospect) => prospect._id);
+  const prospectIdToAssignedUserId = new Map(
+    prospects.map((prospect) => [String(prospect._id), String(prospect.assignedToUserId || "")])
+  );
+
+  const leads = prospectIds.length
+    ? await Lead.find({ prospectId: { $in: prospectIds } })
+        .select("_id prospectId")
+        .lean()
+    : [];
+  const leadIds = leads.map((lead) => lead._id);
+  const leadIdToAssignedUserId = new Map(
+    leads.map((lead) => [String(lead._id), prospectIdToAssignedUserId.get(String(lead.prospectId)) || ""])
+  );
+
+  const engagements = leadIds.length
+    ? await LeadEngagement.find({ leadId: { $in: leadIds } })
+        .select("_id leadId")
+        .lean()
+    : [];
+  const engagementIds = engagements.map((engagement) => engagement._id);
+  const engagementIdToAssignedUserId = new Map(
+    engagements.map((engagement) => [String(engagement._id), leadIdToAssignedUserId.get(String(engagement.leadId)) || ""])
+  );
+  const engagementIdToLeadId = new Map(engagements.map((engagement) => [String(engagement._id), String(engagement.leadId || "")]));
+
+  const [policyholders, applications] = await Promise.all([
+    engagementIds.length
+      ? Policyholder.find({ leadEngagementId: { $in: engagementIds } })
+          .select("leadEngagementId")
+          .lean()
+      : [],
+    engagementIds.length
+      ? Application.find({ leadEngagementId: { $in: engagementIds } })
+          .select("leadEngagementId recordPremiumPaymentTransfer.totalAnnualPremiumPhp")
+          .lean()
+      : [],
+  ]);
+
+  const taskCountsByUserId = new Map(
+    scopedUserIdStrings.map((userId) => [userId, { openTasks: 0, overdueTasks: 0, closedTasks: 0 }])
+  );
+  const nowMs = Date.now();
+
+  for (const task of tasks) {
+    const assignedUserId = String(task?.assignedToUserId || "");
+    if (!taskCountsByUserId.has(assignedUserId)) continue;
+
+    const entry = taskCountsByUserId.get(assignedUserId);
+    const status = String(task?.status || "Open").toLowerCase() === "done" ? "Done" : "Open";
+    const dueAtMs = new Date(task?.dueAt).getTime();
+
+    if (status === "Done") {
+      entry.closedTasks += 1;
+      continue;
+    }
+
+    entry.openTasks += 1;
+    if (Number.isFinite(dueAtMs) && dueAtMs < nowMs) entry.overdueTasks += 1;
+  }
+
+  const leadsByUserId = new Map(scopedUserIdStrings.map((userId) => [userId, 0]));
+  for (const lead of leads) {
+    const assignedUserId = leadIdToAssignedUserId.get(String(lead._id)) || "";
+    if (!leadsByUserId.has(assignedUserId)) continue;
+    leadsByUserId.set(assignedUserId, Number(leadsByUserId.get(assignedUserId) || 0) + 1);
+  }
+
+  const convertedLeadIdsByUserId = new Map(scopedUserIdStrings.map((userId) => [userId, new Set()]));
+  for (const policyholder of policyholders) {
+    const engagementId = String(policyholder?.leadEngagementId || "");
+    const assignedUserId = engagementIdToAssignedUserId.get(engagementId) || "";
+    if (!convertedLeadIdsByUserId.has(assignedUserId)) continue;
+
+    const leadId = engagementIdToLeadId.get(engagementId);
+    if (leadId) convertedLeadIdsByUserId.get(assignedUserId).add(leadId);
+  }
+
+  const annualPremiumByUserId = new Map(scopedUserIdStrings.map((userId) => [userId, 0]));
+  for (const application of applications) {
+    const assignedUserId = engagementIdToAssignedUserId.get(String(application?.leadEngagementId || "")) || "";
+    if (!annualPremiumByUserId.has(assignedUserId)) continue;
+
+    annualPremiumByUserId.set(
+      assignedUserId,
+      Number(annualPremiumByUserId.get(assignedUserId) || 0) +
+        Number(application?.recordPremiumPaymentTransfer?.totalAnnualPremiumPhp || 0)
+    );
+  }
+
+  const buildStatusLabel = ({ overdueTasks, openTasks, converted, annualPremium, leads }) => {
+    if (overdueTasks >= 3) return "Needs Follow-up";
+    if (annualPremium >= 300000 || converted >= 10) return "Top Performer";
+    if (openTasks >= 8) return "High Activity";
+    if (leads === 0) return "Pipeline Building";
+    return "Healthy Pipeline";
+  };
+
+  const agents = scopedAgents
+    .map((agent) => {
+      const assignedUserId = String(agent?.userId?._id || "");
+      const taskCounts = taskCountsByUserId.get(assignedUserId) || { openTasks: 0, overdueTasks: 0, closedTasks: 0 };
+      const leads = Number(leadsByUserId.get(assignedUserId) || 0);
+      const converted = convertedLeadIdsByUserId.get(assignedUserId)?.size || 0;
+      const annualPremium = Number(annualPremiumByUserId.get(assignedUserId) || 0);
+      const fullName = [agent?.userId?.firstName, agent?.userId?.middleName, agent?.userId?.lastName]
+        .filter(Boolean)
+        .join(" ")
+        .trim();
+
+      return {
+        id: String(agent?._id || assignedUserId),
+        userId: assignedUserId,
+        username: agent?.userId?.username || "",
+        name: fullName || agent?.userId?.username || "—",
+        unit: agent?.unitId?.unitName || "",
+        branch: agent?.unitId?.branchId?.branchName || "",
+        area: agent?.unitId?.branchId?.areaId?.areaName || "",
+        displayPhoto: agent?.userId?.displayPhoto || "",
+        status: buildStatusLabel({
+          overdueTasks: taskCounts.overdueTasks,
+          openTasks: taskCounts.openTasks,
+          converted,
+          annualPremium,
+          leads,
+        }),
+        openTasks: taskCounts.openTasks,
+        overdueTasks: taskCounts.overdueTasks,
+        closedTasks: taskCounts.closedTasks,
+        leads,
+        converted,
+        annualPremium,
+      };
+    })
+    .sort((left, right) => {
+      if (right.annualPremium !== left.annualPremium) return right.annualPremium - left.annualPremium;
+      if (right.converted !== left.converted) return right.converted - left.converted;
+      return String(left.name).localeCompare(String(right.name));
+    });
+
+  const summary = agents.reduce(
+    (accumulator, agent) => ({
+      totalAgents: accumulator.totalAgents + 1,
+      totalOpenTasks: accumulator.totalOpenTasks + Number(agent.openTasks || 0),
+      totalOverdueTasks: accumulator.totalOverdueTasks + Number(agent.overdueTasks || 0),
+      totalClosedTasks: accumulator.totalClosedTasks + Number(agent.closedTasks || 0),
+      totalLeads: accumulator.totalLeads + Number(agent.leads || 0),
+      totalConverted: accumulator.totalConverted + Number(agent.converted || 0),
+      totalAnnualPremium: accumulator.totalAnnualPremium + Number(agent.annualPremium || 0),
+    }),
+    {
+      totalAgents: 0,
+      totalOpenTasks: 0,
+      totalOverdueTasks: 0,
+      totalClosedTasks: 0,
+      totalLeads: 0,
+      totalConverted: 0,
+      totalAnnualPremium: 0,
+    }
+  );
+
+  summary.conversionRate = summary.totalLeads
+    ? Math.round((summary.totalConverted / summary.totalLeads) * 100)
+    : 0;
+  summary.completionRate = summary.totalOpenTasks + summary.totalClosedTasks
+    ? Math.round((summary.totalClosedTasks / (summary.totalOpenTasks + summary.totalClosedTasks)) * 100)
+    : 0;
+
+  return {
+    payload: {
+      manager: {
+        id: String(user._id),
+        role: context.role,
+        username: user.username,
+        firstName: user.firstName,
+        middleName: user.middleName || "",
+        lastName: user.lastName,
+        displayPhoto: user.displayPhoto || "",
+      },
+      scope: {
+        role: context.role,
+        unitId: context.unitId,
+        branchId: context.branchId,
+        unitName: context.unitName,
+        branchName: context.branchName,
+        areaName: context.areaName,
+      },
+      summary,
+      agents,
+      salesRows: agents
+        .map((agent) => ({
+          ...agent,
+          conversionRate: agent.leads ? Math.round((agent.converted / agent.leads) * 100) : 0,
+        }))
+        .sort((left, right) => right.annualPremium - left.annualPremium || right.converted - left.converted),
+    },
+  };
+}
+
+
 /**
  * =========================
  * Global Middleware
@@ -610,6 +904,37 @@ app.post("/api/auth/login", async (req, res) => {
      * Global Error Handling for Login Route
      */
     console.error("Login error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+
+app.get("/api/manager/portal", async (req, res) => {
+  try {
+    const { userId } = req.query;
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId)) {
+      return res.status(400).json({ message: "Invalid userId." });
+    }
+
+    const user = await User.findById(userId)
+      .select("username firstName middleName lastName displayPhoto role")
+      .lean();
+
+    if (!user) return res.status(404).json({ message: "User not found." });
+    if (!["AUM", "UM", "BM"].includes(String(user.role || "").trim().toUpperCase())) {
+      return res.status(403).json({ message: "This account does not have manager portal access." });
+    }
+
+    const result = await buildManagerPortalPayload(user);
+    if (result.error) {
+      return res.status(result.error.status).json({ message: result.error.message });
+    }
+
+    return res.json(result.payload);
+  } catch (err) {
+    console.error("Manager portal data error:", err);
     return res.status(500).json({ message: "Server error." });
   }
 });
