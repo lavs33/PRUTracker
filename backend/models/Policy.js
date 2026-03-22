@@ -1,5 +1,14 @@
+/**
+ * Policy Model
+ * ------------
+ * Stores Policy Issuance-stage records for a single LeadEngagement.
+ *
+ * The document tracks application-status outcomes, uploaded policy artifacts,
+ * and coverage-duration selections used to finalize a converted case.
+ */
 const mongoose = require("mongoose");
 
+/** Activity enum for the Policy Issuance stage flow. */
 const POLICY_ISSUANCE_ACTIVITY = [
   "Record Policy Application Status",
   "Upload Initial Premium eOR",
@@ -7,8 +16,14 @@ const POLICY_ISSUANCE_ACTIVITY = [
   "Record Coverage Duration Details",
 ];
 
+/**
+ * policySchema
+ * ------------
+ * Persists policy-issuance outputs for one lead engagement.
+ */
 const policySchema = new mongoose.Schema(
   {
+    /** One-to-one reference back to the originating LeadEngagement. */
     leadEngagementId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "LeadEngagement",
@@ -16,11 +31,13 @@ const policySchema = new mongoose.Schema(
       unique: true,
       index: true,
     },
+    /** Product reference carried forward into issuance/final policy creation. */
     chosenProductId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Product",
       default: null,
     },
+    /** Latest completed policy-issuance subactivity stored on this document. */
     outcomeActivity: {
       type: String,
       enum: POLICY_ISSUANCE_ACTIVITY,
@@ -28,6 +45,7 @@ const policySchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    /** Issued/declined decision plus issuance date and notes. */
     recordPolicyApplicationStatus: {
       status: {
         type: String,
@@ -49,6 +67,7 @@ const policySchema = new mongoose.Schema(
         default: null,
       },
     },
+    /** Initial premium receipt/eOR upload details. */
     uploadInitialPremiumEor: {
       eorNumber: {
         type: String,
@@ -78,6 +97,7 @@ const policySchema = new mongoose.Schema(
         default: null,
       },
     },
+    /** Policy summary document metadata and insurer policy number. */
     uploadPolicySummary: {
       policyNumber: {
         type: String,
@@ -104,6 +124,7 @@ const policySchema = new mongoose.Schema(
         default: null,
       },
     },
+    /** Final coverage duration and payment-term selections. */
     recordCoverageDurationDetails: {
       policyNumber: {
         type: String,

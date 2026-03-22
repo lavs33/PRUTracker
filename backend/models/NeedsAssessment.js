@@ -1,5 +1,22 @@
+/**
+ * NeedsAssessment Model
+ * ---------------------
+ * Persists the Needs Assessment stage data for one LeadEngagement.
+ *
+ * This document captures:
+ * - attendance confirmation/evidence
+ * - dependent information
+ * - needs-priority calculations and product selection
+ * - optional rider choices
+ * - investment risk-profiling answers and fund allocation choices
+ */
 const mongoose = require("mongoose");
 
+/**
+ * Enumerations
+ * ------------
+ * Centralized allowed values for the nested needs-assessment fields.
+ */
 const GENDER = ["Male", "Female"];
 const DEPENDENT_RELATIONSHIP = ["Child", "Parent", "Sibling"];
 const NEEDS_ASSESSMENT_ACTIVITY = [
@@ -24,15 +41,21 @@ const PRIORITIES = ["Protection", "Health", "Investment"];
 const INVESTMENT_SAVINGS_PLANS = ["Home", "Vehicle", "Holiday", "Early Retirement", "Other"];
 const RISK_PROFILE_CATEGORY = ["NOT_RECOMMENDED", "CONSERVATIVE", "MODERATE", "AGGRESSIVE"];
 
+/**
+ * needsAssessmentSchema
+ * ---------------------
+ * Nested schema that stores stage outputs for the Needs Assessment process.
+ */
 const needsAssessmentSchema = new mongoose.Schema(
   {
+    /** Owning LeadEngagement for this one-to-one needs assessment record. */
     leadEngagementId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "LeadEngagement",
       required: true,
     },
 
-    // Store latest completed Needs Assessment activity (activity flow source remains LeadEngagement.currentActivityKey)
+    /** Latest completed subactivity saved in this document. */
     outcomeActivity: {
       type: String,
       enum: NEEDS_ASSESSMENT_ACTIVITY,
@@ -59,7 +82,7 @@ const needsAssessmentSchema = new mongoose.Schema(
       default: "",
     },
 
-    // Phase 1 - Optional dependents (inline array objects; no separate schema)
+    /** Optional dependent records entered during needs analysis. */
     dependents: {
       type: [
         {
@@ -72,6 +95,7 @@ const needsAssessmentSchema = new mongoose.Schema(
       default: [],
     },
 
+    /** Main needs-analysis payload grouped by business priority. */
     needsPriorities: {
       currentPriority: { type: String, enum: PRIORITIES, default: undefined },
       monthlyIncomeBand: { type: String, enum: MONTHLY_INCOME_BANDS, default: undefined },
