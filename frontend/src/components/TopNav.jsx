@@ -11,6 +11,7 @@ function TopNav({
   onLogout,
   onNotificationsClick,
   showAlerts = true,
+  showDate = showAlerts,
   profileClickable = true,
 }) {
   const API_BASE = "http://localhost:5000";
@@ -92,7 +93,7 @@ function TopNav({
           </div>
         </button>
 
-        {showAlerts && (
+        {showDate && (
           <div className="tn-commandMeta" aria-label="Workspace status">
             <div className="tn-metaPill">
               <FiCalendar aria-hidden="true" />
@@ -102,13 +103,15 @@ function TopNav({
               </div>
             </div>
 
-            <div className="tn-metaPill">
-              <FiActivity aria-hidden="true" />
-              <div>
-                <span>Unread alerts</span>
-                <strong>{alertLabel}</strong>
+            {showAlerts && (
+              <div className="tn-metaPill">
+                <FiActivity aria-hidden="true" />
+                <div>
+                  <span>Unread alerts</span>
+                  <strong>{alertLabel}</strong>
+                </div>
               </div>
-            </div>
+            )}
           </div>
         )}
       </div>
