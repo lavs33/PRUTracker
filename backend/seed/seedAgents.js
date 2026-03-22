@@ -209,9 +209,13 @@ async function seedAgents() {
     }
 
     console.log("Agent seeding completed");
+    await mongoose.disconnect();
     process.exit(0);
   } catch (error) {
     console.error("Seeding error:", error);
+    try {
+      await mongoose.disconnect();
+    } catch {}
     process.exit(1);
   }
 }

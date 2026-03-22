@@ -139,12 +139,15 @@ async function seedOrgStructure() {
       const area = await Area.create({ areaName: areaItem.areaName });
 
       for (const branchItem of areaItem.branches) {
+        // Each branch stores the parent area reference so admin/manager queries
+        // can traverse the organization tree without denormalized strings.
         const branch = await Branch.create({
           branchName: branchItem.branchName,
           areaId: area._id,
         });
 
         for (const unitName of branchItem.units) {
+          // Units are the leaf nodes used for agent assignments.
           await Unit.create({
             unitName,
             branchId: branch._id,
@@ -154,9 +157,13 @@ async function seedOrgStructure() {
     }
 
     console.log("Organization seeding completed successfully");
+    await mongoose.disconnect();
     process.exit(0);
   } catch (error) {
     console.error("Seeding error:", error);
+    try {
+      await mongoose.disconnect();
+    } catch {}
     process.exit(1);
   }
 }

@@ -66,6 +66,8 @@ async function seedAdmin() {
   await mongoose.connect(MONGO_URI);
   console.log("MongoDB connected");
 
+  // The bootstrap admin is intentionally one-time only; if the username is
+  // already present we exit cleanly instead of mutating that account.
   const existingAdmin = await Admin.findOne({ username: adminUsername }).lean();
 
   if (existingAdmin) {
@@ -78,6 +80,8 @@ async function seedAdmin() {
 
   const passwordHash = await bcrypt.hash(adminPassword, SALT_ROUNDS);
 
+  // Admin credentials live exclusively in the Admin collection and do not
+  // create a parallel User record.
   const admin = await Admin.create({
     username: adminUsername,
     passwordHash,
@@ -97,6 +101,8 @@ seedAdmin().catch(async (error) => {
   console.error("Admin seeding error:", error);
 
   try {
+    // Best-effort cleanup so repeated local runs do not leave a hanging
+    // database connection after a failed seed attempt.
     await mongoose.disconnect();
   } catch {}
 

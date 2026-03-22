@@ -17,6 +17,12 @@ const Product = require("../models/Product");
 
 const MONGO_URI = process.env.MONGO_URI;
 
+/**
+ * PRODUCT_TERMS
+ * -------------
+ * Canonical payment-term and coverage-duration metadata keyed by productName.
+ * The script only updates products that already exist in the product catalog.
+ */
 const PRODUCT_TERMS = [
   {
     productName: "PRULove for Life",
@@ -161,6 +167,8 @@ const PRODUCT_TERMS = [
 
   await mongoose.connect(MONGO_URI);
 
+  // bulkWrite keeps the seed fast and idempotent by matching on productName and
+  // only updating the term metadata fields introduced by the workflow change.
   const ops = PRODUCT_TERMS.map((p) => ({
     updateOne: {
       filter: { productName: p.productName },
@@ -187,6 +195,7 @@ const PRODUCT_TERMS = [
   process.exit(0);
 })().catch(async (err) => {
   console.error("❌ Product payment/coverage term seed failed:", err);
+  // Ignore disconnect errors here so the original seed failure stays visible.
   try { await mongoose.disconnect(); } catch {}
   process.exit(1);
 });
