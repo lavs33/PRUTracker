@@ -1,62 +1,368 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { FaFilePdf, FaSearch } from "react-icons/fa";
 import TopNav from "./components/TopNav";
 import ManagerSideNav from "./components/ManagerSideNav";
 import "./ManagerPortal.css";
 
-const AGENT_ROWS = [
-  { username: "AG000101", name: "Angel Dela Cruz", unit: "Diamond Unit", branch: "Metro Manila", status: "Top Performer", openTasks: 5, overdueTasks: 1, closedTasks: 24, leads: 42, converted: 10, annualPremium: 315000 },
-  { username: "AG000102", name: "Miguel Santos", unit: "Diamond Unit", branch: "Metro Manila", status: "Healthy Pipeline", openTasks: 7, overdueTasks: 0, closedTasks: 19, leads: 37, converted: 8, annualPremium: 248000 },
-  { username: "AG000103", name: "Rina Bautista", unit: "Diamond Unit", branch: "Metro Manila", status: "Needs Follow-up", openTasks: 9, overdueTasks: 3, closedTasks: 14, leads: 31, converted: 5, annualPremium: 173000 },
-  { username: "AG000104", name: "Paolo Reyes", unit: "Diamond Unit", branch: "Metro Manila", status: "Recovery Mode", openTasks: 11, overdueTasks: 4, closedTasks: 11, leads: 26, converted: 4, annualPremium: 121000 },
-  { username: "AG000105", name: "Kris Mariano", unit: "Diamond Unit", branch: "Metro Manila", status: "Top Performer", openTasks: 4, overdueTasks: 0, closedTasks: 28, leads: 44, converted: 11, annualPremium: 364000 },
-  { username: "AG000106", name: "Elaine Rivera", unit: "Diamond Unit", branch: "Metro Manila", status: "New Momentum", openTasks: 6, overdueTasks: 1, closedTasks: 17, leads: 29, converted: 6, annualPremium: 190000 },
+const API_BASE = "http://localhost:5000";
+const DATE_PRESETS = [
+  { value: "ALL", label: "All Time" },
+  { value: "30d", label: "Last 30 Days" },
+  { value: "90d", label: "Last 90 Days" },
 ];
 
-function buildScopeData(roleType) {
-  const isUM = roleType === "UM";
-  const agents = isUM
-    ? [
-        ...AGENT_ROWS,
-        { username: "AG000107", name: "Marco Lim", unit: "Diamond Unit", branch: "Metro Manila", status: "Healthy Pipeline", openTasks: 8, overdueTasks: 2, closedTasks: 15, leads: 33, converted: 7, annualPremium: 207000 },
-        { username: "AG000108", name: "Bea Navarro", unit: "Diamond Unit", branch: "Metro Manila", status: "Needs Follow-up", openTasks: 10, overdueTasks: 3, closedTasks: 12, leads: 22, converted: 3, annualPremium: 98000 },
-      ]
-    : AGENT_ROWS;
-
-  const totalAgents = agents.length;
-  const totalOpenTasks = agents.reduce((sum, agent) => sum + agent.openTasks, 0);
-  const totalOverdueTasks = agents.reduce((sum, agent) => sum + agent.overdueTasks, 0);
-  const totalClosedTasks = agents.reduce((sum, agent) => sum + agent.closedTasks, 0);
-  const totalLeads = agents.reduce((sum, agent) => sum + agent.leads, 0);
-  const totalConverted = agents.reduce((sum, agent) => sum + agent.converted, 0);
-  const totalAnnualPremium = agents.reduce((sum, agent) => sum + agent.annualPremium, 0);
-  const conversionRate = totalLeads ? Math.round((totalConverted / totalLeads) * 100) : 0;
-  const completionRate = totalOpenTasks + totalClosedTasks ? Math.round((totalClosedTasks / (totalOpenTasks + totalClosedTasks)) * 100) : 0;
-
-  return {
-    summary: {
-      totalAgents,
-      totalOpenTasks,
-      totalOverdueTasks,
-      totalClosedTasks,
-      totalLeads,
-      totalConverted,
-      totalAnnualPremium,
-      conversionRate,
-      completionRate,
-    },
-    agents,
-    salesRows: agents
-      .map((agent) => ({
-        ...agent,
-        conversionRate: agent.leads ? Math.round((agent.converted / agent.leads) * 100) : 0,
-      }))
-      .sort((a, b) => b.annualPremium - a.annualPremium),
-  };
+function formatMoney(value) {
+  return `₱ ${Number(value || 0).toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-function formatMoney(value) {
-  return `₱ ${Number(value || 0).toLocaleString("en-PH")}`;
+function formatDateTime(value) {
+  const dt = new Date(value);
+  return Number.isNaN(dt.getTime())
+    ? "—"
+    : dt.toLocaleString("en-US", {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      });
+}
+
+function formatDate(value) {
+  const dt = new Date(value);
+  return Number.isNaN(dt.getTime())
+    ? "—"
+    : dt.toLocaleDateString("en-US", {
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      });
+}
+
+function getPortalHeading(roleType) {
+  if (roleType === "AUM") return "Assistant Unit Manager Command Center";
+  if (roleType === "UM") return "Unit Manager Command Center";
+  if (roleType === "BM") return "Branch Manager Command Center";
+  return "Manager Command Center";
+}
+
+function getScopeLabel(scope = {}) {
+  if (scope.role === "BM") {
+    return [scope.branchName, scope.areaName].filter(Boolean).join(" • ") || "Branch scope";
+  }
+
+  return [scope.unitName, scope.branchName, scope.areaName].filter(Boolean).join(" • ") || "Unit scope";
+}
+
+function getPresetLabel(value) {
+  return DATE_PRESETS.find((option) => option.value === value)?.label || "All Time";
+}
+
+function normalizeSearchValue(value) {
+  return String(value || "")
+    .normalize("NFKD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function buildFilter(rows, query, fields) {
+  const normalizedQuery = normalizeSearchValue(query);
+  if (!normalizedQuery) return rows;
+
+  const queryTokens = normalizedQuery.split(" ");
+
+  return rows.filter((row) => {
+    const normalizedFields = fields.map((field) => normalizeSearchValue(row?.[field] || "")).filter(Boolean);
+    const combinedFields = normalizedFields.join(" ");
+
+    return normalizedFields.some((value) => value.includes(normalizedQuery)) || queryTokens.every((token) => combinedFields.includes(token));
+  });
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function createPrintableReport({
+  filename,
+  title,
+  periodLabel,
+  detailsTitle,
+  details,
+  filters,
+  statCards,
+  analyticsSections,
+  tableSections,
+}) {
+  const previousDocumentTitle = document.title;
+  const iframe = document.createElement("iframe");
+  iframe.style.position = "fixed";
+  iframe.style.width = "0";
+  iframe.style.height = "0";
+  iframe.style.border = "0";
+  iframe.style.right = "0";
+  iframe.style.bottom = "0";
+  document.body.appendChild(iframe);
+
+  const reportDoc = iframe.contentWindow?.document;
+  if (!reportDoc || !iframe.contentWindow) {
+    document.body.removeChild(iframe);
+    return;
+  }
+
+  const chunkRows = (rows, size) => {
+    const chunks = [];
+    for (let index = 0; index < rows.length; index += size) chunks.push(rows.slice(index, index + size));
+    return chunks.length ? chunks : [[]];
+  };
+
+  const tablePages = [];
+  tableSections.forEach((section) => {
+    const rowChunks = chunkRows(section.rows || [], section.pageSize || 18);
+    rowChunks.forEach((rows, chunkIndex) => {
+      tablePages.push({
+        title: chunkIndex === 0 ? section.title : `${section.title} (cont.)`,
+        columns: section.columns,
+        rows,
+        emptyMessage: section.emptyMessage || "No rows available.",
+      });
+    });
+  });
+
+  const totalPages = 1 + tablePages.length;
+  const nowLabel = new Date().toLocaleString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+
+  const renderFooter = (pageNumber) => `
+    <footer class="pdf-footer">
+      <span>Generated by PRUTracker • ${escapeHtml(nowLabel)}</span>
+      <span>Page ${pageNumber} of ${totalPages}</span>
+    </footer>
+  `;
+
+  const firstPage = `
+    <section class="pdf-page first-page">
+      <div class="pdf-top-grid">
+        <div class="pdf-title-block">
+          <h1>${escapeHtml(title)}</h1>
+          <div class="pdf-period">Report Period: ${escapeHtml(periodLabel)}</div>
+        </div>
+        <section class="pdf-details-card">
+          <h2>${escapeHtml(detailsTitle)}</h2>
+          <div class="pdf-details-grid">
+            ${details
+              .map(
+                (item) => `
+                  <div class="pdf-detail-item">
+                    <b>${escapeHtml(item.label)}</b>
+                    <span>${escapeHtml(item.value)}</span>
+                  </div>`
+              )
+              .join("")}
+          </div>
+        </section>
+      </div>
+
+      <section class="pdf-filter-grid">
+        ${filters
+          .map(
+            (item) => `
+              <article class="pdf-filter-card">
+                <span>${escapeHtml(item.label)}</span>
+                <strong>${escapeHtml(item.value)}</strong>
+              </article>`
+          )
+          .join("")}
+      </section>
+
+      <section class="pdf-stats-grid">
+        ${statCards
+          .map(
+            (item) => `
+              <article class="pdf-stat-card ${escapeHtml(item.tone || "")}">
+                <span>${escapeHtml(item.label)}</span>
+                <strong>${escapeHtml(item.value)}</strong>
+              </article>`
+          )
+          .join("")}
+      </section>
+
+      <section class="pdf-section-block">
+        <h3>Performance Analytics</h3>
+        <div class="pdf-analytics-grid">
+          ${analyticsSections
+            .map(
+              (section) => `
+                <article class="pdf-analytics-card">
+                  <h4>${escapeHtml(section.title)}</h4>
+                  <div class="pdf-analytics-rows">
+                    ${section.rows
+                      .map(
+                        (row) => `
+                          <div class="pdf-analytics-row">
+                            <span>${escapeHtml(row.label)}</span>
+                            <strong>${escapeHtml(row.value)}</strong>
+                          </div>`
+                      )
+                      .join("")}
+                  </div>
+                </article>`
+            )
+            .join("")}
+        </div>
+      </section>
+      ${renderFooter(1)}
+    </section>
+  `;
+
+  const tablePagesHtml = tablePages
+    .map(
+      (page, index) => `
+        <section class="pdf-page">
+          <section class="pdf-section-block pdf-section-block--table">
+            <h3>${escapeHtml(page.title)}</h3>
+            <table>
+              <thead>
+                <tr>${page.columns.map((column) => `<th>${escapeHtml(column.label)}</th>`).join("")}</tr>
+              </thead>
+              <tbody>
+                ${
+                  page.rows.length
+                    ? page.rows
+                        .map(
+                          (row) => `
+                            <tr>
+                              ${page.columns
+                                .map((column) => `<td>${escapeHtml(column.render ? column.render(row) : row?.[column.key] ?? "—")}</td>`)
+                                .join("")}
+                            </tr>`
+                        )
+                        .join("")
+                    : `<tr><td colspan="${page.columns.length}" class="empty-row">${escapeHtml(page.emptyMessage)}</td></tr>`
+                }
+              </tbody>
+            </table>
+          </section>
+          ${renderFooter(index + 2)}
+        </section>
+      `
+    )
+    .join("");
+
+  document.title = filename;
+  reportDoc.open();
+  reportDoc.write(`
+    <!doctype html>
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <title>${escapeHtml(filename)}</title>
+        <style>
+          @page { size: A4 portrait; margin: 11mm 10mm 12mm; }
+          * { box-sizing: border-box; }
+          body { margin: 0; font-family: Verdana, Geneva, sans-serif; color: #0f172a; }
+          .pdf-page { min-height: 274mm; padding: 4mm 2mm 10mm; position: relative; page-break-after: always; }
+          .pdf-page:last-child { page-break-after: auto; }
+          .pdf-top-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.9fr); gap: 18px; align-items: start; }
+          .pdf-title-block h1 { margin: 0; color: #a32020; font-size: 24px; line-height: 1.12; }
+          .pdf-period { margin-top: 10px; color: #1e3a5f; font-size: 12px; font-weight: 700; }
+          .pdf-details-card { border: 1px solid #f0c1bc; border-radius: 12px; padding: 10px 14px; }
+          .pdf-details-card h2 { margin: 0 0 8px; font-size: 12px; color: #c4382d; text-transform: uppercase; }
+          .pdf-details-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 18px; }
+          .pdf-detail-item { display: grid; gap: 2px; font-size: 11px; }
+          .pdf-detail-item b { color: #1f2937; }
+          .pdf-filter-grid, .pdf-stats-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+          .pdf-filter-card, .pdf-stat-card { border: 1px solid #d6dee8; border-radius: 10px; padding: 8px 10px; min-height: 58px; }
+          .pdf-filter-card span, .pdf-stat-card span { display: block; font-size: 10px; color: #1f2937; }
+          .pdf-filter-card strong { display: block; margin-top: 4px; font-size: 12px; color: #111827; }
+          .pdf-stat-card strong { display: block; margin-top: 6px; font-size: 17px; color: #0f172a; }
+          .pdf-stat-card.red { border-color: #f1c0ba; }
+          .pdf-stat-card.blue { border-color: #c7d8ff; }
+          .pdf-stat-card.green { border-color: #bfe7ca; }
+          .pdf-stat-card.gold { border-color: #f3d48a; }
+          .pdf-section-block { margin-top: 14px; }
+          .pdf-section-block h3 { margin: 0 0 10px; padding-left: 8px; border-left: 4px solid #da291c; color: #c22820; font-size: 13px; }
+          .pdf-analytics-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+          .pdf-analytics-card { border: 1px solid #d6dee8; border-radius: 10px; padding: 10px 12px; }
+          .pdf-analytics-card h4 { margin: 0 0 8px; font-size: 12px; color: #0f172a; }
+          .pdf-analytics-rows { display: grid; gap: 5px; }
+          .pdf-analytics-row { display: flex; justify-content: space-between; gap: 12px; font-size: 11px; }
+          .pdf-analytics-row strong { font-size: 11px; }
+          table { width: 100%; border-collapse: collapse; font-size: 10px; }
+          th, td { border: 1px solid #d6dee8; padding: 6px 5px; text-align: left; vertical-align: top; }
+          th { background: #f8fafc; color: #0f172a; font-size: 9px; }
+          .empty-row { text-align: center; color: #6b7280; }
+          .pdf-footer { position: absolute; left: 2mm; right: 2mm; bottom: 0; padding-top: 6px; border-top: 1px solid #d6dee8; display: flex; justify-content: space-between; font-size: 9px; }
+        </style>
+      </head>
+      <body>
+        ${firstPage}
+        ${tablePagesHtml}
+      </body>
+    </html>
+  `);
+  reportDoc.close();
+
+  setTimeout(() => {
+    iframe.contentWindow?.focus();
+    iframe.contentWindow?.print();
+    document.title = previousDocumentTitle;
+    setTimeout(() => document.body.removeChild(iframe), 1000);
+  }, 250);
+}
+
+function Toolbar({
+  searchId,
+  searchValue,
+  onSearchChange,
+  searchPlaceholder,
+  datePreset,
+  onDatePresetChange,
+  onPdfClick,
+  pdfLabel,
+}) {
+  return (
+    <div className="manager-toolbar">
+      <div className="manager-toolbar__filters">
+        <label className="manager-search" htmlFor={searchId}>
+          <FaSearch size={14} />
+          <input id={searchId} type="search" placeholder={searchPlaceholder} value={searchValue} onChange={onSearchChange} />
+        </label>
+
+        {onDatePresetChange && (
+          <label className="manager-select" htmlFor={`${searchId}-date-preset`}>
+            <span>Date Range</span>
+            <select id={`${searchId}-date-preset`} value={datePreset} onChange={onDatePresetChange}>
+              {DATE_PRESETS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+      </div>
+
+      <button type="button" className="manager-report-btn" onClick={onPdfClick}>
+        <FaFilePdf size={15} />
+        <span>{pdfLabel}</span>
+      </button>
+    </div>
+  );
 }
 
 function ManagerPortal({ roleType }) {
@@ -65,6 +371,14 @@ function ManagerPortal({ roleType }) {
   const normalizedRole = String(roleType || "").trim().toUpperCase();
   const [activeView, setActiveView] = useState("dashboard");
   const [agentSearch, setAgentSearch] = useState("");
+  const [taskSearch, setTaskSearch] = useState("");
+  const [salesSearch, setSalesSearch] = useState("");
+  const [taskDatePreset, setTaskDatePreset] = useState("ALL");
+  const [salesDatePreset, setSalesDatePreset] = useState("ALL");
+  const [portalData, setPortalData] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [sideNavCollapsed, setSideNavCollapsed] = useState(false);
 
   const user = useMemo(() => {
     try {
@@ -90,18 +404,42 @@ function ManagerPortal({ roleType }) {
     document.title = `PRUTracker | ${normalizedRole} Portal`;
   }, [normalizedRole]);
 
-  const scopeData = useMemo(() => buildScopeData(normalizedRole), [normalizedRole]);
+  useEffect(() => {
+    if (!user?.id || user.role !== normalizedRole) return;
 
-  const filteredAgents = useMemo(() => {
-    const query = agentSearch.trim().toLowerCase();
-    if (!query) return scopeData.agents;
+    const controller = new AbortController();
 
-    return scopeData.agents.filter((agent) =>
-      [agent.username, agent.name, agent.unit, agent.branch, agent.status].some((value) =>
-        String(value || "").toLowerCase().includes(query)
-      )
-    );
-  }, [agentSearch, scopeData.agents]);
+    const fetchPortalData = async () => {
+      setIsLoading(true);
+      setLoadError("");
+
+      try {
+        const params = new URLSearchParams({
+          userId: user.id,
+          taskDatePreset,
+          salesDatePreset,
+        });
+        const res = await fetch(`${API_BASE}/api/manager/portal?${params.toString()}`, {
+          signal: controller.signal,
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+          throw new Error(data?.message || "Failed to load manager portal data.");
+        }
+
+        setPortalData(data);
+      } catch (err) {
+        if (err.name === "AbortError") return;
+        setLoadError(err.message || "Failed to load manager portal data.");
+      } finally {
+        if (!controller.signal.aborted) setIsLoading(false);
+      }
+    };
+
+    fetchPortalData();
+    return () => controller.abort();
+  }, [normalizedRole, salesDatePreset, taskDatePreset, user?.id, user?.role]);
 
   const handleLogout = () => {
     localStorage.removeItem("managerPortalUser");
@@ -109,12 +447,211 @@ function ManagerPortal({ roleType }) {
     navigate("/login", { replace: true });
   };
 
+  const summary = portalData?.summary || {
+    totalAgents: 0,
+    totalOpenTasks: 0,
+    totalOverdueTasks: 0,
+    totalClosedTasks: 0,
+    totalLeads: 0,
+    totalConverted: 0,
+    totalPolicies: 0,
+    activePolicies: 0,
+    totalAnnualPremium: 0,
+    totalFrequencyPremium: 0,
+    conversionRate: 0,
+    completionRate: 0,
+    activePolicyRate: 0,
+    frequencyPremiumBreakdown: { monthlyPremium: 0, quarterlyPremium: 0, halfYearlyPremium: 0, yearlyPremium: 0 },
+  };
+  const taskSummary = portalData?.taskSummary || summary;
+  const salesSummary = portalData?.salesSummary || summary;
+
+  const filteredAgents = useMemo(
+    () => buildFilter(portalData?.agents || [], agentSearch, ["username", "name", "unit", "branch"]),
+    [agentSearch, portalData?.agents]
+  );
+  const filteredTaskRows = useMemo(
+    () => buildFilter(portalData?.taskRows || [], taskSearch, ["username", "name", "topTaskType"]),
+    [portalData?.taskRows, taskSearch]
+  );
+  const filteredSalesRows = useMemo(
+    () => buildFilter(portalData?.salesRows || [], salesSearch, ["username", "name"]),
+    [portalData?.salesRows, salesSearch]
+  );
+
+  const scope = portalData?.scope || {};
+  const scopeLabel = getScopeLabel(scope);
+  const generatedAtLabel = portalData?.reportContext?.generatedAt ? formatDateTime(portalData.reportContext.generatedAt) : null;
+  const taskPeriodLabel = portalData?.reportContext?.taskPeriodLabel || getPresetLabel(taskDatePreset);
+  const salesPeriodLabel = portalData?.reportContext?.salesPeriodLabel || getPresetLabel(salesDatePreset);
+
   const summaryCards = [
-    { label: "Agents in Scope", value: scopeData.summary.totalAgents },
-    { label: "Open Tasks", value: scopeData.summary.totalOpenTasks },
-    { label: "Conversion Rate", value: `${scopeData.summary.conversionRate}%` },
-    { label: "Annual Premium", value: formatMoney(scopeData.summary.totalAnnualPremium) },
+    { label: "Agents in Scope", value: summary.totalAgents },
+    { label: "Open Tasks", value: summary.totalOpenTasks },
+    { label: "Conversion Rate", value: `${summary.conversionRate}%` },
+    { label: "Annual Premium", value: formatMoney(summary.totalAnnualPremium) },
   ];
+
+  const taskReportColumns = [
+    { key: "username", label: "Username" },
+    { key: "name", label: "Name" },
+    { key: "totalTasks", label: "Total Tasks" },
+    { key: "openTasks", label: "Open" },
+    { key: "overdueTasks", label: "Overdue Open" },
+    { key: "closedTasks", label: "Done" },
+    { key: "delayedDoneTasks", label: "Delayed Done" },
+    { key: "completionRate", label: "Completion Rate", render: (row) => `${row.completionRate}%` },
+    { key: "topTaskType", label: "Top Task Type" },
+  ];
+
+  const salesReportColumns = [
+    { key: "username", label: "Username" },
+    { key: "name", label: "Name" },
+    { key: "leads", label: "Leads" },
+    { key: "converted", label: "Converted" },
+    { key: "conversionRate", label: "Conversion Rate", render: (row) => `${row.conversionRate}%` },
+    { key: "totalPolicies", label: "Policies" },
+    { key: "activePolicies", label: "Active" },
+    { key: "annualPremium", label: "Annual Premium", render: (row) => formatMoney(row.annualPremium) },
+    { key: "monthlyPremium", label: "Monthly", render: (row) => formatMoney(row.monthlyPremium) },
+    { key: "quarterlyPremium", label: "Quarterly", render: (row) => formatMoney(row.quarterlyPremium) },
+    { key: "halfYearlyPremium", label: "Half-yearly", render: (row) => formatMoney(row.halfYearlyPremium) },
+  ];
+
+  const managerNameLabel = normalizedRole === "AUM" ? "AUM Name" : normalizedRole === "UM" ? "UM Name" : "BM Name";
+
+  const unitDetails = [
+    { label: normalizedRole === "BM" ? "Branch Manager Code" : "Unit Manager Code", value: user?.username || "—" },
+    { label: managerNameLabel, value: [user?.firstName, user?.lastName].filter(Boolean).join(" ") || user?.username || "—" },
+    { label: normalizedRole === "BM" ? "Branch" : "Unit", value: normalizedRole === "BM" ? scope.branchName || "—" : scope.unitName || "—" },
+    { label: normalizedRole === "BM" ? "Area" : "Branch", value: normalizedRole === "BM" ? scope.areaName || "—" : scope.branchName || "—" },
+    { label: normalizedRole === "BM" ? "Total Units" : "Area", value: normalizedRole === "BM" ? "Branch scope" : scope.areaName || "—" },
+    { label: "Agents in Scope", value: String(summary.totalAgents || 0) },
+  ];
+
+  const generateTaskPdfReport = () => {
+    const statusDistribution = [
+      { label: "Open", value: `${taskSummary.totalOpenTasks} (${taskSummary.totalOpenTasks + taskSummary.totalClosedTasks ? Math.round((taskSummary.totalOpenTasks / (taskSummary.totalOpenTasks + taskSummary.totalClosedTasks)) * 100) : 0}%)` },
+      { label: "Done", value: `${taskSummary.totalClosedTasks} (${taskSummary.completionRate}%)` },
+      { label: "Overdue Open", value: `${taskSummary.totalOverdueTasks}` },
+      {
+        label: "Delayed Done",
+        value: `${filteredTaskRows.reduce((sum, row) => sum + Number(row.delayedDoneTasks || 0), 0)}`,
+      },
+    ];
+    const typeBreakdown = filteredTaskRows
+      .map((row) => ({ label: row.name || row.username, value: `${row.topTaskType || "—"} • ${row.totalTasks || 0} tasks` }))
+      .slice(0, 8);
+
+    createPrintableReport({
+      filename: `${user?.username || normalizedRole} - Unit Task Performance Report`,
+      title: "Unit Task Performance Report",
+      periodLabel:
+        taskDatePreset === "ALL"
+          ? `${taskPeriodLabel}${filteredTaskRows.length ? ` • Updated ${generatedAtLabel || formatDateTime(new Date())}` : ""}`
+          : `${formatDate(new Date(Date.now() - (taskDatePreset === "30d" ? 30 : 90) * 24 * 60 * 60 * 1000))} to ${formatDate(new Date())}`,
+      detailsTitle: "Unit Details",
+      details: unitDetails,
+      filters: [
+        { label: "Date Range Filter", value: taskPeriodLabel },
+        { label: "Search Filter", value: taskSearch.trim() || "All" },
+        { label: "Report Scope", value: scopeLabel },
+        { label: "Rows Included", value: String(filteredTaskRows.length) },
+      ],
+      statCards: [
+        { label: "Total Tasks", value: filteredTaskRows.reduce((sum, row) => sum + Number(row.totalTasks || 0), 0), tone: "red" },
+        { label: "Open", value: taskSummary.totalOpenTasks, tone: "blue" },
+        { label: "Done", value: taskSummary.totalClosedTasks, tone: "green" },
+        { label: "Overdue", value: taskSummary.totalOverdueTasks, tone: "gold" },
+        { label: "Completion Rate", value: `${taskSummary.completionRate}%`, tone: "blue" },
+        {
+          label: "Late Completion Rate",
+          value: `${filteredTaskRows.reduce((sum, row) => sum + Number(row.closedTasks || 0), 0) ? Math.round((filteredTaskRows.reduce((sum, row) => sum + Number(row.delayedDoneTasks || 0), 0) / Math.max(filteredTaskRows.reduce((sum, row) => sum + Number(row.closedTasks || 0), 0), 1)) * 100) : 0}%`,
+          tone: "gold",
+        },
+        { label: "Agents Listed", value: filteredTaskRows.length, tone: "green" },
+        { label: "Top Task Type", value: filteredTaskRows[0]?.topTaskType || "—", tone: "red" },
+      ],
+      analyticsSections: [
+        { title: "Status Distribution", rows: statusDistribution },
+        {
+          title: "Task Type Performance",
+          rows: typeBreakdown.length ? typeBreakdown : [{ label: "No task rows", value: "No rows available." }],
+        },
+      ],
+      tableSections: [
+        {
+          title: "Unit Task Detail",
+          columns: taskReportColumns,
+          rows: filteredTaskRows,
+          pageSize: 14,
+          emptyMessage: "No task detail rows available.",
+        },
+      ],
+    });
+  };
+
+  const generateSalesPdfReport = () => {
+    const frequencyBreakdown = salesSummary.frequencyPremiumBreakdown || {
+      monthlyPremium: 0,
+      quarterlyPremium: 0,
+      halfYearlyPremium: 0,
+      yearlyPremium: 0,
+    };
+
+    createPrintableReport({
+      filename: `${user?.username || normalizedRole} - Unit Sales Performance Report`,
+      title: "Unit Sales Performance Report",
+      periodLabel:
+        salesDatePreset === "ALL"
+          ? salesPeriodLabel
+          : `${formatDate(new Date(Date.now() - (salesDatePreset === "30d" ? 30 : 90) * 24 * 60 * 60 * 1000))} to ${formatDate(new Date())}`,
+      detailsTitle: "Unit Details",
+      details: unitDetails,
+      filters: [
+        { label: "Date Range Filter", value: salesPeriodLabel },
+        { label: "Search Filter", value: salesSearch.trim() || "All" },
+        { label: "Report Scope", value: scopeLabel },
+        { label: "Rows Included", value: String(filteredSalesRows.length) },
+      ],
+      statCards: [
+        { label: "Total Leads", value: salesSummary.totalLeads, tone: "red" },
+        { label: "Converted", value: salesSummary.totalConverted, tone: "green" },
+        { label: "Policies", value: salesSummary.totalPolicies, tone: "blue" },
+        { label: "Active Policy Rate", value: `${salesSummary.activePolicyRate}%`, tone: "gold" },
+        { label: "Annual Premium", value: formatMoney(salesSummary.totalAnnualPremium), tone: "blue" },
+        { label: "Monthly Premium", value: formatMoney(frequencyBreakdown.monthlyPremium), tone: "green" },
+        { label: "Quarterly Premium", value: formatMoney(frequencyBreakdown.quarterlyPremium), tone: "gold" },
+        { label: "Half-yearly Premium", value: formatMoney(frequencyBreakdown.halfYearlyPremium), tone: "red" },
+      ],
+      analyticsSections: [
+        {
+          title: "Frequency Premium Breakdown",
+          rows: [
+            { label: "Monthly", value: formatMoney(frequencyBreakdown.monthlyPremium) },
+            { label: "Quarterly", value: formatMoney(frequencyBreakdown.quarterlyPremium) },
+            { label: "Half-yearly", value: formatMoney(frequencyBreakdown.halfYearlyPremium) },
+            { label: "Yearly", value: formatMoney(frequencyBreakdown.yearlyPremium) },
+          ],
+        },
+        {
+          title: "Top Sales Producers",
+          rows: filteredSalesRows.length
+            ? filteredSalesRows.slice(0, 8).map((row) => ({ label: row.name || row.username, value: formatMoney(row.annualPremium) }))
+            : [{ label: "No sales rows", value: "No rows available." }],
+        },
+      ],
+      tableSections: [
+        {
+          title: "Unit Sales Detail",
+          columns: salesReportColumns,
+          rows: filteredSalesRows,
+          pageSize: 12,
+          emptyMessage: "No sales detail rows available.",
+        },
+      ],
+    });
+  };
 
   return (
     <div className="manager-portal">
@@ -123,21 +660,28 @@ function ManagerPortal({ roleType }) {
         onLogoClick={() => setActiveView("dashboard")}
         onLogout={handleLogout}
         showAlerts={false}
+        showDate
         profileClickable={false}
       />
 
       <div className="manager-portal__body">
-        <ManagerSideNav roleLabel={normalizedRole} active={activeView} onNavigate={setActiveView} />
+        <ManagerSideNav
+          roleLabel={normalizedRole}
+          active={activeView}
+          onNavigate={setActiveView}
+          collapsed={sideNavCollapsed}
+          onToggle={() => setSideNavCollapsed((current) => !current)}
+        />
 
         <main className="manager-portal__content">
           <section className="manager-hero">
             <div>
               <p className="manager-hero__eyebrow">{normalizedRole} Portal</p>
-              <h1>{normalizedRole === "AUM" ? "Assistant Unit Manager" : "Unit Manager"} Command Center</h1>
+              <h1>{getPortalHeading(normalizedRole)}</h1>
               <p>
-                Frontend-first workspace for team monitoring, unit execution visibility, and manager-level coaching
-                decisions before backend data wiring.
+                Monitor {scopeLabel} with live backend metrics, agent-inclusive unit coverage, auto-updating date-filtered tables, and printable reports.
               </p>
+              {generatedAtLabel && <small className="manager-hero__meta">Updated {generatedAtLabel}</small>}
             </div>
             <div className="manager-hero__cards">
               {summaryCards.map((card) => (
@@ -149,45 +693,68 @@ function ManagerPortal({ roleType }) {
             </div>
           </section>
 
-          {activeView === "dashboard" && (
+          {isLoading && <section className="manager-panel manager-feedback">Loading manager portal data...</section>}
+          {loadError && <section className="manager-panel manager-feedback manager-feedback--error">{loadError}</section>}
+
+          {!isLoading && !loadError && activeView === "dashboard" && (
             <section className="manager-panel">
               <div className="manager-panel__head">
-                <h2>Unit Overview</h2>
-                <p>High-level pulse of agent workload and sales momentum.</p>
+                <h2>{normalizedRole === "BM" ? "Branch Overview" : "Unit Overview"}</h2>
+                <p>High-level pulse of workload, conversion output, and premium momentum across the current manager scope.</p>
               </div>
               <div className="manager-kpi-grid">
                 <div>
                   <span>Completed Tasks</span>
-                  <strong>{scopeData.summary.totalClosedTasks}</strong>
+                  <strong>{summary.totalClosedTasks}</strong>
                 </div>
                 <div>
                   <span>Overdue Tasks</span>
-                  <strong>{scopeData.summary.totalOverdueTasks}</strong>
+                  <strong>{summary.totalOverdueTasks}</strong>
                 </div>
                 <div>
                   <span>Leads Managed</span>
-                  <strong>{scopeData.summary.totalLeads}</strong>
+                  <strong>{summary.totalLeads}</strong>
                 </div>
                 <div>
                   <span>Converted Leads</span>
-                  <strong>{scopeData.summary.totalConverted}</strong>
+                  <strong>{summary.totalConverted}</strong>
+                </div>
+                <div>
+                  <span>Total Policies</span>
+                  <strong>{summary.totalPolicies}</strong>
+                </div>
+                <div>
+                  <span>Active Policy Rate</span>
+                  <strong>{summary.activePolicyRate}%</strong>
+                </div>
+                <div>
+                  <span>Annual Premium</span>
+                  <strong>{formatMoney(summary.totalAnnualPremium)}</strong>
+                </div>
+                <div>
+                  <span>Frequency Premium</span>
+                  <strong>{formatMoney(summary.totalFrequencyPremium)}</strong>
                 </div>
               </div>
             </section>
           )}
 
-          {activeView === "agents" && (
+          {!isLoading && !loadError && activeView === "agents" && (
             <section className="manager-panel">
-              <div className="manager-panel__head split">
+              <div className="manager-panel__head">
                 <div>
                   <h2>Agents in Scope</h2>
-                  <p>Search and review agents under the current manager scope.</p>
+                  <p>The scoped agent list includes the current {normalizedRole} account’s underlying agent record in both the count and the list.</p>
                 </div>
+              </div>
+
+              <div className="manager-toolbar manager-toolbar--search-only">
                 <label className="manager-search" htmlFor="manager-agents-search">
+                  <FaSearch size={14} />
                   <input
                     id="manager-agents-search"
                     type="search"
-                    placeholder="Search username, name, or status"
+                    placeholder="Search username, name, unit, or branch"
                     value={agentSearch}
                     onChange={(e) => setAgentSearch(e.target.value)}
                   />
@@ -200,10 +767,11 @@ function ManagerPortal({ roleType }) {
                     <tr>
                       <th>Username</th>
                       <th>Name</th>
-                      <th>Status</th>
+                      <th>Unit</th>
+                      <th>Branch</th>
                       <th>Open Tasks</th>
                       <th>Overdue</th>
-                      <th>Closed</th>
+                      <th>Done</th>
                       <th>Leads</th>
                       <th>Converted</th>
                       <th>Annual Premium</th>
@@ -211,10 +779,11 @@ function ManagerPortal({ roleType }) {
                   </thead>
                   <tbody>
                     {filteredAgents.map((agent) => (
-                      <tr key={agent.username}>
+                      <tr key={agent.id}>
                         <td>{agent.username}</td>
                         <td>{agent.name}</td>
-                        <td>{agent.status}</td>
+                        <td>{agent.unit || "—"}</td>
+                        <td>{agent.branch || "—"}</td>
                         <td>{agent.openTasks}</td>
                         <td>{agent.overdueTasks}</td>
                         <td>{agent.closedTasks}</td>
@@ -226,99 +795,188 @@ function ManagerPortal({ roleType }) {
                   </tbody>
                 </table>
               </div>
+
+              {!filteredAgents.length && <div className="manager-empty-state">No agents matched this search yet.</div>}
             </section>
           )}
 
-          {activeView === "task_progress" && (
-            <section className="manager-grid">
-              <article className="manager-panel">
-                <div className="manager-panel__head">
-                  <h2>Unit Task Progress Dashboard</h2>
-                  <p>Aggregated view of task execution across agents in scope.</p>
+          {!isLoading && !loadError && activeView === "task_progress" && (
+            <section className="manager-panel">
+              <div className="manager-panel__head">
+                <div>
+                  <h2>{normalizedRole === "BM" ? "Branch Task Progress" : "Unit Task Progress"}</h2>
+                  <p>Review filtered unit task execution by agent, without branch search, then generate a PDF report in the requested unit-report format.</p>
                 </div>
-                <div className="manager-kpi-grid">
-                  <div>
-                    <span>Open Tasks</span>
-                    <strong>{scopeData.summary.totalOpenTasks}</strong>
-                  </div>
-                  <div>
-                    <span>Done Tasks</span>
-                    <strong>{scopeData.summary.totalClosedTasks}</strong>
-                  </div>
-                  <div>
-                    <span>Overdue Tasks</span>
-                    <strong>{scopeData.summary.totalOverdueTasks}</strong>
-                  </div>
-                  <div>
-                    <span>Completion Rate</span>
-                    <strong>{scopeData.summary.completionRate}%</strong>
-                  </div>
-                </div>
-              </article>
+              </div>
 
-              <article className="manager-panel">
-                <div className="manager-panel__head">
-                  <h2>Task Priority Ranking</h2>
-                  <p>Agents needing the fastest task coaching.</p>
+              <div className="manager-kpi-grid">
+                <div>
+                  <span>Filtered Open Tasks</span>
+                  <strong>{taskSummary.totalOpenTasks}</strong>
                 </div>
-                <div className="manager-rank-list">
-                  {[...scopeData.agents]
-                    .sort((a, b) => (b.overdueTasks + b.openTasks) - (a.overdueTasks + a.openTasks))
-                    .map((agent) => (
-                      <div key={agent.username}>
-                        <strong>{agent.name}</strong>
-                        <span>{agent.overdueTasks} overdue · {agent.openTasks} open</span>
-                      </div>
+                <div>
+                  <span>Filtered Overdue Tasks</span>
+                  <strong>{taskSummary.totalOverdueTasks}</strong>
+                </div>
+                <div>
+                  <span>Filtered Done Tasks</span>
+                  <strong>{taskSummary.totalClosedTasks}</strong>
+                </div>
+                <div>
+                  <span>Completion Rate</span>
+                  <strong>{taskSummary.completionRate}%</strong>
+                </div>
+              </div>
+
+              <Toolbar
+                searchId="manager-task-search"
+                searchValue={taskSearch}
+                onSearchChange={(e) => setTaskSearch(e.target.value)}
+                searchPlaceholder="Search username, name, or task type"
+                datePreset={taskDatePreset}
+                onDatePresetChange={(e) => setTaskDatePreset(e.target.value)}
+                onPdfClick={generateTaskPdfReport}
+                pdfLabel="Generate Task Report (PDF)"
+              />
+
+              <div className="manager-filter-note">Showing <strong>{taskPeriodLabel}</strong> task data. Reports use the same date range automatically.</div>
+
+              <div className="manager-table-wrap">
+                <table className="manager-table manager-table--wide">
+                  <thead>
+                    <tr>
+                      <th>Username</th>
+                      <th>Name</th>
+                      <th>Total Tasks</th>
+                      <th>Open</th>
+                      <th>Overdue</th>
+                      <th>Done</th>
+                      <th>Delayed Done</th>
+                      <th>Completion Rate</th>
+                      <th>Top Task Type</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredTaskRows.map((row) => (
+                      <tr key={row.id}>
+                        <td>{row.username}</td>
+                        <td>{row.name}</td>
+                        <td>{row.totalTasks}</td>
+                        <td>{row.openTasks}</td>
+                        <td>{row.overdueTasks}</td>
+                        <td>{row.closedTasks}</td>
+                        <td>{row.delayedDoneTasks}</td>
+                        <td>{row.completionRate}%</td>
+                        <td>{row.topTaskType}</td>
+                      </tr>
                     ))}
-                </div>
-              </article>
+                  </tbody>
+                </table>
+              </div>
+
+              {!filteredTaskRows.length && <div className="manager-empty-state">No task rows matched this search yet.</div>}
             </section>
           )}
 
-          {activeView === "sales_performance" && (
-            <section className="manager-grid">
-              <article className="manager-panel">
-                <div className="manager-panel__head">
-                  <h2>Unit Sales Performance Dashboard</h2>
-                  <p>Sales outcome snapshot for the current manager scope.</p>
+          {!isLoading && !loadError && activeView === "sales_performance" && (
+            <section className="manager-panel">
+              <div className="manager-panel__head">
+                <div>
+                  <h2>{normalizedRole === "BM" ? "Branch Sales Performance" : "Unit Sales Performance"}</h2>
+                  <p>Track filtered agent conversion, policy outcomes, and premium-frequency breakdowns, without branch or unit search terms.</p>
                 </div>
-                <div className="manager-kpi-grid">
-                  <div>
-                    <span>Total Leads</span>
-                    <strong>{scopeData.summary.totalLeads}</strong>
-                  </div>
-                  <div>
-                    <span>Converted Leads</span>
-                    <strong>{scopeData.summary.totalConverted}</strong>
-                  </div>
-                  <div>
-                    <span>Conversion Rate</span>
-                    <strong>{scopeData.summary.conversionRate}%</strong>
-                  </div>
-                  <div>
-                    <span>Annual Premium</span>
-                    <strong>{formatMoney(scopeData.summary.totalAnnualPremium)}</strong>
-                  </div>
-                </div>
-              </article>
+              </div>
 
-              <article className="manager-panel">
-                <div className="manager-panel__head">
-                  <h2>Agent Sales Ranking</h2>
-                  <p>Top premium contribution inside the unit scope.</p>
+              <div className="manager-kpi-grid">
+                <div>
+                  <span>Total Leads</span>
+                  <strong>{salesSummary.totalLeads}</strong>
                 </div>
-                <div className="manager-rank-list">
-                  {scopeData.salesRows.map((agent) => (
-                    <div key={agent.username}>
-                      <strong>{agent.name}</strong>
-                      <span>{formatMoney(agent.annualPremium)} · {agent.conversionRate}% conversion</span>
-                    </div>
-                  ))}
+                <div>
+                  <span>Converted Leads</span>
+                  <strong>{salesSummary.totalConverted}</strong>
                 </div>
-              </article>
+                <div>
+                  <span>Total Policies</span>
+                  <strong>{salesSummary.totalPolicies}</strong>
+                </div>
+                <div>
+                  <span>Active Policy Rate</span>
+                  <strong>{salesSummary.activePolicyRate}%</strong>
+                </div>
+                <div>
+                  <span>Annual Premium</span>
+                  <strong>{formatMoney(salesSummary.totalAnnualPremium)}</strong>
+                </div>
+                <div>
+                  <span>Monthly Premium</span>
+                  <strong>{formatMoney(salesSummary.frequencyPremiumBreakdown?.monthlyPremium)}</strong>
+                </div>
+                <div>
+                  <span>Quarterly Premium</span>
+                  <strong>{formatMoney(salesSummary.frequencyPremiumBreakdown?.quarterlyPremium)}</strong>
+                </div>
+                <div>
+                  <span>Half-yearly Premium</span>
+                  <strong>{formatMoney(salesSummary.frequencyPremiumBreakdown?.halfYearlyPremium)}</strong>
+                </div>
+              </div>
+
+              <Toolbar
+                searchId="manager-sales-search"
+                searchValue={salesSearch}
+                onSearchChange={(e) => setSalesSearch(e.target.value)}
+                searchPlaceholder="Search username or name"
+                datePreset={salesDatePreset}
+                onDatePresetChange={(e) => setSalesDatePreset(e.target.value)}
+                onPdfClick={generateSalesPdfReport}
+                pdfLabel="Generate Sales Report (PDF)"
+              />
+
+              <div className="manager-filter-note">Showing <strong>{salesPeriodLabel}</strong> sales data. Reports use the same date range automatically.</div>
+
+              <div className="manager-table-wrap">
+                <table className="manager-table manager-table--wide manager-table--sales">
+                  <thead>
+                    <tr>
+                      <th>Username</th>
+                      <th>Name</th>
+                      <th>Leads</th>
+                      <th>Converted</th>
+                      <th>Conversion Rate</th>
+                      <th>Policies</th>
+                      <th>Active</th>
+                      <th>Annual Premium</th>
+                      <th>Monthly</th>
+                      <th>Quarterly</th>
+                      <th>Half-yearly</th>
+                      <th>Yearly</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredSalesRows.map((row) => (
+                      <tr key={row.id}>
+                        <td>{row.username}</td>
+                        <td>{row.name}</td>
+                        <td>{row.leads}</td>
+                        <td>{row.converted}</td>
+                        <td>{row.conversionRate}%</td>
+                        <td>{row.totalPolicies}</td>
+                        <td>{row.activePolicies}</td>
+                        <td>{formatMoney(row.annualPremium)}</td>
+                        <td>{formatMoney(row.monthlyPremium)}</td>
+                        <td>{formatMoney(row.quarterlyPremium)}</td>
+                        <td>{formatMoney(row.halfYearlyPremium)}</td>
+                        <td>{formatMoney(row.yearlyPremium)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {!filteredSalesRows.length && <div className="manager-empty-state">No sales rows matched this search yet.</div>}
             </section>
           )}
-
         </main>
       </div>
     </div>
