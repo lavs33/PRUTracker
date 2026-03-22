@@ -49,6 +49,13 @@ const AUM = require("./models/AUM");
 
 const app = express();
 
+/**
+ * buildManagerPopulateQuery(managerType)
+ * ------------------------------------
+ * Returns the populate() graph needed to fully hydrate a manager-role record.
+ * BM records populate branch directly, while AUM/UM records populate unit then
+ * derive the branch/area chain from that unit.
+ */
 function buildManagerPopulateQuery(managerType = "") {
   const type = String(managerType || "").trim().toUpperCase();
   const populate = [
@@ -102,6 +109,12 @@ function buildManagerPopulateQuery(managerType = "") {
   return populate;
 }
 
+/**
+ * getManagerProfile(managerDoc)
+ * -----------------------------
+ * Normalizes the nested populate result of a manager document into a single
+ * object containing user, agent, unit, branch, and area references.
+ */
 function getManagerProfile(managerDoc) {
   const agent = managerDoc?.agentId || {};
   const user = managerDoc?.userId || agent.userId || {};
@@ -118,6 +131,11 @@ function getManagerProfile(managerDoc) {
   };
 }
 
+/**
+ * getManagerModelByType(typeRaw)
+ * ------------------------------
+ * Maps a role code (BM/UM/AUM) to its matching Mongoose model.
+ */
 function getManagerModelByType(typeRaw = "") {
   const type = String(typeRaw || "").trim().toUpperCase();
   if (type === "BM") return BM;
@@ -126,6 +144,12 @@ function getManagerModelByType(typeRaw = "") {
   return null;
 }
 
+/**
+ * formatManagerRecord(managerDoc, type)
+ * ------------------------------------
+ * Flattens a populated manager document into the API response shape expected by
+ * the admin organization screens.
+ */
 function formatManagerRecord(managerDoc, type) {
   if (!managerDoc) return null;
 
@@ -159,6 +183,11 @@ function formatManagerRecord(managerDoc, type) {
   };
 }
 
+/**
+ * matchesManagerScope(managerDoc, managerType, scope)
+ * --------------------------------------------------
+ * Applies branch/unit scoping rules depending on the manager role being tested.
+ */
 function matchesManagerScope(managerDoc, managerType, { branchId = "", unitId = "" } = {}) {
   const profile = getManagerProfile(managerDoc);
   if (managerType === "BM") {
@@ -168,6 +197,12 @@ function matchesManagerScope(managerDoc, managerType, { branchId = "", unitId = 
   return String(profile.unit?._id || "") === String(unitId || "");
 }
 
+/**
+ * matchesSearchTerms(fields, qRaw)
+ * -------------------------------
+ * Lightweight multi-field search helper used by list payload builders when the
+ * filtering logic already runs in memory after querying MongoDB.
+ */
 function matchesSearchTerms(fields, qRaw) {
   const q = String(qRaw || "").trim().toLowerCase();
   if (!q) return true;
@@ -189,10 +224,22 @@ function matchesSearchTerms(fields, qRaw) {
   return false;
 }
 
+/**
+ * padSixDigitSequence(value)
+ * --------------------------
+ * Normalizes a numeric sequence into the fixed six-digit code format used by
+ * generated usernames/codes (e.g. 12 -> "000012").
+ */
 function padSixDigitSequence(value) {
   return String(Math.max(0, Number(value) || 0)).padStart(6, "0");
 }
 
+/**
+ * getNextRoleSequence(usernames, role)
+ * -----------------------------------
+ * Scans existing usernames and returns the next available numeric sequence for
+ * the requested role prefix.
+ */
 function getNextRoleSequence(usernames = [], role = "AG") {
   const prefix = String(role || "").trim().toUpperCase();
   const pattern = new RegExp(`^${escapeRegex(prefix)}(\\d{6})$`);
@@ -206,10 +253,20 @@ function getNextRoleSequence(usernames = [], role = "AG") {
   return maxSequence + 1;
 }
 
+/**
+ * buildGeneratedUsername(role, sequenceNumber)
+ * -------------------------------------------
+ * Composes a system-generated username from a role prefix and padded sequence.
+ */
 function buildGeneratedUsername(role, sequenceNumber) {
   return `${String(role || "").trim().toUpperCase()}${padSixDigitSequence(sequenceNumber)}`;
 }
 
+/**
+ * calculateAgeFromDate(value)
+ * ---------------------------
+ * Calculates current age from a birthday using UTC-safe comparisons.
+ */
 function calculateAgeFromDate(value) {
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return null;
@@ -224,6 +281,11 @@ function calculateAgeFromDate(value) {
   return age >= 0 ? age : null;
 }
 
+/**
+ * isFutureDate(value)
+ * -------------------
+ * Returns true when the supplied date falls after today (date-only comparison).
+ */
 function isFutureDate(value) {
   const date = value instanceof Date ? new Date(value.getTime()) : new Date(value);
   if (Number.isNaN(date.getTime())) return false;
@@ -235,6 +297,11 @@ function isFutureDate(value) {
   return date.getTime() > today.getTime();
 }
 
+/**
+ * buildGeneratedPassword(role, birthdayValue, sequenceNumber)
+ * ----------------------------------------------------------
+ * Creates the default generated password pattern used during account creation.
+ */
 function buildGeneratedPassword(role, birthdayValue, sequenceNumber) {
   const roleCode = String(role || "").trim().toUpperCase();
   const date = birthdayValue instanceof Date ? birthdayValue : new Date(birthdayValue);
@@ -256,6 +323,8 @@ async function buildAdminOrganizationListPayload({
   managerType = "",
   agentSearch = "",
 } = {}) {
+  // Pull the full hierarchy in parallel so the admin organization screen can
+  // build all list/table views from one normalized payload.
   const [areas, branches, units, agents, branchManagers, unitManagers, assistantUnitManagers] = await Promise.all([
     Area.find().sort({ areaName: 1 }).lean(),
     Branch.find().sort({ branchName: 1 }).lean(),
@@ -286,18 +355,25 @@ async function buildAdminOrganizationListPayload({
   const areaNameById = new Map(areas.map((area) => [String(area._id), area.areaName || ""]));
   const branchById = new Map(branches.map((branch) => [String(branch._id), branch]));
 
+  // Flatten manager documents once so downstream filters/sequences can work
+  // against a consistent response shape regardless of the source model.
   const formattedManagers = {
     bm: branchManagers.map((manager) => formatManagerRecord(manager, "BM")),
     um: unitManagers.map((manager) => formatManagerRecord(manager, "UM")),
     aum: assistantUnitManagers.map((manager) => formatManagerRecord(manager, "AUM")),
   };
 
+  // The UI uses the next sequence values to preview autogenerated credentials
+  // before a manager record is actually created.
   const managerSequences = {
     BM: getNextRoleSequence(formattedManagers.bm.map((manager) => manager.username || ""), "BM"),
     UM: getNextRoleSequence(formattedManagers.um.map((manager) => manager.username || ""), "UM"),
     AUM: getNextRoleSequence(formattedManagers.aum.map((manager) => manager.username || ""), "AUM"),
   };
 
+  // Only active managers should occupy the branch/unit "assigned manager"
+  // slots in the admin tables; blocked managers remain visible in the manager
+  // list itself but are excluded from these active lookups.
   const activeBmByBranchId = new Map(
     formattedManagers.bm.filter((manager) => !manager.isBlocked).map((manager) => [String(manager.branchId), manager])
   );
@@ -357,6 +433,8 @@ async function buildAdminOrganizationListPayload({
 
   managerTypes.forEach((type) => {
     const key = type.toLowerCase();
+    // Manager search intentionally stays in-memory because the same formatted
+    // data is already reused by multiple tabs in the response payload.
     formattedFilteredManagers[key] = (formattedManagers[key] || []).filter(
       (manager) =>
         !manager.isBlocked && matchesSearchTerms([manager.username, manager.firstName, manager.lastName], managerSearch)
@@ -2208,6 +2286,11 @@ app.delete("/api/admin/organization/areas/:areaId", async (req, res) => {
  * - Prevents regex injection / unintended regex behavior when users search.
  * - Ensures user input is treated as literal text.
  */
+/**
+ * escapeRegex(text)
+ * -----------------
+ * Escapes user-supplied text before embedding it in a RegExp constructor.
+ */
 function escapeRegex(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -2233,6 +2316,11 @@ function escapeRegex(text) {
  *
  * Security:
  * - Escapes user input before constructing regex patterns.
+ */
+/**
+ * buildProspectSearchMatch(qRaw)
+ * -----------------------------
+ * Builds the MongoDB $or search filter used by prospect listing endpoints.
  */
 function buildProspectSearchMatch(qRaw) {
   const q = String(qRaw || "").trim();
@@ -2289,6 +2377,11 @@ function buildProspectSearchMatch(qRaw) {
  * Used for:
  * - normalizing phone-like input before validation or storage.
  */
+/**
+ * buildPolicyholderSearchMatch(qRaw)
+ * ---------------------------------
+ * Builds the MongoDB $or search filter used by policyholder listing endpoints.
+ */
 function buildPolicyholderSearchMatch(qRaw) {
   const q = String(qRaw || "").trim();
   if (!q) return null;
@@ -2319,6 +2412,11 @@ function buildPolicyholderSearchMatch(qRaw) {
   return { $or: or };
 }
 
+/**
+ * onlyDigits(v)
+ * -------------
+ * Utility used by validation helpers to strip non-numeric characters.
+ */
 function onlyDigits(v) {
   return String(v || "").replace(/\D/g, "");
 }
@@ -2331,6 +2429,11 @@ function onlyDigits(v) {
  * Rules:
  * - Empty string / null / undefined is allowed (email is optional).
  * - If provided, must match a basic email regex.
+ */
+/**
+ * isValidEmail(email)
+ * -------------------
+ * Lightweight email validator for request-body checks.
  */
 function isValidEmail(email) {
   // allow empty string (optional field)
@@ -2350,6 +2453,12 @@ function isValidEmail(email) {
  * Logic:
  * - Calculates year difference
  * - Adjusts down by 1 if birthday hasn't occurred yet this year
+ */
+/**
+ * computeAgeFromBirthday(birthDate)
+ * --------------------------------
+ * Calculates age from a birthday using the local-calendar expectations of the
+ * prospect forms.
  */
 function computeAgeFromBirthday(birthDate) {
   if (!(birthDate instanceof Date) || isNaN(birthDate.getTime())) return null;
@@ -2372,6 +2481,11 @@ function computeAgeFromBirthday(birthDate) {
  *
  * Example:
  * - A birthday set to tomorrow should be rejected as "future date".
+ */
+/**
+ * isFutureDateOnly(dateObj)
+ * -------------------------
+ * Date-only future check used by form validators that ignore the time portion.
  */
 function isFutureDateOnly(dateObj) {
   const d = new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate());
@@ -2465,6 +2579,11 @@ async function getNextPolicyholderCode() {
  * Returns:
  * - "YYYY-MM-DD" or null if date is invalid
  */
+/**
+ * dateKeyInTZ(date, timeZone)
+ * ---------------------------
+ * Produces a stable YYYY-MM-DD key for a date in the requested time zone.
+ */
 function dateKeyInTZ(date, timeZone = "Asia/Manila") {
   const d = new Date(date);
   if (Number.isNaN(d.getTime())) return null;
@@ -2491,12 +2610,22 @@ function dateKeyInTZ(date, timeZone = "Asia/Manila") {
  *
  * Uses dateKeyInTZ() to compare YYYY-MM-DD keys.
  */
+/**
+ * isDueTodayInManila(dueAt)
+ * -------------------------
+ * Convenience helper for dashboard/task widgets that bucket work by Manila day.
+ */
 function isDueTodayInManila(dueAt) {
   const todayKey = dateKeyInTZ(new Date(), "Asia/Manila");
   const dueKey = dateKeyInTZ(dueAt, "Asia/Manila");
   return !!todayKey && todayKey === dueKey;
 }
 
+/**
+ * formatTimeInManila(date)
+ * ------------------------
+ * Formats a timestamp into a short Manila-time clock string.
+ */
 function formatTimeInManila(date) {
   const d = new Date(date);
   if (Number.isNaN(d.getTime())) return "";
@@ -2509,6 +2638,11 @@ function formatTimeInManila(date) {
   }).format(d);
 }
 
+/**
+ * formatDateTimeInManila(date)
+ * ----------------------------
+ * Formats a full Manila date-time string for task descriptions and meeting text.
+ */
 function formatDateTimeInManila(date) {
   const d = new Date(date);
   if (Number.isNaN(d.getTime())) return "";
@@ -2608,12 +2742,22 @@ async function ensureTaskMissedNotificationsForUser(userObjectId) {
   await Notification.bulkWrite(writes, { ordered: false });
 }
 
+/**
+ * toValidObjectIdString(value)
+ * ----------------------------
+ * Returns a normalized ObjectId string or null when the value is invalid.
+ */
 function toValidObjectIdString(value) {
   if (!value) return null;
   const str = String(value).trim();
   return mongoose.isValidObjectId(str) ? str : null;
 }
 
+/**
+ * uniqueValidObjectIdStrings(values)
+ * ---------------------------------
+ * De-duplicates and filters arrays down to valid ObjectId strings only.
+ */
 function uniqueValidObjectIdStrings(values = []) {
   return [...new Set(values.map(toValidObjectIdString).filter(Boolean))];
 }
@@ -4110,6 +4254,11 @@ const ACTIVITY_BY_STAGE = {
  * Returns:
  * - true if valid under current rule set
  * - false if stage has a catalog and activityKey is not allowed
+ */
+/**
+ * isValidActivityForStage(stage, activityKey)
+ * ------------------------------------------
+ * Validates that a currentActivityKey is allowed for the supplied pipeline stage.
  */
 function isValidActivityForStage(stage, activityKey) {
   if (!activityKey) return true; 
@@ -7245,6 +7394,8 @@ app.post("/api/prospects/:prospectId/leads/:leadId/assess-interest", async (req,
     let droppedLeadResponse = null;
 
     await session.withTransaction(async () => {
+      // Scope the prospect lookup to the requesting agent/user so this route
+      // cannot mutate a lead that belongs to someone else.
       const prospect = await Prospect.findOne({ _id: prospectId, assignedToUserId: userObjectId }).session(session);
       if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
 
@@ -7266,6 +7417,8 @@ app.post("/api/prospects/:prospectId/leads/:leadId/assess-interest", async (req,
       const attempt = await getLatestRespondedAttemptForEngagement(engagement._id, session);
       if (!attempt) throw Object.assign(new Error("No responded contact attempt found."), { status: 409 });
 
+      // The latest responded attempt is the canonical record that stores the
+      // outcome of the "Assess Interest" step.
       attempt.interestLevel = lvl;
       attempt.outcomeActivity = "Assess Interest";
 
@@ -7289,6 +7442,8 @@ app.post("/api/prospects/:prospectId/leads/:leadId/assess-interest", async (req,
       } else {
         attempt.preferredChannel = undefined;
         attempt.preferredChannelOther = undefined;
+        // Keep the engagement parked on "Assess Interest" so the UI/history
+        // still reflects which activity produced the not-interested outcome.
         engagement.currentActivityKey = "Assess Interest";
 
         const currentLeadStatus = String(lead.status || "").trim();
@@ -7302,6 +7457,8 @@ app.post("/api/prospects/:prospectId/leads/:leadId/assess-interest", async (req,
         const dropReason = "Interest / Engagement";
         const dropNotes = "Lead was automatically dropped after the prospect was assessed as not interested during Contacting.";
         if (currentLeadStatus !== "Dropped") {
+          // Preserve the prior status so reporting/admin tooling can tell
+          // whether this lead was dropped from New vs In Progress.
           lead.statusBeforeDrop = currentLeadStatus;
           lead.status = "Dropped";
           lead.dropReason = dropReason;
@@ -7309,6 +7466,8 @@ app.post("/api/prospects/:prospectId/leads/:leadId/assess-interest", async (req,
           lead.droppedAt = lead.droppedAt || new Date();
         }
 
+        // Auto-finish the open approach task because the lead can no longer
+        // advance through the contacting pipeline once it is dropped.
         const openApproachTask = await Task.findOne({
           assignedToUserId: userObjectId,
           prospectId: prospect._id,
@@ -7323,6 +7482,8 @@ app.post("/api/prospects/:prospectId/leads/:leadId/assess-interest", async (req,
           await openApproachTask.save({ session });
         }
 
+        // Return a concise payload so the frontend can show a confirmation
+        // modal without having to re-fetch the lead list immediately.
         droppedLeadPayload = {
           leadCode: lead.leadCode || "",
           status: lead.status,
@@ -7353,6 +7514,11 @@ app.post("/api/prospects/:prospectId/leads/:leadId/assess-interest", async (req,
 
 
 
+/**
+ * isValidHttpUrl(value)
+ * ---------------------
+ * Validates online meeting links and other user-entered HTTP(S) URLs.
+ */
 function isValidHttpUrl(value) {
   try {
     const u = new URL(String(value || "").trim());
@@ -7362,6 +7528,11 @@ function isValidHttpUrl(value) {
   }
 }
 
+/**
+ * combineDateAndTimeLocal(dateStr, timeStr)
+ * ----------------------------------------
+ * Combines separate local-date and local-time form values into one Date object.
+ */
 function combineDateAndTimeLocal(dateStr, timeStr) {
   const [y, m, d] = String(dateStr || "").split("-").map((n) => Number(n));
   const [hh, mm] = String(timeStr || "").split(":").map((n) => Number(n));
@@ -7370,6 +7541,11 @@ function combineDateAndTimeLocal(dateStr, timeStr) {
   return new Date(y, m - 1, d, hh, mm, 0, 0);
 }
 
+/**
+ * isMeetingSlotValidWindow(startAt, durationMin)
+ * ---------------------------------------------
+ * Enforces the allowed meeting scheduling window and duration constraints.
+ */
 function isMeetingSlotValidWindow(startAt, durationMin) {
   if (!(startAt instanceof Date) || Number.isNaN(startAt.getTime())) return false;
   if (![30, 60, 90, 120].includes(Number(durationMin))) return false;
@@ -7382,7 +7558,15 @@ function isMeetingSlotValidWindow(startAt, durationMin) {
   return startMin >= 7 * 60 && endMin <= 21 * 60;
 }
 
+/**
+ * getAgentMeetingWindows(userObjectId, from, to, session)
+ * ------------------------------------------------------
+ * Collects already-booked meeting time windows for every lead assigned to the
+ * requested agent/user so new schedules can be checked for overlap.
+ */
 async function getAgentMeetingWindows(userObjectId, from, to, session) {
+  // Meeting records are linked through lead engagement ids, so first gather
+  // the leads whose prospects belong to the requested agent.
   const leads = await Lead.find({})
     .select("_id prospectId")
     .session(session || null)
@@ -7427,6 +7611,8 @@ async function getAgentMeetingWindows(userObjectId, from, to, session) {
     .session(session || null)
     .lean();
 
+  // Normalize every meeting to an explicit [start, end) window. Older rows may
+  // be missing endAt, so durationMin is used as a fallback for conflict checks.
   return meetings
     .map((m) => {
       const start = m.startAt ? new Date(m.startAt) : null;
@@ -7443,6 +7629,11 @@ async function getAgentMeetingWindows(userObjectId, from, to, session) {
     .filter(Boolean);
 }
 
+/**
+ * hasMeetingConflict(startAt, endAt, windows)
+ * ------------------------------------------
+ * Returns true when the proposed meeting overlaps an existing time window.
+ */
 function hasMeetingConflict(startAt, endAt, windows) {
   return windows.some((w) => w.start < endAt && w.end > startAt);
 }
@@ -7662,7 +7853,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
         dedupeKey: appointmentDedupeKey,
       }).session(session);
 
-      const appointmentTitle = `Needs Assessment Meeting scheduled with ${prospect.firstName}`;
+      const appointmentTitle = `Meeting scheduled with ${prospect.firstName}`;
       const appointmentDescription = `Attend scheduled meeting with ${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName} (Lead ${lead.leadCode || "—"}). Meeting window: ${formatDateTimeInManila(dt)} to ${formatDateTimeInManila(endAt)} (Asia/Manila).`;
       const appointmentDueAt = new Date(endAt.getTime() + 15 * 60 * 1000);
 

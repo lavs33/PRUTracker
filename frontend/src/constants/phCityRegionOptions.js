@@ -1,3 +1,11 @@
+/**
+ * Philippine city-to-region reference data used by prospect/policyholder forms.
+ *
+ * Why a flat array?
+ * - The UI renders these values directly in select/autocomplete components.
+ * - Keeping the source shape flat makes it easy to sort/filter/map in React.
+ * - A derived lookup map is exported below for fast city -> region resolution.
+ */
 export const PH_CITY_REGION_OPTIONS = [
   { city: "Laoag", region: "Region I – Ilocos Region" },
   { city: "Batac", region: "Region I – Ilocos Region" },
@@ -148,4 +156,8 @@ export const PH_CITY_REGION_OPTIONS = [
   { city: "Tanjay", region: "NIR – Negros Island Region" },
 ];
 
+/**
+ * Fast lookup helper for components/forms that already know the city name and
+ * only need to display or persist the matching region label.
+ */
 export const CITY_TO_REGION = Object.fromEntries(PH_CITY_REGION_OPTIONS.map((x) => [x.city, x.region]));

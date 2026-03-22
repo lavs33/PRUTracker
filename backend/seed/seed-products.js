@@ -17,6 +17,12 @@ const Product = require("../models/Product");
 
 const MONGO_URI = process.env.MONGO_URI;
 
+/**
+ * PRODUCTS
+ * --------
+ * Demo product catalog entries used by local/dev environments. The records are
+ * keyed by `productName`, which makes the seed safe to re-run with upserts.
+ */
 const PRODUCTS = [
   // Protection
   { productName: "PRULove for Life", productCategory: "Protection", description: "This plan is a limited-pay, whole-life insurance plan that provides protection against death, total permanent disability, and accidental death until age 100. Designed for affordability, it allows for flexible premium payments over 5, 10, 15, or 20 years, with premiums starting as low as P87/day." },
@@ -53,6 +59,8 @@ const PRODUCTS = [
 
   await mongoose.connect(MONGO_URI);
 
+  // Upsert by productName so descriptions/categories can be refreshed without
+  // creating duplicate catalog rows on repeated runs.
   const ops = PRODUCTS.map((p) => ({
     updateOne: {
       filter: { productName: p.productName },
@@ -71,6 +79,8 @@ const PRODUCTS = [
 
   const result = await Product.bulkWrite(ops, { ordered: false });
 
+  // Count only the seeded names so the terminal output confirms the target set
+  // is present after the bulk upsert finishes.
   const total = await Product.countDocuments({
     productName: { $in: PRODUCTS.map((p) => p.productName) },
   });
