@@ -1,6 +1,6 @@
 .tasks-shell {
   min-height: 100vh;
-  background: #fff;
+  background: #da291c;
 }
 
 .tasks-body {
@@ -52,8 +52,7 @@
 }
 
 .tasks-btn.primary:hover {
-  background: #ff8da1;
-  color: #ffffff;
+  background: #d7dae0;
 }
 
 .tasks-btn.secondary {

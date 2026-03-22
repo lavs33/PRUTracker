@@ -1,90 +1,140 @@
 .side-nav {
   position: sticky;
-  top: 0;
-  height: calc(100vh - 0px);
-  width: 190px;
-  background: #D9E1E2;
-  box-shadow: 6px 0 14px rgba(0, 0, 0, 0.06);
+  top: 14px;
+  align-self: flex-start;
+  height: calc(100vh - 28px);
+  width: 252px;
+  background: #373a36;
+  box-shadow: 0 20px 40px rgba(15, 23, 42, 0.22);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 24px;
   display: flex;
   flex-direction: column;
-  padding: 10px 8px;
-  gap: 10px;
-  transition: width 0.2s ease;
+  padding: 14px 12px;
+  gap: 14px;
+  transition: width 0.22s ease, padding 0.22s ease;
   font-family: "FSAlbertArabic", sans-serif;
+  margin: 14px 0 14px 14px;
 }
 
 .side-nav.collapsed {
-  width: 70px;
+  width: 88px;
+  padding: 14px 10px;
 }
 
 .side-nav-top {
   display: flex;
-  justify-content: flex-end;
-  padding: 4px 2px 10px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 4px 2px;
+}
+
+.side-nav-brand {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.side-nav-eyebrow {
+  color: rgba(191, 219, 254, 0.82);
+  font: 700 10px/1.2 "FSAlbertArabic", sans-serif;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.side-nav-brandTitle {
+  color: #f8fafc;
+  font: 900 17px/1.2 "FSAlbertArabic", sans-serif;
+}
+
+.side-nav-brandMeta {
+  color: rgba(226, 232, 240, 0.74);
+  font: 600 11px/1.35 "FSAlbertArabic", sans-serif;
 }
 
 .side-nav-collapseBtn {
-  border: none;
-  background: rgba(255, 255, 255, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.08);
+  color: #f8fafc;
   cursor: pointer;
-  border-radius: 12px;
-  padding: 8px 10px;
+  border-radius: 14px;
+  padding: 9px 10px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.2s ease, transform 0.2s ease;
+  transition: background 0.2s ease, transform 0.2s ease, border-color 0.2s ease;
 }
 
 .side-nav-collapseBtn:hover {
-  background: rgba(218, 41, 28, 0.10);
+  background: rgba(248, 250, 252, 0.16);
+  border-color: rgba(255, 255, 255, 0.24);
 }
 
 .side-nav-list {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.side-nav-sectionLabel {
+  color: rgba(191, 219, 254, 0.82);
+  font: 700 10px/1.2 "FSAlbertArabic", sans-serif;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 4px 8px 0;
 }
 
 .side-nav-group {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
 .side-nav-item {
-  border: none;
-  background: transparent;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.05);
   cursor: pointer;
-  border-radius: 14px;
-  padding: 12px 10px;
+  border-radius: 18px;
+  padding: 13px 12px;
   transition: all 0.2s ease;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   font-family: "FSAlbertArabic", sans-serif;
   width: 100%;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
 }
 
 .side-nav-item:hover {
-  background: rgba(218, 41, 28, 0.08);
+  background: rgba(255, 255, 255, 0.10);
+  border-color: rgba(255, 255, 255, 0.10);
 }
 
 .side-nav-item.active {
-  background: rgba(218, 41, 28, 0.14);
-  border: 2px solid rgba(218, 41, 28, 0.35);
+  background: linear-gradient(135deg, rgba(218, 41, 28, 0.22) 0%, rgba(239, 68, 68, 0.18) 100%);
+  border-color: rgba(248, 113, 113, 0.42);
+  box-shadow: 0 10px 20px rgba(15, 23, 42, 0.20);
 }
 
 .side-nav-item.subActive {
-  background: rgba(55, 58, 54, 0.08);
-  border: 2px solid rgba(55, 58, 54, 0.20);
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(148, 163, 184, 0.28);
 }
 
 .side-nav-icon {
-  color: #DA291C;
+  color: #fca5a5;
   display: flex;
   align-items: center;
   justify-content: center;
-  min-width: 28px;
+  min-width: 36px;
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .side-nav-labelRow {
@@ -95,16 +145,27 @@
   gap: 8px;
 }
 
+.side-nav-labelBlock {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
 .side-nav-label {
   font-size: 14px;
   font-weight: 800;
   font-family: "FSAlbertArabic", sans-serif;
-  color: #373A36;
+  color: #f8fafc;
+}
+
+.side-nav-caption {
+  font: 600 11px/1.25 "FSAlbertArabic", sans-serif;
+  color: rgba(226, 232, 240, 0.72);
 }
 
 .side-nav-caretBtn {
   border: none;
-  background: transparent;
+  background: rgba(255, 255, 255, 0.08);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -117,7 +178,7 @@
 }
 
 .side-nav-caretBtn:hover {
-  background: rgba(218, 41, 28, 0.10);
+  background: rgba(255, 255, 255, 0.16);
 }
 
 .side-nav-caretBtn:active {
@@ -125,8 +186,8 @@
 }
 
 .side-nav-caretIcon {
-  font-size: 18px; 
-  color: #373A36;
+  font-size: 18px;
+  color: #e2e8f0;
   transform: rotate(-90deg);
   transition: transform 0.2s ease;
 }
@@ -136,38 +197,69 @@
 }
 
 .side-nav-subList {
-  margin-left: 40px;
+  margin-left: 48px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 7px;
   padding-bottom: 4px;
+  position: relative;
+}
+
+.side-nav-subList::before {
+  content: "";
+  position: absolute;
+  left: -15px;
+  top: 2px;
+  bottom: 6px;
+  width: 1px;
+  background: rgba(226, 232, 240, 0.18);
 }
 
 .side-nav-subItem {
-  border: none;
-  background: rgba(255, 255, 255, 0.65);
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.06);
   cursor: pointer;
-  border-radius: 12px;
+  border-radius: 14px;
   padding: 10px 12px;
   font-size: 13px;
   font-family: "FSAlbertArabic", sans-serif;
   font-weight: 800;
-  color: #373A36;
+  color: #e2e8f0;
   text-align: left;
   transition: all 0.2s ease;
 }
 
 .side-nav-subItem:hover {
-  background: rgba(218, 41, 28, 0.10);
+  background: rgba(255, 255, 255, 0.12);
 }
 
 .side-nav-subItem.active {
-  background: rgba(218, 41, 28, 0.16);
-  border: 2px solid rgba(218, 41, 28, 0.35);
-  color: #DA291C;
+  background: rgba(248, 113, 113, 0.16);
+  border-color: rgba(248, 113, 113, 0.36);
+  color: #fff1f2;
 }
 
+.side-nav.collapsed .side-nav-brandTitle,
+.side-nav.collapsed .side-nav-brandMeta,
+.side-nav.collapsed .side-nav-sectionLabel,
 .side-nav.collapsed .side-nav-labelRow,
 .side-nav.collapsed .side-nav-subList {
   display: none;
+}
+
+.side-nav.collapsed .side-nav-top {
+  justify-content: center;
+}
+
+.side-nav.collapsed .side-nav-brand {
+  display: none;
+}
+
+.side-nav.collapsed .side-nav-item {
+  justify-content: center;
+  padding: 12px 10px;
+}
+
+.side-nav.collapsed .side-nav-icon {
+  min-width: 40px;
 }

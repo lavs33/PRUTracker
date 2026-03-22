@@ -4,6 +4,7 @@
  * Defines the base user account structure in the system.
  * This model stores authentication credentials and personal details
  * for all system roles (Agent, AUM, UM, BM).
+ * Admin accounts are intentionally stored in a separate Admin collection.
  *
  * Collection name in MongoDB: "users"
  */
@@ -27,6 +28,10 @@ const userSchema = new mongoose.Schema(
      *  - "AUM" → Assistant Unit Manager
      *  - "UM"  → Unit Manager
      *  - "BM"  → Branch Manager
+     *
+     * NOTE:
+     *  - Admin is intentionally NOT part of this enum.
+     *  - Admin accounts belong to the standalone Admin model instead.
      *
      * required: true
      *  - Every user must have a defined role.
@@ -52,7 +57,7 @@ const userSchema = new mongoose.Schema(
      *  - Prevents duplicate accounts with same username.
      */
     username: {
-      type: String, 
+      type: String,
       required: true,
       unique: true,
     },
@@ -94,8 +99,8 @@ const userSchema = new mongoose.Schema(
      *  - Prevents undefined/null values.
      */
     middleName: {
-        type: String,
-        default: "",
+      type: String,
+      default: "",
     },
 
     /**
@@ -162,7 +167,7 @@ const userSchema = new mongoose.Schema(
      *  - If no image uploaded, empty string is stored.
      */
     displayPhoto: {
-      type: String, 
+      type: String,
       default: "",
     },
 
@@ -178,15 +183,15 @@ const userSchema = new mongoose.Schema(
       required: true,
     },
   },
-    /**
-     * timestamps: true
-     * ----------------
-     * Automatically adds:
-     *  - createdAt → when the user record was created
-     *  - updatedAt → when the user record was last modified
-     *
-     * Managed automatically by Mongoose.
-     */
+  /**
+   * timestamps: true
+   * ----------------
+   * Automatically adds:
+   *  - createdAt → when the user record was created
+   *  - updatedAt → when the user record was last modified
+   *
+   * Managed automatically by Mongoose.
+   */
   { timestamps: true }
 );
 

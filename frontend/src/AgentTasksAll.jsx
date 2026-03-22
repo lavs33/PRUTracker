@@ -11,7 +11,6 @@ const TASK_TYPES = [
   "UPDATE_CONTACT_INFO",
   "APPOINTMENT",
   "PRESENTATION",
-  "CUSTOM",
 ];
 
 // Date helpers OUTSIDE component
@@ -70,6 +69,9 @@ function AgentTasksAll() {
       case "clients":
         navigate(`/agent/${user.username}/clients`);
         break;
+      case "clients_relationship":
+        navigate(`/agent/${user.username}/clients/relationship`);
+        break;
       case "clients_all_prospects":
         navigate(`/agent/${user.username}/prospects`);
         break;
@@ -79,11 +81,18 @@ function AgentTasksAll() {
       case "tasks":
         navigate(`/agent/${user.username}/tasks`);
         break;
+      case "tasks_progress":
+        navigate(`/agent/${user.username}/tasks/progress`);
+        break;
       case "tasks_all":
         navigate(`/agent/${user.username}/tasks/all`);
         break;
+
+      case "sales_performance":
+        navigate(`/agent/${user.username}/sales/performance`);
+        break;
       case "sales":
-        alert("Sales module coming soon");
+        navigate(`/agent/${user.username}/sales/performance`);
         break;
       default:
         break;
@@ -165,7 +174,7 @@ function AgentTasksAll() {
     const arr = Array.isArray(tasksRaw) ? tasksRaw : [];
 
     return arr.map((t) => {
-      const normalizedType = String(t?.type || "CUSTOM").toUpperCase().trim();
+      const normalizedType = String(t?.type || "UPDATE_CONTACT_INFO").toUpperCase().trim();
       const normalizedStatus =
         String(t?.status || "Open").toLowerCase() === "done" ? "Done" : "Open";
 

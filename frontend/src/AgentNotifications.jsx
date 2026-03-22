@@ -66,10 +66,15 @@ function AgentNotifications() {
       case "clients":
         navigate(`/agent/${user.username}/clients`);
         break;
+
+      case "clients_relationship":
+        navigate(`/agent/${user.username}/clients/relationship`);
+        break;
+
       case "clients_all_prospects":
         navigate(`/agent/${user.username}/prospects`);
         break;
-        
+
       case "clients_all_policyholders":
         navigate(`/agent/${user.username}/policyholders`);
         break;
@@ -77,6 +82,11 @@ function AgentNotifications() {
       case "tasks":
         navigate(`/agent/${user.username}/tasks`);
         break;
+
+      case "tasks_progress":
+        navigate(`/agent/${user.username}/tasks/progress`);
+        break;
+
       case "tasks_all":
         navigate(`/agent/${user.username}/tasks/all`);
         break;
@@ -86,9 +96,8 @@ function AgentNotifications() {
         navigate(`/agent/${user.username}/notifications`);
         break;
 
-      case "sales":
-        alert("Sales module coming soon");
-        break;
+      case "sales": navigate(`/agent/${user.username}/sales/performance`); break;
+      case "sales_performance": navigate(`/agent/${user.username}/sales/performance`); break;
 
       default:
         break;

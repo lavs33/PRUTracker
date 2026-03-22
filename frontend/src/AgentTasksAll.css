@@ -1,6 +1,6 @@
 .alltasks-shell {
   min-height: 100vh;
-  background: #fff;
+  background: #da291c;
 }
 
 .alltasks-body {
@@ -145,17 +145,6 @@
   font-weight: 800;
   cursor: pointer;
   font-family: "FSAlbertArabic", sans-serif;
-}
-
-.tasks-btn.primary {
-  background: #ffffff;
-  color: #373a36;
-  border: none;
-}
-
-.tasks-btn.primary:hover {
-  background: #ff8da1;
-  color: #ffffff;
 }
 
 .tasks-btn.secondary:hover {

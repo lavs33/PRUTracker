@@ -45,6 +45,10 @@ function AgentTasks() {
         navigate(`/agent/${user.username}/clients`);
         break;
 
+      case "clients_relationship":
+        navigate(`/agent/${user.username}/clients/relationship`);
+        break;
+
       case "clients_all_prospects":
         navigate(`/agent/${user.username}/prospects`);
         break;
@@ -58,13 +62,19 @@ function AgentTasks() {
         navigate(`/agent/${user.username}/tasks`);
         break;
 
+      case "tasks_progress":
+        navigate(`/agent/${user.username}/tasks/progress`);
+        break;
       case "tasks_all":
         navigate(`/agent/${user.username}/tasks/all`);
         break;
 
       // SALES
+      case "sales_performance":
+        navigate(`/agent/${user.username}/sales/performance`);
+        break;
       case "sales":
-        alert("Sales module coming soon");
+        navigate(`/agent/${user.username}/sales/performance`);
         break;
 
       default:
@@ -111,7 +121,7 @@ function AgentTasks() {
         status: normalizedStatus, // DB status (Open/Done)
         uiStatus, // ✅ UI status (Open/Overdue/Done)
 
-        type: String(t?.type || "CUSTOM").toUpperCase().trim(),
+        type: String(t?.type || "UPDATE_CONTACT_INFO").toUpperCase().trim(),
         title: t?.title || "Untitled task",
         description: t?.description || "",
         leadId: t?.leadId || null, // ✅ comes from backend includeRefs=1 for engagement tasks
@@ -172,7 +182,7 @@ function AgentTasks() {
 
   const typePillClass = (type) => {
     const t = String(type || "").toUpperCase();
-    if (t === "APPROACH" || t === "FOLLOW_UP") return "task-pill urgent";
+    if (t === "APPROACH" || t === "FOLLOW_UP" || t === "APPOINTMENT" || t === "PRESENTATION") return "task-pill urgent";
     if (t === "UPDATE_CONTACT_INFO") return "task-pill info";
     return "task-pill";
   };

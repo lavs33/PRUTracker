@@ -2,6 +2,9 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-d
 
 import LandingPage from "./LandingPage";
 import LoginPage from "./LoginPage";
+import AdminLoginPage from "./AdminLoginPage";
+import AdminOrganizationPage from "./AdminOrganizationPage";
+import ManagerPortal from "./ManagerPortal";
 import AgentHome from "./AgentHome";
 import AgentProfile from "./AgentProfile";
 import AgentClients from "./AgentClients";
@@ -17,8 +20,10 @@ import AgentLeadEngagement from "./AgentLeadEngagement";
 
 import AgentTasks from "./AgentTasks";
 import AgentTasksAll from "./AgentTasksAll";
+import AgentTasksProgress from "./AgentTasksProgress";
 
 import AgentNotifications from "./AgentNotifications";
+import AgentSalesPerformance from "./AgentSalesPerformance";
 
 function App() {
   return (
@@ -26,6 +31,10 @@ function App() {
       <Routes>
         <Route path="/" element={<LandingPage />} />
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/admin/login" element={<AdminLoginPage />} />
+        <Route path="/admin/organization" element={<AdminOrganizationPage />} />
+        <Route path="/aum/:username" element={<ManagerPortal roleType="AUM" />} />
+        <Route path="/um/:username" element={<ManagerPortal roleType="UM" />} />
 
         {/* Agent routes (guard handled inside pages) */}
         <Route path="/agent/:username" element={<AgentHome />} />
@@ -45,8 +54,10 @@ function App() {
         
         <Route path="/agent/:username/tasks" element={<AgentTasks />} />
         <Route path="/agent/:username/tasks/all" element={<AgentTasksAll />} />
+        <Route path="/agent/:username/tasks/progress" element={<AgentTasksProgress />} />
 
         <Route path="/agent/:username/notifications" element={<AgentNotifications />} />
+        <Route path="/agent/:username/sales/performance" element={<AgentSalesPerformance />} />
 
         <Route path="*" element={<Navigate to="/" />} />
       </Routes>

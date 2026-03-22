@@ -21,8 +21,10 @@ require("dotenv").config(); // Loads environment variables from .env into proces
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
+const bcrypt = require("bcryptjs");
 
 const User = require("./models/User");
+const Admin = require("./models/Admin");
 const Agent = require("./models/Agent");
 const Prospect = require("./models/Prospect");
 const Policyholder = require("./models/Policyholder");
@@ -41,8 +43,381 @@ const Notification = require("./models/Notification");
 const Unit = require("./models/Unit");
 const Branch = require("./models/Branch");
 const Area = require("./models/Area");
+const BM = require("./models/BM");
+const UM = require("./models/UM");
+const AUM = require("./models/AUM");
 
 const app = express();
+
+function buildManagerPopulateQuery(managerType = "") {
+  const type = String(managerType || "").trim().toUpperCase();
+  const populate = [
+    {
+      path: "userId",
+      select: "username password firstName middleName lastName birthday sex age displayPhoto dateEmployed role",
+    },
+    {
+      path: "agentId",
+      populate: [
+        {
+          path: "unitId",
+          select: "unitName branchId",
+          populate: {
+            path: "branchId",
+            select: "branchName areaId",
+            populate: {
+              path: "areaId",
+              select: "areaName",
+            },
+          },
+        },
+      ],
+    },
+  ];
+
+  if (type === "BM") {
+    populate.push({
+      path: "branchId",
+      select: "branchName areaId",
+      populate: {
+        path: "areaId",
+        select: "areaName",
+      },
+    });
+  } else {
+    populate.push({
+      path: "unitId",
+      select: "unitName branchId",
+      populate: {
+        path: "branchId",
+        select: "branchName areaId",
+        populate: {
+          path: "areaId",
+          select: "areaName",
+        },
+      },
+    });
+  }
+
+  return populate;
+}
+
+function getManagerProfile(managerDoc) {
+  const agent = managerDoc?.agentId || {};
+  const user = managerDoc?.userId || agent.userId || {};
+  const unit = managerDoc?.unitId || agent.unitId || {};
+  const branch = managerDoc?.branchId || unit.branchId || agent.unitId?.branchId || {};
+  const area = branch.areaId || {};
+
+  return {
+    user,
+    agent,
+    unit,
+    branch,
+    area,
+  };
+}
+
+function getManagerModelByType(typeRaw = "") {
+  const type = String(typeRaw || "").trim().toUpperCase();
+  if (type === "BM") return BM;
+  if (type === "UM") return UM;
+  if (type === "AUM") return AUM;
+  return null;
+}
+
+function formatManagerRecord(managerDoc, type) {
+  if (!managerDoc) return null;
+
+  const profile = getManagerProfile(managerDoc);
+
+  return {
+    managerId: managerDoc._id,
+    agentId: profile.agent?._id || "",
+    userId: profile.user?._id || "",
+    username: profile.user?.username || "",
+    password: profile.user?.password || "",
+    firstName: profile.user?.firstName || "",
+    middleName: profile.user?.middleName || "",
+    lastName: profile.user?.lastName || "",
+    birthday: profile.user?.birthday || null,
+    sex: profile.user?.sex || "",
+    age: profile.user?.age || "",
+    displayPhoto: profile.user?.displayPhoto || "",
+    dateEmployed: profile.user?.dateEmployed || null,
+    managerType: type,
+    isBlocked: managerDoc.isBlocked === true,
+    blockedAt: managerDoc.blockedAt || null,
+    createdAt: managerDoc.createdAt || null,
+    updatedAt: managerDoc.updatedAt || null,
+    branchId: profile.branch?._id || "",
+    branchName: profile.branch?.branchName || "",
+    areaId: profile.area?._id || "",
+    areaName: profile.area?.areaName || "",
+    unitId: type === "BM" ? "" : profile.unit?._id || "",
+    unitName: type === "BM" ? "" : profile.unit?.unitName || "",
+  };
+}
+
+function matchesManagerScope(managerDoc, managerType, { branchId = "", unitId = "" } = {}) {
+  const profile = getManagerProfile(managerDoc);
+  if (managerType === "BM") {
+    return String(profile.branch?._id || "") === String(branchId || "");
+  }
+
+  return String(profile.unit?._id || "") === String(unitId || "");
+}
+
+function matchesSearchTerms(fields, qRaw) {
+  const q = String(qRaw || "").trim().toLowerCase();
+  if (!q) return true;
+
+  const values = fields
+    .map((field) => String(field || "").trim().toLowerCase())
+    .filter(Boolean);
+
+  if (values.length === 0) return false;
+
+  const combined = values.join(" ");
+  if (combined.includes(q)) return true;
+
+  const tokens = q.split(/\s+/).filter(Boolean);
+  if (tokens.length >= 2) {
+    return tokens.every((token) => values.some((value) => value.includes(token)));
+  }
+
+  return false;
+}
+
+function padSixDigitSequence(value) {
+  return String(Math.max(0, Number(value) || 0)).padStart(6, "0");
+}
+
+function getNextRoleSequence(usernames = [], role = "AG") {
+  const prefix = String(role || "").trim().toUpperCase();
+  const pattern = new RegExp(`^${escapeRegex(prefix)}(\\d{6})$`);
+
+  const maxSequence = usernames.reduce((max, username) => {
+    const match = String(username || "").trim().toUpperCase().match(pattern);
+    if (!match) return max;
+    return Math.max(max, Number(match[1]));
+  }, 0);
+
+  return maxSequence + 1;
+}
+
+function buildGeneratedUsername(role, sequenceNumber) {
+  return `${String(role || "").trim().toUpperCase()}${padSixDigitSequence(sequenceNumber)}`;
+}
+
+function calculateAgeFromDate(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+
+  const today = new Date();
+  let age = today.getUTCFullYear() - date.getUTCFullYear();
+  const hasBirthdayPassed =
+    today.getUTCMonth() > date.getUTCMonth() ||
+    (today.getUTCMonth() === date.getUTCMonth() && today.getUTCDate() >= date.getUTCDate());
+
+  if (!hasBirthdayPassed) age -= 1;
+  return age >= 0 ? age : null;
+}
+
+function isFutureDate(value) {
+  const date = value instanceof Date ? new Date(value.getTime()) : new Date(value);
+  if (Number.isNaN(date.getTime())) return false;
+
+  const today = new Date();
+  date.setUTCHours(0, 0, 0, 0);
+  today.setUTCHours(0, 0, 0, 0);
+
+  return date.getTime() > today.getTime();
+}
+
+function buildGeneratedPassword(role, birthdayValue, sequenceNumber) {
+  const roleCode = String(role || "").trim().toUpperCase();
+  const date = birthdayValue instanceof Date ? birthdayValue : new Date(birthdayValue);
+  if (Number.isNaN(date.getTime())) return "";
+
+  const months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  const month = months[date.getUTCMonth()] || "";
+  const suffix = padSixDigitSequence(sequenceNumber).slice(-4);
+
+  return `${roleCode}${day}${month}@${suffix}`;
+}
+
+async function buildAdminOrganizationListPayload({
+  areaSearch = "",
+  branchSearch = "",
+  unitSearch = "",
+  managerSearch = "",
+  managerType = "",
+  agentSearch = "",
+} = {}) {
+  const [areas, branches, units, agents, branchManagers, unitManagers, assistantUnitManagers] = await Promise.all([
+    Area.find().sort({ areaName: 1 }).lean(),
+    Branch.find().sort({ branchName: 1 }).lean(),
+    Unit.find().sort({ unitName: 1 }).lean(),
+    Agent.find()
+      .populate({
+        path: "userId",
+        select: "username password firstName middleName lastName birthday sex age displayPhoto dateEmployed role",
+      })
+      .populate({
+        path: "unitId",
+        select: "unitName branchId",
+        populate: {
+          path: "branchId",
+          select: "branchName areaId",
+          populate: {
+            path: "areaId",
+            select: "areaName",
+          },
+        },
+      })
+      .lean(),
+    BM.find().populate(buildManagerPopulateQuery("BM")).lean(),
+    UM.find().populate(buildManagerPopulateQuery("UM")).lean(),
+    AUM.find().populate(buildManagerPopulateQuery("AUM")).lean(),
+  ]);
+
+  const areaNameById = new Map(areas.map((area) => [String(area._id), area.areaName || ""]));
+  const branchById = new Map(branches.map((branch) => [String(branch._id), branch]));
+
+  const formattedManagers = {
+    bm: branchManagers.map((manager) => formatManagerRecord(manager, "BM")),
+    um: unitManagers.map((manager) => formatManagerRecord(manager, "UM")),
+    aum: assistantUnitManagers.map((manager) => formatManagerRecord(manager, "AUM")),
+  };
+
+  const managerSequences = {
+    BM: getNextRoleSequence(formattedManagers.bm.map((manager) => manager.username || ""), "BM"),
+    UM: getNextRoleSequence(formattedManagers.um.map((manager) => manager.username || ""), "UM"),
+    AUM: getNextRoleSequence(formattedManagers.aum.map((manager) => manager.username || ""), "AUM"),
+  };
+
+  const activeBmByBranchId = new Map(
+    formattedManagers.bm.filter((manager) => !manager.isBlocked).map((manager) => [String(manager.branchId), manager])
+  );
+  const activeUmByUnitId = new Map(
+    formattedManagers.um.filter((manager) => !manager.isBlocked).map((manager) => [String(manager.unitId), manager])
+  );
+  const activeAumByUnitId = new Map(
+    formattedManagers.aum.filter((manager) => !manager.isBlocked).map((manager) => [String(manager.unitId), manager])
+  );
+
+  const formattedAreas = areas
+    .map((area) => ({
+      id: area._id,
+      areaName: area.areaName,
+      createdAt: area.createdAt || null,
+      updatedAt: area.updatedAt || null,
+    }))
+    .filter((area) => matchesSearchTerms([area.areaName], areaSearch));
+
+  const formattedBranches = branches
+    .map((branch) => ({
+      id: branch._id,
+      branchName: branch.branchName,
+      areaId: branch.areaId,
+      areaName: areaNameById.get(String(branch.areaId)) || "",
+      createdAt: branch.createdAt || null,
+      updatedAt: branch.updatedAt || null,
+      branchManager: activeBmByBranchId.get(String(branch._id)) || null,
+    }))
+    .filter((branch) => matchesSearchTerms([branch.branchName, branch.areaName], branchSearch));
+
+  const formattedUnits = units
+    .map((unit) => {
+      const branch = branchById.get(String(unit.branchId)) || null;
+      const areaName = branch ? areaNameById.get(String(branch.areaId)) || "" : "";
+      return {
+        id: unit._id,
+        unitName: unit.unitName,
+        branchId: unit.branchId,
+        branchName: branch?.branchName || "",
+        areaName,
+        createdAt: unit.createdAt || null,
+        updatedAt: unit.updatedAt || null,
+        umManager: activeUmByUnitId.get(String(unit._id)) || null,
+        aumManager: activeAumByUnitId.get(String(unit._id)) || null,
+      };
+    })
+    .filter((unit) => matchesSearchTerms([unit.unitName, unit.branchName, unit.areaName], unitSearch));
+
+  const requestedManagerType = String(managerType || "").trim().toUpperCase();
+  const managerTypes = ["BM", "UM", "AUM"].filter((type) => !requestedManagerType || type === requestedManagerType);
+  const formattedFilteredManagers = {
+    bm: [],
+    um: [],
+    aum: [],
+  };
+
+  managerTypes.forEach((type) => {
+    const key = type.toLowerCase();
+    formattedFilteredManagers[key] = (formattedManagers[key] || []).filter(
+      (manager) =>
+        !manager.isBlocked && matchesSearchTerms([manager.username, manager.firstName, manager.lastName], managerSearch)
+    );
+  });
+
+  const agentOptions = agents
+    .map((agent) => ({
+      agentId: agent._id,
+      userId: agent.userId?._id || "",
+      username: agent.userId?.username || "",
+      password: agent.userId?.password || "",
+      role: agent.userId?.role || "AG",
+      firstName: agent.userId?.firstName || "",
+      middleName: agent.userId?.middleName || "",
+      lastName: agent.userId?.lastName || "",
+      birthday: agent.userId?.birthday || null,
+      sex: agent.userId?.sex || "",
+      age: agent.userId?.age || "",
+      displayPhoto: agent.userId?.displayPhoto || "",
+      dateEmployed: agent.userId?.dateEmployed || null,
+      agentType: agent.agentType || "",
+      unitId: agent.unitId?._id || "",
+      unitName: agent.unitId?.unitName || "",
+      branchId: agent.unitId?.branchId?._id || "",
+      branchName: agent.unitId?.branchId?.branchName || "",
+      areaId: agent.unitId?.branchId?.areaId?._id || "",
+      areaName: agent.unitId?.branchId?.areaId?.areaName || "",
+      createdAt: agent.createdAt || null,
+      updatedAt: agent.updatedAt || null,
+    }))
+    .filter((agent) => matchesSearchTerms([agent.username, agent.firstName, agent.lastName], agentSearch));
+
+  return {
+    areas: formattedAreas,
+    branches: formattedBranches,
+    units: formattedUnits,
+    agents: agentOptions,
+    managers: formattedFilteredManagers,
+    managerSequences,
+  };
+}
+
+async function findActiveManagerForScope(managerType, { branchId = "", unitId = "" } = {}) {
+  const ManagerModel = getManagerModelByType(managerType);
+  if (!ManagerModel) return null;
+
+  const scopeQuery =
+    managerType === "BM"
+      ? { branchId, isBlocked: { $ne: true } }
+      : { unitId, isBlocked: { $ne: true } };
+
+  const directMatch = await ManagerModel.findOne(scopeQuery).populate(buildManagerPopulateQuery(managerType)).lean();
+  if (directMatch) return directMatch;
+
+  const managers = await ManagerModel.find({ isBlocked: { $ne: true } })
+    .populate(buildManagerPopulateQuery(managerType))
+    .lean();
+
+  return managers.find((manager) => matchesManagerScope(manager, managerType, { branchId, unitId })) || null;
+}
 
 /**
  * =========================
@@ -180,6 +555,50 @@ app.post("/api/auth/login", async (req, res) => {
         payload.branchName = agent.unitId?.branchId?.branchName || "";
         payload.areaName = agent.unitId?.branchId?.areaId?.areaName || "";
       }
+    } else if (user.role === "AUM" || user.role === "UM") {
+      const ManagerModel = user.role === "AUM" ? AUM : UM;
+      const manager = await ManagerModel.findOne({ userId: user._id }).populate(buildManagerPopulateQuery(user.role)).lean();
+
+      if (!manager) {
+        return res.status(403).json({
+          message: "No active manager assignment was found for this account. Please contact Admin.",
+        });
+      }
+
+      if (manager.isBlocked === true) {
+        return res.status(403).json({
+          message: "This manager account has been replaced and can no longer access the portal.",
+        });
+      }
+
+      const profile = getManagerProfile(manager);
+
+      if (manager) {
+        payload.unitName = profile.unit?.unitName || "";
+        payload.branchName = profile.branch?.branchName || "";
+        payload.areaName = profile.area?.areaName || "";
+      }
+    } else if (user.role === "BM") {
+      const manager = await BM.findOne({ userId: user._id }).populate(buildManagerPopulateQuery("BM")).lean();
+
+      if (!manager) {
+        return res.status(403).json({
+          message: "No active manager assignment was found for this account. Please contact Admin.",
+        });
+      }
+
+      if (manager.isBlocked === true) {
+        return res.status(403).json({
+          message: "This manager account has been replaced and can no longer access the portal.",
+        });
+      }
+
+      const profile = getManagerProfile(manager);
+
+      if (manager) {
+        payload.branchName = profile.branch?.branchName || "";
+        payload.areaName = profile.area?.areaName || "";
+      }
     }
 
     /**
@@ -191,6 +610,1033 @@ app.post("/api/auth/login", async (req, res) => {
      * Global Error Handling for Login Route
      */
     console.error("Login error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+
+/* =========================================================
+   AUTH: ADMIN LOGIN
+   Endpoint: POST /api/admin/auth/login
+========================================================= */
+/**
+ * Admin Login Flow:
+ * 1. Validate username + password
+ * 2. Find standalone Admin account
+ * 3. Reject inactive admins
+ * 4. Compare bcrypt password hash
+ * 5. Return normalized admin payload
+ */
+app.post("/api/admin/auth/login", async (req, res) => {
+  try {
+    const username = String(req.body?.username || "").trim();
+    const password = String(req.body?.password || "");
+
+    if (!username || !password) {
+      return res.status(400).json({ message: "Missing required fields." });
+    }
+
+    const admin = await Admin.findOne({ username }).lean();
+
+    if (!admin) {
+      return res.status(401).json({ message: "Invalid username or password." });
+    }
+
+    if (admin.isActive === false) {
+      return res.status(403).json({ message: "Admin account is inactive." });
+    }
+
+    const passwordMatches = await bcrypt.compare(password, admin.passwordHash || "");
+
+    if (!passwordMatches) {
+      return res.status(401).json({ message: "Invalid username or password." });
+    }
+
+    const payload = {
+      id: admin._id,
+      role: "Admin",
+      username: admin.username,
+      firstName: admin.firstName,
+      lastName: admin.lastName,
+      email: admin.email || "",
+      isActive: admin.isActive !== false,
+    };
+
+    return res.json({ message: "Admin login successful", admin: payload });
+  } catch (err) {
+    console.error("Admin login error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+/* =========================================================
+   ADMIN: ORGANIZATION MANAGEMENT
+========================================================= */
+async function buildAdminOrganizationTree(overviewSearch = "") {
+  const areas = await Area.find().sort({ areaName: 1 }).lean();
+  const areaIds = areas.map((area) => area._id);
+
+  const branches = areaIds.length
+    ? await Branch.find({ areaId: { $in: areaIds } }).sort({ branchName: 1 }).lean()
+    : [];
+  const branchIds = branches.map((branch) => branch._id);
+
+  const units = branchIds.length
+    ? await Unit.find({ branchId: { $in: branchIds } }).sort({ unitName: 1 }).lean()
+    : [];
+  const unitIds = units.map((unit) => unit._id);
+  const [branchManagers, unitManagers, assistantUnitManagers] = await Promise.all([
+    BM.find({ isBlocked: { $ne: true } }).populate(buildManagerPopulateQuery("BM")).lean(),
+    UM.find({ isBlocked: { $ne: true } }).populate(buildManagerPopulateQuery("UM")).lean(),
+    AUM.find({ isBlocked: { $ne: true } }).populate(buildManagerPopulateQuery("AUM")).lean(),
+  ]);
+
+  const agents = unitIds.length
+    ? await Agent.find({ unitId: { $in: unitIds } })
+        .populate({ path: "userId", select: "username firstName lastName" })
+        .lean()
+    : [];
+
+  const formatManagerLabel = (user) => {
+    const account = user || {};
+    const fullName = [account.firstName, account.lastName].filter(Boolean).join(" ").trim();
+    return fullName || account.username || "Unassigned";
+  };
+
+  const bmByBranchId = new Map();
+  const umByUnitId = new Map();
+  const aumByUnitId = new Map();
+
+  for (const manager of branchManagers) {
+    const profile = getManagerProfile(manager);
+    const branchId = profile.branch?._id ? String(profile.branch._id) : "";
+    if (!branchId || !branchIds.some((id) => String(id) === branchId)) continue;
+    bmByBranchId.set(branchId, {
+      label: formatManagerLabel(profile.user),
+      createdAt: manager.createdAt || null,
+      updatedAt: manager.updatedAt || null,
+    });
+  }
+
+  for (const manager of unitManagers) {
+    const profile = getManagerProfile(manager);
+    const unitId = profile.unit?._id ? String(profile.unit._id) : "";
+    if (!unitId || !unitIds.some((id) => String(id) === unitId)) continue;
+    umByUnitId.set(unitId, {
+      label: formatManagerLabel(profile.user),
+      createdAt: manager.createdAt || null,
+      updatedAt: manager.updatedAt || null,
+    });
+  }
+
+  for (const manager of assistantUnitManagers) {
+    const profile = getManagerProfile(manager);
+    const unitId = profile.unit?._id ? String(profile.unit._id) : "";
+    if (!unitId || !unitIds.some((id) => String(id) === unitId)) continue;
+    aumByUnitId.set(unitId, {
+      label: formatManagerLabel(profile.user),
+      createdAt: manager.createdAt || null,
+      updatedAt: manager.updatedAt || null,
+    });
+  }
+
+  const agentsByUnitId = new Map();
+  for (const agent of agents) {
+    const unitKey = String(agent.unitId);
+    if (!agentsByUnitId.has(unitKey)) agentsByUnitId.set(unitKey, []);
+
+    const user = agent.userId || {};
+    const fullName = [user.firstName, user.lastName].filter(Boolean).join(" ").trim();
+    const fallbackLabel = user.username || "Unassigned Agent";
+
+    agentsByUnitId.get(unitKey).push({
+      id: agent._id,
+      username: user.username || "",
+      name: fullName || fallbackLabel,
+      label: user.username ? `${user.username} · ${fullName || user.username}` : fallbackLabel,
+      createdAt: agent.createdAt || null,
+      updatedAt: agent.updatedAt || null,
+    });
+  }
+
+  const unitsByBranchId = new Map();
+  for (const unit of units) {
+    const branchKey = String(unit.branchId);
+    if (!unitsByBranchId.has(branchKey)) unitsByBranchId.set(branchKey, []);
+
+    const umRecord = umByUnitId.get(String(unit._id)) || null;
+    const aumRecord = aumByUnitId.get(String(unit._id)) || null;
+
+    unitsByBranchId.get(branchKey).push({
+      id: unit._id,
+      unitName: unit.unitName,
+      createdAt: unit.createdAt || null,
+      updatedAt: unit.updatedAt || null,
+      um: umRecord?.label || "Unassigned",
+      umCreatedAt: umRecord?.createdAt || null,
+      umUpdatedAt: umRecord?.updatedAt || null,
+      aum: aumRecord?.label || "Unassigned",
+      aumCreatedAt: aumRecord?.createdAt || null,
+      aumUpdatedAt: aumRecord?.updatedAt || null,
+      agents: agentsByUnitId.get(String(unit._id)) || [],
+    });
+  }
+
+  const branchesByAreaId = new Map();
+  for (const branch of branches) {
+    const areaKey = String(branch.areaId);
+    if (!branchesByAreaId.has(areaKey)) branchesByAreaId.set(areaKey, []);
+
+    const bmRecord = bmByBranchId.get(String(branch._id)) || null;
+
+    branchesByAreaId.get(areaKey).push({
+      id: branch._id,
+      branchName: branch.branchName,
+      createdAt: branch.createdAt || null,
+      updatedAt: branch.updatedAt || null,
+      bm: bmRecord?.label || "Unassigned",
+      bmCreatedAt: bmRecord?.createdAt || null,
+      bmUpdatedAt: bmRecord?.updatedAt || null,
+      units: unitsByBranchId.get(String(branch._id)) || [],
+    });
+  }
+
+  return areas
+    .map((area) => ({
+      id: area._id,
+      areaName: area.areaName,
+      createdAt: area.createdAt || null,
+      updatedAt: area.updatedAt || null,
+      branches: branchesByAreaId.get(String(area._id)) || [],
+    }))
+    .map((area) => {
+      if (!overviewSearch.trim()) return area;
+
+      const areaMatches = matchesSearchTerms([area.areaName], overviewSearch);
+      if (areaMatches) return area;
+
+      const filteredBranches = area.branches
+        .map((branch) => {
+          const branchMatches = matchesSearchTerms([branch.branchName, area.areaName], overviewSearch);
+          if (branchMatches) return branch;
+
+          const filteredUnits = branch.units.filter((unit) =>
+            matchesSearchTerms([unit.unitName, branch.branchName, area.areaName], overviewSearch)
+          );
+
+          if (filteredUnits.length === 0) return null;
+          return { ...branch, units: filteredUnits };
+        })
+        .filter(Boolean);
+
+      if (filteredBranches.length === 0) return null;
+      return { ...area, branches: filteredBranches };
+    })
+    .filter(Boolean);
+}
+
+app.get("/api/admin/organization/tree", async (req, res) => {
+  try {
+    const areas = await buildAdminOrganizationTree(req.query.overviewSearch);
+    return res.json({ areas });
+  } catch (err) {
+    console.error("Admin organization tree error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+app.get("/api/admin/organization/form-options", async (req, res) => {
+  try {
+    const payload = await buildAdminOrganizationListPayload();
+
+    return res.json(payload);
+  } catch (err) {
+    console.error("Admin organization form options error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+app.get("/api/admin/organization/list-data", async (req, res) => {
+  try {
+    const payload = await buildAdminOrganizationListPayload({
+      areaSearch: req.query.areaSearch,
+      branchSearch: req.query.branchSearch,
+      unitSearch: req.query.unitSearch,
+      managerSearch: req.query.managerSearch,
+      managerType: req.query.managerType,
+      agentSearch: req.query.agentSearch,
+    });
+
+    return res.json(payload);
+  } catch (err) {
+    console.error("Admin organization list data error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+app.post("/api/admin/organization/areas", async (req, res) => {
+  try {
+    const areaName = String(req.body?.areaName || "").trim();
+
+    if (!areaName) {
+      return res.status(400).json({ message: "Area name is required." });
+    }
+
+    const existingArea = await Area.findOne({
+      areaName: { $regex: new RegExp(`^${escapeRegex(areaName)}$`, "i") },
+    }).lean();
+
+    if (existingArea) {
+      return res.status(409).json({ message: "Area name already exists." });
+    }
+
+    const area = await Area.create({ areaName });
+    return res.status(201).json({ message: "Area created successfully.", area });
+  } catch (err) {
+    console.error("Admin create area error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+app.patch("/api/admin/organization/areas/:areaId", async (req, res) => {
+  try {
+    const { areaId } = req.params;
+    const areaName = String(req.body?.areaName || "").trim();
+
+    if (!mongoose.Types.ObjectId.isValid(areaId)) {
+      return res.status(400).json({ message: "Invalid area id." });
+    }
+
+    if (!areaName) {
+      return res.status(400).json({ message: "Area name is required." });
+    }
+
+    const existingArea = await Area.findOne({
+      _id: { $ne: areaId },
+      areaName: { $regex: new RegExp(`^${escapeRegex(areaName)}$`, "i") },
+    }).lean();
+
+    if (existingArea) {
+      return res.status(409).json({ message: "Area name already exists." });
+    }
+
+    const updatedArea = await Area.findByIdAndUpdate(
+      areaId,
+      { areaName },
+      { new: true, runValidators: true }
+    ).lean();
+
+    if (!updatedArea) {
+      return res.status(404).json({ message: "Area not found." });
+    }
+
+    return res.json({ message: "Area updated successfully.", area: updatedArea });
+  } catch (err) {
+    console.error("Admin update area error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+app.post("/api/admin/organization/branches", async (req, res) => {
+  try {
+    const branchName = String(req.body?.branchName || "").trim();
+    const areaId = String(req.body?.areaId || "").trim();
+
+    if (!branchName) {
+      return res.status(400).json({ message: "Branch name is required." });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(areaId)) {
+      return res.status(400).json({ message: "Valid area id is required." });
+    }
+
+    const existingBranch = await Branch.findOne({
+      areaId,
+      branchName: { $regex: new RegExp(`^${escapeRegex(branchName)}$`, "i") },
+    }).lean();
+
+    if (existingBranch) {
+      return res.status(409).json({ message: "Branch name already exists in the selected area." });
+    }
+
+    const branch = await Branch.create({ branchName, areaId });
+    return res.status(201).json({ message: "Branch created successfully.", branch });
+  } catch (err) {
+    console.error("Admin create branch error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+app.patch("/api/admin/organization/branches/:branchId", async (req, res) => {
+  try {
+    const { branchId } = req.params;
+    const branchName = String(req.body?.branchName || "").trim();
+    const areaId = String(req.body?.areaId || "").trim();
+
+    if (!mongoose.Types.ObjectId.isValid(branchId)) {
+      return res.status(400).json({ message: "Invalid branch id." });
+    }
+
+    if (!branchName) {
+      return res.status(400).json({ message: "Branch name is required." });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(areaId)) {
+      return res.status(400).json({ message: "Valid area id is required." });
+    }
+
+    const existingBranch = await Branch.findOne({
+      _id: { $ne: branchId },
+      areaId,
+      branchName: { $regex: new RegExp(`^${escapeRegex(branchName)}$`, "i") },
+    }).lean();
+
+    if (existingBranch) {
+      return res.status(409).json({ message: "Branch name already exists in the selected area." });
+    }
+
+    const branch = await Branch.findByIdAndUpdate(
+      branchId,
+      { branchName, areaId },
+      { new: true, runValidators: true }
+    ).lean();
+
+    if (!branch) {
+      return res.status(404).json({ message: "Branch not found." });
+    }
+
+    return res.json({ message: "Branch updated successfully.", branch });
+  } catch (err) {
+    console.error("Admin update branch error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+app.post("/api/admin/organization/units", async (req, res) => {
+  try {
+    const unitName = String(req.body?.unitName || "").trim();
+    const branchId = String(req.body?.branchId || "").trim();
+
+    if (!unitName) {
+      return res.status(400).json({ message: "Unit name is required." });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(branchId)) {
+      return res.status(400).json({ message: "Valid branch id is required." });
+    }
+
+    const existingUnit = await Unit.findOne({
+      branchId,
+      unitName: { $regex: new RegExp(`^${escapeRegex(unitName)}$`, "i") },
+    }).lean();
+
+    if (existingUnit) {
+      return res.status(409).json({ message: "Unit name already exists in the selected branch." });
+    }
+
+    const unit = await Unit.create({ unitName, branchId });
+    return res.status(201).json({ message: "Unit created successfully.", unit });
+  } catch (err) {
+    console.error("Admin create unit error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+app.patch("/api/admin/organization/units/:unitId", async (req, res) => {
+  try {
+    const { unitId } = req.params;
+    const unitName = String(req.body?.unitName || "").trim();
+    const branchId = String(req.body?.branchId || "").trim();
+
+    if (!mongoose.Types.ObjectId.isValid(unitId)) {
+      return res.status(400).json({ message: "Invalid unit id." });
+    }
+
+    if (!unitName) {
+      return res.status(400).json({ message: "Unit name is required." });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(branchId)) {
+      return res.status(400).json({ message: "Valid branch id is required." });
+    }
+
+    const existingUnit = await Unit.findOne({
+      _id: { $ne: unitId },
+      branchId,
+      unitName: { $regex: new RegExp(`^${escapeRegex(unitName)}$`, "i") },
+    }).lean();
+
+    if (existingUnit) {
+      return res.status(409).json({ message: "Unit name already exists in the selected branch." });
+    }
+
+    const unit = await Unit.findByIdAndUpdate(
+      unitId,
+      { unitName, branchId },
+      { new: true, runValidators: true }
+    ).lean();
+
+    if (!unit) {
+      return res.status(404).json({ message: "Unit not found." });
+    }
+
+    return res.json({ message: "Unit updated successfully.", unit });
+  } catch (err) {
+    console.error("Admin update unit error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+app.post("/api/admin/organization/agents", async (req, res) => {
+  try {
+    const firstName = String(req.body?.firstName || "").trim();
+    const middleName = String(req.body?.middleName || "").trim();
+    const lastName = String(req.body?.lastName || "").trim();
+    const birthday = String(req.body?.birthday || "").trim();
+    const sex = String(req.body?.sex || "").trim();
+    const dateEmployed = String(req.body?.dateEmployed || "").trim();
+    const displayPhoto = String(req.body?.displayPhoto || "").trim();
+    const agentType = String(req.body?.agentType || "").trim();
+    const unitId = String(req.body?.unitId || "").trim();
+
+    if (!firstName) {
+      return res.status(400).json({ message: "First name is required." });
+    }
+
+    if (!lastName) {
+      return res.status(400).json({ message: "Last name is required." });
+    }
+
+    if (!birthday) {
+      return res.status(400).json({ message: "Birthday is required." });
+    }
+
+    if (!dateEmployed) {
+      return res.status(400).json({ message: "Date employed is required." });
+    }
+
+    if (!["Male", "Female"].includes(sex)) {
+      return res.status(400).json({ message: "A valid sex is required." });
+    }
+
+    if (!["Full-Time", "Part-Time"].includes(agentType)) {
+      return res.status(400).json({ message: "A valid agent type is required." });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(unitId)) {
+      return res.status(400).json({ message: "A valid assigned unit is required." });
+    }
+
+    const [unit, agentUsernames] = await Promise.all([
+      Unit.findById(unitId).lean(),
+      User.find({ username: { $regex: /^AG\d{6}$/i } }, { username: 1 }).lean(),
+    ]);
+
+    if (!unit) {
+      return res.status(404).json({ message: "Selected unit was not found." });
+    }
+
+    const birthdayDate = new Date(birthday);
+    const employedDate = new Date(dateEmployed);
+
+    if (Number.isNaN(birthdayDate.getTime())) {
+      return res.status(400).json({ message: "Birthday is invalid." });
+    }
+
+    if (Number.isNaN(employedDate.getTime())) {
+      return res.status(400).json({ message: "Date employed is invalid." });
+    }
+
+    if (isFutureDate(birthdayDate)) {
+      return res.status(400).json({ message: "Birthday cannot be in the future." });
+    }
+
+    if (isFutureDate(employedDate)) {
+      return res.status(400).json({ message: "Date employed cannot be in the future." });
+    }
+
+    const age = calculateAgeFromDate(birthdayDate);
+    if (age === null) {
+      return res.status(400).json({ message: "Birthday is invalid." });
+    }
+
+    if (age < 21) {
+      return res.status(400).json({ message: "Agents must be at least 21 years old." });
+    }
+
+    const nextSequence = getNextRoleSequence(agentUsernames.map((user) => user.username), "AG");
+    const username = `AG${padSixDigitSequence(nextSequence)}`;
+    const password = buildGeneratedPassword("AG", birthdayDate, nextSequence);
+
+    const user = await User.create({
+      role: "AG",
+      username,
+      password,
+      firstName,
+      middleName,
+      lastName,
+      birthday: birthdayDate,
+      sex,
+      age,
+      displayPhoto,
+      dateEmployed: employedDate,
+    });
+
+    try {
+      const agent = await Agent.create({
+        userId: user._id,
+        agentType,
+        unitId,
+      });
+
+      return res.status(201).json({
+        message: "Agent created successfully.",
+        agentId: agent._id,
+        userId: user._id,
+        username,
+        password,
+      });
+    } catch (agentError) {
+      await User.findByIdAndDelete(user._id);
+      throw agentError;
+    }
+  } catch (err) {
+    console.error("Admin create agent error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+app.patch("/api/admin/organization/agents/:agentId", async (req, res) => {
+  try {
+    const { agentId } = req.params;
+    const username = String(req.body?.username || "").trim().toUpperCase();
+    const password = String(req.body?.password || "").trim();
+    const firstName = String(req.body?.firstName || "").trim();
+    const middleName = String(req.body?.middleName || "").trim();
+    const lastName = String(req.body?.lastName || "").trim();
+    const birthday = String(req.body?.birthday || "").trim();
+    const sex = String(req.body?.sex || "").trim();
+    const dateEmployed = String(req.body?.dateEmployed || "").trim();
+    const displayPhoto = String(req.body?.displayPhoto || "").trim();
+    const agentType = String(req.body?.agentType || "").trim();
+    const unitId = String(req.body?.unitId || "").trim();
+
+    if (!mongoose.Types.ObjectId.isValid(agentId)) {
+      return res.status(400).json({ message: "Invalid agent id." });
+    }
+
+    if (!username) {
+      return res.status(400).json({ message: "Username is required." });
+    }
+
+    if (!firstName) {
+      return res.status(400).json({ message: "First name is required." });
+    }
+
+    if (!lastName) {
+      return res.status(400).json({ message: "Last name is required." });
+    }
+
+    if (!birthday) {
+      return res.status(400).json({ message: "Birthday is required." });
+    }
+
+    if (!dateEmployed) {
+      return res.status(400).json({ message: "Date employed is required." });
+    }
+
+    if (!["Male", "Female"].includes(sex)) {
+      return res.status(400).json({ message: "A valid sex is required." });
+    }
+
+    if (!["Full-Time", "Part-Time"].includes(agentType)) {
+      return res.status(400).json({ message: "A valid agent type is required." });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(unitId)) {
+      return res.status(400).json({ message: "A valid assigned unit is required." });
+    }
+
+    const [agent, unit] = await Promise.all([
+      Agent.findById(agentId).lean(),
+      Unit.findById(unitId).lean(),
+    ]);
+
+    if (!agent) {
+      return res.status(404).json({ message: "Agent not found." });
+    }
+
+    if (!unit) {
+      return res.status(404).json({ message: "Selected unit was not found." });
+    }
+
+    const existingUser = await User.findOne({ _id: { $ne: agent.userId }, username }).lean();
+    if (existingUser) {
+      return res.status(409).json({ message: "Username already exists." });
+    }
+
+    const birthdayDate = new Date(birthday);
+    const employedDate = new Date(dateEmployed);
+
+    if (Number.isNaN(birthdayDate.getTime())) {
+      return res.status(400).json({ message: "Birthday is invalid." });
+    }
+
+    if (Number.isNaN(employedDate.getTime())) {
+      return res.status(400).json({ message: "Date employed is invalid." });
+    }
+
+    if (isFutureDate(birthdayDate)) {
+      return res.status(400).json({ message: "Birthday cannot be in the future." });
+    }
+
+    if (isFutureDate(employedDate)) {
+      return res.status(400).json({ message: "Date employed cannot be in the future." });
+    }
+
+    const age = calculateAgeFromDate(birthdayDate);
+    if (age === null) {
+      return res.status(400).json({ message: "Birthday is invalid." });
+    }
+
+    if (age < 21) {
+      return res.status(400).json({ message: "Agents must be at least 21 years old." });
+    }
+
+    await Promise.all([
+      User.findByIdAndUpdate(
+        agent.userId,
+        {
+          username,
+          ...(password ? { password } : {}),
+          firstName,
+          middleName,
+          lastName,
+          birthday: birthdayDate,
+          sex,
+          age,
+          displayPhoto,
+          dateEmployed: employedDate,
+        },
+        { new: true, runValidators: true }
+      ),
+      Agent.findByIdAndUpdate(
+        agentId,
+        {
+          agentType,
+          unitId,
+        },
+        { new: true, runValidators: true }
+      ),
+    ]);
+
+    return res.json({ message: "Agent updated successfully." });
+  } catch (err) {
+    console.error("Admin update agent error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+app.post("/api/admin/organization/managers/assign", async (req, res) => {
+  try {
+    const managerType = String(req.body?.managerType || "").trim().toUpperCase();
+    const branchId = String(req.body?.branchId || "").trim();
+    const unitId = String(req.body?.unitId || "").trim();
+    const sourceAgentId = String(req.body?.sourceAgentId || "").trim();
+    const dateEmployed = String(req.body?.dateEmployed || "").trim();
+
+    const ManagerModel = getManagerModelByType(managerType);
+
+    if (!ManagerModel) {
+      return res.status(400).json({ message: "Invalid manager type." });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(sourceAgentId)) {
+      return res.status(400).json({ message: "A valid source agent is required." });
+    }
+
+    if (managerType === "BM" && !mongoose.Types.ObjectId.isValid(branchId)) {
+      return res.status(400).json({ message: "A valid branch is required for BM assignment." });
+    }
+
+    if ((managerType === "UM" || managerType === "AUM") && !mongoose.Types.ObjectId.isValid(unitId)) {
+      return res.status(400).json({ message: "A valid unit is required for unit manager assignment." });
+    }
+
+    if (!dateEmployed) {
+      return res.status(400).json({ message: "Date employed is required for manager assignment." });
+    }
+
+    const sourceAgent = await Agent.findById(sourceAgentId)
+      .populate({
+        path: "userId",
+        select: "role username password firstName middleName lastName birthday sex age displayPhoto dateEmployed",
+      })
+      .populate({
+        path: "unitId",
+        select: "unitName branchId",
+        populate: {
+          path: "branchId",
+          select: "branchName areaId",
+          populate: { path: "areaId", select: "areaName" },
+        },
+      })
+      .exec();
+
+    if (!sourceAgent) {
+      return res.status(404).json({ message: "Selected agent was not found." });
+    }
+
+    if (!sourceAgent.userId) {
+      return res.status(400).json({ message: "Selected agent is missing its linked user account." });
+    }
+
+    if (sourceAgent.userId.role !== "AG") {
+      return res.status(409).json({ message: "Only active agent accounts can be promoted through this form." });
+    }
+
+    if (managerType === "BM") {
+      if (String(sourceAgent.unitId?.branchId?._id || "") !== branchId) {
+        return res.status(400).json({ message: "Selected agent does not belong to the chosen branch." });
+      }
+    } else if (String(sourceAgent.unitId?._id || "") !== unitId) {
+      return res.status(400).json({ message: "Selected agent does not belong to the chosen unit." });
+    }
+
+    const employedDate = new Date(dateEmployed);
+    if (Number.isNaN(employedDate.getTime())) {
+      return res.status(400).json({ message: "Date employed is invalid." });
+    }
+
+    if (isFutureDate(employedDate)) {
+      return res.status(400).json({ message: "Date employed cannot be in the future." });
+    }
+
+    const agentEmploymentDate = sourceAgent.userId.dateEmployed ? new Date(sourceAgent.userId.dateEmployed) : null;
+    if (!agentEmploymentDate || Number.isNaN(agentEmploymentDate.getTime())) {
+      return res.status(400).json({ message: "Selected agent is missing a valid agent employment date." });
+    }
+
+    if (employedDate.getTime() <= agentEmploymentDate.getTime()) {
+      return res.status(400).json({ message: "Manager date employed must be after the selected agent date employed." });
+    }
+
+    const usernameCandidates = await ManagerModel.find()
+      .populate({ path: "userId", select: "username" })
+      .lean();
+
+    const nextSequence = getNextRoleSequence(
+      usernameCandidates.map((manager) => manager.userId?.username || ""),
+      managerType
+    );
+    const generatedUsername = buildGeneratedUsername(managerType, nextSequence);
+    const generatedPassword = buildGeneratedPassword(managerType, sourceAgent.userId.birthday, nextSequence);
+
+    if (!generatedPassword) {
+      return res.status(400).json({ message: "Selected agent is missing a valid birthday for manager credential generation." });
+    }
+
+    const scopeUpdate =
+      managerType === "BM"
+        ? { branchId, unitId: undefined }
+        : { unitId, branchId: undefined };
+
+    const activeManager = await findActiveManagerForScope(managerType, { branchId, unitId });
+
+    if (activeManager && String(activeManager.agentId?._id || activeManager.agentId || "") === sourceAgentId) {
+      return res.status(409).json({ message: `This agent is already the active ${managerType}.` });
+    }
+
+    const existingManagerRecord = await ManagerModel.findOne({ agentId: sourceAgentId }).lean();
+
+    if (existingManagerRecord && existingManagerRecord.isBlocked !== true) {
+      return res.status(409).json({ message: `This agent already has an active ${managerType} manager record.` });
+    }
+
+    const promotionDate = new Date();
+    let blockedManager = null;
+
+    if (activeManager) {
+      blockedManager = await ManagerModel.findByIdAndUpdate(
+        activeManager._id,
+        { isBlocked: true, blockedAt: promotionDate },
+        { new: true }
+      )
+        .populate(buildManagerPopulateQuery(managerType))
+        .lean();
+    }
+
+    const managerUser = await User.create({
+      role: managerType,
+      username: generatedUsername,
+      password: generatedPassword,
+      firstName: sourceAgent.userId.firstName,
+      middleName: sourceAgent.userId.middleName || "",
+      lastName: sourceAgent.userId.lastName,
+      birthday: sourceAgent.userId.birthday,
+      sex: sourceAgent.userId.sex,
+      age: sourceAgent.userId.age,
+      displayPhoto: sourceAgent.userId.displayPhoto || "",
+      dateEmployed: employedDate,
+    });
+
+    const nextManagerRecord = existingManagerRecord
+      ? await ManagerModel.findByIdAndUpdate(
+          existingManagerRecord._id,
+          { agentId: sourceAgentId, userId: managerUser._id, ...scopeUpdate, isBlocked: false, blockedAt: null },
+          { new: true, runValidators: true }
+        )
+      : await ManagerModel.create({ agentId: sourceAgentId, userId: managerUser._id, ...scopeUpdate, isBlocked: false, blockedAt: null }).then((doc) =>
+          doc.toObject()
+        );
+
+    if (existingManagerRecord?.userId && String(existingManagerRecord.userId) !== String(managerUser._id)) {
+      await User.findByIdAndDelete(existingManagerRecord.userId);
+    }
+
+    const agentToPromote = await Agent.findById(sourceAgentId);
+    if (!agentToPromote) {
+      throw new Error("Agent to promote was not found during manager assignment.");
+    }
+
+    agentToPromote.isPromoted = true;
+    agentToPromote.promotedToRole = managerType;
+    agentToPromote.datePromoted = promotionDate;
+    agentToPromote.promotionHistory.push({
+      role: managerType,
+      datePromoted: promotionDate,
+      previousRole: sourceAgent.userId.role || "AG",
+      managerUsername: generatedUsername,
+      previousUsername: sourceAgent.userId.username || "",
+      previousDateEmployed: agentEmploymentDate,
+      managerDateEmployed: employedDate,
+      managerUserId: managerUser._id,
+      branchId: managerType === "BM" ? branchId : sourceAgent.unitId?.branchId?._id || branchId || null,
+      unitId: managerType === "BM" ? null : unitId,
+    });
+    await agentToPromote.save();
+
+    const nextManager = await ManagerModel.findById(nextManagerRecord._id).populate(buildManagerPopulateQuery(managerType)).lean();
+
+    return res.status(201).json({
+      message: `${managerType} assignment updated successfully.`,
+      manager: formatManagerRecord(nextManager, managerType),
+      blockedManager: blockedManager ? formatManagerRecord(blockedManager, managerType) : null,
+    });
+  } catch (err) {
+    console.error("Admin assign manager error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+app.delete("/api/admin/organization/areas/:areaId", async (req, res) => {
+  try {
+    const { areaId } = req.params;
+    const confirmCascade = req.body?.confirmCascade === true;
+
+    if (!mongoose.Types.ObjectId.isValid(areaId)) {
+      return res.status(400).json({ message: "Invalid area id." });
+    }
+
+    if (!confirmCascade) {
+      return res.status(400).json({
+        message:
+          "Cascade delete confirmation is required. This action removes branches, units, agents, and linked user accounts under the selected area.",
+      });
+    }
+
+    const area = await Area.findById(areaId).lean();
+    if (!area) {
+      return res.status(404).json({ message: "Area not found." });
+    }
+
+    const branches = await Branch.find({ areaId }, { _id: 1 }).lean();
+    const branchIds = branches.map((branch) => branch._id);
+    const units = branchIds.length ? await Unit.find({ branchId: { $in: branchIds } }, { _id: 1 }).lean() : [];
+    const unitIds = units.map((unit) => unit._id);
+    const [branchManagers, unitManagers, assistantUnitManagers, agents] = await Promise.all([
+      BM.find()
+        .populate({ path: "agentId", select: "unitId", populate: { path: "unitId", select: "branchId" } })
+        .populate({ path: "userId", select: "_id" })
+        .lean(),
+      UM.find()
+        .populate({ path: "agentId", select: "unitId", populate: { path: "unitId", select: "branchId" } })
+        .populate({ path: "userId", select: "_id" })
+        .lean(),
+      AUM.find()
+        .populate({ path: "agentId", select: "unitId", populate: { path: "unitId", select: "branchId" } })
+        .populate({ path: "userId", select: "_id" })
+        .lean(),
+      unitIds.length ? Agent.find({ unitId: { $in: unitIds } }, { _id: 1, userId: 1 }).lean() : [],
+    ]);
+    const filteredBranchManagers = branchManagers.filter((manager) => {
+      const branchId = manager.agentId?.unitId?.branchId;
+      return branchId && branchIds.some((id) => String(id) === String(branchId));
+    });
+    const filteredUnitManagers = unitManagers.filter((manager) => {
+      const currentUnitId = manager.agentId?.unitId?._id || manager.agentId?.unitId;
+      return currentUnitId && unitIds.some((id) => String(id) === String(currentUnitId));
+    });
+    const filteredAssistantUnitManagers = assistantUnitManagers.filter((manager) => {
+      const currentUnitId = manager.agentId?.unitId?._id || manager.agentId?.unitId;
+      return currentUnitId && unitIds.some((id) => String(id) === String(currentUnitId));
+    });
+    const agentIds = agents.map((agent) => agent._id);
+    const bmIds = filteredBranchManagers.map((manager) => manager._id);
+    const umIds = filteredUnitManagers.map((manager) => manager._id);
+    const aumIds = filteredAssistantUnitManagers.map((manager) => manager._id);
+    const userIds = [
+      ...agents.map((agent) => agent.userId),
+      ...filteredBranchManagers.map((manager) => manager.userId?._id || manager.userId),
+      ...filteredUnitManagers.map((manager) => manager.userId?._id || manager.userId),
+      ...filteredAssistantUnitManagers.map((manager) => manager.userId?._id || manager.userId),
+    ].filter(Boolean);
+
+    if (bmIds.length) {
+      await BM.deleteMany({ _id: { $in: bmIds } });
+    }
+
+    if (umIds.length) {
+      await UM.deleteMany({ _id: { $in: umIds } });
+    }
+
+    if (aumIds.length) {
+      await AUM.deleteMany({ _id: { $in: aumIds } });
+    }
+
+    if (agentIds.length) {
+      await Agent.deleteMany({ _id: { $in: agentIds } });
+    }
+
+    if (userIds.length) {
+      await User.deleteMany({ _id: { $in: userIds } });
+    }
+
+    if (unitIds.length) {
+      await Unit.deleteMany({ _id: { $in: unitIds } });
+    }
+
+    if (branchIds.length) {
+      await Branch.deleteMany({ _id: { $in: branchIds } });
+    }
+
+    await Area.deleteOne({ _id: areaId });
+
+    return res.json({
+      message: "Area deleted successfully.",
+      deleted: {
+        areaName: area.areaName,
+        branches: branchIds.length,
+        units: unitIds.length,
+        branchManagers: bmIds.length,
+        unitManagers: umIds.length,
+        assistantUnitManagers: aumIds.length,
+        agents: agentIds.length,
+        users: userIds.length,
+      },
+    });
+  } catch (err) {
+    console.error("Admin delete area error:", err);
     return res.status(500).json({ message: "Server error." });
   }
 });
@@ -608,6 +2054,16 @@ async function ensureTaskMissedNotificationsForUser(userObjectId) {
   await Notification.bulkWrite(writes, { ordered: false });
 }
 
+function toValidObjectIdString(value) {
+  if (!value) return null;
+  const str = String(value).trim();
+  return mongoose.isValidObjectId(str) ? str : null;
+}
+
+function uniqueValidObjectIdStrings(values = []) {
+  return [...new Set(values.map(toValidObjectIdString).filter(Boolean))];
+}
+
 /**
  * attachTaskRefs(tasks)
  * ---------------------
@@ -628,10 +2084,12 @@ async function ensureTaskMissedNotificationsForUser(userObjectId) {
  */
 async function attachTaskRefs(tasks) {
   // Prospects
-  const prospectIds = [...new Set(tasks.map((t) => String(t.prospectId)).filter(Boolean))];
-  const prospects = await Prospect.find({ _id: { $in: prospectIds } })
+  const prospectIds = uniqueValidObjectIdStrings(tasks.map((t) => t.prospectId));
+  const prospects = prospectIds.length
+    ? await Prospect.find({ _id: { $in: prospectIds } })
     .select("firstName middleName lastName")
-    .lean();
+    .lean()
+    : [];
 
   const prospectMap = new Map(
     prospects.map((p) => {
@@ -641,7 +2099,7 @@ async function attachTaskRefs(tasks) {
   );
 
   // LeadEngagement -> leadId -> leadCode
-  const engagementIds = [...new Set(tasks.map((t) => String(t.leadEngagementId)).filter(Boolean))];
+  const engagementIds = uniqueValidObjectIdStrings(tasks.map((t) => t.leadEngagementId));
 
   const engagementToLeadId = new Map(); // engagementId -> leadId
   let leadIdToCode = new Map(); // leadId -> leadCode
@@ -655,7 +2113,7 @@ async function attachTaskRefs(tasks) {
       if (e.leadId) engagementToLeadId.set(String(e._id), String(e.leadId));
     }
 
-    const leadIds = [...new Set(engagements.map((e) => String(e.leadId)).filter(Boolean))];
+    const leadIds = uniqueValidObjectIdStrings(engagements.map((e) => e.leadId));
 
     if (leadIds.length) {
       const leads = await Lead.find({ _id: { $in: leadIds } })
@@ -996,6 +2454,838 @@ app.get("/api/policyholders/recent", async (req, res) => {
     return res.json(out);
   } catch (err) {
     console.error("Recent policyholders error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+/* ===========================
+   AGENT HOME: DASHBOARD PREVIEW (Agent)
+   Endpoint: GET /api/agent/home?userId=...
+=========================== */
+app.get("/api/agent/home", async (req, res) => {
+  try {
+    const { userId } = req.query;
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId)) {
+      return res.status(400).json({ message: "Invalid userId." });
+    }
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    await ensureTaskMissedNotificationsForUser(userObjectId);
+
+    let openTasks = await Task.find({ assignedToUserId: userObjectId, status: "Open" })
+      .select("assignedToUserId prospectId leadEngagementId type title description dueAt status completedAt wasDelayed createdAt")
+      .lean();
+    openTasks = await attachTaskRefs(openTasks);
+
+    const now = new Date();
+    const nowMs = now.getTime();
+    const todayKey = dateKeyInTZ(now, "Asia/Manila");
+    const normalizedTasks = openTasks.map((task) => {
+      const dueMs = new Date(task?.dueAt).getTime();
+      const isOverdue = Number.isFinite(dueMs) ? dueMs < nowMs : false;
+      return { ...task, __isOverdue: isOverdue };
+    });
+
+    const dueTodayTop5 = normalizedTasks
+      .filter((task) => {
+        const dueMs = new Date(task?.dueAt).getTime();
+        const dueOk = Number.isFinite(dueMs) ? dueMs : Infinity;
+        return dateKeyInTZ(task?.dueAt, "Asia/Manila") === todayKey && dueOk >= nowMs;
+      })
+      .slice()
+      .sort((a, b) => new Date(a.dueAt) - new Date(b.dueAt))
+      .slice(0, 5);
+
+    const recentlyAddedTop5 = normalizedTasks
+      .slice()
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+      .slice(0, 5);
+
+    const prospects = await Prospect.find({ assignedToUserId: userObjectId })
+      .select("_id prospectCode firstName middleName lastName marketType prospectType source status createdAt")
+      .lean();
+    const prospectIds = prospects.map((prospect) => prospect._id);
+
+    const leads = prospectIds.length
+      ? await Lead.find({ prospectId: { $in: prospectIds } }).select("_id prospectId source otherSource status createdAt").lean()
+      : [];
+    const leadIds = leads.map((lead) => lead._id);
+
+    const engagements = leadIds.length
+      ? await LeadEngagement.find({ leadId: { $in: leadIds } }).select("_id leadId currentStage createdAt").lean()
+      : [];
+    const engagementIds = engagements.map((engagement) => engagement._id);
+
+    const policyholders = engagementIds.length
+      ? await Policyholder.find({ leadEngagementId: { $in: engagementIds } })
+          .select("status leadEngagementId createdAt")
+          .lean()
+      : [];
+
+    const applications = engagementIds.length
+      ? await Application.find({ leadEngagementId: { $in: engagementIds } })
+          .select("leadEngagementId recordPremiumPaymentTransfer.totalAnnualPremiumPhp")
+          .lean()
+      : [];
+
+    const leadCountByProspectId = new Map();
+    leads.forEach((lead) => {
+      const key = String(lead?.prospectId || "");
+      leadCountByProspectId.set(key, (leadCountByProspectId.get(key) || 0) + 1);
+    });
+
+    const leadById = new Map(leads.map((lead) => [String(lead._id), lead]));
+    const engagementById = new Map(engagements.map((engagement) => [String(engagement._id), engagement]));
+
+    const totalProspects = prospects.length;
+    const totalPolicyholders = policyholders.length;
+    const activePolicies = policyholders.filter((policyholder) => policyholder.status === "Active").length;
+    const conversionRate = totalProspects ? Math.round((totalPolicyholders / totalProspects) * 100) : 0;
+    const activePolicyRate = totalPolicyholders ? Math.round((activePolicies / totalPolicyholders) * 100) : 0;
+
+    const recentProspects = [...prospects]
+      .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+      .slice(0, 3)
+      .map((prospect) => ({
+        _id: prospect._id,
+        prospectCode: prospect.prospectCode || "—",
+        fullName: [prospect.firstName, prospect.middleName, prospect.lastName].filter(Boolean).join(" "),
+        marketType: prospect.marketType || "—",
+        prospectType: prospect.prospectType || "—",
+        status: prospect.status || "—",
+        createdAt: prospect.createdAt || null,
+        leadCount: leadCountByProspectId.get(String(prospect._id)) || 0,
+      }));
+
+    const convertedLeadIds = new Set();
+    policyholders.forEach((policyholder) => {
+      const engagement = engagementById.get(String(policyholder?.leadEngagementId || ""));
+      if (!engagement) return;
+      convertedLeadIds.add(String(engagement.leadId));
+    });
+
+    const leadSourceBreakdown = new Map();
+    leads.forEach((lead) => {
+      const label = String(lead?.source || "Other").trim() || "Other";
+      const current = leadSourceBreakdown.get(label) || { label, total: 0, converted: 0 };
+      current.total += 1;
+      if (convertedLeadIds.has(String(lead._id))) current.converted += 1;
+      leadSourceBreakdown.set(label, current);
+    });
+
+    const bestSource = [...leadSourceBreakdown.values()]
+      .map((item) => ({
+        label: item.label,
+        convertedLeads: item.converted,
+        conversionRatePct: item.total ? Math.round((item.converted / item.total) * 100) : 0,
+      }))
+      .sort((a, b) => {
+        if (b.conversionRatePct !== a.conversionRatePct) return b.conversionRatePct - a.conversionRatePct;
+        return b.convertedLeads - a.convertedLeads;
+      })[0] || null;
+
+    const totalAnnualPremiumPhp = applications.reduce(
+      (sum, application) => sum + Number(application?.recordPremiumPaymentTransfer?.totalAnnualPremiumPhp || 0),
+      0
+    );
+
+    return res.json({
+      tasks: {
+        dueTodayTop5,
+        recentlyAddedTop5,
+      },
+      clients: {
+        totalProspects,
+        totalPolicyholders,
+        conversionRate,
+        activePolicyRate,
+        recentProspects,
+      },
+      sales: {
+        conversionRatePct: conversionRate,
+        totalPolicies: totalPolicyholders,
+        totalAnnualPremiumPhp,
+        bestSource,
+      },
+    });
+  } catch (err) {
+    console.error("Agent home data error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+/* ===========================
+   CLIENTS: RELATIONSHIP DASHBOARD (Agent)
+   Endpoint: GET /api/clients/relationship/dashboard?userId=...
+=========================== */
+app.get("/api/clients/relationship/dashboard", async (req, res) => {
+  try {
+    const {
+      userId,
+      datePreset = "ALL",
+      source = "ALL",
+      marketType = "ALL",
+      prospectType = "ALL",
+      status = "ALL",
+    } = req.query;
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId)) {
+      return res.status(400).json({ message: "Invalid userId." });
+    }
+
+    const now = new Date();
+    const startDate = (() => {
+      const dt = new Date(now);
+      if (datePreset === "30d") {
+        dt.setDate(dt.getDate() - 30);
+        return dt;
+      }
+      if (datePreset === "90d") {
+        dt.setDate(dt.getDate() - 90);
+        return dt;
+      }
+      if (datePreset === "365d") {
+        dt.setDate(dt.getDate() - 365);
+        return dt;
+      }
+      return null;
+    })();
+
+    const formatDate = (value) => {
+      const dt = new Date(value);
+      return Number.isNaN(dt.getTime())
+        ? "—"
+        : dt.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+    };
+    const toPct = (part, total) => (total ? Math.round((part / total) * 100) : 0);
+    const countBy = (arr, predicate) => arr.filter(predicate).length;
+    const normalizeKey = (value) => String(value || "");
+    const bucketDate = (dateValue, unit) => {
+      const dt = new Date(dateValue);
+      if (Number.isNaN(dt.getTime())) return null;
+      if (unit === "week") {
+        const normalized = new Date(dt);
+        const day = normalized.getDay();
+        const diff = (day + 6) % 7;
+        normalized.setHours(0, 0, 0, 0);
+        normalized.setDate(normalized.getDate() - diff);
+        return normalized;
+      }
+      return new Date(dt.getFullYear(), dt.getMonth(), 1);
+    };
+    const buildSeries = (items, dateKey) => {
+      const unit = datePreset === "30d" || datePreset === "90d" ? "week" : "month";
+      const desiredBuckets = 6;
+      const seriesEnd = bucketDate(now, unit);
+      const seriesStart = new Date(seriesEnd);
+      if (unit === "week") seriesStart.setDate(seriesStart.getDate() - ((desiredBuckets - 1) * 7));
+      else seriesStart.setMonth(seriesStart.getMonth() - (desiredBuckets - 1));
+      const buckets = [];
+      const cursor = new Date(seriesStart);
+      for (let i = 0; i < desiredBuckets; i += 1) {
+        buckets.push(new Date(cursor));
+        if (unit === "week") cursor.setDate(cursor.getDate() + 7);
+        else cursor.setMonth(cursor.getMonth() + 1);
+      }
+
+      const counts = new Map(buckets.map((bucket) => [bucket.getTime(), 0]));
+      items.forEach((item) => {
+        const bucket = bucketDate(item?.[dateKey], unit);
+        if (!bucket) return;
+        const key = bucket.getTime();
+        if (counts.has(key)) counts.set(key, (counts.get(key) || 0) + 1);
+      });
+
+      return buckets.map((bucket) => ({
+        label: unit === "week"
+          ? `${bucket.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
+          : bucket.toLocaleDateString("en-US", { month: "short", year: "2-digit" }),
+        value: counts.get(bucket.getTime()) || 0,
+      }));
+    };
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const prospectQuery = { assignedToUserId: userObjectId };
+    if (startDate) prospectQuery.createdAt = { $gte: startDate };
+    if (source !== "ALL") prospectQuery.source = source;
+    if (marketType !== "ALL") prospectQuery.marketType = marketType;
+    if (prospectType !== "ALL") prospectQuery.prospectType = prospectType;
+    if (status !== "ALL") prospectQuery.status = status;
+
+    const prospects = await Prospect.find(prospectQuery)
+      .select("_id prospectCode firstName middleName lastName marketType prospectType source status createdAt")
+      .lean();
+
+    const prospectIds = prospects.map((p) => p._id);
+    const leads = prospectIds.length
+      ? await Lead.find({ prospectId: { $in: prospectIds } }).select("_id prospectId status createdAt").lean()
+      : [];
+    const leadIds = leads.map((l) => l._id);
+
+    const engagements = leadIds.length
+      ? await LeadEngagement.find({ leadId: { $in: leadIds } }).select("_id leadId currentStage createdAt").lean()
+      : [];
+    const engagementIds = engagements.map((e) => e._id);
+
+    const policyholders = engagementIds.length
+      ? await Policyholder.find({ leadEngagementId: { $in: engagementIds } })
+          .select("status leadEngagementId createdAt policyholderCode policyNumber")
+          .lean()
+      : [];
+
+    const leadById = new Map(leads.map((lead) => [normalizeKey(lead._id), lead]));
+    const engagementById = new Map(engagements.map((engagement) => [normalizeKey(engagement._id), engagement]));
+    const policyholdersByProspectId = new Map();
+
+    policyholders.forEach((policyholder) => {
+      const engagement = engagementById.get(normalizeKey(policyholder.leadEngagementId));
+      if (!engagement) return;
+      const lead = leadById.get(normalizeKey(engagement.leadId));
+      if (!lead) return;
+      const prospectId = normalizeKey(lead.prospectId);
+      const arr = policyholdersByProspectId.get(prospectId) || [];
+      arr.push(policyholder);
+      policyholdersByProspectId.set(prospectId, arr);
+    });
+
+    const totalProspects = prospects.length;
+    const totalPolicyholders = policyholders.length;
+    const totalLeads = leads.length;
+    const prospectsWithLeads = new Set(leads.map((lead) => normalizeKey(lead.prospectId))).size;
+    const newLeads = countBy(leads, (lead) => lead.status === "New");
+    const inProgressLeads = countBy(leads, (lead) => lead.status === "In Progress");
+    const activeLeads = newLeads + inProgressLeads;
+
+    const warm = countBy(prospects, (p) => p.marketType === "Warm");
+    const cold = countBy(prospects, (p) => p.marketType === "Cold");
+    const elite = countBy(prospects, (p) => p.prospectType === "Elite");
+    const ordinary = countBy(prospects, (p) => p.prospectType === "Ordinary");
+    const agentSourced = countBy(prospects, (p) => p.source === "Agent-Sourced");
+    const systemAssigned = countBy(prospects, (p) => p.source === "System-Assigned");
+
+    const prospectStatusCounts = ["Active", "Wrong Contact", "Dropped"].map((status) => ({
+      status,
+      value: countBy(prospects, (p) => p.status === status),
+    }));
+
+    const activePolicies = countBy(policyholders, (p) => p.status === "Active");
+    const lapsedPolicies = countBy(policyholders, (p) => p.status === "Lapsed");
+    const cancelledPolicies = countBy(policyholders, (p) => p.status === "Cancelled");
+
+    const stageLabels = ["Contacting", "Needs Assessment", "Proposal", "Application", "Policy Issuance"];
+    const totalEngagements = engagements.length;
+    const stageProgress = stageLabels.map((label) => {
+      const count = countBy(engagements, (e) => String(e.currentStage || "") === label);
+      return { label, count, value: toPct(count, totalEngagements) };
+    });
+
+    const sourceBuckets = ["Agent-Sourced", "System-Assigned"].map((label) => {
+      const sourceProspects = prospects.filter((prospect) => prospect.source === label);
+      const sourceProspectIds = new Set(sourceProspects.map((prospect) => normalizeKey(prospect._id)));
+      const converted = policyholders.filter((policyholder) => {
+        const engagement = engagementById.get(normalizeKey(policyholder.leadEngagementId));
+        if (!engagement) return false;
+        const lead = leadById.get(normalizeKey(engagement.leadId));
+        if (!lead) return false;
+        return sourceProspectIds.has(normalizeKey(lead.prospectId));
+      }).length;
+      return {
+        label,
+        prospects: sourceProspects.length,
+        policyholders: converted,
+        conversionRatePct: toPct(converted, sourceProspects.length),
+      };
+    });
+
+    const marketBuckets = ["Warm", "Cold"].map((label) => {
+      const marketProspects = prospects.filter((prospect) => prospect.marketType === label);
+      const converted = marketProspects.reduce((sum, prospect) => {
+        const linked = policyholdersByProspectId.get(normalizeKey(prospect._id)) || [];
+        return sum + linked.length;
+      }, 0);
+      return {
+        label,
+        prospects: marketProspects.length,
+        policyholders: converted,
+        conversionRatePct: toPct(converted, marketProspects.length),
+      };
+    });
+
+    const prospectTrend = buildSeries(prospects, "createdAt");
+    const policyholderTrend = buildSeries(policyholders, "createdAt");
+
+    const recentProspects = [...prospects]
+      .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+      .slice(0, 10)
+      .map((prospect) => {
+        const linkedPolicies = policyholdersByProspectId.get(normalizeKey(prospect._id)) || [];
+        return {
+          prospectCode: prospect.prospectCode || "—",
+          fullName: [prospect.firstName, prospect.middleName, prospect.lastName].filter(Boolean).join(" "),
+          marketType: prospect.marketType || "—",
+          prospectType: prospect.prospectType || "—",
+          source: prospect.source || "—",
+          status: prospect.status || "—",
+          createdAt: prospect.createdAt || null,
+          policyholders: linkedPolicies.length,
+        };
+      });
+
+    const conversionHotspot = [...sourceBuckets].sort((a, b) => b.conversionRatePct - a.conversionRatePct)[0] || null;
+    const policyRiskPct = toPct(lapsedPolicies + cancelledPolicies, totalPolicyholders);
+    const leadCoveragePct = toPct(prospectsWithLeads, totalProspects);
+    const periodLabel = startDate ? `${formatDate(startDate)} to ${formatDate(now)}` : "All available records";
+
+    return res.json({
+      filters: {
+        datePreset,
+        source,
+        marketType,
+        prospectType,
+        status,
+      },
+      totals: {
+        prospects: totalProspects,
+        prospectsWithLeads,
+        policyholders: totalPolicyholders,
+        engagements: totalEngagements,
+        leads: totalLeads,
+        activeLeads,
+      },
+      leadStatusCounts: {
+        new: newLeads,
+        inProgress: inProgressLeads,
+      },
+      conversionRatePct: toPct(totalPolicyholders, totalProspects),
+      warmRatePct: toPct(warm, totalProspects),
+      sourceRatePct: toPct(agentSourced, totalProspects),
+      activePolicyRatePct: toPct(activePolicies, totalPolicyholders),
+      prospectMix: { warm, cold, elite, ordinary, agentSourced, systemAssigned },
+      prospectStatusCounts,
+      policyStatusCounts: {
+        active: activePolicies,
+        lapsed: lapsedPolicies,
+        cancelled: cancelledPolicies,
+      },
+      stageProgress,
+      sourceConversion: sourceBuckets,
+      marketConversion: marketBuckets,
+      trendSeries: {
+        prospects: prospectTrend,
+        policyholders: policyholderTrend,
+      },
+      recentProspects,
+      reportContext: {
+        periodLabel,
+        generatedAt: now,
+      },
+      insights: {
+        topSource: conversionHotspot,
+        leadCoverage: {
+          prospectsWithLeads,
+          prospectsWithoutLeads: Math.max(totalProspects - prospectsWithLeads, 0),
+          leadCoveragePct,
+        },
+        policyRiskPct,
+      },
+    });
+  } catch (err) {
+    console.error("Clients relationship dashboard error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+/* ===========================
+   SALES: PERFORMANCE DASHBOARD (Agent)
+   Endpoint: GET /api/sales/performance?userId=...
+=========================== */
+app.get("/api/sales/performance", async (req, res) => {
+  try {
+    const {
+      userId,
+      datePreset = "ALL",
+      leadSource = "ALL",
+      policyStatus = "ALL",
+    } = req.query;
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId)) {
+      return res.status(400).json({ message: "Invalid userId." });
+    }
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const now = new Date();
+
+    const buildSalesReportContext = () => {
+      if (datePreset === "30d") {
+        const start = new Date(now);
+        start.setDate(start.getDate() - 30);
+        return {
+          startDate: start,
+          periodLabel: "Last 30 days",
+        };
+      }
+      if (datePreset === "90d") {
+        const start = new Date(now);
+        start.setDate(start.getDate() - 90);
+        return {
+          startDate: start,
+          periodLabel: "Last 90 days",
+        };
+      }
+      return {
+        startDate: null,
+        periodLabel: "All available records",
+      };
+    };
+
+    const reportContext = buildSalesReportContext();
+    const defaultResponse = {
+      filters: {
+        datePreset: String(datePreset || "ALL"),
+        leadSource: String(leadSource || "ALL"),
+        policyStatus: String(policyStatus || "ALL"),
+      },
+      reportContext: {
+        periodLabel: reportContext.periodLabel,
+        generatedAt: now,
+      },
+      totalLeads: 0,
+      convertedLeads: 0,
+      unconvertedLeads: 0,
+      conversionRatePct: 0,
+      totalPolicies: 0,
+      activePolicyRatePct: 0,
+      totalAnnualPremiumPhp: 0,
+      totalFrequencyPremiumPhp: 0,
+      averageAnnualPremiumPerConvertedLeadPhp: 0,
+      averageFrequencyPremiumPerConvertedLeadPhp: 0,
+      frequencyPremiumBreakdown: {
+        monthlyPremiumPhp: 0,
+        quarterlyPremiumPhp: 0,
+        halfYearlyPremiumPhp: 0,
+        yearlyPremiumPhp: 0,
+      },
+      activePolicies: 0,
+      lapsedPolicies: 0,
+      cancelledPolicies: 0,
+      leadSourceBreakdown: [],
+      monthlyConvertedLeads: [],
+      salesRows: [],
+    };
+
+    const prospects = await Prospect.find({ assignedToUserId: userObjectId })
+      .select("_id prospectCode firstName middleName lastName")
+      .lean();
+    const prospectIds = prospects.map((p) => p._id);
+
+    if (!prospectIds.length) {
+      return res.json(defaultResponse);
+    }
+
+    const leadQuery = { prospectId: { $in: prospectIds } };
+    if (reportContext.startDate) {
+      leadQuery.createdAt = { $gte: reportContext.startDate };
+    }
+    if (leadSource !== "ALL") {
+      leadQuery.source = String(leadSource);
+    }
+
+    const leads = await Lead.find(leadQuery)
+      .select("_id prospectId leadCode source otherSource status createdAt")
+      .lean();
+    const leadIds = leads.map((l) => l._id);
+
+    if (!leadIds.length) {
+      return res.json(defaultResponse);
+    }
+
+    const engagements = leadIds.length
+      ? await LeadEngagement.find({ leadId: { $in: leadIds } }).select("_id leadId").lean()
+      : [];
+    const engagementIds = engagements.map((e) => e._id);
+
+    const policyholders = engagementIds.length
+      ? await Policyholder.find({ leadEngagementId: { $in: engagementIds } })
+          .select("leadEngagementId status createdAt")
+          .lean()
+      : [];
+
+    const applications = engagementIds.length
+      ? await Application.find({ leadEngagementId: { $in: engagementIds } })
+          .select("leadEngagementId recordPremiumPaymentTransfer.totalAnnualPremiumPhp recordPremiumPaymentTransfer.totalFrequencyPremiumPhp")
+          .lean()
+      : [];
+
+    const needsAssessments = engagementIds.length
+      ? await NeedsAssessment.find({ leadEngagementId: { $in: engagementIds } })
+          .select("leadEngagementId needsPriorities.productSelection.requestedFrequency")
+          .lean()
+      : [];
+
+    const scopedPolicyholders =
+      policyStatus === "ALL"
+        ? policyholders
+        : policyholders.filter((policyholder) => policyholder.status === String(policyStatus));
+    const engagementIdToLeadId = new Map(engagements.map((engagement) => [String(engagement._id), String(engagement.leadId)]));
+    const leadIdsWithScopedPolicies = new Set(
+      scopedPolicyholders.map((policyholder) => engagementIdToLeadId.get(String(policyholder.leadEngagementId))).filter(Boolean)
+    );
+    const reportingLeads =
+      policyStatus === "ALL"
+        ? leads
+        : leads.filter((lead) => leadIdsWithScopedPolicies.has(String(lead._id)));
+    const totalLeads = reportingLeads.length;
+
+    if (policyStatus !== "ALL" && !reportingLeads.length) {
+      return res.json(defaultResponse);
+    }
+
+    const scopedEngagementIds = new Set(scopedPolicyholders.map((policyholder) => String(policyholder.leadEngagementId)));
+    const scopedApplications =
+      policyStatus === "ALL"
+        ? applications
+        : applications.filter((application) => scopedEngagementIds.has(String(application?.leadEngagementId || "")));
+    const scopedNeedsAssessments =
+      policyStatus === "ALL"
+        ? needsAssessments
+        : needsAssessments.filter((needsAssessment) => scopedEngagementIds.has(String(needsAssessment?.leadEngagementId || "")));
+
+    const engagementToFrequency = new Map(
+      scopedNeedsAssessments.map((n) => [
+        String(n.leadEngagementId),
+        String(n?.needsPriorities?.productSelection?.requestedFrequency || "").trim(),
+      ])
+    );
+
+    const frequencyPremiumBreakdown = {
+      monthlyPremiumPhp: 0,
+      quarterlyPremiumPhp: 0,
+      halfYearlyPremiumPhp: 0,
+      yearlyPremiumPhp: 0,
+    };
+
+    const normalizeFrequencyKey = (frequencyValue) => {
+      const normalized = String(frequencyValue || "").trim().toLowerCase();
+      if (normalized === "monthly") return "monthlyPremiumPhp";
+      if (normalized === "quarterly") return "quarterlyPremiumPhp";
+      if (normalized === "half-yearly" || normalized === "half yearly" || normalized === "semi-annual" || normalized === "semi annual") {
+        return "halfYearlyPremiumPhp";
+      }
+      if (normalized === "yearly" || normalized === "annual" || normalized === "annually") return "yearlyPremiumPhp";
+      return null;
+    };
+
+    const totalAnnualPremiumPhp = scopedApplications.reduce(
+      (sum, a) => sum + Number(a?.recordPremiumPaymentTransfer?.totalAnnualPremiumPhp || 0),
+      0
+    );
+    const totalFrequencyPremiumPhp = scopedApplications.reduce(
+      (sum, a) => sum + Number(a?.recordPremiumPaymentTransfer?.totalFrequencyPremiumPhp || 0),
+      0
+    );
+
+    for (const appDoc of scopedApplications) {
+      const premium = Number(appDoc?.recordPremiumPaymentTransfer?.totalFrequencyPremiumPhp || 0);
+      const freq = engagementToFrequency.get(String(appDoc?.leadEngagementId)) || "";
+      const frequencyKey = normalizeFrequencyKey(freq);
+
+      if (frequencyKey) frequencyPremiumBreakdown[frequencyKey] += premium;
+    }
+
+    const activePolicies = scopedPolicyholders.filter((p) => p.status === "Active").length;
+    const lapsedPolicies = scopedPolicyholders.filter((p) => p.status === "Lapsed").length;
+    const cancelledPolicies = scopedPolicyholders.filter((p) => p.status === "Cancelled").length;
+    const totalPolicies = scopedPolicyholders.length;
+
+    const engagementToLead = new Map(engagements.map((e) => [String(e._id), String(e.leadId)]));
+    const leadById = new Map(reportingLeads.map((lead) => [String(lead._id), lead]));
+    const prospectById = new Map(prospects.map((prospect) => [String(prospect._id), prospect]));
+    const normalizeLeadSourceLabel = (lead) => {
+      const rawSource = String(lead?.source || "").trim();
+      if (rawSource === "Other") return "Other";
+      return rawSource || "Other";
+    };
+
+    const convertedLeadMomentsByEngagement = new Map();
+    for (const policyholder of scopedPolicyholders) {
+      const engagementId = String(policyholder?.leadEngagementId || "");
+      if (!engagementId) continue;
+
+      const createdAt = new Date(policyholder.createdAt);
+      const existingMoment = convertedLeadMomentsByEngagement.get(engagementId);
+
+      if (!existingMoment) {
+        convertedLeadMomentsByEngagement.set(engagementId, createdAt);
+        continue;
+      }
+
+      if (!Number.isNaN(createdAt.getTime()) && (Number.isNaN(existingMoment.getTime()) || createdAt < existingMoment)) {
+        convertedLeadMomentsByEngagement.set(engagementId, createdAt);
+      }
+    }
+
+    const convertedLeads = convertedLeadMomentsByEngagement.size;
+    const unconvertedLeads = Math.max(totalLeads - convertedLeads, 0);
+    const conversionRatePct = totalLeads ? Math.round((convertedLeads / totalLeads) * 100) : 0;
+    const activePolicyRatePct = totalPolicies ? Math.round((activePolicies / totalPolicies) * 100) : 0;
+    const averageAnnualPremiumPerConvertedLeadPhp = convertedLeads
+      ? Number((totalAnnualPremiumPhp / convertedLeads).toFixed(2))
+      : 0;
+    const averageFrequencyPremiumPerConvertedLeadPhp = convertedLeads
+      ? Number((totalFrequencyPremiumPhp / convertedLeads).toFixed(2))
+      : 0;
+
+    const leadSourceBreakdownMap = new Map();
+
+    for (const lead of reportingLeads) {
+      const bucket = normalizeLeadSourceLabel(lead);
+      if (!leadSourceBreakdownMap.has(bucket)) {
+        leadSourceBreakdownMap.set(bucket, {
+          label: bucket,
+          totalLeads: 0,
+          convertedLeads: 0,
+          conversionRatePct: 0,
+        });
+      }
+      leadSourceBreakdownMap.get(bucket).totalLeads += 1;
+    }
+
+    for (const engagementId of convertedLeadMomentsByEngagement.keys()) {
+      const leadId = engagementToLead.get(engagementId);
+      const lead = leadId ? leadById.get(String(leadId)) : null;
+      if (!lead) continue;
+      const bucket = normalizeLeadSourceLabel(lead);
+      if (!leadSourceBreakdownMap.has(bucket)) {
+        leadSourceBreakdownMap.set(bucket, {
+          label: bucket,
+          totalLeads: 0,
+          convertedLeads: 0,
+          conversionRatePct: 0,
+        });
+      }
+      leadSourceBreakdownMap.get(bucket).convertedLeads += 1;
+    }
+
+    const leadSourceBreakdown = [...leadSourceBreakdownMap.values()]
+      .map((sourceMetrics) => ({
+        ...sourceMetrics,
+        conversionRatePct: sourceMetrics.totalLeads
+          ? Math.round((sourceMetrics.convertedLeads / sourceMetrics.totalLeads) * 100)
+          : 0,
+      }))
+      .sort((a, b) => {
+        if (b.convertedLeads !== a.convertedLeads) return b.convertedLeads - a.convertedLeads;
+        if (b.totalLeads !== a.totalLeads) return b.totalLeads - a.totalLeads;
+        return a.label.localeCompare(b.label);
+      });
+
+    for (const sourceMetrics of leadSourceBreakdown) {
+      sourceMetrics.conversionRatePct = sourceMetrics.totalLeads
+        ? Math.round((sourceMetrics.convertedLeads / sourceMetrics.totalLeads) * 100)
+        : 0;
+    }
+
+    const monthMap = new Map();
+    for (const conversionDate of convertedLeadMomentsByEngagement.values()) {
+      if (Number.isNaN(conversionDate.getTime())) continue;
+      const key = `${conversionDate.getUTCFullYear()}-${String(conversionDate.getUTCMonth() + 1).padStart(2, "0")}`;
+      monthMap.set(key, (monthMap.get(key) || 0) + 1);
+    }
+
+    const monthlyConvertedLeads = [];
+    const currentMonth = new Date();
+    for (let offset = 5; offset >= 0; offset -= 1) {
+      const monthDate = new Date(Date.UTC(currentMonth.getUTCFullYear(), currentMonth.getUTCMonth() - offset, 1));
+      const monthKey = `${monthDate.getUTCFullYear()}-${String(monthDate.getUTCMonth() + 1).padStart(2, "0")}`;
+      monthlyConvertedLeads.push({
+        month: monthKey,
+        converted: monthMap.get(monthKey) || 0,
+      });
+    }
+
+    const leadIdToPolicyholders = new Map();
+    for (const policyholder of scopedPolicyholders) {
+      const leadId = engagementToLead.get(String(policyholder.leadEngagementId));
+      if (!leadId) continue;
+      const key = String(leadId);
+      if (!leadIdToPolicyholders.has(key)) {
+        leadIdToPolicyholders.set(key, []);
+      }
+      leadIdToPolicyholders.get(key).push(policyholder);
+    }
+
+    const leadIdToApplication = new Map(
+      scopedApplications.map((application) => {
+        const leadId = engagementToLead.get(String(application.leadEngagementId));
+        return [String(leadId || ""), application];
+      }).filter(([leadId]) => leadId)
+    );
+    const leadIdToNeedsAssessment = new Map(
+      scopedNeedsAssessments.map((needsAssessment) => {
+        const leadId = engagementToLead.get(String(needsAssessment.leadEngagementId));
+        return [String(leadId || ""), needsAssessment];
+      }).filter(([leadId]) => leadId)
+    );
+
+    const salesRows = reportingLeads
+      .map((lead) => {
+        const leadKey = String(lead._id);
+        const prospect = prospectById.get(String(lead.prospectId));
+        const relatedPolicies = [...(leadIdToPolicyholders.get(leadKey) || [])].sort(
+          (a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)
+        );
+        const latestPolicy = relatedPolicies[0] || null;
+        const application = leadIdToApplication.get(leadKey) || null;
+        const needsAssessment = leadIdToNeedsAssessment.get(leadKey) || null;
+        const fullName = [prospect?.firstName, prospect?.middleName, prospect?.lastName].filter(Boolean).join(" ").trim() || "—";
+        const requestedFrequency = String(needsAssessment?.needsPriorities?.productSelection?.requestedFrequency || "").trim() || "—";
+
+        return {
+          leadCode: lead.leadCode || "—",
+          prospectCode: prospect?.prospectCode || "—",
+          prospectName: fullName,
+          leadSource: normalizeLeadSourceLabel(lead),
+          leadStatus: String(lead.status || "—"),
+          leadCreatedAt: lead.createdAt || null,
+          policies: relatedPolicies.length,
+          policyStatus: latestPolicy?.status || "—",
+          convertedAt: latestPolicy?.createdAt || null,
+          requestedFrequency,
+          annualPremiumPhp: Number(application?.recordPremiumPaymentTransfer?.totalAnnualPremiumPhp || 0),
+          frequencyPremiumPhp: Number(application?.recordPremiumPaymentTransfer?.totalFrequencyPremiumPhp || 0),
+        };
+      })
+      .sort((a, b) => {
+        const left = new Date(b.convertedAt || b.leadCreatedAt || 0).getTime();
+        const right = new Date(a.convertedAt || a.leadCreatedAt || 0).getTime();
+        if (left !== right) return left - right;
+        return String(a.leadCode).localeCompare(String(b.leadCode));
+      });
+
+    return res.json({
+      ...defaultResponse,
+      totalLeads,
+      convertedLeads,
+      unconvertedLeads,
+      conversionRatePct,
+      totalPolicies,
+      activePolicyRatePct,
+      totalAnnualPremiumPhp,
+      totalFrequencyPremiumPhp,
+      averageAnnualPremiumPerConvertedLeadPhp,
+      averageFrequencyPremiumPerConvertedLeadPhp,
+      frequencyPremiumBreakdown,
+      activePolicies,
+      lapsedPolicies,
+      cancelledPolicies,
+      leadSourceBreakdown,
+      monthlyConvertedLeads,
+      salesRows,
+    });
+  } catch (err) {
+    console.error("Sales performance error:", err);
     return res.status(500).json({ message: "Server error." });
   }
 });
@@ -7419,6 +9709,157 @@ app.get("/api/tasks/summary", async (req, res) => {
 });
 
 // ===========================
+// TASKS: PROGRESS DASHBOARD (Agent)
+// GET /api/tasks/progress?userId=...
+// ===========================
+app.get("/api/tasks/progress", async (req, res) => {
+  try {
+    const { userId, datePreset = "30d", status = "ALL", type = "ALL", drillType = "", drillLimit = "12", reportLimit = "120" } = req.query;
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId)) {
+      return res.status(400).json({ message: "Invalid userId." });
+    }
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    await ensureTaskMissedNotificationsForUser(userObjectId);
+
+    let tasks = await Task.find({ assignedToUserId: userObjectId })
+      .select("_id prospectId leadEngagementId type title dueAt status completedAt wasDelayed createdAt")
+      .lean();
+
+    tasks = await attachTaskRefs(tasks);
+
+    const now = Date.now();
+    const fromMs = (() => {
+      if (String(datePreset) === "7d") return now - 7 * 24 * 60 * 60 * 1000;
+      if (String(datePreset) === "30d") return now - 30 * 24 * 60 * 60 * 1000;
+      if (String(datePreset) === "90d") return now - 90 * 24 * 60 * 60 * 1000;
+      return null;
+    })();
+
+    const normalized = tasks.map((t) => {
+      const normalizedStatus = String(t?.status || "Open").toLowerCase() === "done" ? "Done" : "Open";
+      const normalizedType = String(t?.type || "UPDATE_CONTACT_INFO").toUpperCase().trim();
+      const dueAtMs = new Date(t?.dueAt).getTime();
+      const createdAtMs = new Date(t?.createdAt).getTime();
+      const isOverdue = normalizedStatus === "Open" && Number.isFinite(dueAtMs) && dueAtMs < now;
+      return {
+        ...t,
+        status: normalizedStatus,
+        type: normalizedType,
+        dueAtMs,
+        createdAtMs,
+        isOverdue,
+        wasDelayed: Boolean(t?.wasDelayed),
+      };
+    });
+
+    const filtered = normalized.filter((t) => {
+      if (String(type) !== "ALL" && t.type !== String(type).toUpperCase().trim()) return false;
+
+      const s = String(status).toUpperCase().trim();
+      if (s === "OPEN" && t.status !== "Open") return false;
+      if (s === "DONE" && t.status !== "Done") return false;
+      if (s === "OVERDUE_OPEN" && !t.isOverdue) return false;
+      if (s === "DELAYED_DONE" && !(t.status === "Done" && t.wasDelayed)) return false;
+
+      if (fromMs != null) {
+        const refMs = Number.isFinite(t.dueAtMs) ? t.dueAtMs : t.createdAtMs;
+        if (!Number.isFinite(refMs) || refMs < fromMs) return false;
+      }
+      return true;
+    });
+
+    const open = filtered.filter((t) => t.status === "Open");
+    const done = filtered.filter((t) => t.status === "Done");
+    const overdue = open.filter((t) => t.isOverdue);
+    const delayedDone = done.filter((t) => t.wasDelayed);
+    const onTimeDone = done.filter((t) => !t.wasDelayed);
+
+    const TASK_TYPES = ["APPROACH", "FOLLOW_UP", "UPDATE_CONTACT_INFO", "APPOINTMENT", "PRESENTATION"];
+    const typeCounts = TASK_TYPES.map((taskType) => {
+      const rows = filtered.filter((t) => t.type === taskType);
+      const doneCount = rows.filter((t) => t.status === "Done").length;
+      return { type: taskType, total: rows.length, done: doneCount };
+    });
+
+    const leadWorkloadMap = new Map();
+    for (const t of filtered) {
+      if (!t?.leadEngagementId) continue;
+      const key = String(t.leadEngagementId);
+      const row = leadWorkloadMap.get(key) || {
+        leadEngagementId: key,
+        leadCode: t?.leadCode || "—",
+        prospectName: t?.prospectName || "—",
+        total: 0,
+        open: 0,
+        overdue: 0,
+      };
+      row.total += 1;
+      if (t.status === "Open") row.open += 1;
+      if (t.isOverdue) row.overdue += 1;
+      leadWorkloadMap.set(key, row);
+    }
+
+    const leadWorkloadRows = [...leadWorkloadMap.values()]
+      .sort((a, b) => b.open - a.open || b.total - a.total)
+      .slice(0, 8);
+
+    const normalizedDrillType = String(drillType || "").toUpperCase().trim();
+    const drillMax = Math.max(1, Math.min(100, Number(drillLimit) || 12));
+    const reportMax = Math.max(20, Math.min(500, Number(reportLimit) || 120));
+
+    const drillTasks = normalizedDrillType
+      ? filtered
+          .filter((t) => t.type === normalizedDrillType)
+          .sort((a, b) => (Number.isFinite(a.dueAtMs) ? a.dueAtMs : Infinity) - (Number.isFinite(b.dueAtMs) ? b.dueAtMs : Infinity))
+          .slice(0, drillMax)
+      : [];
+
+    const reportTasks = filtered
+      .slice()
+      .sort((a, b) => (Number.isFinite(a.dueAtMs) ? a.dueAtMs : Infinity) - (Number.isFinite(b.dueAtMs) ? b.dueAtMs : Infinity))
+      .slice(0, reportMax);
+
+    const totalTasks = filtered.length;
+    const completionRate = totalTasks ? Math.round((done.length / totalTasks) * 100) : 0;
+    const onTimeRate = done.length ? Math.round((onTimeDone.length / done.length) * 100) : 0;
+    const lateCompletionRate = done.length ? Math.round((delayedDone.length / done.length) * 100) : 0;
+    const overdueOpenRate = open.length ? Math.round((overdue.length / open.length) * 100) : 0;
+
+    return res.json({
+      totalTasks,
+      openTasks: open.length,
+      doneTasks: done.length,
+      overdueTasks: overdue.length,
+      delayedDoneTasks: delayedDone.length,
+      completionRate,
+      onTimeRate,
+      lateCompletionRate,
+      overdueOpenRate,
+      typeCounts,
+      leadWorkloadRows,
+      statusChart: [
+        { key: "Open", value: open.length, color: "#ef4444" },
+        { key: "Done", value: done.length, color: "#16a34a" },
+        { key: "Overdue Open", value: overdue.length, color: "#f59e0b" },
+        { key: "Delayed Done", value: delayedDone.length, color: "#7c3aed" },
+      ],
+      drillTasks,
+      reportTasks,
+      reportContext: {
+        datePreset: String(datePreset),
+        status: String(status),
+        type: String(type),
+      },
+    });
+  } catch (err) {
+    console.error("Task progress dashboard error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+// ===========================
 // TASKS: LIST (Agent)
 // GET /api/tasks?userId=...&status=Open|Done&type=APPROACH&includeRefs=1
 //
@@ -7466,7 +9907,6 @@ app.get("/api/tasks", async (req, res) => {
         "UPDATE_CONTACT_INFO",
         "APPOINTMENT",
         "PRESENTATION",
-        "CUSTOM",
       ];
 
       if (!ALLOWED_TYPES.includes(t)) {
@@ -7494,11 +9934,13 @@ app.get("/api/tasks", async (req, res) => {
      */
     if (String(includeRefs) === "1") {
       // --- Prospects (names) ---
-      const prospectIds = [...new Set(tasks.map((t) => String(t.prospectId)).filter(Boolean))];
+      const prospectIds = uniqueValidObjectIdStrings(tasks.map((t) => t.prospectId));
 
-      const prospects = await Prospect.find({ _id: { $in: prospectIds } })
+      const prospects = prospectIds.length
+        ? await Prospect.find({ _id: { $in: prospectIds } })
         .select("firstName middleName lastName")
-        .lean();
+        .lean()
+        : [];
 
       const prospectMap = new Map(
         prospects.map((p) => {
@@ -7508,7 +9950,7 @@ app.get("/api/tasks", async (req, res) => {
       );
 
       // --- LeadEngagement -> leadId ---
-      const engagementIds = [...new Set(tasks.map((t) => String(t.leadEngagementId)).filter(Boolean))];
+      const engagementIds = uniqueValidObjectIdStrings(tasks.map((t) => t.leadEngagementId));
 
       const engagementToLeadId = new Map(); 
       let leadIdToCode = new Map();       
@@ -7522,7 +9964,7 @@ app.get("/api/tasks", async (req, res) => {
           if (e.leadId) engagementToLeadId.set(String(e._id), String(e.leadId));
         }
 
-        const leadIds = [...new Set(engagements.map((e) => String(e.leadId)).filter(Boolean))];
+        const leadIds = uniqueValidObjectIdStrings(engagements.map((e) => e.leadId));
 
         if (leadIds.length) {
           const leads = await Lead.find({ _id: { $in: leadIds } })
@@ -7641,20 +10083,21 @@ app.get("/api/notifications", async (req, res) => {
         ...new Set(
           notifs
             .filter((n) => n.entityType === "Task" && n.entityId)
-            .map((n) => String(n.entityId))
+            .map((n) => toValidObjectIdString(n.entityId))
+            .filter(Boolean)
         ),
       ];
       // Fetch minimal task fields needed for navigation
-      const tasks = await Task.find({ _id: { $in: taskIds } })
+      const tasks = taskIds.length
+        ? await Task.find({ _id: { $in: taskIds } })
         .select("prospectId leadEngagementId type")
-        .lean();
+        .lean()
+        : [];
 
       const taskMap = new Map(tasks.map((t) => [String(t._id), t]));
 
       // Resolve engagement -> leadId
-      const engagementIds = [
-        ...new Set(tasks.map((t) => String(t.leadEngagementId)).filter(Boolean)),
-      ];
+      const engagementIds = uniqueValidObjectIdStrings(tasks.map((t) => t.leadEngagementId));
 
       const engagementToLeadId = new Map();
       if (engagementIds.length) {
@@ -7668,12 +10111,12 @@ app.get("/api/notifications", async (req, res) => {
       }
 
       // Prospect name helpers (prospectId -> fullName)
-      const prospectIds = [
-        ...new Set(tasks.map((t) => String(t.prospectId)).filter(Boolean)),
-      ];
-      const prospects = await Prospect.find({ _id: { $in: prospectIds } })
-        .select("firstName middleName lastName")
-        .lean();
+      const prospectIds = uniqueValidObjectIdStrings(tasks.map((t) => t.prospectId));
+      const prospects = prospectIds.length
+        ? await Prospect.find({ _id: { $in: prospectIds } })
+          .select("firstName middleName lastName")
+          .lean()
+        : [];
       const prospectMap = new Map(
         prospects.map((p) => {
           const fullName = `${p.firstName}${p.middleName ? ` ${p.middleName}` : ""} ${p.lastName}`.trim();
@@ -7682,13 +10125,9 @@ app.get("/api/notifications", async (req, res) => {
       );
 
       // leadCode helpers (leadId -> leadCode)
-      const leadIds = [
-        ...new Set(
-          tasks
-            .map((t) => (t.leadEngagementId ? engagementToLeadId.get(String(t.leadEngagementId)) : null))
-            .filter(Boolean)
-        ),
-      ];
+      const leadIds = uniqueValidObjectIdStrings(
+        tasks.map((t) => (t.leadEngagementId ? engagementToLeadId.get(String(t.leadEngagementId)) : null))
+      );
       let leadIdToCode = new Map();
       if (leadIds.length) {
         const leads = await Lead.find({ _id: { $in: leadIds } })

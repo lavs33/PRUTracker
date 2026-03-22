@@ -334,6 +334,10 @@ const handleSideNav = (key) => {
       navigate(`/agent/${user.username}/clients`);
       break;
 
+    case "clients_relationship":
+      navigate(`/agent/${user.username}/clients/relationship`);
+      break;
+
     case "clients_all_prospects":
       navigate(`/agent/${user.username}/prospects`);
       break;
@@ -347,14 +351,16 @@ const handleSideNav = (key) => {
       navigate(`/agent/${user.username}/tasks`);
       break;
 
+    case "tasks_progress":
+      navigate(`/agent/${user.username}/tasks/progress`);
+      break;
+
     case "tasks_all":
       navigate(`/agent/${user.username}/tasks/all`);
       break;
 
-    // SALES
-    case "sales":
-      alert("Sales module coming soon");
-      break;
+    case "sales": navigate(`/agent/${user.username}/sales/performance`); break;
+    case "sales_performance": navigate(`/agent/${user.username}/sales/performance`); break;
 
     default:
       break;

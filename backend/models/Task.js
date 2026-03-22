@@ -25,7 +25,6 @@ const TASK_TYPES = [
   "APPOINTMENT",
   "PRESENTATION",
   "UPDATE_CONTACT_INFO",
-  "CUSTOM",
 ];
 
 /**
@@ -292,8 +291,6 @@ taskSchema.pre("validate", function () {
    * UPDATE_CONTACT_INFO
    * - Explicitly allowed without leadEngagementId.
    *
-   * CUSTOM
-   * - Not enforced here (depends on how used yet).
    */
   const t = String(this.type || "").toUpperCase();
   const requiresEngagement = ["APPROACH", "FOLLOW_UP", "APPOINTMENT", "PRESENTATION"].includes(t);
