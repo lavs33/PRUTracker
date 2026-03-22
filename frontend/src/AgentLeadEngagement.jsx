@@ -20,19 +20,20 @@ function SubactivityNavigator({
     <div className="le-subactivityShell">
       <div className="le-activityTracker le-activityTracker--interactive">
         {steps.map((step, idx) => {
-          const isDone = allowAllSteps || idx < currentIndex;
-          const isActive = idx === viewedIndex;
+          const isViewed = idx === viewedIndex;
           const isCurrent = showCurrentStatus && idx === currentIndex;
+          const isReached = allowAllSteps || idx <= currentIndex;
+          const isDone = allowAllSteps || idx < currentIndex;
           const isReachable = allowAllSteps || idx <= currentIndex;
 
           return (
             <button
               key={step.key}
               type="button"
-              className={`${isReachable ? "reachable" : ""} ${isDone ? "done" : ""} ${isActive ? "current" : ""} ${isCurrent ? "live-current" : ""}`.trim()}
+              className={`${isReachable ? "reachable" : ""} ${isReached ? "reached" : ""} ${isDone ? "done" : ""} ${isViewed ? "viewed" : ""} ${isCurrent ? "live-current" : ""}`.trim()}
               onClick={() => onSelect(step.key)}
               disabled={!isReachable}
-              aria-current={isActive ? "step" : undefined}
+              aria-current={isViewed ? "step" : undefined}
               title={!isReachable ? "Finish the current subactivity first." : undefined}
             >
               <span className="le-activityTracker__label">{step.label}</span>
@@ -92,6 +93,7 @@ function AgentLeadEngagement() {
   });
   const [savingInterest, setSavingInterest] = useState(false);
   const [interestError, setInterestError] = useState("");
+  const [dropOutcomeModal, setDropOutcomeModal] = useState(null);
 
   const [meetingForm, setMeetingForm] = useState({
     meetingDate: "",
@@ -1551,6 +1553,12 @@ function AgentLeadEngagement() {
   const showProposalPanel = viewStage === "Proposal";
   const showApplicationPanel = viewStage === "Application";
   const showPolicyIssuancePanel = viewStage === "Policy Issuance";
+  const viewedStageIndex = viewStage === "Not Started" ? -1 : PIPELINE_STEPS.indexOf(viewStage);
+  const isViewingPastStage = viewedStageIndex >= 0 && safeIndex > viewedStageIndex;
+  const isViewingFutureStage = viewedStageIndex >= 0 && viewedStageIndex > safeIndex;
+  const futureStageSubactivityHelperText =
+    "This stage is still ahead in the lead journey. Its subactivities stay gray until the progression reaches them.";
+
   const isNeedsAssessmentEditableNow = showNeedsAssessmentPanel && isViewingCurrentStage && stage === "Needs Assessment";
   const isProposalEditableNow = showProposalPanel && isViewingCurrentStage && stage === "Proposal";
 
@@ -2372,6 +2380,16 @@ function AgentLeadEngagement() {
       if (!res.ok) throw new Error(data?.message || "Failed to save assess interest.");
 
       await refreshCurrentProgressView();
+      if (data?.leadDropped && data?.droppedLead) {
+        setDropOutcomeModal({
+          title: "Lead Dropped",
+          message: "The lead was automatically dropped because the prospect was not interested.",
+          leadCode: String(data.droppedLead.leadCode || lead?.leadCode || "").trim(),
+          dropReason: String(data.droppedLead.dropReason || "").trim(),
+          dropNotes: String(data.droppedLead.dropNotes || "").trim(),
+          droppedAt: data.droppedLead.droppedAt || null,
+        });
+      }
     } catch (err) {
       setInterestError(err?.message || "Cannot connect to server. Is backend running?");
     } finally {
@@ -3911,18 +3929,19 @@ function AgentLeadEngagement() {
                   {showContactingTracker && !isViewingCurrentStage && (
                     <SubactivityNavigator
                       steps={CONTACTING_STEPS_UI}
-                      currentIndex={CONTACTING_STEPS_UI.length - 1}
+                      currentIndex={isViewingPastStage ? CONTACTING_STEPS_UI.length - 1 : -1}
                       viewedIndex={contactingViewedStepIndex}
                       onSelect={setContactingViewedActivityKey}
+                      helperText={isViewingFutureStage ? futureStageSubactivityHelperText : ""}
                       showCurrentStatus={false}
-                      allowAllSteps
+                      allowAllSteps={isViewingPastStage}
                     />
                   )}
 
                       {showNeedsAssessmentPanel && (
                     <SubactivityNavigator
                       steps={NEEDS_ASSESSMENT_STEPS_UI}
-                      currentIndex={isViewingCurrentStage ? needsCurrentStepIndex : NEEDS_ASSESSMENT_STEPS_UI.length - 1}
+                      currentIndex={isViewingCurrentStage ? needsCurrentStepIndex : isViewingPastStage ? NEEDS_ASSESSMENT_STEPS_UI.length - 1 : -1}
                       viewedIndex={needsViewedStepIndex}
                       onSelect={(stepKey) =>
                         isViewingCurrentStage
@@ -3936,7 +3955,9 @@ function AgentLeadEngagement() {
                       }
                       helperText={
                         !isViewingCurrentStage
-                          ? ""
+                          ? isViewingFutureStage
+                            ? futureStageSubactivityHelperText
+                            : ""
                           : isLeadClosed
                           ? closedLeadSubactivityHelperText
                           : needsViewedStepIndex < needsCurrentStepIndex
@@ -3944,14 +3965,14 @@ function AgentLeadEngagement() {
                           : "Click any unlocked subactivity to review saved details. Only the current subactivity can be edited."
                       }
                       showCurrentStatus={showCurrentSubactivityStatus}
-                      allowAllSteps={!isViewingCurrentStage}
+                      allowAllSteps={isViewingPastStage}
                     />
                   )}
 
                   {showProposalPanel && (
                     <SubactivityNavigator
                       steps={PROPOSAL_STEPS_UI}
-                      currentIndex={isViewingCurrentStage ? proposalCurrentStepIndex : PROPOSAL_STEPS_UI.length - 1}
+                      currentIndex={isViewingCurrentStage ? proposalCurrentStepIndex : isViewingPastStage ? PROPOSAL_STEPS_UI.length - 1 : -1}
                       viewedIndex={proposalViewedStepIndex}
                       onSelect={(stepKey) =>
                         isViewingCurrentStage
@@ -3965,7 +3986,9 @@ function AgentLeadEngagement() {
                       }
                       helperText={
                         !isViewingCurrentStage
-                          ? ""
+                          ? isViewingFutureStage
+                            ? futureStageSubactivityHelperText
+                            : ""
                           : isLeadClosed
                           ? closedLeadSubactivityHelperText
                           : proposalViewedStepIndex < proposalCurrentStepIndex
@@ -3973,14 +3996,14 @@ function AgentLeadEngagement() {
                           : "Click any unlocked subactivity to review saved details. Only the current subactivity can be edited."
                       }
                       showCurrentStatus={showCurrentSubactivityStatus}
-                      allowAllSteps={!isViewingCurrentStage}
+                      allowAllSteps={isViewingPastStage}
                     />
                   )}
 
                   {showApplicationPanel && (
                     <SubactivityNavigator
                       steps={APPLICATION_STEPS_UI}
-                      currentIndex={isViewingCurrentStage ? applicationCurrentStepIndex : APPLICATION_STEPS_UI.length - 1}
+                      currentIndex={isViewingCurrentStage ? applicationCurrentStepIndex : isViewingPastStage ? APPLICATION_STEPS_UI.length - 1 : -1}
                       viewedIndex={applicationViewedStepIndex}
                       onSelect={(stepKey) =>
                         isViewingCurrentStage
@@ -3994,7 +4017,9 @@ function AgentLeadEngagement() {
                       }
                       helperText={
                         !isViewingCurrentStage
-                          ? ""
+                          ? isViewingFutureStage
+                            ? futureStageSubactivityHelperText
+                            : ""
                           : isLeadClosed
                           ? closedLeadSubactivityHelperText
                           : applicationViewedStepIndex < applicationCurrentStepIndex
@@ -4002,14 +4027,14 @@ function AgentLeadEngagement() {
                           : "Click any unlocked subactivity to review saved details. Only the current subactivity can be edited."
                       }
                       showCurrentStatus={showCurrentSubactivityStatus}
-                      allowAllSteps={!isViewingCurrentStage}
+                      allowAllSteps={isViewingPastStage}
                     />
                   )}
 
                   {showPolicyIssuancePanel && (
                     <SubactivityNavigator
                       steps={POLICY_ISSUANCE_STEPS_UI}
-                      currentIndex={isViewingCurrentStage ? policyCurrentStepIndex : POLICY_ISSUANCE_STEPS_UI.length - 1}
+                      currentIndex={isViewingCurrentStage ? policyCurrentStepIndex : isViewingPastStage ? POLICY_ISSUANCE_STEPS_UI.length - 1 : -1}
                       viewedIndex={policyViewedStepIndex}
                       onSelect={(stepKey) =>
                         isViewingCurrentStage
@@ -4023,7 +4048,9 @@ function AgentLeadEngagement() {
                       }
                       helperText={
                         !isViewingCurrentStage
-                          ? ""
+                          ? isViewingFutureStage
+                            ? futureStageSubactivityHelperText
+                            : ""
                           : isLeadClosed
                           ? closedLeadSubactivityHelperText
                           : policyViewedStepIndex < policyCurrentStepIndex
@@ -4031,7 +4058,7 @@ function AgentLeadEngagement() {
                           : "Click any unlocked subactivity to review saved details. Only the current subactivity can be edited."
                       }
                       showCurrentStatus={showCurrentSubactivityStatus}
-                      allowAllSteps={!isViewingCurrentStage}
+                      allowAllSteps={isViewingPastStage}
                     />
                   )}
 
@@ -7370,6 +7397,44 @@ function AgentLeadEngagement() {
           )}
         </main>
       </div>
+
+      {dropOutcomeModal ? (
+        <div className="le-modalOverlay" role="dialog" aria-modal="true" aria-labelledby="le-drop-modal-title">
+          <div className="le-modalCard">
+            <button type="button" className="le-modalClose" aria-label="Close drop modal" onClick={() => setDropOutcomeModal(null)}>
+              ×
+            </button>
+            <h3 className="le-modalTitle" id="le-drop-modal-title">{dropOutcomeModal.title}</h3>
+            <p className="le-modalText">{dropOutcomeModal.message}</p>
+            <div className="le-attemptMeta" style={{ marginBottom: 16 }}>
+              {dropOutcomeModal.leadCode ? (
+                <div>
+                  <span className="le-metaLabel">Lead Code</span>
+                  <span className="le-metaValue">{dropOutcomeModal.leadCode}</span>
+                </div>
+              ) : null}
+              {dropOutcomeModal.dropReason ? (
+                <div>
+                  <span className="le-metaLabel">Drop Reason</span>
+                  <span className="le-metaValue">{dropOutcomeModal.dropReason}</span>
+                </div>
+              ) : null}
+              {dropOutcomeModal.droppedAt ? (
+                <div>
+                  <span className="le-metaLabel">Dropped At</span>
+                  <span className="le-metaValue">{formatDateTime(dropOutcomeModal.droppedAt)}</span>
+                </div>
+              ) : null}
+            </div>
+            {dropOutcomeModal.dropNotes ? <p className="le-modalText">{dropOutcomeModal.dropNotes}</p> : null}
+            <div className="le-modalActions">
+              <button type="button" className="le-btn primary" onClick={() => setDropOutcomeModal(null)}>
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -126,6 +126,13 @@ function AgentPolicyholdersAll() {
   const shownCount = rows.length;
   const totalCount = totalForThisUser;
 
+  const openPolicyholderLeadDetails = (policyholder) => {
+    const prospectId = String(policyholder?.prospectId || "").trim();
+    const leadId = String(policyholder?.leadId || "").trim();
+    if (!prospectId || !leadId) return;
+    navigate(`/agent/${user.username}/prospects/${prospectId}/leads/${leadId}`);
+  };
+
   const resetFilters = () => {
     setQuery("");
     setProductName("");
@@ -255,8 +262,26 @@ function AgentPolicyholdersAll() {
                     </tr>
                   </thead>
                   <tbody>
-                    {rows.map((p) => (
-                      <tr key={p._id} className="allpol-row">
+                    {rows.map((p) => {
+                      const canOpenLeadDetails = Boolean(String(p?.prospectId || "").trim() && String(p?.leadId || "").trim());
+
+                      return (
+                      <tr
+                        key={p._id}
+                        className={`allpol-row ${canOpenLeadDetails ? "allpol-row--clickable" : ""}`.trim()}
+                        onClick={canOpenLeadDetails ? () => openPolicyholderLeadDetails(p) : undefined}
+                        onKeyDown={canOpenLeadDetails
+                          ? (e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                openPolicyholderLeadDetails(p);
+                              }
+                            }
+                          : undefined}
+                        role={canOpenLeadDetails ? "link" : undefined}
+                        tabIndex={canOpenLeadDetails ? 0 : undefined}
+                        title={canOpenLeadDetails ? "Open lead details" : undefined}
+                      >
                         <td>{String(p.policyholderNo ?? 0).padStart(2, "0")}</td>
                         <td className="allpol-mono allpol-cell-nowrap">{p.policyholderCode || "—"}</td>
                         <td>{p.firstName || "—"}</td>
@@ -271,7 +296,8 @@ function AgentPolicyholdersAll() {
                         <td className="allpol-cell-date">{formatDateOnly(p.nextPaymentDate)}</td>
                         <td className="allpol-cell-date">{formatDateOnly(p.createdAt)}</td>
                       </tr>
-                    ))}
+                      );
+                    })}
                     {rows.length === 0 && (
                       <tr>
                         <td colSpan="11" className="allpol-empty">No policyholders found.</td>
