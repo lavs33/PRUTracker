@@ -419,6 +419,391 @@ async function findActiveManagerForScope(managerType, { branchId = "", unitId = 
   return managers.find((manager) => matchesManagerScope(manager, managerType, { branchId, unitId })) || null;
 }
 
+async function getManagerScopeContext(user) {
+  const normalizedRole = String(user?.role || "").trim().toUpperCase();
+  const ManagerModel = getManagerModelByType(normalizedRole);
+
+  if (!ManagerModel) {
+    return { error: { status: 400, message: "Invalid manager role." } };
+  }
+
+  const manager = await ManagerModel.findOne({ userId: user._id }).populate(buildManagerPopulateQuery(normalizedRole)).lean();
+
+  if (!manager) {
+    return {
+      error: {
+        status: 403,
+        message: "No active manager assignment was found for this account. Please contact Admin.",
+      },
+    };
+  }
+
+  if (manager.isBlocked === true) {
+    return {
+      error: {
+        status: 403,
+        message: "This manager account has been replaced and can no longer access the portal.",
+      },
+    };
+  }
+
+  const profile = getManagerProfile(manager);
+
+  return {
+    role: normalizedRole,
+    manager,
+    profile,
+    managerAgentId: String(profile.agent?._id || ""),
+    unitId: String(profile.unit?._id || ""),
+    branchId: String(profile.branch?._id || ""),
+    unitName: profile.unit?.unitName || "",
+    branchName: profile.branch?.branchName || "",
+    areaName: profile.area?.areaName || "",
+  };
+}
+
+async function buildManagerPortalPayload(user) {
+  const context = await getManagerScopeContext(user);
+  if (context.error) return context;
+
+  const agentQuery = {};
+
+  if (context.role === "BM") {
+    const branchUnits = await Unit.find({ branchId: context.branchId }).select("_id").lean();
+    const unitIds = branchUnits.map((unit) => unit._id);
+    agentQuery.unitId = { $in: unitIds };
+  } else {
+    agentQuery.unitId = context.unitId;
+  }
+
+  const scopedAgents = await Agent.find(agentQuery)
+    .populate({
+      path: "userId",
+      select: "username firstName middleName lastName displayPhoto role",
+    })
+    .populate({
+      path: "unitId",
+      select: "unitName branchId",
+      populate: {
+        path: "branchId",
+        select: "branchName areaId",
+        populate: {
+          path: "areaId",
+          select: "areaName",
+        },
+      },
+    })
+    .lean();
+
+  const scopedUserIds = scopedAgents.map((agent) => agent.userId?._id).filter(Boolean);
+  const scopedUserIdStrings = scopedUserIds.map((value) => String(value));
+
+  const metricsByUserId = new Map(
+    scopedAgents.map((agent) => {
+      const assignedUserId = String(agent?.userId?._id || "");
+      const fullName = [agent?.userId?.firstName, agent?.userId?.middleName, agent?.userId?.lastName]
+        .filter(Boolean)
+        .join(" ")
+        .trim();
+
+      return [
+        assignedUserId,
+        {
+          id: String(agent?._id || assignedUserId),
+          userId: assignedUserId,
+          username: agent?.userId?.username || "",
+          name: fullName || agent?.userId?.username || "—",
+          unit: agent?.unitId?.unitName || "",
+          branch: agent?.unitId?.branchId?.branchName || "",
+          area: agent?.unitId?.branchId?.areaId?.areaName || "",
+          displayPhoto: agent?.userId?.displayPhoto || "",
+          totalTasks: 0,
+          openTasks: 0,
+          overdueTasks: 0,
+          closedTasks: 0,
+          delayedDoneTasks: 0,
+          completionRate: 0,
+          nextDueAt: null,
+          lastCompletedAt: null,
+          topTaskType: "—",
+          leads: 0,
+          converted: 0,
+          totalPolicies: 0,
+          activePolicies: 0,
+          lapsedPolicies: 0,
+          cancelledPolicies: 0,
+          annualPremium: 0,
+          frequencyPremium: 0,
+          latestLeadCreatedAt: null,
+          latestPolicyIssuedAt: null,
+          taskTypeCounts: new Map(),
+          convertedLeadIds: new Set(),
+        },
+      ];
+    })
+  );
+
+  const [tasks, prospects] = await Promise.all([
+    scopedUserIds.length
+      ? Task.find({ assignedToUserId: { $in: scopedUserIds } })
+          .select("assignedToUserId type title dueAt status completedAt wasDelayed createdAt")
+          .lean()
+      : [],
+    scopedUserIds.length
+      ? Prospect.find({ assignedToUserId: { $in: scopedUserIds } })
+          .select("_id assignedToUserId")
+          .lean()
+      : [],
+  ]);
+
+  const nowMs = Date.now();
+  for (const task of tasks) {
+    const assignedUserId = String(task?.assignedToUserId || "");
+    const metrics = metricsByUserId.get(assignedUserId);
+    if (!metrics) continue;
+
+    metrics.totalTasks += 1;
+    const taskType = String(task?.type || "").trim().toUpperCase() || "UNSPECIFIED";
+    metrics.taskTypeCounts.set(taskType, Number(metrics.taskTypeCounts.get(taskType) || 0) + 1);
+
+    const normalizedStatus = String(task?.status || "Open").toLowerCase() === "done" ? "Done" : "Open";
+    const dueAtMs = new Date(task?.dueAt).getTime();
+    const completedAtMs = new Date(task?.completedAt).getTime();
+
+    if (normalizedStatus === "Done") {
+      metrics.closedTasks += 1;
+      if (task?.wasDelayed) metrics.delayedDoneTasks += 1;
+      if (Number.isFinite(completedAtMs) && (!metrics.lastCompletedAt || completedAtMs > new Date(metrics.lastCompletedAt).getTime())) {
+        metrics.lastCompletedAt = task.completedAt;
+      }
+      continue;
+    }
+
+    metrics.openTasks += 1;
+    if (Number.isFinite(dueAtMs) && dueAtMs < nowMs) metrics.overdueTasks += 1;
+    if (Number.isFinite(dueAtMs) && (!metrics.nextDueAt || dueAtMs < new Date(metrics.nextDueAt).getTime())) {
+      metrics.nextDueAt = task.dueAt;
+    }
+  }
+
+  const prospectIds = prospects.map((prospect) => prospect._id);
+  const prospectIdToAssignedUserId = new Map(
+    prospects.map((prospect) => [String(prospect._id), String(prospect.assignedToUserId || "")])
+  );
+
+  const leads = prospectIds.length
+    ? await Lead.find({ prospectId: { $in: prospectIds } })
+        .select("_id prospectId createdAt")
+        .lean()
+    : [];
+  const leadIds = leads.map((lead) => lead._id);
+  const leadIdToAssignedUserId = new Map(
+    leads.map((lead) => [String(lead._id), prospectIdToAssignedUserId.get(String(lead.prospectId)) || ""])
+  );
+
+  for (const lead of leads) {
+    const assignedUserId = leadIdToAssignedUserId.get(String(lead._id)) || "";
+    const metrics = metricsByUserId.get(assignedUserId);
+    if (!metrics) continue;
+
+    metrics.leads += 1;
+    const leadCreatedAtMs = new Date(lead?.createdAt).getTime();
+    if (Number.isFinite(leadCreatedAtMs) && (!metrics.latestLeadCreatedAt || leadCreatedAtMs > new Date(metrics.latestLeadCreatedAt).getTime())) {
+      metrics.latestLeadCreatedAt = lead.createdAt;
+    }
+  }
+
+  const engagements = leadIds.length
+    ? await LeadEngagement.find({ leadId: { $in: leadIds } })
+        .select("_id leadId")
+        .lean()
+    : [];
+  const engagementIds = engagements.map((engagement) => engagement._id);
+  const engagementIdToAssignedUserId = new Map(
+    engagements.map((engagement) => [String(engagement._id), leadIdToAssignedUserId.get(String(engagement.leadId)) || ""])
+  );
+  const engagementIdToLeadId = new Map(
+    engagements.map((engagement) => [String(engagement._id), String(engagement.leadId || "")])
+  );
+
+  const [policyholders, applications] = await Promise.all([
+    scopedUserIds.length
+      ? Policyholder.find({ assignedToUserId: { $in: scopedUserIds } })
+          .select("assignedToUserId leadEngagementId status createdAt")
+          .lean()
+      : [],
+    engagementIds.length
+      ? Application.find({ leadEngagementId: { $in: engagementIds } })
+          .select("leadEngagementId recordPremiumPaymentTransfer.totalAnnualPremiumPhp recordPremiumPaymentTransfer.totalFrequencyPremiumPhp")
+          .lean()
+      : [],
+  ]);
+
+  for (const policyholder of policyholders) {
+    const assignedUserId = String(policyholder?.assignedToUserId || engagementIdToAssignedUserId.get(String(policyholder?.leadEngagementId || "")) || "");
+    const metrics = metricsByUserId.get(assignedUserId);
+    if (!metrics) continue;
+
+    metrics.totalPolicies += 1;
+    const policyStatus = String(policyholder?.status || "").trim();
+    if (policyStatus === "Active") metrics.activePolicies += 1;
+    else if (policyStatus === "Lapsed") metrics.lapsedPolicies += 1;
+    else if (policyStatus === "Cancelled") metrics.cancelledPolicies += 1;
+
+    const leadId = engagementIdToLeadId.get(String(policyholder?.leadEngagementId || ""));
+    if (leadId) metrics.convertedLeadIds.add(leadId);
+
+    const policyCreatedAtMs = new Date(policyholder?.createdAt).getTime();
+    if (Number.isFinite(policyCreatedAtMs) && (!metrics.latestPolicyIssuedAt || policyCreatedAtMs > new Date(metrics.latestPolicyIssuedAt).getTime())) {
+      metrics.latestPolicyIssuedAt = policyholder.createdAt;
+    }
+  }
+
+  for (const application of applications) {
+    const assignedUserId = engagementIdToAssignedUserId.get(String(application?.leadEngagementId || "")) || "";
+    const metrics = metricsByUserId.get(assignedUserId);
+    if (!metrics) continue;
+
+    metrics.annualPremium += Number(application?.recordPremiumPaymentTransfer?.totalAnnualPremiumPhp || 0);
+    metrics.frequencyPremium += Number(application?.recordPremiumPaymentTransfer?.totalFrequencyPremiumPhp || 0);
+  }
+
+  const rows = [...metricsByUserId.values()].map((metrics) => {
+    const topTaskTypeEntry = [...metrics.taskTypeCounts.entries()].sort((left, right) => right[1] - left[1] || String(left[0]).localeCompare(String(right[0])))[0];
+    const completionRate = metrics.totalTasks ? Math.round((metrics.closedTasks / metrics.totalTasks) * 100) : 0;
+    const conversionRate = metrics.leads ? Math.round((metrics.convertedLeadIds.size / metrics.leads) * 100) : 0;
+
+    return {
+      id: metrics.id,
+      userId: metrics.userId,
+      username: metrics.username,
+      name: metrics.name,
+      unit: metrics.unit,
+      branch: metrics.branch,
+      area: metrics.area,
+      displayPhoto: metrics.displayPhoto,
+      totalTasks: metrics.totalTasks,
+      openTasks: metrics.openTasks,
+      overdueTasks: metrics.overdueTasks,
+      closedTasks: metrics.closedTasks,
+      delayedDoneTasks: metrics.delayedDoneTasks,
+      completionRate,
+      nextDueAt: metrics.nextDueAt,
+      lastCompletedAt: metrics.lastCompletedAt,
+      topTaskType: topTaskTypeEntry?.[0] || "—",
+      leads: metrics.leads,
+      converted: metrics.convertedLeadIds.size,
+      conversionRate,
+      totalPolicies: metrics.totalPolicies,
+      activePolicies: metrics.activePolicies,
+      lapsedPolicies: metrics.lapsedPolicies,
+      cancelledPolicies: metrics.cancelledPolicies,
+      annualPremium: metrics.annualPremium,
+      frequencyPremium: metrics.frequencyPremium,
+      latestLeadCreatedAt: metrics.latestLeadCreatedAt,
+      latestPolicyIssuedAt: metrics.latestPolicyIssuedAt,
+    };
+  });
+
+  const byName = (left, right) => String(left.name).localeCompare(String(right.name)) || String(left.username).localeCompare(String(right.username));
+  const agents = rows
+    .map((row) => ({
+      id: row.id,
+      userId: row.userId,
+      username: row.username,
+      name: row.name,
+      unit: row.unit,
+      branch: row.branch,
+      area: row.area,
+      displayPhoto: row.displayPhoto,
+      openTasks: row.openTasks,
+      overdueTasks: row.overdueTasks,
+      closedTasks: row.closedTasks,
+      leads: row.leads,
+      converted: row.converted,
+      annualPremium: row.annualPremium,
+    }))
+    .sort(byName);
+
+  const taskRows = [...rows].sort((left, right) => {
+    if (right.overdueTasks !== left.overdueTasks) return right.overdueTasks - left.overdueTasks;
+    if (right.openTasks !== left.openTasks) return right.openTasks - left.openTasks;
+    if (right.totalTasks !== left.totalTasks) return right.totalTasks - left.totalTasks;
+    return byName(left, right);
+  });
+
+  const salesRows = [...rows].sort((left, right) => {
+    if (right.annualPremium !== left.annualPremium) return right.annualPremium - left.annualPremium;
+    if (right.converted !== left.converted) return right.converted - left.converted;
+    if (right.leads !== left.leads) return right.leads - left.leads;
+    return byName(left, right);
+  });
+
+  const summary = rows.reduce(
+    (accumulator, row) => ({
+      totalAgents: accumulator.totalAgents + 1,
+      totalOpenTasks: accumulator.totalOpenTasks + Number(row.openTasks || 0),
+      totalOverdueTasks: accumulator.totalOverdueTasks + Number(row.overdueTasks || 0),
+      totalClosedTasks: accumulator.totalClosedTasks + Number(row.closedTasks || 0),
+      totalLeads: accumulator.totalLeads + Number(row.leads || 0),
+      totalConverted: accumulator.totalConverted + Number(row.converted || 0),
+      totalPolicies: accumulator.totalPolicies + Number(row.totalPolicies || 0),
+      activePolicies: accumulator.activePolicies + Number(row.activePolicies || 0),
+      totalAnnualPremium: accumulator.totalAnnualPremium + Number(row.annualPremium || 0),
+      totalFrequencyPremium: accumulator.totalFrequencyPremium + Number(row.frequencyPremium || 0),
+    }),
+    {
+      totalAgents: 0,
+      totalOpenTasks: 0,
+      totalOverdueTasks: 0,
+      totalClosedTasks: 0,
+      totalLeads: 0,
+      totalConverted: 0,
+      totalPolicies: 0,
+      activePolicies: 0,
+      totalAnnualPremium: 0,
+      totalFrequencyPremium: 0,
+    }
+  );
+
+  summary.conversionRate = summary.totalLeads ? Math.round((summary.totalConverted / summary.totalLeads) * 100) : 0;
+  summary.completionRate = summary.totalOpenTasks + summary.totalClosedTasks
+    ? Math.round((summary.totalClosedTasks / (summary.totalOpenTasks + summary.totalClosedTasks)) * 100)
+    : 0;
+  summary.activePolicyRate = summary.totalPolicies ? Math.round((summary.activePolicies / summary.totalPolicies) * 100) : 0;
+
+  return {
+    payload: {
+      manager: {
+        id: String(user._id),
+        role: context.role,
+        username: user.username,
+        firstName: user.firstName,
+        middleName: user.middleName || "",
+        lastName: user.lastName,
+        displayPhoto: user.displayPhoto || "",
+      },
+      scope: {
+        role: context.role,
+        unitId: context.unitId,
+        branchId: context.branchId,
+        unitName: context.unitName,
+        branchName: context.branchName,
+        areaName: context.areaName,
+      },
+      reportContext: {
+        generatedAt: new Date(),
+      },
+      summary,
+      agents,
+      taskRows,
+      salesRows,
+    },
+  };
+}
+
+
+
 /**
  * =========================
  * Global Middleware
@@ -610,6 +995,37 @@ app.post("/api/auth/login", async (req, res) => {
      * Global Error Handling for Login Route
      */
     console.error("Login error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+
+app.get("/api/manager/portal", async (req, res) => {
+  try {
+    const { userId } = req.query;
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId)) {
+      return res.status(400).json({ message: "Invalid userId." });
+    }
+
+    const user = await User.findById(userId)
+      .select("username firstName middleName lastName displayPhoto role")
+      .lean();
+
+    if (!user) return res.status(404).json({ message: "User not found." });
+    if (!["AUM", "UM", "BM"].includes(String(user.role || "").trim().toUpperCase())) {
+      return res.status(403).json({ message: "This account does not have manager portal access." });
+    }
+
+    const result = await buildManagerPortalPayload(user);
+    if (result.error) {
+      return res.status(result.error.status).json({ message: result.error.message });
+    }
+
+    return res.json(result.payload);
+  } catch (err) {
+    console.error("Manager portal data error:", err);
     return res.status(500).json({ message: "Server error." });
   }
 });
