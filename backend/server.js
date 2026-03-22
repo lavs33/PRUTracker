@@ -3331,7 +3331,13 @@ app.get("/api/clients/relationship/dashboard", async (req, res) => {
     const stageLabels = ["Contacting", "Needs Assessment", "Proposal", "Application", "Policy Issuance"];
     const totalEngagements = engagements.length;
     const stageProgress = stageLabels.map((label) => {
-      const count = countBy(engagements, (e) => String(e.currentStage || "") === label);
+      const count = countBy(engagements, (e) => {
+        if (String(e.currentStage || "") !== label) return false;
+        if (label !== "Policy Issuance") return true;
+
+        const lead = leadById.get(normalizeKey(e.leadId));
+        return String(lead?.status || "").trim() !== "Closed";
+      });
       return { label, count, value: toPct(count, totalEngagements) };
     });
 
