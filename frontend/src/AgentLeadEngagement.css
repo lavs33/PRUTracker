@@ -277,12 +277,16 @@
   cursor: pointer;
 }
 
+.le-activityTracker--interactive button.reached,
 .le-activityTracker--interactive button.done,
-.le-activityTracker--interactive button.current,
 .le-activityTracker--interactive button.live-current {
   background: rgba(218, 41, 28, 0.12);
   border-color: rgba(218, 41, 28, 0.35);
   color: #da291c;
+}
+
+.le-activityTracker--interactive button.viewed {
+  box-shadow: 0 0 0 2px rgba(31, 111, 235, 0.16);
 }
 
 .le-activityTracker--interactive button:disabled {

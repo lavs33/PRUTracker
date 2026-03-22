@@ -126,6 +126,13 @@ function AgentPolicyholdersAll() {
   const shownCount = rows.length;
   const totalCount = totalForThisUser;
 
+  const openPolicyholderLeadEngagement = (policyholder) => {
+    const prospectId = String(policyholder?.prospectId || "").trim();
+    const leadId = String(policyholder?.leadId || "").trim();
+    if (!prospectId || !leadId) return;
+    navigate(`/agent/${user.username}/prospects/${prospectId}/leads/${leadId}/engage`);
+  };
+
   const resetFilters = () => {
     setQuery("");
     setProductName("");
@@ -258,7 +265,19 @@ function AgentPolicyholdersAll() {
                     {rows.map((p) => (
                       <tr key={p._id} className="allpol-row">
                         <td>{String(p.policyholderNo ?? 0).padStart(2, "0")}</td>
-                        <td className="allpol-mono allpol-cell-nowrap">{p.policyholderCode || "—"}</td>
+                        <td className="allpol-mono allpol-cell-nowrap">
+                          {String(p?.prospectId || "").trim() && String(p?.leadId || "").trim() ? (
+                            <button
+                              type="button"
+                              className="allpol-linkBtn"
+                              onClick={() => openPolicyholderLeadEngagement(p)}
+                            >
+                              {p.policyholderCode || "—"}
+                            </button>
+                          ) : (
+                            p.policyholderCode || "—"
+                          )}
+                        </td>
                         <td>{p.firstName || "—"}</td>
                         <td>{p.lastName || "—"}</td>
                         <td>{p.age ?? "—"}</td>

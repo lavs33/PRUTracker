@@ -2974,12 +2974,15 @@ app.get("/api/policyholders/recent", async (req, res) => {
             {
               $project: {
                 _id: 1,
+                leadEngagementId: 1,
                 policyholderNo: 1,
                 policyholderCode: 1,
                 policyNumber: 1,
                 status: 1,
                 lastPaidDate: 1,
                 nextPaymentDate: 1,
+                leadId: "$lead._id",
+                prospectId: "$prospect._id",
                 firstName: "$prospect.firstName",
                 lastName: "$prospect.lastName",
               },
@@ -3331,7 +3334,13 @@ app.get("/api/clients/relationship/dashboard", async (req, res) => {
     const stageLabels = ["Contacting", "Needs Assessment", "Proposal", "Application", "Policy Issuance"];
     const totalEngagements = engagements.length;
     const stageProgress = stageLabels.map((label) => {
-      const count = countBy(engagements, (e) => String(e.currentStage || "") === label);
+      const count = countBy(engagements, (e) => {
+        if (String(e.currentStage || "") !== label) return false;
+        if (label !== "Policy Issuance") return true;
+
+        const lead = leadById.get(normalizeKey(e.leadId));
+        return String(lead?.status || "").trim() !== "Closed";
+      });
       return { label, count, value: toPct(count, totalEngagements) };
     });
 
@@ -4015,6 +4024,7 @@ app.get("/api/policyholders", async (req, res) => {
       {
         $project: {
           _id: 1,
+          leadEngagementId: 1,
           policyholderNo: 1,
           policyholderCode: 1,
           policyNumber: 1,
@@ -4022,6 +4032,8 @@ app.get("/api/policyholders", async (req, res) => {
           lastPaidDate: 1,
           nextPaymentDate: 1,
           createdAt: 1,
+          leadId: "$lead._id",
+          prospectId: "$prospect._id",
           firstName: "$prospect.firstName",
           lastName: "$prospect.lastName",
           age: "$prospect.age",

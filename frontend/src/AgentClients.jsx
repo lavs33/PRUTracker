@@ -168,6 +168,13 @@ const formatDateOnly = (d) => {
   });
 };
 
+const openPolicyholderLeadEngagement = (policyholder) => {
+  const prospectId = String(policyholder?.prospectId || "").trim();
+  const leadId = String(policyholder?.leadId || "").trim();
+  if (!prospectId || !leadId) return;
+  navigate(`/agent/${user.username}/prospects/${prospectId}/leads/${leadId}/engage`);
+};
+
   if (!isReady) return null;
 
 const handleSideNav = (key) => {
@@ -381,9 +388,26 @@ const handleSideNav = (key) => {
                   </thead>
 
                   <tbody>
-                    {recentPolicyholders.map((c) => (
-                      <tr key={c._id} className="prospect-row">
-                        <td>{String(c.policyholderNo ?? 0).padStart(2, "0")}</td>
+                    {recentPolicyholders.map((c) => {
+                      const canOpenLeadEngagement = Boolean(
+                        String(c?.prospectId || "").trim() && String(c?.leadId || "").trim()
+                      );
+
+                      return (
+                        <tr key={c._id} className="prospect-row">
+                        <td>
+                          {canOpenLeadEngagement ? (
+                            <button
+                              type="button"
+                              className="ac-inlineLink"
+                              onClick={() => openPolicyholderLeadEngagement(c)}
+                            >
+                              {String(c.policyholderNo ?? 0).padStart(2, "0")}
+                            </button>
+                          ) : (
+                            String(c.policyholderNo ?? 0).padStart(2, "0")
+                          )}
+                        </td>
                         <td>{c.firstName || "—"}</td>
                         <td>{c.lastName || "—"}</td>
                         <td className="mono">{c.policyNumber || "—"}</td>
@@ -396,8 +420,9 @@ const handleSideNav = (key) => {
                         </td>
                         <td>{formatDateOnly(c.lastPaidDate)}</td>
                         <td>{formatDateOnly(c.nextPaymentDate)}</td>
-                      </tr>
-                    ))}
+                        </tr>
+                      );
+                    })}
 
                     {recentPolicyholders.length === 0 && (
                       <tr>
