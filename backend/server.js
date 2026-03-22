@@ -2974,12 +2974,15 @@ app.get("/api/policyholders/recent", async (req, res) => {
             {
               $project: {
                 _id: 1,
+                leadEngagementId: 1,
                 policyholderNo: 1,
                 policyholderCode: 1,
                 policyNumber: 1,
                 status: 1,
                 lastPaidDate: 1,
                 nextPaymentDate: 1,
+                leadId: "$lead._id",
+                prospectId: "$prospect._id",
                 firstName: "$prospect.firstName",
                 lastName: "$prospect.lastName",
               },
@@ -3331,7 +3334,13 @@ app.get("/api/clients/relationship/dashboard", async (req, res) => {
     const stageLabels = ["Contacting", "Needs Assessment", "Proposal", "Application", "Policy Issuance"];
     const totalEngagements = engagements.length;
     const stageProgress = stageLabels.map((label) => {
-      const count = countBy(engagements, (e) => String(e.currentStage || "") === label);
+      const count = countBy(engagements, (e) => {
+        if (String(e.currentStage || "") !== label) return false;
+        if (label !== "Policy Issuance") return true;
+
+        const lead = leadById.get(normalizeKey(e.leadId));
+        return String(lead?.status || "").trim() !== "Closed";
+      });
       return { label, count, value: toPct(count, totalEngagements) };
     });
 
@@ -4015,6 +4024,7 @@ app.get("/api/policyholders", async (req, res) => {
       {
         $project: {
           _id: 1,
+          leadEngagementId: 1,
           policyholderNo: 1,
           policyholderCode: 1,
           policyNumber: 1,
@@ -4022,6 +4032,8 @@ app.get("/api/policyholders", async (req, res) => {
           lastPaidDate: 1,
           nextPaymentDate: 1,
           createdAt: 1,
+          leadId: "$lead._id",
+          prospectId: "$prospect._id",
           firstName: "$prospect.firstName",
           lastName: "$prospect.lastName",
           age: "$prospect.age",
@@ -7230,6 +7242,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/assess-interest", async (req,
     if (!mongoose.isValidObjectId(leadId)) return res.status(400).json({ message: "Invalid leadId." });
 
     const userObjectId = new mongoose.Types.ObjectId(userId);
+    let droppedLeadResponse = null;
 
     await session.withTransaction(async () => {
       const prospect = await Prospect.findOne({ _id: prospectId, assignedToUserId: userObjectId }).session(session);
@@ -7256,6 +7269,8 @@ app.post("/api/prospects/:prospectId/leads/:leadId/assess-interest", async (req,
       attempt.interestLevel = lvl;
       attempt.outcomeActivity = "Assess Interest";
 
+      let droppedLeadPayload = null;
+
       if (lvl === "INTERESTED") {
         const pc = String(preferredChannel || "").trim();
         if (!["SMS", "WhatsApp", "Viber", "Telegram", "Other"].includes(pc)) {
@@ -7275,13 +7290,59 @@ app.post("/api/prospects/:prospectId/leads/:leadId/assess-interest", async (req,
         attempt.preferredChannel = undefined;
         attempt.preferredChannelOther = undefined;
         engagement.currentActivityKey = "Assess Interest";
+
+        const currentLeadStatus = String(lead.status || "").trim();
+        if (currentLeadStatus === "Closed") {
+          throw Object.assign(new Error("Cannot auto-drop a Closed lead."), { status: 409 });
+        }
+        if (!["New", "In Progress", "Dropped"].includes(currentLeadStatus)) {
+          throw Object.assign(new Error("Lead cannot be auto-dropped from the current status."), { status: 409 });
+        }
+
+        const dropReason = "Interest / Engagement";
+        const dropNotes = "Lead was automatically dropped after the prospect was assessed as not interested during Contacting.";
+        if (currentLeadStatus !== "Dropped") {
+          lead.statusBeforeDrop = currentLeadStatus;
+          lead.status = "Dropped";
+          lead.dropReason = dropReason;
+          lead.dropNotes = dropNotes;
+          lead.droppedAt = lead.droppedAt || new Date();
+        }
+
+        const openApproachTask = await Task.findOne({
+          assignedToUserId: userObjectId,
+          prospectId: prospect._id,
+          leadEngagementId: engagement._id,
+          type: "APPROACH",
+          status: "Open",
+        }).session(session);
+
+        if (openApproachTask) {
+          openApproachTask.status = "Done";
+          openApproachTask.completedAt = new Date();
+          await openApproachTask.save({ session });
+        }
+
+        droppedLeadPayload = {
+          leadCode: lead.leadCode || "",
+          status: lead.status,
+          dropReason: lead.dropReason || dropReason,
+          dropNotes: lead.dropNotes || dropNotes,
+          droppedAt: lead.droppedAt || null,
+        };
       }
 
       await attempt.save({ session });
       await engagement.save({ session });
+      await lead.save({ session });
+      droppedLeadResponse = droppedLeadPayload;
     });
 
-    return res.json({ message: "Assess Interest saved." });
+    return res.json({
+      message: droppedLeadResponse ? "Assess Interest saved. Lead was dropped." : "Assess Interest saved.",
+      leadDropped: Boolean(droppedLeadResponse),
+      droppedLead: droppedLeadResponse,
+    });
   } catch (err) {
     console.error("Assess interest error:", err);
     return res.status(err?.status || 500).json({ message: err?.message || "Server error." });
