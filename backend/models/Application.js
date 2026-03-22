@@ -63,6 +63,12 @@ const applicationSchema = new mongoose.Schema(
         type: Number,
         default: null,
       },
+      methodForInitialPayment: {
+        type: String,
+        enum: [...RENEWAL_PAYMENT_METHODS, ""],
+        default: "",
+        trim: true,
+      },
       methodForRenewalPayment: {
         type: String,
         enum: [...RENEWAL_PAYMENT_METHODS, ""],
