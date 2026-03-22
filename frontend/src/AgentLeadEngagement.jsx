@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { FaChevronRight } from "react-icons/fa";
 import TopNav from "./components/TopNav";
@@ -6,6 +6,46 @@ import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
 import "./AgentLeadEngagement.css";
 import { PH_CITY_REGION_OPTIONS, CITY_TO_REGION } from "./constants/phCityRegionOptions";
+
+function SubactivityNavigator({
+  steps,
+  currentIndex,
+  viewedIndex,
+  onSelect,
+  helperText = "",
+  showCurrentStatus = true,
+  allowAllSteps = false,
+}) {
+  return (
+    <div className="le-subactivityShell">
+      <div className="le-activityTracker le-activityTracker--interactive">
+        {steps.map((step, idx) => {
+          const isDone = allowAllSteps || idx < currentIndex;
+          const isActive = idx === viewedIndex;
+          const isCurrent = showCurrentStatus && idx === currentIndex;
+          const isReachable = allowAllSteps || idx <= currentIndex;
+
+          return (
+            <button
+              key={step.key}
+              type="button"
+              className={`${isReachable ? "reachable" : ""} ${isDone ? "done" : ""} ${isActive ? "current" : ""} ${isCurrent ? "live-current" : ""}`.trim()}
+              onClick={() => onSelect(step.key)}
+              disabled={!isReachable}
+              aria-current={isActive ? "step" : undefined}
+              title={!isReachable ? "Finish the current subactivity first." : undefined}
+            >
+              <span className="le-activityTracker__label">{step.label}</span>
+              {isCurrent ? <small className="le-activityTracker__status">Current</small> : null}
+            </button>
+          );
+        })}
+      </div>
+
+      {helperText ? <p className="le-smallNote le-subactivityHint">{helperText}</p> : null}
+    </div>
+  );
+}
 
 function AgentLeadEngagement() {
   const navigate = useNavigate();
@@ -41,6 +81,7 @@ function AgentLeadEngagement() {
   });
 
   const [validateForm, setValidateForm] = useState({ phoneValidation: "" });
+  const [contactingViewedActivityKey, setContactingViewedActivityKey] = useState("");
   const [validatingContact, setValidatingContact] = useState(false);
   const [validateError, setValidateError] = useState("");
 
@@ -71,6 +112,7 @@ function AgentLeadEngagement() {
   const [needsAssessmentError, setNeedsAssessmentError] = useState("");
   const [needsAssessmentSavedAt, setNeedsAssessmentSavedAt] = useState("");
   const [needsAssessmentCurrentActivityKey, setNeedsAssessmentCurrentActivityKey] = useState("Record Prospect Attendance");
+  const [needsAssessmentViewedActivityKey, setNeedsAssessmentViewedActivityKey] = useState("");
   const [needsAssessmentOutcomeActivity, setNeedsAssessmentOutcomeActivity] = useState("");
   const [proposalMeetingForm, setProposalMeetingForm] = useState({
     meetingDate: "",
@@ -88,6 +130,7 @@ function AgentLeadEngagement() {
   const [proposalMeetingError, setProposalMeetingError] = useState("");
   const [proposalMeetingFieldErrors, setProposalMeetingFieldErrors] = useState({});
   const [proposalCurrentActivityKey, setProposalCurrentActivityKey] = useState("Generate Proposal");
+  const [proposalViewedActivityKey, setProposalViewedActivityKey] = useState("");
   const [proposalGenerateForm, setProposalGenerateForm] = useState({
     chosenProductId: "",
     chosenProductName: "",
@@ -149,6 +192,7 @@ function AgentLeadEngagement() {
   const [applicationPremiumPaymentForm, setApplicationPremiumPaymentForm] = useState({
     totalAnnualPremiumPhp: "",
     totalFrequencyPremiumPhp: "",
+    methodForInitialPayment: "",
     methodForRenewalPayment: "",
     paymentProofImageDataUrl: "",
     paymentProofFileName: "",
@@ -160,7 +204,6 @@ function AgentLeadEngagement() {
   const [applicationPaymentProofInputKey, setApplicationPaymentProofInputKey] = useState(0);
   const [applicationNeedsPaymentSelection, setApplicationNeedsPaymentSelection] = useState({
     requestedFrequency: "",
-    methodForInitialPayment: "",
   });
   const [applicationSubmissionForm, setApplicationSubmissionForm] = useState({
     pruOneTransactionId: "",
@@ -172,7 +215,9 @@ function AgentLeadEngagement() {
   const [applicationSubmissionSaving, setApplicationSubmissionSaving] = useState(false);
   const [applicationSubmissionError, setApplicationSubmissionError] = useState("");
   const [applicationSubmissionScreenshotInputKey, setApplicationSubmissionScreenshotInputKey] = useState(0);
+  const [applicationViewedActivityKey, setApplicationViewedActivityKey] = useState("");
   const [policyCurrentActivityKey, setPolicyCurrentActivityKey] = useState("Record Policy Application Status");
+  const [policyViewedActivityKey, setPolicyViewedActivityKey] = useState("");
   const [policyStatusForm, setPolicyStatusForm] = useState({
     status: "",
     issuanceDate: "",
@@ -469,6 +514,7 @@ function AgentLeadEngagement() {
           appPremiumPayment?.totalFrequencyPremiumPhp !== null && appPremiumPayment?.totalFrequencyPremiumPhp !== undefined
             ? String(appPremiumPayment.totalFrequencyPremiumPhp)
             : "",
+        methodForInitialPayment: String(appPremiumPayment?.methodForInitialPayment || ""),
         methodForRenewalPayment: String(appPremiumPayment?.methodForRenewalPayment || ""),
         paymentProofImageDataUrl: String(appPremiumPayment?.paymentProofImageDataUrl || ""),
         paymentProofFileName: String(appPremiumPayment?.paymentProofFileName || ""),
@@ -478,7 +524,6 @@ function AgentLeadEngagement() {
       setApplicationPremiumPaymentFieldErrors({});
       setApplicationNeedsPaymentSelection({
         requestedFrequency: String(appNeedsSelection?.requestedFrequency || ""),
-        methodForInitialPayment: String(appNeedsSelection?.methodForInitialPayment || ""),
       });
       setApplicationChosenProduct({
         id: String(appChosenProduct?._id || applicationStage?.chosenProductId || ""),
@@ -675,7 +720,6 @@ function AgentLeadEngagement() {
             selectedProductId: String(data?.needsAssessment?.needsPriorities?.productSelection?.selectedProductId || ""),
             requestedPremiumPayment: data?.needsAssessment?.needsPriorities?.productSelection?.requestedPremiumPayment ?? "",
             requestedFrequency: String(data?.needsAssessment?.needsPriorities?.productSelection?.requestedFrequency || "Monthly") || "Monthly",
-            methodForInitialPayment: String(data?.needsAssessment?.needsPriorities?.productSelection?.methodForInitialPayment || ""),
           },
           optionalRiders: Array.isArray(data?.needsAssessment?.needsPriorities?.optionalRiders)
             ? data.needsAssessment.needsPriorities.optionalRiders.map((r) => ({
@@ -774,11 +818,76 @@ function AgentLeadEngagement() {
     fetchNeedsAssessment();
   }, [selectedStageView, engagement?.currentStage, fetchNeedsAssessment]);
 
+  const showCurrentProgressView = useCallback(() => {
+    setSelectedStageView("CURRENT");
+    setShowAddAttempt(false);
+    setContactingViewedActivityKey("");
+    setNeedsAssessmentViewedActivityKey("");
+    setProposalViewedActivityKey("");
+    setApplicationViewedActivityKey("");
+    setPolicyViewedActivityKey("");
+  }, []);
+
+  const refreshCurrentProgressView = useCallback(async ({ includeNeedsAssessment = false } = {}) => {
+    if (includeNeedsAssessment) {
+      await fetchNeedsAssessment();
+    }
+    await fetchEngagement();
+    showCurrentProgressView();
+  }, [fetchEngagement, fetchNeedsAssessment, showCurrentProgressView]);
+
+  const submitNeedsAssessmentAttendanceOnly = async () => {
+    try {
+      setNeedsAssessmentError("");
+
+      if (!isNeedsAssessmentCurrentViewEditable || isNeedsAssessmentLocked) return;
+      if (needsAssessmentForm.attendanceChoice !== "YES") {
+        setNeedsAssessmentError("Prospect attendance must be marked YES before saving.");
+        return;
+      }
+
+      const attendanceProofImageDataUrl = String(needsAssessmentForm.attendanceProofImageDataUrl || "").trim();
+      const attendanceProofFileName = String(needsAssessmentForm.attendanceProofFileName || "").trim();
+      if (!attendanceProofImageDataUrl) {
+        setNeedsAssessmentError("Please upload a proof of attendance image before proceeding.");
+        return;
+      }
+      if (!/^data:image\/(?:jpeg|png);base64,/i.test(attendanceProofImageDataUrl)) {
+        setNeedsAssessmentError("Proof of attendance must be a JPG, JPEG, or PNG image.");
+        return;
+      }
+      if (attendanceProofFileName && !/\.(jpe?g|png)$/i.test(attendanceProofFileName)) {
+        setNeedsAssessmentError("Proof of attendance file type must be JPG, JPEG, or PNG.");
+        return;
+      }
+
+      setNeedsAssessmentSaving(true);
+
+      const res = await fetch(`${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/needs-assessment/attendance?userId=${user.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          attended: true,
+          attendanceProofImageDataUrl,
+          attendanceProofFileName,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.message || "Failed to record attendance.");
+
+      await refreshCurrentProgressView({ includeNeedsAssessment: true });
+    } catch (err) {
+      setNeedsAssessmentError(err?.message || "Failed to record attendance.");
+    } finally {
+      setNeedsAssessmentSaving(false);
+    }
+  };
+
   const onSaveNeedsAssessment = async () => {
     setNeedsAssessmentSavedAt("");
     setNeedsAssessmentError("");
 
-    if (!isNeedsAssessmentEditableNow) return;
+    if (!isNeedsAssessmentCurrentViewEditable) return;
 
     if (needsAssessmentForm.attendanceChoice !== "YES") {
       setNeedsAssessmentError("Prospect attendance must be marked YES before saving.");
@@ -799,12 +908,14 @@ function AgentLeadEngagement() {
       return;
     }
 
+    const sex = String(needsAssessmentForm.basicInformation?.sex || "").trim();
     const civilStatus = String(needsAssessmentForm.basicInformation?.civilStatus || "").trim();
     const birthday = String(needsAssessmentForm.basicInformation?.birthday || "").trim();
     const occupationCategory = String(needsAssessmentForm.basicInformation?.occupationCategory || "").trim();
     const occupation = String(needsAssessmentForm.basicInformation?.occupation || "").trim();
     const age = Number(needsAssessmentForm.basicInformation?.age || "");
 
+    if (!["Male", "Female"].includes(sex)) { setNeedsAssessmentError("Sex is required."); return; }
     if (!civilStatus) { setNeedsAssessmentError("Civil status is required."); return; }
     if (!birthday) { setNeedsAssessmentError("Birthday is required."); return; }
     if (!["Employed", "Self-Employed", "Not Employed"].includes(occupationCategory)) { setNeedsAssessmentError("Occupation category is required."); return; }
@@ -871,12 +982,10 @@ function AgentLeadEngagement() {
     const selectedProductId = String(np?.productSelection?.selectedProductId || "").trim();
     const requestedFrequency = String(np?.productSelection?.requestedFrequency || "Monthly").trim() || "Monthly";
     const requestedPremiumPayment = toNonNegativeNumber(np?.productSelection?.requestedPremiumPayment);
-    const methodForInitialPayment = String(np?.productSelection?.methodForInitialPayment || "").trim();
     const selectedProduct = (availableProductsByPriority || []).find((prod) => String(prod?._id || "") === selectedProductId);
     if (!selectedProductId || !selectedProduct) { setNeedsAssessmentError("Product Selection: please select a product under the chosen priority."); return; }
     if (!["Monthly", "Quarterly", "Half-yearly", "Yearly"].includes(requestedFrequency)) { setNeedsAssessmentError("Product Selection: requested frequency is invalid."); return; }
     if (requestedPremiumPayment === null) { setNeedsAssessmentError("Product Selection: requested premium payment is required."); return; }
-    if (!["Credit Card / Debit Card", "Mobile Wallet / GCash", "Dated Check", "Bills Payments"].includes(methodForInitialPayment)) { setNeedsAssessmentError("Product Selection: method for initial payment is required."); return; }
 
     if (currentPriority === "Protection") {
       const monthlySpend = toNonNegativeNumber(np?.protection?.monthlySpend);
@@ -991,7 +1100,6 @@ function AgentLeadEngagement() {
                 selectedProductId: String(np?.productSelection?.selectedProductId || "").trim(),
                 requestedPremiumPayment: toNonNegativeNumber(np?.productSelection?.requestedPremiumPayment),
                 requestedFrequency: String(np?.productSelection?.requestedFrequency || "Monthly").trim() || "Monthly",
-                methodForInitialPayment: String(np?.productSelection?.methodForInitialPayment || "").trim(),
               },
               optionalRiders: (np?.optionalRiders || [])
                 .map((r) => ({
@@ -1045,8 +1153,7 @@ function AgentLeadEngagement() {
       }
 
       setNeedsAssessmentSavedAt(new Date().toISOString());
-      await fetchNeedsAssessment();
-      await fetchEngagement();
+      await refreshCurrentProgressView({ includeNeedsAssessment: true });
     } catch (err) {
       setNeedsAssessmentError(err?.message || "Failed to save needs assessment.");
     } finally {
@@ -1108,6 +1215,27 @@ function AgentLeadEngagement() {
     ],
     []
   );
+
+  const syncViewedStepWithCurrent = useCallback((steps, currentKey, setViewedKey, previousCurrentRef) => {
+    const fallbackKey = steps[0]?.key || "";
+    const nextCurrentKey = steps.some((step) => step.key === currentKey) ? currentKey : fallbackKey;
+
+    setViewedKey((existing) => {
+      const existingIndex = steps.findIndex((step) => step.key === existing);
+      const currentIndex = steps.findIndex((step) => step.key === nextCurrentKey);
+      const previousCurrentKey = previousCurrentRef.current;
+
+      const shouldSnapToCurrent =
+        !existing ||
+        existingIndex < 0 ||
+        existingIndex > currentIndex ||
+        (previousCurrentKey && existing === previousCurrentKey && previousCurrentKey !== nextCurrentKey);
+
+      return shouldSnapToCurrent ? nextCurrentKey : existing;
+    });
+
+    previousCurrentRef.current = nextCurrentKey;
+  }, []);
 
   const CHANNELS = useMemo(() => ["Call", "SMS", "WhatsApp", "Viber", "Telegram"], []);
   const cityOptions = useMemo(() => [...PH_CITY_REGION_OPTIONS].sort((a, b) => a.city.localeCompare(b.city)), []);
@@ -1434,8 +1562,6 @@ function AgentLeadEngagement() {
 
   // Activity tracker only relevant when Contacting panel is shown
   const showContactingTracker = showContactingPanel;
-  const showProposalTracker = showProposalPanel;
-  const showPolicyIssuanceTracker = showPolicyIssuancePanel;
 
   // Current activity (badge + tracker)
   const currentActivityKeyRaw = String(engagement?.currentActivityKey || "").trim();
@@ -1446,20 +1572,6 @@ function AgentLeadEngagement() {
 
   const currentContactVersion = Number(prospect?.contactInfoVersion ?? 1);
   const lastAttemptVersionUsed = Number(lastAttempt?.contactInfoVersionUsed ?? NaN);
-
-  // show validate ONLY when:
-  // - not blocked
-  // - last attempt responded
-  // - last attempt used the CURRENT contact info version
-  const showValidateContact =
-    !isEngagementBlocked &&
-    isViewingCurrentStage &&
-    showContactingPanel &&
-    !isContactingReadOnly &&
-    lastAttempt?.response === "Responded" &&
-    Number.isFinite(lastAttemptVersionUsed) &&
-    lastAttemptVersionUsed === currentContactVersion &&
-    currentActivityKeyRaw === "Validate Contact";
 
   const hasOpenApproachTask = useMemo(() => {
       const list = Array.isArray(engagement?.tasks) ? engagement.tasks : [];
@@ -1473,9 +1585,55 @@ function AgentLeadEngagement() {
     Number.isFinite(lastAttemptVersionUsed) &&
     lastAttemptVersionUsed < currentContactVersion;
 
-  const effectiveActivityKey =
-    (isReApproachMode ? "Attempt Contact" : currentActivityKeyRaw) ||
-    (attempts.length > 0 ? "Attempt Contact" : "");
+  const savedPhoneValidationResult = String(lastAttempt?.phoneValidation || "").trim().toUpperCase();
+  const savedInterestLevel = String(lastAttempt?.interestLevel || "").trim().toUpperCase();
+  const hasSavedContactMeeting =
+    Boolean(lastAttempt?.meetingAt) ||
+    Boolean(String(lastAttempt?.meetingMode || "").trim()) ||
+    Boolean(String(lastAttempt?.meetingPlatform || "").trim()) ||
+    Boolean(String(lastAttempt?.meetingPlatformOther || "").trim()) ||
+    Boolean(String(lastAttempt?.meetingLink || "").trim()) ||
+    Boolean(String(lastAttempt?.meetingPlace || "").trim()) ||
+    Boolean(Number(lastAttempt?.meetingDurationMin || 0)) ||
+    Boolean(lastAttempt?.meetingEndAt);
+
+  const inferredContactingActivityKey = useMemo(() => {
+    if (attempts.length === 0) return "Attempt Contact";
+    if (isReApproachMode) return "Attempt Contact";
+
+    const outcomeActivity = String(lastAttempt?.outcomeActivity || "").trim();
+    if (CONTACTING_STEPS_UI.some((step) => step.key === outcomeActivity)) {
+      return outcomeActivity;
+    }
+
+    if (!isLastAttemptResponded) return "Attempt Contact";
+    if (!savedPhoneValidationResult) return "Validate Contact";
+    if (savedPhoneValidationResult === "WRONG_CONTACT") return "Validate Contact";
+    if (!savedInterestLevel) return "Assess Interest";
+    if (savedInterestLevel === "INTERESTED" && !hasSavedContactMeeting) return "Schedule Meeting";
+    if (savedInterestLevel === "INTERESTED" && hasSavedContactMeeting) return "Schedule Meeting";
+    return "Assess Interest";
+  }, [
+    attempts.length,
+    isReApproachMode,
+    lastAttempt?.outcomeActivity,
+    CONTACTING_STEPS_UI,
+    isLastAttemptResponded,
+    savedPhoneValidationResult,
+    savedInterestLevel,
+    hasSavedContactMeeting,
+  ]);
+
+  const effectiveActivityKey = useMemo(() => {
+    const keys = [currentActivityKeyRaw, inferredContactingActivityKey].filter(Boolean);
+    if (!keys.length) return attempts.length > 0 ? "Attempt Contact" : "";
+
+    return keys.reduce((furthest, key) => {
+      const furthestIndex = CONTACTING_STEPS_UI.findIndex((step) => step.key === furthest);
+      const keyIndex = CONTACTING_STEPS_UI.findIndex((step) => step.key === key);
+      return keyIndex > furthestIndex ? key : furthest;
+    });
+  }, [currentActivityKeyRaw, inferredContactingActivityKey, attempts.length, CONTACTING_STEPS_UI]);
 
   const normalizedActivityIndex = useMemo(() => {
     if (stage === "Not Started" && attempts.length === 0) return -1; // none active
@@ -1486,23 +1644,9 @@ function AgentLeadEngagement() {
   }, [stage, attempts.length, CONTACTING_STEPS_UI, effectiveActivityKey]);
 
   const addAttemptActivityIndex = useMemo(() => {
-    if (!showAddAttempt) return normalizedActivityIndex;
-
-    if (attemptForm.response !== "Responded") return 0;
-    if (!validateForm.phoneValidation) return 1;
-    if (validateForm.phoneValidation === "WRONG_CONTACT") return 1;
-
-    if (!interestForm.interestLevel) return 2;
-    if (interestForm.interestLevel === "NOT_INTERESTED") return 2;
-
-    return 3;
-  }, [
-    showAddAttempt,
-    normalizedActivityIndex,
-    attemptForm.response,
-    validateForm.phoneValidation,
-    interestForm.interestLevel,
-  ]);
+    if (showAddAttempt) return 0;
+    return normalizedActivityIndex;
+  }, [showAddAttempt, normalizedActivityIndex]);
 
   // ✅ Badge label
   const currentActivityLabel = useMemo(() => {
@@ -1521,6 +1665,8 @@ function AgentLeadEngagement() {
     attempts.length,
     effectiveActivityKey,
   ]);
+
+  const contactingCurrentActivityKey = showAddAttempt ? "Attempt Contact" : (effectiveActivityKey || "Attempt Contact");
 
   const proposalUiActivityKey = useMemo(() => {
     const fallback = "Generate Proposal";
@@ -1557,10 +1703,8 @@ function AgentLeadEngagement() {
       needsAssessmentForm?.needsPriorities?.productSelection?.requestedFrequency ||
       ""
   ).trim();
-  const initialPaymentMethodFromNeedsAssessment = String(
-    applicationNeedsPaymentSelection?.methodForInitialPayment ||
-      needsAssessmentForm?.needsPriorities?.productSelection?.methodForInitialPayment ||
-      ""
+  const initialPaymentMethodFromApplication = String(
+    applicationPremiumPaymentForm.methodForInitialPayment || ""
   ).trim();
 
   const hasSavedApplicationPremiumPaymentTransfer = useMemo(() => {
@@ -1568,15 +1712,19 @@ function AgentLeadEngagement() {
     const frequencyRaw = String(applicationPremiumPaymentForm.totalFrequencyPremiumPhp ?? "").trim();
     const hasAnnual = annualRaw !== "" && toNonNegativeNumber(annualRaw) !== null;
     const hasFrequency = frequencyRaw !== "" && toNonNegativeNumber(frequencyRaw) !== null;
+    const hasInitialMethod = ["Credit Card / Debit Card", "Mobile Wallet / GCash", "Dated Check", "Bills Payments"].includes(
+      String(applicationPremiumPaymentForm.methodForInitialPayment || "").trim()
+    );
     const hasRenewalMethod = ["Credit Card / Debit Card", "Mobile Wallet / GCash", "Dated Check", "Bills Payments"].includes(
       String(applicationPremiumPaymentForm.methodForRenewalPayment || "").trim()
     );
     const hasProof = Boolean(String(applicationPremiumPaymentForm.paymentProofImageDataUrl || "").trim());
     const hasSavedTimestamp = Boolean(String(applicationPremiumPaymentForm.savedAt || "").trim());
-    return hasAnnual && hasFrequency && hasRenewalMethod && hasProof && hasSavedTimestamp;
+    return hasAnnual && hasFrequency && hasInitialMethod && hasRenewalMethod && hasProof && hasSavedTimestamp;
   }, [
     applicationPremiumPaymentForm.totalAnnualPremiumPhp,
     applicationPremiumPaymentForm.totalFrequencyPremiumPhp,
+    applicationPremiumPaymentForm.methodForInitialPayment,
     applicationPremiumPaymentForm.methodForRenewalPayment,
     applicationPremiumPaymentForm.paymentProofImageDataUrl,
     applicationPremiumPaymentForm.savedAt,
@@ -1696,13 +1844,11 @@ function AgentLeadEngagement() {
     const selectedProductId = String(np?.productSelection?.selectedProductId || "").trim();
     const requestedFrequency = String(np?.productSelection?.requestedFrequency || "Monthly").trim() || "Monthly";
     const requestedPremiumPayment = toNonNegativeNumber(np?.productSelection?.requestedPremiumPayment);
-    const methodForInitialPayment = String(np?.productSelection?.methodForInitialPayment || "").trim();
     const selectedProduct = (availableProductsByPriority || []).find((prod) => String(prod?._id || "") === selectedProductId);
     if (!selectedProductId || !selectedProduct) return false;
     if (!["Monthly", "Quarterly", "Half-yearly", "Yearly"].includes(requestedFrequency)) return false;
     if (requestedPremiumPayment === null) return false;
     if (!/^data:image\/(?:jpeg|png);base64,/i.test(attendanceProofImageDataUrl)) return false;
-    if (!["Credit Card / Debit Card", "Mobile Wallet / GCash", "Dated Check", "Bills Payments"].includes(methodForInitialPayment)) return false;
 
     if (priority === "Protection") {
       const monthlySpend = toNonNegativeNumber(np?.protection?.monthlySpend);
@@ -1757,6 +1903,119 @@ function AgentLeadEngagement() {
         : "Schedule Proposal Presentation"
       : needsActivityKeyRaw;
 
+  const previousContactingCurrentActivityRef = useRef("");
+  const previousNeedsCurrentActivityRef = useRef("");
+  const previousProposalCurrentActivityRef = useRef("");
+  const previousApplicationCurrentActivityRef = useRef("");
+  const previousPolicyCurrentActivityRef = useRef("");
+
+  useEffect(() => {
+    syncViewedStepWithCurrent(
+      CONTACTING_STEPS_UI,
+      contactingCurrentActivityKey,
+      setContactingViewedActivityKey,
+      previousContactingCurrentActivityRef
+    );
+  }, [CONTACTING_STEPS_UI, contactingCurrentActivityKey, syncViewedStepWithCurrent]);
+
+  useEffect(() => {
+    syncViewedStepWithCurrent(
+      NEEDS_ASSESSMENT_STEPS_UI,
+      needsActivityKeyRaw,
+      setNeedsAssessmentViewedActivityKey,
+      previousNeedsCurrentActivityRef
+    );
+  }, [NEEDS_ASSESSMENT_STEPS_UI, needsActivityKeyRaw, syncViewedStepWithCurrent]);
+
+  useEffect(() => {
+    syncViewedStepWithCurrent(
+      PROPOSAL_STEPS_UI,
+      proposalUiActivityKey,
+      setProposalViewedActivityKey,
+      previousProposalCurrentActivityRef
+    );
+  }, [PROPOSAL_STEPS_UI, proposalUiActivityKey, syncViewedStepWithCurrent]);
+
+  useEffect(() => {
+    syncViewedStepWithCurrent(
+      APPLICATION_STEPS_UI,
+      applicationUiActivityKey,
+      setApplicationViewedActivityKey,
+      previousApplicationCurrentActivityRef
+    );
+  }, [APPLICATION_STEPS_UI, applicationUiActivityKey, syncViewedStepWithCurrent]);
+
+  useEffect(() => {
+    syncViewedStepWithCurrent(
+      POLICY_ISSUANCE_STEPS_UI,
+      policyIssuanceUiActivityKey,
+      setPolicyViewedActivityKey,
+      previousPolicyCurrentActivityRef
+    );
+  }, [POLICY_ISSUANCE_STEPS_UI, policyIssuanceUiActivityKey, syncViewedStepWithCurrent]);
+
+  const getStepIndex = useCallback(
+    (steps, key) => {
+      const idx = steps.findIndex((step) => step.key === key);
+      return idx >= 0 ? idx : 0;
+    },
+    []
+  );
+
+  const selectReachableViewedStep = useCallback(
+    (steps, stepKey, currentIndex, setViewedKey) => {
+      const nextIndex = steps.findIndex((step) => step.key === stepKey);
+      if (nextIndex < 0 || nextIndex > currentIndex) return;
+      setViewedKey(stepKey);
+    },
+    []
+  );
+
+  const contactingCurrentStepIndex = getStepIndex(CONTACTING_STEPS_UI, contactingCurrentActivityKey);
+  const contactingViewedStepIndex = getStepIndex(CONTACTING_STEPS_UI, contactingViewedActivityKey || contactingCurrentActivityKey);
+  const needsCurrentStepIndex = getStepIndex(NEEDS_ASSESSMENT_STEPS_UI, needsActivityKeyRaw);
+  const needsViewedStepIndex = getStepIndex(NEEDS_ASSESSMENT_STEPS_UI, needsAssessmentViewedActivityKey || needsActivityKeyRaw);
+  const proposalCurrentStepIndex = getStepIndex(PROPOSAL_STEPS_UI, proposalUiActivityKey);
+  const proposalViewedStepIndex = getStepIndex(PROPOSAL_STEPS_UI, proposalViewedActivityKey || proposalUiActivityKey);
+  const applicationCurrentStepIndex = getStepIndex(APPLICATION_STEPS_UI, applicationUiActivityKey);
+  const applicationViewedStepIndex = getStepIndex(APPLICATION_STEPS_UI, applicationViewedActivityKey || applicationUiActivityKey);
+  const policyCurrentStepIndex = getStepIndex(POLICY_ISSUANCE_STEPS_UI, policyIssuanceUiActivityKey);
+  const policyViewedStepIndex = getStepIndex(POLICY_ISSUANCE_STEPS_UI, policyViewedActivityKey || policyIssuanceUiActivityKey);
+
+  const isAttemptContactViewed = contactingViewedActivityKey === "Attempt Contact";
+  const isValidateContactViewed = contactingViewedActivityKey === "Validate Contact";
+  const isAssessInterestViewed = contactingViewedActivityKey === "Assess Interest";
+  const isScheduleMeetingViewed = contactingViewedActivityKey === "Schedule Meeting";
+  const isContactingCurrentViewEditable =
+    isViewingCurrentStage && !isContactingReadOnly && contactingViewedActivityKey === contactingCurrentActivityKey;
+  const isValidateContactEditable =
+    isContactingCurrentViewEditable && contactingCurrentActivityKey === "Validate Contact" && !isEngagementBlocked;
+  const isAssessInterestEditable =
+    isContactingCurrentViewEditable && contactingCurrentActivityKey === "Assess Interest";
+  const isScheduleMeetingEditable =
+    isContactingCurrentViewEditable && contactingCurrentActivityKey === "Schedule Meeting";
+
+  const isNeedsAssessmentCurrentViewEditable =
+    isNeedsAssessmentEditableNow && needsAssessmentViewedActivityKey === needsActivityKeyRaw;
+  const isNeedsScheduleEditable =
+    isNeedsAssessmentCurrentViewEditable &&
+    needsActivityKeyRaw === "Schedule Proposal Presentation" &&
+    needsAssessmentViewedActivityKey === "Schedule Proposal Presentation";
+  const isNeedsAnalysisViewed = needsAssessmentViewedActivityKey === "Perform Needs Analysis";
+  const isNeedsScheduleViewed = needsAssessmentViewedActivityKey === "Schedule Proposal Presentation";
+
+  const isProposalGenerateViewed = proposalViewedActivityKey === "Generate Proposal";
+  const isProposalAttendanceViewed = proposalViewedActivityKey === "Record Prospect Attendance";
+  const isProposalPresentationViewed = proposalViewedActivityKey === "Present Proposal";
+  const isProposalScheduleApplicationViewed = proposalViewedActivityKey === "Schedule Application Submission";
+  const isApplicationAttendanceViewed = applicationViewedActivityKey === "Record Prospect Attendance";
+  const isApplicationPremiumViewed = applicationViewedActivityKey === "Record Premium Payment Transfer";
+  const isApplicationSubmissionViewed = applicationViewedActivityKey === "Record Application Submission";
+  const isPolicyStatusViewed = policyViewedActivityKey === "Record Policy Application Status";
+  const isPolicyInitialEorViewed = policyViewedActivityKey === "Upload Initial Premium eOR";
+  const isPolicySummaryViewed = policyViewedActivityKey === "Upload Policy Summary";
+  const isPolicyCoverageViewed = policyViewedActivityKey === "Record Coverage Duration Details";
+
   const attendanceProofErrorMessages = useMemo(
     () => [
       "Please upload a proof of attendance image before proceeding.",
@@ -1775,6 +2034,7 @@ function AgentLeadEngagement() {
     if (!errorText) return "";
     if (attendanceProofErrorMessages.includes(errorText)) return "attendanceProof";
     if (errorText === "Prospect attendance must be marked YES before saving.") return "attendanceChoice";
+    if (errorText === "Sex is required.") return "sex";
     if (errorText === "Civil status is required.") return "civilStatus";
     if (errorText.startsWith("Birthday")) return "birthday";
     if (errorText.startsWith("Prospect age")) return "birthday";
@@ -1795,7 +2055,6 @@ function AgentLeadEngagement() {
     if (errorText.startsWith("Product Selection: please select")) return "selectedProductId";
     if (errorText.startsWith("Product Selection: requested frequency")) return "requestedFrequency";
     if (errorText.startsWith("Product Selection: requested premium")) return "requestedPremiumPayment";
-    if (errorText.startsWith("Product Selection: method for initial payment")) return "methodForInitialPayment";
     if (errorText.startsWith("Protection: approximate monthly spend") || errorText.startsWith("Protection: monthly spend")) return "protectionMonthlySpend";
     if (errorText.startsWith("Protection: savings for protection")) return "protectionSavings";
     if (errorText.startsWith("Health: approximate amount")) return "healthAmount";
@@ -1865,10 +2124,6 @@ function AgentLeadEngagement() {
   }, [needsAssessmentForm, resolveApproxIncome, scoreRiskProfile, toNonNegativeNumber, INVESTMENT_FUNDS, SUITABLE_RISK_RATINGS_BY_CATEGORY]);
 
   const previousContactingActivity = String(lastAttempt?.outcomeActivity || effectiveActivityKey || "Attempt Contact").trim();
-  const previousContactingActivityIndex = useMemo(() => {
-    const idx = CONTACTING_STEPS_UI.findIndex((s) => s.key === previousContactingActivity);
-    return idx >= 0 ? idx : 0;
-  }, [CONTACTING_STEPS_UI, previousContactingActivity]);
 
   const stageActivityBadge =
     showContactingPanel
@@ -1886,6 +2141,8 @@ function AgentLeadEngagement() {
       : "";
 
   const isLeadClosed = String(lead?.status || "").trim().toLowerCase() === "closed";
+  const showCurrentSubactivityStatus = isViewingCurrentStage && !isLeadClosed;
+  const closedLeadSubactivityHelperText = "This lead is closed. Subactivities are view-only.";
 
   const mainTitle = viewStage === "Not Started" ? "Not Started" : viewStage || "—";
 
@@ -1998,65 +2255,7 @@ function AgentLeadEngagement() {
   };
 
   const onSubmitAttempt = async () => {
-    const baseErrors = validateAttempt();
-    const response = String(attemptForm.response || "").trim();
-    const phoneValidation = String(validateForm.phoneValidation || "").trim().toUpperCase();
-    const interestLevel = String(interestForm.interestLevel || "").trim().toUpperCase();
-    const preferredChannel = String(interestForm.preferredChannel || "").trim();
-    const preferredChannelOther = String(interestForm.preferredChannelOther || "").trim();
-    const meetingDate = String(meetingForm.meetingDate || "").trim();
-    const meetingStartTime = String(meetingForm.meetingStartTime || "").trim();
-    const meetingDurationMin = Number(meetingForm.meetingDurationMin || 120);
-    const meetingMode = String(meetingForm.meetingMode || "").trim();
-    const meetingPlatform = String(meetingForm.meetingPlatform || "").trim();
-    const meetingPlatformOther = String(meetingForm.meetingPlatformOther || "").trim();
-    const meetingLink = String(meetingForm.meetingLink || "").trim();
-    const meetingPlace = String(meetingForm.meetingPlace || "").trim();
-
-    const errs = { ...baseErrors };
-
-    if (response === "Responded") {
-      if (!phoneValidation) errs.phoneValidation = "Please select phone validation result.";
-
-      if (phoneValidation === "CORRECT") {
-        if (!["INTERESTED", "NOT_INTERESTED"].includes(interestLevel)) {
-          errs.interestLevel = "Please select a valid interest level.";
-        }
-
-        if (interestLevel === "INTERESTED") {
-          if (!["SMS", "WhatsApp", "Viber", "Telegram", "Other"].includes(preferredChannel)) {
-            errs.preferredChannel = "Please select a preferred communication channel.";
-          }
-          if (preferredChannel === "Other" && !preferredChannelOther) {
-            errs.preferredChannelOther = "Please specify the other communication channel.";
-          }
-
-          if (!meetingDate) errs.meetingDate = "Meeting date is required.";
-          if (!meetingStartTime) errs.meetingStartTime = "Meeting start time is required.";
-          if (![30, 60, 90, 120].includes(meetingDurationMin)) errs.meetingDurationMin = "Duration must be 30, 60, 90, or 120 minutes.";
-          if (meetingDate && meetingStartTime && isSlotBooked(meetingDate, meetingStartTime, meetingDurationMin)) {
-            errs.meetingStartTime = "Selected time is already booked.";
-          }
-          if (!["Online", "Face-to-face"].includes(meetingMode)) {
-            errs.meetingMode = "Please select meeting mode.";
-          }
-          if (meetingMode === "Online") {
-            if (!["Zoom", "Google Meet", "Other"].includes(meetingPlatform)) {
-              errs.meetingPlatform = "Please select online platform.";
-            }
-            if (meetingPlatform === "Other" && !meetingPlatformOther) {
-              errs.meetingPlatformOther = "Please specify other platform.";
-            }
-            if (!meetingLink) errs.meetingLink = "Meeting link is required for online meetings.";
-            if (meetingLink && !isValidHttpUrl(meetingLink)) errs.meetingLink = "Meeting link must be a valid http/https URL.";
-            if (meetingForm.meetingInviteSent !== true) errs.meetingInviteSent = "Meeting invite must be sent before saving.";
-          }
-          if (meetingMode === "Face-to-face" && !meetingPlace) {
-            errs.meetingPlace = "Meeting place is required for face-to-face meetings.";
-          }
-        }
-      }
-    }
+    const errs = validateAttempt();
 
     setAttemptErrors(errs);
     if (Object.keys(errs).length) return;
@@ -2072,7 +2271,7 @@ function AgentLeadEngagement() {
           body: JSON.stringify({
             primaryChannel: attemptForm.primaryChannel,
             otherChannels: attemptForm.otherChannels,
-            response,
+            response: String(attemptForm.response || "").trim(),
             notes: String(attemptForm.notes || "").trim(),
           }),
         }
@@ -2081,62 +2280,7 @@ function AgentLeadEngagement() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to add contact attempt.");
 
-      if (response === "Responded") {
-        const validateRes = await fetch(
-          `${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/validate-contact?userId=${user.id}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ result: phoneValidation }),
-          }
-        );
-        const validateData = await validateRes.json();
-        if (!validateRes.ok) throw new Error(validateData?.message || "Failed to validate contact.");
-
-        if (phoneValidation === "CORRECT") {
-          const interestRes = await fetch(
-            `${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/assess-interest?userId=${user.id}`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                interestLevel,
-                preferredChannel: interestLevel === "INTERESTED" ? preferredChannel : undefined,
-                preferredChannelOther:
-                  interestLevel === "INTERESTED" && preferredChannel === "Other" ? preferredChannelOther : undefined,
-              }),
-            }
-          );
-          const interestData = await interestRes.json();
-          if (!interestRes.ok) throw new Error(interestData?.message || "Failed to save assess interest.");
-
-          if (interestLevel === "INTERESTED") {
-            const meetingRes = await fetch(
-              `${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/schedule-meeting?userId=${user.id}`,
-              {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  meetingDate,
-                  meetingStartTime,
-                  meetingDurationMin,
-                  meetingMode,
-                  meetingPlatform: meetingMode === "Online" ? meetingPlatform : undefined,
-                  meetingPlatformOther:
-                    meetingMode === "Online" && meetingPlatform === "Other" ? meetingPlatformOther : undefined,
-                  meetingLink: meetingMode === "Online" ? meetingLink : undefined,
-                  meetingInviteSent: Boolean(meetingForm.meetingInviteSent),
-                  meetingPlace: meetingMode === "Face-to-face" ? meetingPlace : undefined,
-                }),
-              }
-            );
-            const meetingData = await meetingRes.json();
-            if (!meetingRes.ok) throw new Error(meetingData?.message || "Failed to schedule meeting.");
-          }
-        }
-      }
-
-      await fetchEngagement();
+      await refreshCurrentProgressView();
       setShowAddAttempt(false);
       resetAttemptForm();
       resetProgressiveSubForms();
@@ -2173,7 +2317,7 @@ function AgentLeadEngagement() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to validate contact.");
 
-      await fetchEngagement();
+      await refreshCurrentProgressView();
 
       setValidateForm({ phoneValidation: "" });
     } catch (err) {
@@ -2227,7 +2371,7 @@ function AgentLeadEngagement() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to save assess interest.");
 
-      await fetchEngagement();
+      await refreshCurrentProgressView();
     } catch (err) {
       setInterestError(err?.message || "Cannot connect to server. Is backend running?");
     } finally {
@@ -2323,7 +2467,7 @@ function AgentLeadEngagement() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to schedule meeting.");
 
-      await fetchEngagement();
+      await refreshCurrentProgressView();
     } catch (err) {
       setMeetingError(err?.message || "Cannot connect to server. Is backend running?");
     } finally {
@@ -2434,8 +2578,7 @@ function AgentLeadEngagement() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to schedule proposal presentation.");
 
-      await fetchNeedsAssessment();
-      await fetchEngagement();
+      await refreshCurrentProgressView({ includeNeedsAssessment: true });
     } catch (err) {
       setProposalMeetingError(err?.message || "Cannot connect to server. Is backend running?");
     } finally {
@@ -2509,7 +2652,7 @@ function AgentLeadEngagement() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to save generated proposal.");
 
-      await fetchEngagement();
+      await refreshCurrentProgressView();
     } catch (err) {
       setProposalGenerateError(err?.message || "Failed to save generated proposal.");
     } finally {
@@ -2656,7 +2799,7 @@ function AgentLeadEngagement() {
 
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to save proposal attendance.");
-      await fetchEngagement();
+      await refreshCurrentProgressView();
     } catch (err) {
       setProposalAttendanceError(err?.message || "Failed to save proposal attendance.");
     } finally {
@@ -2684,7 +2827,7 @@ function AgentLeadEngagement() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to save proposal presentation details.");
-      await fetchEngagement();
+      await refreshCurrentProgressView();
     } catch (err) {
       setProposalPresentationError(err?.message || "Failed to save proposal presentation details.");
     } finally {
@@ -2720,7 +2863,7 @@ function AgentLeadEngagement() {
 
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to save application attendance.");
-      await fetchEngagement();
+      await refreshCurrentProgressView();
     } catch (err) {
       setApplicationAttendanceError(err?.message || "Failed to save application attendance.");
     } finally {
@@ -2737,6 +2880,7 @@ function AgentLeadEngagement() {
       const totalFrequencyPremiumRaw = String(computedFrequencyPremiumValue || applicationPremiumPaymentForm.totalFrequencyPremiumPhp || "").trim();
       const totalAnnualPremiumPhp = toNonNegativeNumber(totalAnnualPremiumRaw);
       const totalFrequencyPremiumPhp = toNonNegativeNumber(totalFrequencyPremiumRaw);
+      const methodForInitialPayment = String(applicationPremiumPaymentForm.methodForInitialPayment || "").trim();
       const methodForRenewalPayment = String(applicationPremiumPaymentForm.methodForRenewalPayment || "").trim();
       const paymentProofImageDataUrl = String(applicationPremiumPaymentForm.paymentProofImageDataUrl || "").trim();
       const paymentProofFileName = String(applicationPremiumPaymentForm.paymentProofFileName || "").trim();
@@ -2751,12 +2895,16 @@ function AgentLeadEngagement() {
         setApplicationPremiumPaymentFieldErrors({ totalFrequencyPremiumPhp: `${totalFrequencyPremiumLabel} is required.` });
         return;
       }
+      if (!allowedPaymentMethods.includes(methodForInitialPayment)) {
+        setApplicationPremiumPaymentFieldErrors({ methodForInitialPayment: "Method for initial payment is required." });
+        return;
+      }
       if (!allowedPaymentMethods.includes(methodForRenewalPayment)) {
         setApplicationPremiumPaymentFieldErrors({ methodForRenewalPayment: "Method for renewal payment is required." });
         return;
       }
       if (!paymentProofImageDataUrl) {
-        setApplicationPremiumPaymentFieldErrors({ paymentProofImageDataUrl: `Proof of Payment via ${initialPaymentMethodFromNeedsAssessment || "Initial Payment Method"} (JPG, JPEG, PNG) is required.` });
+        setApplicationPremiumPaymentFieldErrors({ paymentProofImageDataUrl: `Proof of Payment via ${methodForInitialPayment || "Initial Payment Method"} (JPG, JPEG, PNG) is required.` });
         return;
       }
 
@@ -2768,6 +2916,7 @@ function AgentLeadEngagement() {
         body: JSON.stringify({
           totalAnnualPremiumPhp,
           totalFrequencyPremiumPhp,
+          methodForInitialPayment,
           methodForRenewalPayment,
           paymentProofImageDataUrl,
           paymentProofFileName,
@@ -2777,17 +2926,21 @@ function AgentLeadEngagement() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to save premium payment transfer.");
 
-      await fetchEngagement();
+      await refreshCurrentProgressView();
     } catch (err) {
       const msg = String(err?.message || "Failed to save premium payment transfer.");
       if (msg.includes("Total annual premium")) {
         setApplicationPremiumPaymentFieldErrors({ totalAnnualPremiumPhp: "Total Annual Premium (in Php) is required." });
       } else if (msg.includes("Total requested-frequency premium")) {
         setApplicationPremiumPaymentFieldErrors({ totalFrequencyPremiumPhp: `${totalFrequencyPremiumLabel} is required.` });
+      } else if (msg.includes("Method for initial payment")) {
+        setApplicationPremiumPaymentFieldErrors({ methodForInitialPayment: "Method for initial payment is required." });
       } else if (msg.includes("Method for renewal payment")) {
         setApplicationPremiumPaymentFieldErrors({ methodForRenewalPayment: "Method for renewal payment is required." });
       } else if (msg.includes("Proof of payment")) {
-        setApplicationPremiumPaymentFieldErrors({ paymentProofImageDataUrl: `Proof of Payment via ${initialPaymentMethodFromNeedsAssessment || "Initial Payment Method"} (JPG, JPEG, PNG) is required.` });
+        setApplicationPremiumPaymentFieldErrors({
+          paymentProofImageDataUrl: `Proof of Payment via ${String(applicationPremiumPaymentForm.methodForInitialPayment || "").trim() || "Initial Payment Method"} (JPG, JPEG, PNG) is required.`,
+        });
       } else {
         setApplicationPremiumPaymentError(msg);
       }
@@ -2827,7 +2980,7 @@ function AgentLeadEngagement() {
 
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to save application submission.");
-      await fetchEngagement();
+      await refreshCurrentProgressView();
     } catch (err) {
       const msg = String(err?.message || "Failed to save application submission.");
       if (msg.includes("Transaction ID")) {
@@ -2899,7 +3052,7 @@ function AgentLeadEngagement() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to save policy application status.");
-      await fetchEngagement();
+      await refreshCurrentProgressView();
     } catch (err) {
       const msg = String(err?.message || "Failed to save policy application status.");
       if (msg.includes("Issued or Declined")) {
@@ -2972,7 +3125,7 @@ function AgentLeadEngagement() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to save Initial Premium eOR.");
-      await fetchEngagement();
+      await refreshCurrentProgressView();
     } catch (err) {
       const msg = String(err?.message || "Failed to save Initial Premium eOR.");
       if (msg.includes("eOR number")) setPolicyInitialEorFieldErrors({ eorNumber: "eOR number is required." });
@@ -3215,7 +3368,7 @@ function AgentLeadEngagement() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to save policy summary.");
-      await fetchEngagement();
+      await refreshCurrentProgressView();
     } catch (err) {
       const msg = String(err?.message || "Failed to save policy summary.");
       if (msg.includes("8 digits")) setPolicySummaryFieldErrors({ policyNumber: "Policy number must be exactly 8 digits." });
@@ -3278,7 +3431,7 @@ function AgentLeadEngagement() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to save coverage duration details.");
-      await fetchEngagement();
+      await refreshCurrentProgressView();
     } catch (err) {
       const msg = String(err?.message || "Failed to save coverage duration details.");
       if (msg.toLowerCase().includes("payment term")) {
@@ -3397,7 +3550,7 @@ function AgentLeadEngagement() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to schedule application submission.");
 
-      await fetchEngagement();
+      await refreshCurrentProgressView();
     } catch (err) {
       setApplicationMeetingError(err?.message || "Cannot connect to server. Is backend running?");
     } finally {
@@ -3731,86 +3884,155 @@ function AgentLeadEngagement() {
                     </p>
                   )}
 
-                  {showContactingTracker && (
-                    <div className="le-activityTracker">
-                      {CONTACTING_STEPS_UI.map((s, idx) => {
-                        const trackerIndex = showAddAttempt ? addAttemptActivityIndex : (isViewingCurrentStage ? normalizedActivityIndex : previousContactingActivityIndex);
-                        const isActiveCurrent = trackerIndex === idx;
-                        const isCompleted = trackerIndex > idx;
-                        const isReached = trackerIndex >= idx;
-                        return (
-                          <span
-                            key={s.key}
-                            className={`${isReached ? "active" : ""} ${isCompleted ? "done" : ""} ${isActiveCurrent ? "current" : ""}`.trim()}
-                          >
-                            {s.label}
-                          </span>
-                        );
-                      })}
-                    </div>
+                  {showContactingTracker && isViewingCurrentStage && (
+                    <SubactivityNavigator
+                      steps={CONTACTING_STEPS_UI}
+                      currentIndex={contactingCurrentStepIndex}
+                      viewedIndex={contactingViewedStepIndex}
+                      onSelect={(stepKey) =>
+                        selectReachableViewedStep(
+                          CONTACTING_STEPS_UI,
+                          stepKey,
+                          contactingCurrentStepIndex,
+                          setContactingViewedActivityKey
+                        )
+                      }
+                      helperText={
+                        isLeadClosed
+                          ? closedLeadSubactivityHelperText
+                          : contactingViewedStepIndex < contactingCurrentStepIndex
+                          ? "Viewing a previously saved subactivity. Click the current subactivity to resume editing."
+                          : "Click any unlocked subactivity to review saved details. Only the current subactivity can be edited."
+                      }
+                      showCurrentStatus={showCurrentSubactivityStatus}
+                    />
+                  )}
+
+                  {showContactingTracker && !isViewingCurrentStage && (
+                    <SubactivityNavigator
+                      steps={CONTACTING_STEPS_UI}
+                      currentIndex={CONTACTING_STEPS_UI.length - 1}
+                      viewedIndex={contactingViewedStepIndex}
+                      onSelect={setContactingViewedActivityKey}
+                      showCurrentStatus={false}
+                      allowAllSteps
+                    />
                   )}
 
                       {showNeedsAssessmentPanel && (
-                    <div className="le-activityTracker">
-                      {NEEDS_ASSESSMENT_STEPS_UI.map((step, idx) => {
-                        const currentIdx = Math.max(
-                          0,
-                          NEEDS_ASSESSMENT_STEPS_UI.findIndex((x) => x.key === needsUiActivityKey)
-                        );
-                        const isDone = idx < currentIdx;
-                        const isActive = idx === currentIdx;
-                        return (
-                          <span key={step.key} className={`${isDone ? "done" : ""} ${isActive ? "active current" : ""}`.trim()}>
-                            {step.label}
-                          </span>
-                        );
-                      })}
-                    </div>
+                    <SubactivityNavigator
+                      steps={NEEDS_ASSESSMENT_STEPS_UI}
+                      currentIndex={isViewingCurrentStage ? needsCurrentStepIndex : NEEDS_ASSESSMENT_STEPS_UI.length - 1}
+                      viewedIndex={needsViewedStepIndex}
+                      onSelect={(stepKey) =>
+                        isViewingCurrentStage
+                          ? selectReachableViewedStep(
+                              NEEDS_ASSESSMENT_STEPS_UI,
+                              stepKey,
+                              needsCurrentStepIndex,
+                              setNeedsAssessmentViewedActivityKey
+                            )
+                          : setNeedsAssessmentViewedActivityKey(stepKey)
+                      }
+                      helperText={
+                        !isViewingCurrentStage
+                          ? ""
+                          : isLeadClosed
+                          ? closedLeadSubactivityHelperText
+                          : needsViewedStepIndex < needsCurrentStepIndex
+                          ? "Viewing a previously saved subactivity. Click the current subactivity to resume editing."
+                          : "Click any unlocked subactivity to review saved details. Only the current subactivity can be edited."
+                      }
+                      showCurrentStatus={showCurrentSubactivityStatus}
+                      allowAllSteps={!isViewingCurrentStage}
+                    />
                   )}
 
-                  {showProposalTracker && (
-                    <div className="le-activityTracker">
-                      {PROPOSAL_STEPS_UI.map((step, idx) => {
-                        const currentIdx = Math.max(0, PROPOSAL_STEPS_UI.findIndex((x) => x.key === proposalUiActivityKey));
-                        const isDone = idx < currentIdx;
-                        const isActive = idx === currentIdx;
-                        return (
-                          <span key={step.key} className={`${isDone ? "done" : ""} ${isActive ? "active current" : ""}`.trim()}>
-                            {step.label}
-                          </span>
-                        );
-                      })}
-                    </div>
+                  {showProposalPanel && (
+                    <SubactivityNavigator
+                      steps={PROPOSAL_STEPS_UI}
+                      currentIndex={isViewingCurrentStage ? proposalCurrentStepIndex : PROPOSAL_STEPS_UI.length - 1}
+                      viewedIndex={proposalViewedStepIndex}
+                      onSelect={(stepKey) =>
+                        isViewingCurrentStage
+                          ? selectReachableViewedStep(
+                              PROPOSAL_STEPS_UI,
+                              stepKey,
+                              proposalCurrentStepIndex,
+                              setProposalViewedActivityKey
+                            )
+                          : setProposalViewedActivityKey(stepKey)
+                      }
+                      helperText={
+                        !isViewingCurrentStage
+                          ? ""
+                          : isLeadClosed
+                          ? closedLeadSubactivityHelperText
+                          : proposalViewedStepIndex < proposalCurrentStepIndex
+                          ? "Viewing a previously saved proposal subactivity in read-only mode. Click the current subactivity to resume editing."
+                          : "Click any unlocked subactivity to review saved details. Only the current subactivity can be edited."
+                      }
+                      showCurrentStatus={showCurrentSubactivityStatus}
+                      allowAllSteps={!isViewingCurrentStage}
+                    />
                   )}
 
                   {showApplicationPanel && (
-                    <div className="le-activityTracker">
-                      {APPLICATION_STEPS_UI.map((step, idx) => {
-                        const currentIdx = Math.max(0, APPLICATION_STEPS_UI.findIndex((x) => x.key === applicationUiActivityKey));
-                        const isDone = idx < currentIdx;
-                        const isActive = idx === currentIdx;
-                        return (
-                          <span key={step.key} className={`${isDone ? "done" : ""} ${isActive ? "active current" : ""}`.trim()}>
-                            {step.label}
-                          </span>
-                        );
-                      })}
-                    </div>
+                    <SubactivityNavigator
+                      steps={APPLICATION_STEPS_UI}
+                      currentIndex={isViewingCurrentStage ? applicationCurrentStepIndex : APPLICATION_STEPS_UI.length - 1}
+                      viewedIndex={applicationViewedStepIndex}
+                      onSelect={(stepKey) =>
+                        isViewingCurrentStage
+                          ? selectReachableViewedStep(
+                              APPLICATION_STEPS_UI,
+                              stepKey,
+                              applicationCurrentStepIndex,
+                              setApplicationViewedActivityKey
+                            )
+                          : setApplicationViewedActivityKey(stepKey)
+                      }
+                      helperText={
+                        !isViewingCurrentStage
+                          ? ""
+                          : isLeadClosed
+                          ? closedLeadSubactivityHelperText
+                          : applicationViewedStepIndex < applicationCurrentStepIndex
+                          ? "Viewing a previously saved application subactivity in read-only mode. Click the current subactivity to resume editing."
+                          : "Click any unlocked subactivity to review saved details. Only the current subactivity can be edited."
+                      }
+                      showCurrentStatus={showCurrentSubactivityStatus}
+                      allowAllSteps={!isViewingCurrentStage}
+                    />
                   )}
 
-                  {showPolicyIssuanceTracker && (
-                    <div className="le-activityTracker">
-                      {POLICY_ISSUANCE_STEPS_UI.map((step, idx) => {
-                        const currentIdx = Math.max(0, POLICY_ISSUANCE_STEPS_UI.findIndex((x) => x.key === policyIssuanceUiActivityKey));
-                        const isDone = idx < currentIdx;
-                        const isActive = idx === currentIdx;
-                        return (
-                          <span key={step.key} className={`${isDone ? "done" : ""} ${isActive ? "active current" : ""}`.trim()}>
-                            {step.label}
-                          </span>
-                        );
-                      })}
-                    </div>
+                  {showPolicyIssuancePanel && (
+                    <SubactivityNavigator
+                      steps={POLICY_ISSUANCE_STEPS_UI}
+                      currentIndex={isViewingCurrentStage ? policyCurrentStepIndex : POLICY_ISSUANCE_STEPS_UI.length - 1}
+                      viewedIndex={policyViewedStepIndex}
+                      onSelect={(stepKey) =>
+                        isViewingCurrentStage
+                          ? selectReachableViewedStep(
+                              POLICY_ISSUANCE_STEPS_UI,
+                              stepKey,
+                              policyCurrentStepIndex,
+                              setPolicyViewedActivityKey
+                            )
+                          : setPolicyViewedActivityKey(stepKey)
+                      }
+                      helperText={
+                        !isViewingCurrentStage
+                          ? ""
+                          : isLeadClosed
+                          ? closedLeadSubactivityHelperText
+                          : policyViewedStepIndex < policyCurrentStepIndex
+                          ? "Viewing a previously saved policy issuance subactivity in read-only mode. Click the current subactivity to resume editing."
+                          : "Click any unlocked subactivity to review saved details. Only the current subactivity can be edited."
+                      }
+                      showCurrentStatus={showCurrentSubactivityStatus}
+                      allowAllSteps={!isViewingCurrentStage}
+                    />
                   )}
 
                   {showApplicationPanel && (
@@ -3850,138 +4072,140 @@ function AgentLeadEngagement() {
                         </div>
                       </div>
 
-                      <div className="le-block">
-                        <h4 className="le-blockTitle">Prospect Attendance</h4>
+                      {isApplicationAttendanceViewed && (
+                        <div className="le-block">
+                          <h4 className="le-blockTitle">Prospect Attendance</h4>
 
-                        {hasSavedApplicationAttendance ? (
-                          <>
-                            <div className="le-formRow">
-                              <label className="le-label">Prospect Attended?</label>
-                              <p className="le-smallNote">{applicationAttendanceForm.attendanceChoice === "YES" ? "Yes" : "No"}</p>
-                            </div>
-
-                            <div className="le-formRow">
-                              <label className="le-label">Proof of Attendance</label>
-                              <p className="le-smallNote">{applicationAttendanceForm.attendanceProofFileName || "Uploaded image"}</p>
-                            </div>
-
-                            <div className="le-formRow">
-                              <label className="le-label">Preview</label>
-                              <img
-                                src={applicationAttendanceForm.attendanceProofImageDataUrl}
-                                alt="Application attendance proof preview"
-                                style={{ maxWidth: 260, width: "100%", borderRadius: 8, border: "1px solid #e5e7eb" }}
-                              />
-                            </div>
-
-                          </>
-                        ) : (
-                          <>
-                            <div className="le-formRow" style={{ alignItems: "center" }}>
-                              <label className="le-label">Prospect Attended? *</label>
-                              <div className="le-checkboxGrid">
-                                <label className="le-check">
-                                  <input
-                                    type="radio"
-                                    name="application-prospect-attendance"
-                                    checked={applicationAttendanceForm.attendanceChoice === "YES"}
-                                    onChange={() => {
-                                      setApplicationAttendanceError("");
-                                      setApplicationAttendanceForm((f) => ({ ...f, attendanceChoice: "YES" }));
-                                    }}
-                                  />
-                                  <span>Yes</span>
-                                </label>
-                                <label className="le-check">
-                                  <input
-                                    type="radio"
-                                    name="application-prospect-attendance"
-                                    checked={applicationAttendanceForm.attendanceChoice === "NO"}
-                                    onChange={() => {
-                                      setApplicationAttendanceForm((f) => ({
-                                        ...f,
-                                        attendanceChoice: "NO",
-                                        attendanceProofImageDataUrl: "",
-                                        attendanceProofFileName: "",
-                                      }));
-                                      setApplicationAttendanceError("Prospect attendance is required before proceeding to application submission.");
-                                    }}
-                                  />
-                                  <span>No</span>
-                                </label>
+                          {hasSavedApplicationAttendance ? (
+                            <>
+                              <div className="le-formRow">
+                                <label className="le-label">Prospect Attended?</label>
+                                <p className="le-smallNote">{applicationAttendanceForm.attendanceChoice === "YES" ? "Yes" : "No"}</p>
                               </div>
-                            </div>
 
-                            {applicationAttendanceError === "Prospect attendance is required before proceeding to application submission." ? (
-                              <p className="le-smallNote" style={{ color: "#DA291C", marginTop: 6 }}>
-                                {applicationAttendanceError}
-                              </p>
-                            ) : null}
+                              <div className="le-formRow">
+                                <label className="le-label">Proof of Attendance</label>
+                                <p className="le-smallNote">{applicationAttendanceForm.attendanceProofFileName || "Uploaded image"}</p>
+                              </div>
 
-                            {applicationAttendanceForm.attendanceChoice === "YES" ? (
-                              <>
-                                <div className="le-formRow">
-                                  <label className="le-label">Proof of Attendance (JPG, JPEG, PNG) *</label>
-                                  <input
-                                    type="file"
-                                    className="le-input"
-                                    accept="image/jpeg,image/png,.jpg,.jpeg,.png"
-                                    onChange={(e) => onApplicationAttendanceProofPicked(e.target.files?.[0] || null)}
-                                    disabled={applicationAttendanceSaving || applicationAttendanceForm.attendanceChoice !== "YES"}
-                                  />
-                                  {applicationAttendanceForm.attendanceProofFileName ? (
-                                    <p className="le-smallNote">Selected file: {applicationAttendanceForm.attendanceProofFileName}</p>
-                                  ) : null}
-                                </div>
+                              <div className="le-formRow">
+                                <label className="le-label">Preview</label>
+                                <img
+                                  src={applicationAttendanceForm.attendanceProofImageDataUrl}
+                                  alt="Application attendance proof preview"
+                                  style={{ maxWidth: 260, width: "100%", borderRadius: 8, border: "1px solid #e5e7eb" }}
+                                />
+                              </div>
 
-                                {String(applicationAttendanceForm.attendanceProofImageDataUrl || "").trim() ? (
-                                  <div className="le-formRow">
-                                    <label className="le-label">Preview</label>
-                                    <img
-                                      src={applicationAttendanceForm.attendanceProofImageDataUrl}
-                                      alt="Application attendance proof preview"
-                                      style={{ maxWidth: 260, width: "100%", borderRadius: 8, border: "1px solid #e5e7eb" }}
+                            </>
+                          ) : (
+                            <>
+                              <div className="le-formRow" style={{ alignItems: "center" }}>
+                                <label className="le-label">Prospect Attended? *</label>
+                                <div className="le-checkboxGrid">
+                                  <label className="le-check">
+                                    <input
+                                      type="radio"
+                                      name="application-prospect-attendance"
+                                      checked={applicationAttendanceForm.attendanceChoice === "YES"}
+                                      onChange={() => {
+                                        setApplicationAttendanceError("");
+                                        setApplicationAttendanceForm((f) => ({ ...f, attendanceChoice: "YES" }));
+                                      }}
                                     />
+                                    <span>Yes</span>
+                                  </label>
+                                  <label className="le-check">
+                                    <input
+                                      type="radio"
+                                      name="application-prospect-attendance"
+                                      checked={applicationAttendanceForm.attendanceChoice === "NO"}
+                                      onChange={() => {
+                                        setApplicationAttendanceForm((f) => ({
+                                          ...f,
+                                          attendanceChoice: "NO",
+                                          attendanceProofImageDataUrl: "",
+                                          attendanceProofFileName: "",
+                                        }));
+                                        setApplicationAttendanceError("Prospect attendance is required before proceeding to application submission.");
+                                      }}
+                                    />
+                                    <span>No</span>
+                                  </label>
+                                </div>
+                              </div>
+
+                              {applicationAttendanceError === "Prospect attendance is required before proceeding to application submission." ? (
+                                <p className="le-smallNote" style={{ color: "#DA291C", marginTop: 6 }}>
+                                  {applicationAttendanceError}
+                                </p>
+                              ) : null}
+
+                              {applicationAttendanceForm.attendanceChoice === "YES" ? (
+                                <>
+                                  <div className="le-formRow">
+                                    <label className="le-label">Proof of Attendance (JPG, JPEG, PNG) *</label>
+                                    <input
+                                      type="file"
+                                      className="le-input"
+                                      accept="image/jpeg,image/png,.jpg,.jpeg,.png"
+                                      onChange={(e) => onApplicationAttendanceProofPicked(e.target.files?.[0] || null)}
+                                      disabled={applicationAttendanceSaving || applicationAttendanceForm.attendanceChoice !== "YES"}
+                                    />
+                                    {applicationAttendanceForm.attendanceProofFileName ? (
+                                      <p className="le-smallNote">Selected file: {applicationAttendanceForm.attendanceProofFileName}</p>
+                                    ) : null}
                                   </div>
-                                ) : null}
 
-                                {applicationAttendanceError && applicationAttendanceError !== "Prospect attendance is required before proceeding to application submission." ? (
-                                  <p className="le-smallNote" style={{ color: "#DA291C", marginTop: 8 }}>{applicationAttendanceError}</p>
-                                ) : null}
-                              </>
-                            ) : null}
+                                  {String(applicationAttendanceForm.attendanceProofImageDataUrl || "").trim() ? (
+                                    <div className="le-formRow">
+                                      <label className="le-label">Preview</label>
+                                      <img
+                                        src={applicationAttendanceForm.attendanceProofImageDataUrl}
+                                        alt="Application attendance proof preview"
+                                        style={{ maxWidth: 260, width: "100%", borderRadius: 8, border: "1px solid #e5e7eb" }}
+                                      />
+                                    </div>
+                                  ) : null}
 
-                            <div className="le-actions" style={{ marginTop: 10 }}>
-                              <button
-                                type="button"
-                                className="le-btn secondary"
-                                onClick={() => {
-                                  setApplicationAttendanceError("");
-                                  setApplicationAttendanceForm({
-                                    attendanceChoice: "",
-                                    attendanceProofImageDataUrl: "",
-                                    attendanceProofFileName: "",
-                                    attendedAt: "",
-                                  });
-                                }}
-                                disabled={applicationAttendanceSaving}
-                              >
-                                Cancel
-                              </button>
-                              <button
-                                type="button"
-                                className="le-btn primary"
-                                onClick={submitApplicationAttendance}
-                                disabled={applicationAttendanceSaving || applicationAttendanceForm.attendanceChoice !== "YES"}
-                              >
-                                {applicationAttendanceSaving ? "Saving..." : "Record Prospect Attendance"}
-                              </button>
-                            </div>
-                          </>
-                        )}
-                      </div>
+                                  {applicationAttendanceError && applicationAttendanceError !== "Prospect attendance is required before proceeding to application submission." ? (
+                                    <p className="le-smallNote" style={{ color: "#DA291C", marginTop: 8 }}>{applicationAttendanceError}</p>
+                                  ) : null}
+                                </>
+                              ) : null}
 
-                      {hasSavedApplicationAttendance ? (
+                              <div className="le-actions" style={{ marginTop: 10 }}>
+                                <button
+                                  type="button"
+                                  className="le-btn secondary"
+                                  onClick={() => {
+                                    setApplicationAttendanceError("");
+                                    setApplicationAttendanceForm({
+                                      attendanceChoice: "",
+                                      attendanceProofImageDataUrl: "",
+                                      attendanceProofFileName: "",
+                                      attendedAt: "",
+                                    });
+                                  }}
+                                  disabled={applicationAttendanceSaving}
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  type="button"
+                                  className="le-btn primary"
+                                  onClick={submitApplicationAttendance}
+                                  disabled={applicationAttendanceSaving || applicationAttendanceForm.attendanceChoice !== "YES"}
+                                >
+                                  {applicationAttendanceSaving ? "Saving..." : "Record Prospect Attendance"}
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      )}
+
+                      {isApplicationPremiumViewed && hasSavedApplicationAttendance ? (
                         <div className="le-block">
                           <h4 className="le-blockTitle">{hasSavedApplicationPremiumPaymentTransfer ? "Premium Payment Transfer Details" : "Record Premium Payment Transfer"}</h4>
 
@@ -4003,7 +4227,7 @@ function AgentLeadEngagement() {
                               ) : null}
                               <div className="le-formRow">
                                 <label className="le-label">Method for Initial Payment</label>
-                                <p className="le-smallNote">{initialPaymentMethodFromNeedsAssessment || "—"}</p>
+                                <p className="le-smallNote">{initialPaymentMethodFromApplication || "—"}</p>
                               </div>
                               <div className="le-formRow">
                                 <label className="le-label">Method for Renewal Payment</label>
@@ -4058,8 +4282,25 @@ function AgentLeadEngagement() {
                               ) : null}
 
                               <div className="le-formRow">
-                                <label className="le-label">Method for Initial Payment</label>
-                                <p className="le-smallNote">{initialPaymentMethodFromNeedsAssessment || "Not available from Needs Assessment."}</p>
+                                <label className="le-label">Method for Initial Payment *</label>
+                                <select
+                                  className="le-input"
+                                  value={applicationPremiumPaymentForm.methodForInitialPayment}
+                                  onChange={(e) => {
+                                    setApplicationPremiumPaymentForm((f) => ({ ...f, methodForInitialPayment: e.target.value }));
+                                    setApplicationPremiumPaymentFieldErrors((prev) => ({ ...prev, methodForInitialPayment: "" }));
+                                  }}
+                                  disabled={applicationPremiumPaymentSaving}
+                                >
+                                  <option value="">Select</option>
+                                  <option value="Credit Card / Debit Card">Credit Card / Debit Card</option>
+                                  <option value="Mobile Wallet / GCash">Mobile Wallet / GCash</option>
+                                  <option value="Dated Check">Dated Check</option>
+                                  <option value="Bills Payments">Bills Payments</option>
+                                </select>
+                                {applicationPremiumPaymentFieldErrors.methodForInitialPayment ? (
+                                  <p className="le-smallNote" style={{ color: "#DA291C", marginTop: 6 }}>{applicationPremiumPaymentFieldErrors.methodForInitialPayment}</p>
+                                ) : null}
                               </div>
 
                               <div className="le-formRow">
@@ -4085,7 +4326,7 @@ function AgentLeadEngagement() {
                               </div>
 
                               <div className="le-formRow">
-                                <label className="le-label">Proof of Payment via {initialPaymentMethodFromNeedsAssessment || "Initial Payment Method"} (JPG, JPEG, PNG) *</label>
+                                <label className="le-label">Proof of Payment via {applicationPremiumPaymentForm.methodForInitialPayment || "Initial Payment Method"} (JPG, JPEG, PNG) *</label>
                                 <input
                                   key={applicationPaymentProofInputKey}
                                   type="file"
@@ -4131,6 +4372,7 @@ function AgentLeadEngagement() {
                                       ...f,
                                       totalAnnualPremiumPhp: "",
                                       totalFrequencyPremiumPhp: "",
+                                      methodForInitialPayment: "",
                                       methodForRenewalPayment: "",
                                       paymentProofImageDataUrl: "",
                                       paymentProofFileName: "",
@@ -4156,7 +4398,7 @@ function AgentLeadEngagement() {
                         </div>
                       ) : null}
 
-                      {hasSavedApplicationAttendance && hasSavedApplicationPremiumPaymentTransfer ? (
+                      {isApplicationSubmissionViewed && hasSavedApplicationAttendance && hasSavedApplicationPremiumPaymentTransfer ? (
                         <div className="le-block">
                           <h4 className="le-blockTitle">{hasSavedApplicationSubmission ? "Application Submission Details" : "Record Application Submission"}</h4>
 
@@ -4269,114 +4511,116 @@ function AgentLeadEngagement() {
 
                   {showPolicyIssuancePanel && (
                     <>
-                      <div className="le-block">
-                        <h4 className="le-blockTitle">{hasSavedPolicyApplicationStatus ? "Policy Application Status Details" : "Record Policy Application Status"}</h4>
+                      {isPolicyStatusViewed && (
+                        <div className="le-block">
+                          <h4 className="le-blockTitle">{hasSavedPolicyApplicationStatus ? "Policy Application Status Details" : "Record Policy Application Status"}</h4>
 
-                        {hasSavedPolicyApplicationStatus ? (
-                          <>
-                            <div className="le-formRow">
-                              <label className="le-label">Policy Application Status</label>
-                              <p className="le-smallNote">{policyStatusForm.status}</p>
-                            </div>
-                            {policyStatusForm.status === "Issued" ? (
+                          {hasSavedPolicyApplicationStatus ? (
+                            <>
                               <div className="le-formRow">
-                                <label className="le-label">Issuance Date</label>
-                                <p className="le-smallNote">{policyStatusForm.issuanceDate || "—"}</p>
+                                <label className="le-label">Policy Application Status</label>
+                                <p className="le-smallNote">{policyStatusForm.status}</p>
                               </div>
-                            ) : null}
-                            {String(policyStatusForm.notes || "").trim() ? (
+                              {policyStatusForm.status === "Issued" ? (
+                                <div className="le-formRow">
+                                  <label className="le-label">Issuance Date</label>
+                                  <p className="le-smallNote">{policyStatusForm.issuanceDate || "—"}</p>
+                                </div>
+                              ) : null}
+                              {String(policyStatusForm.notes || "").trim() ? (
+                                <div className="le-formRow">
+                                  <label className="le-label">Notes</label>
+                                  <p className="le-smallNote">{policyStatusForm.notes}</p>
+                                </div>
+                              ) : null}
+                            </>
+                          ) : (
+                            <>
                               <div className="le-formRow">
-                                <label className="le-label">Notes</label>
-                                <p className="le-smallNote">{policyStatusForm.notes}</p>
-                              </div>
-                            ) : null}
-                          </>
-                        ) : (
-                          <>
-                            <div className="le-formRow">
-                              <label className="le-label">Policy Application Status *</label>
-                              <select
-                                className={`le-input ${policyStatusFieldErrors.status ? "error" : ""}`}
-                                value={policyStatusForm.status}
-                                onChange={(e) => {
-                                  const v = e.target.value;
-                                  setPolicyStatusForm((f) => ({ ...f, status: v, issuanceDate: v === "Issued" ? f.issuanceDate : "" }));
-                                  setPolicyStatusFieldErrors((prev) => ({ ...prev, status: "", issuanceDate: "" }));
-                                }}
-                                disabled={policyStatusSaving}
-                              >
-                                <option value="">Select</option>
-                                <option value="Issued">Issued</option>
-                                <option value="Declined">Declined</option>
-                              </select>
-                              {policyStatusFieldErrors.status ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyStatusFieldErrors.status}</p> : null}
-                            </div>
-
-                            {policyStatusForm.status === "Issued" ? (
-                              <div className="le-formRow">
-                                <label className="le-label">Issuance Date *</label>
-                                <input
-                                  type="date"
-                                  className={`le-input ${policyStatusFieldErrors.issuanceDate ? "error" : ""}`}
-                                  value={policyStatusForm.issuanceDate}
+                                <label className="le-label">Policy Application Status *</label>
+                                <select
+                                  className={`le-input ${policyStatusFieldErrors.status ? "error" : ""}`}
+                                  value={policyStatusForm.status}
                                   onChange={(e) => {
-                                    setPolicyStatusForm((f) => ({ ...f, issuanceDate: e.target.value }));
-                                    setPolicyStatusFieldErrors((prev) => ({ ...prev, issuanceDate: "" }));
+                                    const v = e.target.value;
+                                    setPolicyStatusForm((f) => ({ ...f, status: v, issuanceDate: v === "Issued" ? f.issuanceDate : "" }));
+                                    setPolicyStatusFieldErrors((prev) => ({ ...prev, status: "", issuanceDate: "" }));
                                   }}
-                                  min={applicationSubmissionSavedDateInput || undefined}
-                                  max={todayDateInput}
+                                  disabled={policyStatusSaving}
+                                >
+                                  <option value="">Select</option>
+                                  <option value="Issued">Issued</option>
+                                  <option value="Declined">Declined</option>
+                                </select>
+                                {policyStatusFieldErrors.status ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyStatusFieldErrors.status}</p> : null}
+                              </div>
+
+                              {policyStatusForm.status === "Issued" ? (
+                                <div className="le-formRow">
+                                  <label className="le-label">Issuance Date *</label>
+                                  <input
+                                    type="date"
+                                    className={`le-input ${policyStatusFieldErrors.issuanceDate ? "error" : ""}`}
+                                    value={policyStatusForm.issuanceDate}
+                                    onChange={(e) => {
+                                      setPolicyStatusForm((f) => ({ ...f, issuanceDate: e.target.value }));
+                                      setPolicyStatusFieldErrors((prev) => ({ ...prev, issuanceDate: "" }));
+                                    }}
+                                    min={applicationSubmissionSavedDateInput || undefined}
+                                    max={todayDateInput}
+                                    disabled={policyStatusSaving}
+                                  />
+                                  {policyStatusFieldErrors.issuanceDate ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyStatusFieldErrors.issuanceDate}</p> : null}
+                                </div>
+                              ) : null}
+
+                              <div className="le-formRow">
+                                <label className="le-label">Notes (Optional)</label>
+                                <textarea
+                                  className="le-input"
+                                  rows={3}
+                                  value={policyStatusForm.notes}
+                                  onChange={(e) => setPolicyStatusForm((f) => ({ ...f, notes: e.target.value }))}
                                   disabled={policyStatusSaving}
                                 />
-                                {policyStatusFieldErrors.issuanceDate ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyStatusFieldErrors.issuanceDate}</p> : null}
                               </div>
-                            ) : null}
 
-                            <div className="le-formRow">
-                              <label className="le-label">Notes (Optional)</label>
-                              <textarea
-                                className="le-input"
-                                rows={3}
-                                value={policyStatusForm.notes}
-                                onChange={(e) => setPolicyStatusForm((f) => ({ ...f, notes: e.target.value }))}
-                                disabled={policyStatusSaving}
-                              />
-                            </div>
+                              {policyStatusError ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyStatusError}</p> : null}
 
-                            {policyStatusError ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyStatusError}</p> : null}
+                              <div className="le-actions" style={{ marginTop: 10 }}>
+                                <button
+                                  type="button"
+                                  className="le-btn secondary"
+                                  onClick={() => {
+                                    setPolicyStatusError("");
+                                    setPolicyStatusFieldErrors({});
+                                    setPolicyStatusForm({ status: "", issuanceDate: "", notes: "", savedAt: "" });
+                                  }}
+                                  disabled={policyStatusSaving}
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  type="button"
+                                  className="le-btn primary"
+                                  onClick={submitPolicyApplicationStatus}
+                                  disabled={policyStatusSaving}
+                                >
+                                  {policyStatusSaving ? "Saving..." : "Save Policy Application Status"}
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      )}
 
-                            <div className="le-actions" style={{ marginTop: 10 }}>
-                              <button
-                                type="button"
-                                className="le-btn secondary"
-                                onClick={() => {
-                                  setPolicyStatusError("");
-                                  setPolicyStatusFieldErrors({});
-                                  setPolicyStatusForm({ status: "", issuanceDate: "", notes: "", savedAt: "" });
-                                }}
-                                disabled={policyStatusSaving}
-                              >
-                                Cancel
-                              </button>
-                              <button
-                                type="button"
-                                className="le-btn primary"
-                                onClick={submitPolicyApplicationStatus}
-                                disabled={policyStatusSaving}
-                              >
-                                {policyStatusSaving ? "Saving..." : "Save Policy Application Status"}
-                              </button>
-                            </div>
-                          </>
-                        )}
-                      </div>
-
-                      {hasSavedPolicyApplicationStatus && policyStatusForm.status === "Issued" ? (
+                      {isPolicyInitialEorViewed && hasSavedPolicyApplicationStatus && policyStatusForm.status === "Issued" ? (
                         <div className="le-block">
                           <h4 className="le-blockTitle">{hasSavedPolicyInitialPremiumEor ? "Initial Premium eOR Details" : "Upload Initial Premium eOR"}</h4>
 
                           <div className="le-formRow">
                             <label className="le-label">Method of Initial Payment</label>
-                            <p className="le-smallNote">{applicationNeedsPaymentSelection.methodForInitialPayment || "—"}</p>
+                            <p className="le-smallNote">{initialPaymentMethodFromApplication || "—"}</p>
                           </div>
                           <div className="le-formRow">
                             <label className="le-label">{`${totalFrequencyPremiumLabel.replace("(in Php)", "")} Payment (Php)`}</label>
@@ -4497,7 +4741,7 @@ function AgentLeadEngagement() {
                       ) : null}
 
 
-                      {hasSavedPolicyInitialPremiumEor ? (
+                      {isPolicySummaryViewed && hasSavedPolicyInitialPremiumEor ? (
                         <div className="le-block">
                           <h4 className="le-blockTitle">{hasSavedPolicySummary ? "Policy Summary Details" : "Upload Policy Summary"}</h4>
 
@@ -4597,7 +4841,7 @@ function AgentLeadEngagement() {
                       ) : null}
 
 
-                      {hasSavedPolicySummary ? (
+                      {isPolicyCoverageViewed && hasSavedPolicySummary ? (
                         <div className="le-block">
                           <h4 className="le-blockTitle">{hasSavedPolicyCoverageDetails ? "Coverage Duration Details" : "Record Coverage Duration Details"}</h4>
 
@@ -4624,6 +4868,24 @@ function AgentLeadEngagement() {
                                 <label className="le-label">Selected Payment Term</label>
                                 <p className="le-smallNote">{policyCoverageForm.selectedPaymentTermLabel || "—"}</p>
                               </div>
+                              {String(policyCoverageForm.selectedPaymentTermType || "").trim() ? (
+                                <div className="le-formRow">
+                                  <label className="le-label">Selected Payment Term Type</label>
+                                  <p className="le-smallNote">{policyCoverageForm.selectedPaymentTermType}</p>
+                                </div>
+                              ) : null}
+                              {policyCoverageForm.selectedPaymentTermYears !== "" && policyCoverageForm.selectedPaymentTermYears !== null && policyCoverageForm.selectedPaymentTermYears !== undefined ? (
+                                <div className="le-formRow">
+                                  <label className="le-label">Selected Payment Term Years</label>
+                                  <p className="le-smallNote">{policyCoverageForm.selectedPaymentTermYears}</p>
+                                </div>
+                              ) : null}
+                              {policyCoverageForm.selectedPaymentTermUntilAge !== "" && policyCoverageForm.selectedPaymentTermUntilAge !== null && policyCoverageForm.selectedPaymentTermUntilAge !== undefined ? (
+                                <div className="le-formRow">
+                                  <label className="le-label">Payment Term Until Age</label>
+                                  <p className="le-smallNote">{policyCoverageForm.selectedPaymentTermUntilAge}</p>
+                                </div>
+                              ) : null}
                               <div className="le-formRow">
                                 <label className="le-label">Next Payment Date</label>
                                 <p className="le-smallNote">{policyCoverageForm.nextPaymentDate || computedNextPaymentDate || "Not applicable"}</p>
@@ -4632,6 +4894,24 @@ function AgentLeadEngagement() {
                                 <label className="le-label">Coverage Duration</label>
                                 <p className="le-smallNote">{policyCoverageForm.coverageDurationLabel || "—"}</p>
                               </div>
+                              {String(policyCoverageForm.coverageDurationType || "").trim() ? (
+                                <div className="le-formRow">
+                                  <label className="le-label">Coverage Duration Type</label>
+                                  <p className="le-smallNote">{policyCoverageForm.coverageDurationType}</p>
+                                </div>
+                              ) : null}
+                              {policyCoverageForm.coverageDurationYears !== "" && policyCoverageForm.coverageDurationYears !== null && policyCoverageForm.coverageDurationYears !== undefined ? (
+                                <div className="le-formRow">
+                                  <label className="le-label">Coverage Duration Years</label>
+                                  <p className="le-smallNote">{policyCoverageForm.coverageDurationYears}</p>
+                                </div>
+                              ) : null}
+                              {policyCoverageForm.coverageDurationUntilAge !== "" && policyCoverageForm.coverageDurationUntilAge !== null && policyCoverageForm.coverageDurationUntilAge !== undefined ? (
+                                <div className="le-formRow">
+                                  <label className="le-label">Coverage Duration Until Age</label>
+                                  <p className="le-smallNote">{policyCoverageForm.coverageDurationUntilAge}</p>
+                                </div>
+                              ) : null}
                             </>
                           ) : (
                             <>
@@ -4767,7 +5047,7 @@ function AgentLeadEngagement() {
                     </p>
                   )}
 
-                  {showContactingPanel && (
+                  {showContactingPanel && isAttemptContactViewed && (
                     <>
                       <div className="le-block">
                         <div className="le-blockHeader">
@@ -4915,421 +5195,6 @@ function AgentLeadEngagement() {
                               />
                             </div>
 
-                            {attemptForm.response === "Responded" && (
-                              <>
-                                <div className="le-activitySectionHeader">2. Validate Contact</div>
-
-                                <div className="le-formRow">
-                                  <label className="le-label">Phone Number Correct? *</label>
-                                  <select
-                                    className={`le-input ${attemptErrors.phoneValidation ? "error" : ""}`}
-                                    value={validateForm.phoneValidation}
-                                    onChange={(e) => {
-                                      const nextValidation = e.target.value;
-                                      setValidateForm({ phoneValidation: nextValidation });
-                                      if (nextValidation !== "CORRECT") {
-                                        setInterestForm({ interestLevel: "", preferredChannel: "", preferredChannelOther: "" });
-                                        setMeetingForm({
-                                          meetingDate: "",
-                                          meetingStartTime: "",
-                                          meetingDurationMin: 120,
-                                          meetingMode: "",
-                                          meetingPlatform: "",
-                                          meetingPlatformOther: "",
-                                          meetingLink: "",
-                                          meetingInviteSent: false,
-                                          meetingPlace: "",
-                                        });
-                                      }
-                                      setAttemptErrors((er) => ({
-                                        ...er,
-                                        phoneValidation: undefined,
-                                        interestLevel: undefined,
-                                        preferredChannel: undefined,
-                                        preferredChannelOther: undefined,
-                                        meetingDate: undefined,
-                                    meetingStartTime: undefined,
-                                    meetingDurationMin: undefined,
-                                        meetingMode: undefined,
-                                        meetingPlatform: undefined,
-                                        meetingPlatformOther: undefined,
-                                        meetingLink: undefined,
-                                        meetingInviteSent: undefined,
-                                        meetingPlace: undefined,
-                                      }));
-                                    }}
-                                    disabled={addingAttempt}
-                                  >
-                                    <option value="">Select</option>
-                                    <option value="CORRECT">Correct</option>
-                                    <option value="WRONG_CONTACT">Wrong</option>
-                                  </select>
-                                </div>
-
-                                {attemptErrors.phoneValidation ? (
-                                  <div className="le-smallNote" style={{ color: "#DA291C" }}>
-                                    {attemptErrors.phoneValidation}
-                                  </div>
-                                ) : null}
-                              </>
-                            )}
-
-                            {attemptForm.response === "Responded" && validateForm.phoneValidation === "CORRECT" && (
-                              <>
-                                <div className="le-activitySectionHeader">3. Assess Interest</div>
-
-                                <div className="le-formRow">
-                                  <label className="le-label">Interest Level *</label>
-                                  <select
-                                    className={`le-input ${attemptErrors.interestLevel ? "error" : ""}`}
-                                    value={interestForm.interestLevel}
-                                    onChange={(e) => {
-                                      const nextInterestLevel = e.target.value;
-                                      setInterestForm((f) => ({
-                                        ...f,
-                                        interestLevel: nextInterestLevel,
-                                        preferredChannel: "",
-                                        preferredChannelOther: "",
-                                      }));
-                                      if (nextInterestLevel !== "INTERESTED") {
-                                        setMeetingForm({
-                                          meetingDate: "",
-                                          meetingStartTime: "",
-                                          meetingDurationMin: 120,
-                                          meetingMode: "",
-                                          meetingPlatform: "",
-                                          meetingPlatformOther: "",
-                                          meetingLink: "",
-                                          meetingInviteSent: false,
-                                          meetingPlace: "",
-                                        });
-                                      }
-                                      setAttemptErrors((er) => ({
-                                        ...er,
-                                        interestLevel: undefined,
-                                        preferredChannel: undefined,
-                                        preferredChannelOther: undefined,
-                                        meetingDate: undefined,
-                                    meetingStartTime: undefined,
-                                    meetingDurationMin: undefined,
-                                        meetingMode: undefined,
-                                        meetingPlatform: undefined,
-                                        meetingPlatformOther: undefined,
-                                        meetingLink: undefined,
-                                        meetingInviteSent: undefined,
-                                        meetingPlace: undefined,
-                                      }));
-                                    }}
-                                    disabled={addingAttempt}
-                                  >
-                                    <option value="">Select</option>
-                                    <option value="INTERESTED">Interested</option>
-                                    <option value="NOT_INTERESTED">Not Interested</option>
-                                  </select>
-                                </div>
-
-                                {attemptErrors.interestLevel ? (
-                                  <div className="le-smallNote" style={{ color: "#DA291C" }}>
-                                    {attemptErrors.interestLevel}
-                                  </div>
-                                ) : null}
-
-                                {interestForm.interestLevel === "INTERESTED" ? (
-                                  <>
-                                    <div className="le-formRow">
-                                      <label className="le-label">Preferred Communication Channel *</label>
-                                      <select
-                                        className={`le-input ${attemptErrors.preferredChannel ? "error" : ""}`}
-                                        value={interestForm.preferredChannel}
-                                        onChange={(e) => {
-                                          setInterestForm((f) => ({ ...f, preferredChannel: e.target.value }));
-                                          setAttemptErrors((er) => ({
-                                            ...er,
-                                            preferredChannel: undefined,
-                                            preferredChannelOther: undefined,
-                                          }));
-                                        }}
-                                        disabled={addingAttempt}
-                                      >
-                                        <option value="">Select</option>
-                                        <option value="SMS">SMS</option>
-                                        <option value="WhatsApp">WhatsApp</option>
-                                        <option value="Viber">Viber</option>
-                                        <option value="Telegram">Telegram</option>
-                                        <option value="Other">Other</option>
-                                      </select>
-                                    </div>
-
-                                    {attemptErrors.preferredChannel ? (
-                                      <div className="le-smallNote" style={{ color: "#DA291C" }}>
-                                        {attemptErrors.preferredChannel}
-                                      </div>
-                                    ) : null}
-
-                                    {interestForm.preferredChannel === "Other" && (
-                                      <div className="le-formRow">
-                                        <label className="le-label">Other Channel *</label>
-                                        <input
-                                          className={`le-input ${attemptErrors.preferredChannelOther ? "error" : ""}`}
-                                          value={interestForm.preferredChannelOther}
-                                          onChange={(e) => {
-                                            setInterestForm((f) => ({ ...f, preferredChannelOther: e.target.value }));
-                                            setAttemptErrors((er) => ({ ...er, preferredChannelOther: undefined }));
-                                          }}
-                                          disabled={addingAttempt}
-                                        />
-                                      </div>
-                                    )}
-
-                                    {attemptErrors.preferredChannelOther ? (
-                                      <div className="le-smallNote" style={{ color: "#DA291C" }}>
-                                        {attemptErrors.preferredChannelOther}
-                                      </div>
-                                    ) : null}
-                                  </>
-                                ) : null}
-                              </>
-                            )}
-
-                            {attemptForm.response === "Responded" &&
-                              validateForm.phoneValidation === "CORRECT" &&
-                              interestForm.interestLevel === "INTERESTED" && (
-                                <>
-                                  <div className="le-activitySectionHeader">4. Schedule Meeting</div>
-
-                                  <div className="le-formRow">
-                                    <label className="le-label">Meeting Date *</label>
-                                    <select
-                                      className={`le-input ${attemptErrors.meetingDate ? "error" : ""}`}
-                                      value={meetingForm.meetingDate}
-                                      onChange={(e) => {
-                                        setMeetingForm((f) => ({ ...f, meetingDate: e.target.value, meetingStartTime: "" }));
-                                        setAttemptErrors((er) => ({ ...er, meetingDate: undefined, meetingStartTime: undefined }));
-                                      }}
-                                      disabled={addingAttempt || loadingAvailability}
-                                    >
-                                      <option value="">Select date</option>
-                                      {availableDateOptions.map((d) => (
-                                        <option key={d.value} value={d.value}>{d.label}</option>
-                                      ))}
-                                    </select>
-                                  </div>
-
-                                  {attemptErrors.meetingDate ? (
-                                    <div className="le-smallNote" style={{ color: "#DA291C" }}>
-                                      {attemptErrors.meetingDate}
-                                    </div>
-                                  ) : null}
-
-                                  <div className="le-formRow">
-                                    <label className="le-label">Duration *</label>
-                                    <select
-                                      className={`le-input ${attemptErrors.meetingDurationMin ? "error" : ""}`}
-                                      value={meetingForm.meetingDurationMin}
-                                      onChange={(e) => {
-                                        const nextDuration = Number(e.target.value || 120);
-                                        setMeetingForm((f) => ({ ...f, meetingDurationMin: nextDuration, meetingStartTime: "" }));
-                                        setAttemptErrors((er) => ({ ...er, meetingDurationMin: undefined, meetingStartTime: undefined }));
-                                      }}
-                                      disabled={addingAttempt}
-                                    >
-                                      <option value={30}>30 mins</option>
-                                      <option value={60}>60 mins</option>
-                                      <option value={90}>90 mins</option>
-                                      <option value={120}>120 mins</option>
-                                    </select>
-                                  </div>
-
-                                  {attemptErrors.meetingDurationMin ? (
-                                    <div className="le-smallNote" style={{ color: "#DA291C" }}>
-                                      {attemptErrors.meetingDurationMin}
-                                    </div>
-                                  ) : null}
-
-                                  <div className="le-formRow">
-                                    <label className="le-label">Start Time *</label>
-                                    <select
-                                      className={`le-input ${attemptErrors.meetingStartTime ? "error" : ""}`}
-                                      value={meetingForm.meetingStartTime}
-                                      onChange={(e) => {
-                                        setMeetingForm((f) => ({ ...f, meetingStartTime: e.target.value }));
-                                        setAttemptErrors((er) => ({ ...er, meetingStartTime: undefined }));
-                                      }}
-                                      disabled={addingAttempt || !meetingForm.meetingDate}
-                                    >
-                                      <option value="">Select time</option>
-                                      {meetingStartSlots.map((slot) => {
-                                        const booked = isSlotBooked(meetingForm.meetingDate, slot, meetingForm.meetingDurationMin);
-                                        return (
-                                          <option key={slot} value={slot} disabled={booked}>
-                                            {formatTimeLabel(slot)}{booked ? " (Booked)" : ""}
-                                          </option>
-                                        );
-                                      })}
-                                    </select>
-                                  </div>
-
-                                  {attemptErrors.meetingStartTime ? (
-                                    <div className="le-smallNote" style={{ color: "#DA291C" }}>
-                                      {attemptErrors.meetingStartTime}
-                                    </div>
-                                  ) : null}
-
-                                  <div className="le-formRow">
-                                    <label className="le-label">Meeting Mode *</label>
-                                    <select
-                                      className={`le-input ${attemptErrors.meetingMode ? "error" : ""}`}
-                                      value={meetingForm.meetingMode}
-                                      onChange={(e) => {
-                                        setMeetingForm((f) => ({
-                                          ...f,
-                                          meetingMode: e.target.value,
-                                          meetingPlatform: "",
-                                          meetingPlatformOther: "",
-                                          meetingLink: "",
-                                          meetingPlace: "",
-                                        }));
-                                        setAttemptErrors((er) => ({
-                                          ...er,
-                                          meetingMode: undefined,
-                                          meetingPlatform: undefined,
-                                          meetingPlatformOther: undefined,
-                                          meetingLink: undefined,
-                                          meetingInviteSent: undefined,
-                                          meetingPlace: undefined,
-                                        }));
-                                      }}
-                                      disabled={addingAttempt}
-                                    >
-                                      <option value="">Select</option>
-                                      <option value="Online">Online</option>
-                                      <option value="Face-to-face">Face-to-face</option>
-                                    </select>
-                                  </div>
-
-                                  {attemptErrors.meetingMode ? (
-                                    <div className="le-smallNote" style={{ color: "#DA291C" }}>
-                                      {attemptErrors.meetingMode}
-                                    </div>
-                                  ) : null}
-
-                                  {meetingForm.meetingMode === "Online" && (
-                                    <>
-                                      <div className="le-formRow">
-                                        <label className="le-label">Platform *</label>
-                                        <select
-                                          className={`le-input ${attemptErrors.meetingPlatform ? "error" : ""}`}
-                                          value={meetingForm.meetingPlatform}
-                                          onChange={(e) => {
-                                            setMeetingForm((f) => ({ ...f, meetingPlatform: e.target.value }));
-                                            setAttemptErrors((er) => ({
-                                              ...er,
-                                              meetingPlatform: undefined,
-                                              meetingPlatformOther: undefined,
-                                            }));
-                                          }}
-                                          disabled={addingAttempt}
-                                        >
-                                          <option value="">Select</option>
-                                          <option value="Zoom">Zoom</option>
-                                          <option value="Google Meet">Google Meet</option>
-                                          <option value="Other">Other</option>
-                                        </select>
-                                      </div>
-
-                                      {attemptErrors.meetingPlatform ? (
-                                        <div className="le-smallNote" style={{ color: "#DA291C" }}>
-                                          {attemptErrors.meetingPlatform}
-                                        </div>
-                                      ) : null}
-
-                                      {meetingForm.meetingPlatform === "Other" && (
-                                        <div className="le-formRow">
-                                          <label className="le-label">Other Platform *</label>
-                                          <input
-                                            className={`le-input ${attemptErrors.meetingPlatformOther ? "error" : ""}`}
-                                            value={meetingForm.meetingPlatformOther}
-                                            onChange={(e) => {
-                                              setMeetingForm((f) => ({ ...f, meetingPlatformOther: e.target.value }));
-                                              setAttemptErrors((er) => ({ ...er, meetingPlatformOther: undefined }));
-                                            }}
-                                            disabled={addingAttempt}
-                                          />
-                                        </div>
-                                      )}
-
-                                      {attemptErrors.meetingPlatformOther ? (
-                                        <div className="le-smallNote" style={{ color: "#DA291C" }}>
-                                          {attemptErrors.meetingPlatformOther}
-                                        </div>
-                                      ) : null}
-
-                                      <div className="le-formRow">
-                                        <label className="le-label">Meeting Link *</label>
-                                        <input
-                                          className={`le-input ${attemptErrors.meetingLink ? "error" : ""}`}
-                                          value={meetingForm.meetingLink}
-                                          onChange={(e) => {
-                                            setMeetingForm((f) => ({ ...f, meetingLink: e.target.value }));
-                                            setAttemptErrors((er) => ({ ...er, meetingLink: undefined }));
-                                          }}
-                                          disabled={addingAttempt}
-                                          placeholder="https://example.com/meeting-link"
-                                        />
-                                      </div>
-
-                                      {attemptErrors.meetingLink ? (
-                                        <div className="le-smallNote" style={{ color: "#DA291C" }}>
-                                          {attemptErrors.meetingLink}
-                                        </div>
-                                      ) : null}
-
-                                      <div className="le-formRow">
-                                        <label className="le-check">
-                                          <input
-                                            type="checkbox"
-                                            checked={meetingForm.meetingInviteSent}
-                                            onChange={(e) => {
-                                              setMeetingForm((f) => ({ ...f, meetingInviteSent: e.target.checked }));
-                                              setAttemptErrors((er) => ({ ...er, meetingInviteSent: undefined }));
-                                            }}
-                                            disabled={addingAttempt}
-                                          />
-                                          <span>I confirm invite link has been sent (required)</span>
-                                        </label>
-                                      </div>
-
-                                      {attemptErrors.meetingInviteSent ? (
-                                        <div className="le-smallNote" style={{ color: "#DA291C" }}>
-                                          {attemptErrors.meetingInviteSent}
-                                        </div>
-                                      ) : null}
-                                    </>
-                                  )}
-
-                                  {meetingForm.meetingMode === "Face-to-face" && (
-                                    <div className="le-formRow">
-                                      <label className="le-label">Meeting Place *</label>
-                                      <input
-                                        className={`le-input ${attemptErrors.meetingPlace ? "error" : ""}`}
-                                        value={meetingForm.meetingPlace}
-                                        onChange={(e) => {
-                                          setMeetingForm((f) => ({ ...f, meetingPlace: e.target.value }));
-                                          setAttemptErrors((er) => ({ ...er, meetingPlace: undefined }));
-                                        }}
-                                        disabled={addingAttempt}
-                                      />
-                                    </div>
-                                  )}
-
-                                  {attemptErrors.meetingPlace ? (
-                                    <div className="le-smallNote" style={{ color: "#DA291C" }}>
-                                      {attemptErrors.meetingPlace}
-                                    </div>
-                                  ) : null}
-                                </>
-                              )}
-
                             <div className="le-actions">
                               <button type="button" className="le-btn secondary" onClick={onCancelAddAttempt} disabled={addingAttempt}>
                                 Cancel
@@ -5343,19 +5208,6 @@ function AgentLeadEngagement() {
 
                         <div className="le-attemptList">
                           {attempts.map((a) => {
-                            const hasPhoneValidation = !!String(a.phoneValidation || "").trim();
-                            const hasInterest = !!String(a.interestLevel || "").trim();
-                            const hasPreferredChannel = !!String(a.preferredChannel || "").trim();
-                            const hasMeetingData =
-                              !!a.meetingAt ||
-                              !!String(a.meetingMode || "").trim() ||
-                              !!String(a.meetingPlatform || "").trim() ||
-                              !!String(a.meetingPlatformOther || "").trim() ||
-                              !!String(a.meetingLink || "").trim() ||
-                              !!String(a.meetingPlace || "").trim() ||
-                              !!Number(a.meetingDurationMin || 0) ||
-                              !!a.meetingEndAt;
-
                             return (
                               <div key={a.attemptNo} className="le-attemptItem">
                                 <div className="le-attemptTop">
@@ -5382,110 +5234,7 @@ function AgentLeadEngagement() {
                                     <span className="le-metaLabel">Phone No. Ver. Used</span>
                                     <span className="le-metaValue">{a.contactInfoVersionUsed ?? "—"}</span>
                                   </div>
-
-                                  {hasPhoneValidation ? (
-                                    <div>
-                                      <span className="le-metaLabel">Phone Validation</span>
-                                      <span className="le-metaValue">{a.phoneValidation}</span>
-                                    </div>
-                                  ) : null}
-
-                                  {hasInterest ? (
-                                    <div>
-                                      <span className="le-metaLabel">Interest Level</span>
-                                      <span className="le-metaValue">{a.interestLevel}</span>
-                                    </div>
-                                  ) : null}
-
-                                  {hasPreferredChannel ? (
-                                    <div>
-                                      <span className="le-metaLabel">Preferred Channel</span>
-                                      <span className="le-metaValue">{a.preferredChannel}</span>
-                                    </div>
-                                  ) : null}
-
-                                  {String(a.preferredChannelOther || "").trim() ? (
-                                    <div>
-                                      <span className="le-metaLabel">Preferred Channel (Other)</span>
-                                      <span className="le-metaValue">{a.preferredChannelOther}</span>
-                                    </div>
-                                  ) : null}
                                 </div>
-
-                                {hasMeetingData ? (
-                                  <>
-                                    <div className="le-attemptSectionHeader">Meeting Details</div>
-                                    <div className="le-attemptMeta">
-                                      <div>
-                                        <span className="le-metaLabel">Meeting Date & Time</span>
-                                        <span className="le-metaValue">{formatDateTime(a.meetingAt)}</span>
-                                      </div>
-
-                                      {Number(a.meetingDurationMin || 0) > 0 ? (
-                                        <div>
-                                          <span className="le-metaLabel">Meeting Duration</span>
-                                          <span className="le-metaValue">{a.meetingDurationMin} mins</span>
-                                        </div>
-                                      ) : null}
-
-                                      {a.meetingEndAt ? (
-                                        <div>
-                                          <span className="le-metaLabel">Meeting Ends</span>
-                                          <span className="le-metaValue">{formatDateTime(a.meetingEndAt)}</span>
-                                        </div>
-                                      ) : null}
-
-                                      {String(a.meetingMode || "").trim() ? (
-                                        <div>
-                                          <span className="le-metaLabel">Meeting Mode</span>
-                                          <span className="le-metaValue">{a.meetingMode}</span>
-                                        </div>
-                                      ) : null}
-
-                                      {String(a.meetingPlatform || "").trim() ? (
-                                        <div>
-                                          <span className="le-metaLabel">Meeting Platform</span>
-                                          <span className="le-metaValue">{a.meetingPlatform}</span>
-                                        </div>
-                                      ) : null}
-
-                                      {String(a.meetingPlatformOther || "").trim() ? (
-                                        <div>
-                                          <span className="le-metaLabel">Meeting Platform (Other)</span>
-                                          <span className="le-metaValue">{a.meetingPlatformOther}</span>
-                                        </div>
-                                      ) : null}
-
-                                      {String(a.meetingLink || "").trim() ? (
-                                        <div>
-                                          <span className="le-metaLabel">Meeting Link</span>
-                                          <span className="le-metaValue">{a.meetingLink}</span>
-                                        </div>
-                                      ) : null}
-
-                                      {String(a.meetingMode || "").trim() === "Online" ? (
-                                        <div>
-                                          <span className="le-metaLabel">Meeting Invite Sent</span>
-                                          <span className="le-metaValue">{a.meetingInviteSent ? "Yes" : "No"}</span>
-                                        </div>
-                                      ) : null}
-
-                                      {String(a.meetingPlace || "").trim() ? (
-                                        <div>
-                                          <span className="le-metaLabel">Meeting Place</span>
-                                          <span className="le-metaValue">{a.meetingPlace}</span>
-                                        </div>
-                                      ) : null}
-
-                                      {String(a.meetingStatus || "").trim() ? (
-                                        <div>
-                                          <span className="le-metaLabel">Status</span>
-                                          <span className="le-metaValue">{a.meetingStatus}</span>
-                                        </div>
-                                      ) : null}
-                                    </div>
-                                  </>
-                                ) : null}
 
                                 {String(a.notes || "").trim() ? (
                                   <div className="le-attemptNotes">
@@ -5504,8 +5253,10 @@ function AgentLeadEngagement() {
                           )}
                         </div>
                       </div>
+                    </>
+                  )}
 
-                      {!showAddAttempt && isEngagementBlocked && (
+                  {showContactingPanel && !showAddAttempt && isValidateContactViewed && isEngagementBlocked && (
                         <div className="le-block">
                           <h4 className="le-blockTitle">Validate Contact</h4>
                           <div className="le-formRow">
@@ -5520,325 +5271,385 @@ function AgentLeadEngagement() {
                         </div>
                       )}
 
-                      {!showAddAttempt && showValidateContact && (
+                      {showContactingPanel && !showAddAttempt && isValidateContactViewed && !isEngagementBlocked && (
                         <div className="le-block">
                           <h4 className="le-blockTitle">Validate Contact</h4>
 
-                          {validateError ? (
-                            <div className="le-formError" style={{ color: "#DA291C", marginBottom: 10 }}>
-                              {validateError}
+                          {isValidateContactEditable ? (
+                            <>
+                              {validateError ? (
+                                <div className="le-formError" style={{ color: "#DA291C", marginBottom: 10 }}>
+                                  {validateError}
+                                </div>
+                              ) : null}
+
+                              <div className="le-formRow">
+                                <label className="le-label">Phone Number Correct?</label>
+                                <select
+                                  className="le-input"
+                                  value={validateForm.phoneValidation}
+                                  onChange={(e) => {
+                                    setValidateForm({ phoneValidation: e.target.value });
+                                    setValidateError("");
+                                  }}
+                                  disabled={validatingContact || uiLocked || isContactingReadOnly}
+                                >
+                                  <option value="">Select</option>
+                                  <option value="CORRECT">Correct</option>
+                                  <option value="WRONG_CONTACT">Wrong</option>
+                                </select>
+                              </div>
+
+                              <div className="le-actions">
+                                <button
+                                  type="button"
+                                  className="le-btn secondary"
+                                  onClick={() => {
+                                    setValidateForm({ phoneValidation: "" });
+                                    setValidateError("");
+                                  }}
+                                  disabled={validatingContact || uiLocked || isContactingReadOnly}
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  type="button"
+                                  className="le-btn primary"
+                                  onClick={submitValidateContact}
+                                  disabled={validatingContact || uiLocked || isContactingReadOnly}
+                                >
+                                  {validatingContact ? "Saving..." : "Save"}
+                                </button>
+                              </div>
+                            </>
+                          ) : savedPhoneValidationResult ? (
+                            <div className="le-attemptMeta" style={{ marginTop: 8 }}>
+                              <div>
+                                <span className="le-metaLabel">Phone Number Correct?</span>
+                                <span className="le-metaValue">{savedPhoneValidationResult === "CORRECT" ? "Correct" : "Wrong"}</span>
+                              </div>
                             </div>
-                          ) : null}
-
-                          <div className="le-formRow">
-                            <label className="le-label">Phone Number Correct?</label>
-                            <select
-                              className="le-input"
-                              value={validateForm.phoneValidation}
-                              onChange={(e) => {
-                                setValidateForm({ phoneValidation: e.target.value });
-                                setValidateError("");
-                              }}
-                              disabled={validatingContact || uiLocked || isContactingReadOnly}
-                            >
-                              <option value="">Select</option>
-                              <option value="CORRECT">Correct</option>
-                              <option value="WRONG_CONTACT">Wrong</option>
-                            </select>
-                          </div>
-
-                          <div className="le-actions">
-                            <button
-                              type="button"
-                              className="le-btn secondary"
-                              onClick={() => {
-                                setValidateForm({ phoneValidation: "" });
-                                setValidateError("");
-                              }}
-                              disabled={validatingContact || uiLocked || isContactingReadOnly}
-                            >
-                              Cancel
-                            </button>
-                            <button
-                              type="button"
-                              className="le-btn primary"
-                              onClick={submitValidateContact}
-                              disabled={validatingContact || uiLocked || isContactingReadOnly}
-                            >
-                              {validatingContact ? "Saving..." : "Save"}
-                            </button>
-                          </div>
+                          ) : (
+                            <p className="le-muted" style={{ marginTop: 8 }}>
+                              No saved validation result yet.
+                            </p>
+                          )}
                         </div>
                       )}
 
-                      {!showAddAttempt && isViewingCurrentStage && !isContactingReadOnly && currentActivityKeyRaw === "Assess Interest" && (
+                      {showContactingPanel && !showAddAttempt && isAssessInterestViewed && (
                         <div className="le-block">
                           <h4 className="le-blockTitle">Assess Interest</h4>
 
-                          {interestError ? (
-                            <div className="le-formError" style={{ color: "#DA291C", marginBottom: 10 }}>
-                              {interestError}
-                            </div>
-                          ) : null}
-
-                          <div className="le-formRow">
-                            <label className="le-label">Interest Level *</label>
-                            <select
-                              className="le-input"
-                              value={interestForm.interestLevel}
-                              onChange={(e) =>
-                                setInterestForm((f) => ({
-                                  ...f,
-                                  interestLevel: e.target.value,
-                                  preferredChannel: "",
-                                  preferredChannelOther: "",
-                                }))
-                              }
-                              disabled={savingInterest}
-                            >
-                              <option value="">Select</option>
-                              <option value="INTERESTED">Interested</option>
-                              <option value="NOT_INTERESTED">Not Interested</option>
-                            </select>
-                          </div>
-
-                          {interestForm.interestLevel === "INTERESTED" && (
+                          {isAssessInterestEditable ? (
                             <>
+                              {interestError ? (
+                                <div className="le-formError" style={{ color: "#DA291C", marginBottom: 10 }}>
+                                  {interestError}
+                                </div>
+                              ) : null}
+
                               <div className="le-formRow">
-                                <label className="le-label">Preferred Communication Channel *</label>
+                                <label className="le-label">Interest Level *</label>
                                 <select
                                   className="le-input"
-                                  value={interestForm.preferredChannel}
-                                  onChange={(e) => setInterestForm((f) => ({ ...f, preferredChannel: e.target.value }))}
+                                  value={interestForm.interestLevel}
+                                  onChange={(e) =>
+                                    setInterestForm((f) => ({
+                                      ...f,
+                                      interestLevel: e.target.value,
+                                      preferredChannel: "",
+                                      preferredChannelOther: "",
+                                    }))
+                                  }
                                   disabled={savingInterest}
                                 >
                                   <option value="">Select</option>
-                                  <option value="SMS">SMS</option>
-                                  <option value="WhatsApp">WhatsApp</option>
-                                  <option value="Viber">Viber</option>
-                                  <option value="Telegram">Telegram</option>
-                                  <option value="Other">Other</option>
+                                  <option value="INTERESTED">Interested</option>
+                                  <option value="NOT_INTERESTED">Not Interested</option>
                                 </select>
                               </div>
 
-                              {interestForm.preferredChannel === "Other" && (
-                                <div className="le-formRow">
-                                  <label className="le-label">Other Channel *</label>
-                                  <input
-                                    className="le-input"
-                                    value={interestForm.preferredChannelOther}
-                                    onChange={(e) =>
-                                      setInterestForm((f) => ({ ...f, preferredChannelOther: e.target.value }))
-                                    }
-                                    disabled={savingInterest}
-                                  />
-                                </div>
-                              )}
-                            </>
-                          )}
+                              {interestForm.interestLevel === "INTERESTED" && (
+                                <>
+                                  <div className="le-formRow">
+                                    <label className="le-label">Preferred Communication Channel *</label>
+                                    <select
+                                      className="le-input"
+                                      value={interestForm.preferredChannel}
+                                      onChange={(e) => setInterestForm((f) => ({ ...f, preferredChannel: e.target.value }))}
+                                      disabled={savingInterest}
+                                    >
+                                      <option value="">Select</option>
+                                      <option value="SMS">SMS</option>
+                                      <option value="WhatsApp">WhatsApp</option>
+                                      <option value="Viber">Viber</option>
+                                      <option value="Telegram">Telegram</option>
+                                      <option value="Other">Other</option>
+                                    </select>
+                                  </div>
 
-                          <div className="le-actions">
-                            <button
-                              type="button"
-                              className="le-btn secondary"
-                              onClick={() =>
-                                setInterestForm({ interestLevel: "", preferredChannel: "", preferredChannelOther: "" })
-                              }
-                              disabled={savingInterest}
-                            >
-                              Cancel
-                            </button>
-                            <button type="button" className="le-btn primary" onClick={submitAssessInterest} disabled={savingInterest}>
-                              {savingInterest ? "Saving..." : "Save"}
-                            </button>
-                          </div>
+                                  {interestForm.preferredChannel === "Other" && (
+                                    <div className="le-formRow">
+                                      <label className="le-label">Other Channel *</label>
+                                      <input
+                                        className="le-input"
+                                        value={interestForm.preferredChannelOther}
+                                        onChange={(e) =>
+                                          setInterestForm((f) => ({ ...f, preferredChannelOther: e.target.value }))
+                                        }
+                                        disabled={savingInterest}
+                                      />
+                                    </div>
+                                  )}
+                                </>
+                              )}
+
+                              <div className="le-actions">
+                                <button
+                                  type="button"
+                                  className="le-btn secondary"
+                                  onClick={() =>
+                                    setInterestForm({ interestLevel: "", preferredChannel: "", preferredChannelOther: "" })
+                                  }
+                                  disabled={savingInterest}
+                                >
+                                  Cancel
+                                </button>
+                                <button type="button" className="le-btn primary" onClick={submitAssessInterest} disabled={savingInterest}>
+                                  {savingInterest ? "Saving..." : "Save"}
+                                </button>
+                              </div>
+                            </>
+                          ) : savedInterestLevel ? (
+                            <div className="le-attemptMeta" style={{ marginTop: 8 }}>
+                              <div>
+                                <span className="le-metaLabel">Interest Level</span>
+                                <span className="le-metaValue">{savedInterestLevel}</span>
+                              </div>
+                              {String(lastAttempt?.preferredChannel || "").trim() ? (
+                                <div>
+                                  <span className="le-metaLabel">Preferred Communication Channel</span>
+                                  <span className="le-metaValue">{lastAttempt.preferredChannel}</span>
+                                </div>
+                              ) : null}
+                              {String(lastAttempt?.preferredChannelOther || "").trim() ? (
+                                <div>
+                                  <span className="le-metaLabel">Preferred Channel (Other)</span>
+                                  <span className="le-metaValue">{lastAttempt.preferredChannelOther}</span>
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : (
+                            <p className="le-muted" style={{ marginTop: 8 }}>
+                              No saved interest assessment yet.
+                            </p>
+                          )}
                         </div>
                       )}
 
-                      {!showAddAttempt && isViewingCurrentStage && !isContactingReadOnly && currentActivityKeyRaw === "Schedule Meeting" && (
+                      {showContactingPanel && !showAddAttempt && isScheduleMeetingViewed && (
                         <div className="le-block">
                           <h4 className="le-blockTitle">Schedule Meeting</h4>
 
-                          {meetingError ? (
-                            <div className="le-formError" style={{ color: "#DA291C", marginBottom: 10 }}>
-                              {meetingError}
-                            </div>
-                          ) : null}
-
-                          <div className="le-formRow">
-                            <label className="le-label">Meeting Date *</label>
-                            <select
-                              className="le-input"
-                              value={meetingForm.meetingDate}
-                              onChange={(e) => setMeetingForm((f) => ({ ...f, meetingDate: e.target.value, meetingStartTime: "" }))}
-                              disabled={savingMeeting || loadingAvailability}
-                            >
-                              <option value="">Select date</option>
-                              {availableDateOptions.map((d) => (
-                                <option key={d.value} value={d.value}>{d.label}</option>
-                              ))}
-                            </select>
-                          </div>
-
-                          <div className="le-formRow">
-                            <label className="le-label">Duration *</label>
-                            <select
-                              className="le-input"
-                              value={meetingForm.meetingDurationMin}
-                              onChange={(e) => setMeetingForm((f) => ({ ...f, meetingDurationMin: Number(e.target.value || 120), meetingStartTime: "" }))}
-                              disabled={savingMeeting}
-                            >
-                              <option value={30}>30 mins</option>
-                              <option value={60}>60 mins</option>
-                              <option value={90}>90 mins</option>
-                              <option value={120}>120 mins</option>
-                            </select>
-                          </div>
-
-                          <div className="le-formRow">
-                            <label className="le-label">Start Time *</label>
-                            <select
-                              className="le-input"
-                              value={meetingForm.meetingStartTime}
-                              onChange={(e) => setMeetingForm((f) => ({ ...f, meetingStartTime: e.target.value }))}
-                              disabled={savingMeeting || !meetingForm.meetingDate}
-                            >
-                              <option value="">Select time</option>
-                              {meetingStartSlots.map((slot) => {
-                                const booked = isSlotBooked(meetingForm.meetingDate, slot, meetingForm.meetingDurationMin);
-                                return (
-                                  <option key={slot} value={slot} disabled={booked}>
-                                    {formatTimeLabel(slot)}{booked ? " (Booked)" : ""}
-                                  </option>
-                                );
-                              })}
-                            </select>
-                          </div>
-
-                          <div className="le-formRow">
-                            <label className="le-label">Meeting Mode *</label>
-                            <select
-                              className="le-input"
-                              value={meetingForm.meetingMode}
-                              onChange={(e) =>
-                                setMeetingForm((f) => ({
-                                  ...f,
-                                  meetingMode: e.target.value,
-                                  meetingPlatform: "",
-                                  meetingPlatformOther: "",
-                                  meetingLink: "",
-                                  meetingPlace: "",
-                                }))
-                              }
-                              disabled={savingMeeting}
-                            >
-                              <option value="">Select</option>
-                              <option value="Online">Online</option>
-                              <option value="Face-to-face">Face-to-face</option>
-                            </select>
-                          </div>
-
-                          {meetingForm.meetingMode === "Online" && (
+                          {isScheduleMeetingEditable ? (
                             <>
+                              {meetingError ? (
+                                <div className="le-formError" style={{ color: "#DA291C", marginBottom: 10 }}>
+                                  {meetingError}
+                                </div>
+                              ) : null}
+
                               <div className="le-formRow">
-                                <label className="le-label">Platform *</label>
+                                <label className="le-label">Meeting Date *</label>
                                 <select
                                   className="le-input"
-                                  value={meetingForm.meetingPlatform}
-                                  onChange={(e) => setMeetingForm((f) => ({ ...f, meetingPlatform: e.target.value }))}
-                                  disabled={savingMeeting}
+                                  value={meetingForm.meetingDate}
+                                  onChange={(e) => setMeetingForm((f) => ({ ...f, meetingDate: e.target.value, meetingStartTime: "" }))}
+                                  disabled={savingMeeting || loadingAvailability}
                                 >
-                                  <option value="">Select</option>
-                                  <option value="Zoom">Zoom</option>
-                                  <option value="Google Meet">Google Meet</option>
-                                  <option value="Other">Other</option>
+                                  <option value="">Select date</option>
+                                  {availableDateOptions.map((d) => (
+                                    <option key={d.value} value={d.value}>{d.label}</option>
+                                  ))}
                                 </select>
                               </div>
 
-                              {meetingForm.meetingPlatform === "Other" && (
+                              <div className="le-formRow">
+                                <label className="le-label">Duration *</label>
+                                <select
+                                  className="le-input"
+                                  value={meetingForm.meetingDurationMin}
+                                  onChange={(e) => setMeetingForm((f) => ({ ...f, meetingDurationMin: Number(e.target.value || 120), meetingStartTime: "" }))}
+                                  disabled={savingMeeting}
+                                >
+                                  <option value={30}>30 mins</option>
+                                  <option value={60}>60 mins</option>
+                                  <option value={90}>90 mins</option>
+                                  <option value={120}>120 mins</option>
+                                </select>
+                              </div>
+
+                              <div className="le-formRow">
+                                <label className="le-label">Start Time *</label>
+                                <select
+                                  className="le-input"
+                                  value={meetingForm.meetingStartTime}
+                                  onChange={(e) => setMeetingForm((f) => ({ ...f, meetingStartTime: e.target.value }))}
+                                  disabled={savingMeeting || !meetingForm.meetingDate}
+                                >
+                                  <option value="">Select time</option>
+                                  {meetingStartSlots.map((slot) => {
+                                    const booked = isSlotBooked(meetingForm.meetingDate, slot, meetingForm.meetingDurationMin);
+                                    return (
+                                      <option key={slot} value={slot} disabled={booked}>
+                                        {formatTimeLabel(slot)}{booked ? " (Booked)" : ""}
+                                      </option>
+                                    );
+                                  })}
+                                </select>
+                              </div>
+
+                              <div className="le-formRow">
+                                <label className="le-label">Meeting Mode *</label>
+                                <select
+                                  className="le-input"
+                                  value={meetingForm.meetingMode}
+                                  onChange={(e) =>
+                                    setMeetingForm((f) => ({
+                                      ...f,
+                                      meetingMode: e.target.value,
+                                      meetingPlatform: "",
+                                      meetingPlatformOther: "",
+                                      meetingLink: "",
+                                      meetingPlace: "",
+                                    }))
+                                  }
+                                  disabled={savingMeeting}
+                                >
+                                  <option value="">Select</option>
+                                  <option value="Online">Online</option>
+                                  <option value="Face-to-face">Face-to-face</option>
+                                </select>
+                              </div>
+
+                              {meetingForm.meetingMode === "Online" && (
+                                <>
+                                  <div className="le-formRow">
+                                    <label className="le-label">Platform *</label>
+                                    <select
+                                      className="le-input"
+                                      value={meetingForm.meetingPlatform}
+                                      onChange={(e) => setMeetingForm((f) => ({ ...f, meetingPlatform: e.target.value }))}
+                                      disabled={savingMeeting}
+                                    >
+                                      <option value="">Select</option>
+                                      <option value="Zoom">Zoom</option>
+                                      <option value="Google Meet">Google Meet</option>
+                                      <option value="Other">Other</option>
+                                    </select>
+                                  </div>
+
+                                  {meetingForm.meetingPlatform === "Other" && (
+                                    <div className="le-formRow">
+                                      <label className="le-label">Other Platform *</label>
+                                      <input
+                                        className="le-input"
+                                        value={meetingForm.meetingPlatformOther}
+                                        onChange={(e) =>
+                                          setMeetingForm((f) => ({ ...f, meetingPlatformOther: e.target.value }))
+                                        }
+                                        disabled={savingMeeting}
+                                      />
+                                    </div>
+                                  )}
+
+                                  <div className="le-formRow">
+                                    <label className="le-label">Meeting Link *</label>
+                                    <input
+                                      className="le-input"
+                                      value={meetingForm.meetingLink}
+                                      onChange={(e) => setMeetingForm((f) => ({ ...f, meetingLink: e.target.value }))}
+                                      disabled={savingMeeting}
+                                      placeholder="https://example.com/meeting-link"
+                                    />
+                                  </div>
+
+                                  <div className="le-formRow">
+                                    <label className="le-check">
+                                      <input
+                                        type="checkbox"
+                                        checked={meetingForm.meetingInviteSent}
+                                        onChange={(e) => setMeetingForm((f) => ({ ...f, meetingInviteSent: e.target.checked }))}
+                                        disabled={savingMeeting}
+                                      />
+                                      <span>I confirm invite link has been sent (required)</span>
+                                    </label>
+                                  </div>
+                                </>
+                              )}
+
+                              {meetingForm.meetingMode === "Face-to-face" && (
                                 <div className="le-formRow">
-                                  <label className="le-label">Other Platform *</label>
+                                  <label className="le-label">Meeting Place *</label>
                                   <input
                                     className="le-input"
-                                    value={meetingForm.meetingPlatformOther}
-                                    onChange={(e) =>
-                                      setMeetingForm((f) => ({ ...f, meetingPlatformOther: e.target.value }))
-                                    }
+                                    value={meetingForm.meetingPlace}
+                                    onChange={(e) => setMeetingForm((f) => ({ ...f, meetingPlace: e.target.value }))}
                                     disabled={savingMeeting}
+                                    placeholder="Enter full place/address"
                                   />
                                 </div>
                               )}
 
-                              <div className="le-formRow">
-                                <label className="le-label">Meeting Link *</label>
-                                <input
-                                  className="le-input"
-                                  value={meetingForm.meetingLink}
-                                  onChange={(e) => setMeetingForm((f) => ({ ...f, meetingLink: e.target.value }))}
+                              <div className="le-actions">
+                                <button
+                                  type="button"
+                                  className="le-btn secondary"
+                                  onClick={() =>
+                                    setMeetingForm({
+                                      meetingDate: "",
+                                      meetingStartTime: "",
+                                      meetingDurationMin: 120,
+                                      meetingMode: "",
+                                      meetingPlatform: "",
+                                      meetingPlatformOther: "",
+                                      meetingLink: "",
+                                      meetingInviteSent: false,
+                                      meetingPlace: "",
+                                    })
+                                  }
                                   disabled={savingMeeting}
-                                  placeholder="https://example.com/meeting-link"
-                                />
-                              </div>
-
-                              <div className="le-formRow">
-                                <label className="le-check">
-                                  <input
-                                    type="checkbox"
-                                    checked={meetingForm.meetingInviteSent}
-                                    onChange={(e) => setMeetingForm((f) => ({ ...f, meetingInviteSent: e.target.checked }))}
-                                    disabled={savingMeeting}
-                                  />
-                                  <span>I confirm invite link has been sent (required)</span>
-                                </label>
+                                >
+                                  Cancel
+                                </button>
+                                <button type="button" className="le-btn primary" onClick={submitScheduleMeeting} disabled={savingMeeting}>
+                                  {savingMeeting ? "Saving..." : "Save Meeting"}
+                                </button>
                               </div>
                             </>
-                          )}
-
-                          {meetingForm.meetingMode === "Face-to-face" && (
-                            <div className="le-formRow">
-                              <label className="le-label">Meeting Place *</label>
-                              <input
-                                className="le-input"
-                                value={meetingForm.meetingPlace}
-                                onChange={(e) => setMeetingForm((f) => ({ ...f, meetingPlace: e.target.value }))}
-                                disabled={savingMeeting}
-                                placeholder="Enter full place/address"
-                              />
+                          ) : hasSavedContactMeeting ? (
+                            <div className="le-attemptMeta" style={{ marginTop: 8 }}>
+                              {lastAttempt?.meetingAt ? <div><span className="le-metaLabel">Meeting Date & Time</span><span className="le-metaValue">{formatDateTime(lastAttempt.meetingAt)}</span></div> : null}
+                              {Number(lastAttempt?.meetingDurationMin || 0) > 0 ? <div><span className="le-metaLabel">Meeting Duration</span><span className="le-metaValue">{lastAttempt.meetingDurationMin} mins</span></div> : null}
+                              {lastAttempt?.meetingEndAt ? <div><span className="le-metaLabel">Meeting Ends</span><span className="le-metaValue">{formatDateTime(lastAttempt.meetingEndAt)}</span></div> : null}
+                              {String(lastAttempt?.meetingMode || "").trim() ? <div><span className="le-metaLabel">Meeting Mode</span><span className="le-metaValue">{lastAttempt.meetingMode}</span></div> : null}
+                              {String(lastAttempt?.meetingPlatform || "").trim() ? <div><span className="le-metaLabel">Meeting Platform</span><span className="le-metaValue">{lastAttempt.meetingPlatform}</span></div> : null}
+                              {String(lastAttempt?.meetingPlatformOther || "").trim() ? <div><span className="le-metaLabel">Meeting Platform (Other)</span><span className="le-metaValue">{lastAttempt.meetingPlatformOther}</span></div> : null}
+                              {String(lastAttempt?.meetingLink || "").trim() ? <div><span className="le-metaLabel">Meeting Link</span><span className="le-metaValue">{lastAttempt.meetingLink}</span></div> : null}
+                              {String(lastAttempt?.meetingMode || "").trim() === "Online" ? <div><span className="le-metaLabel">Meeting Invite Sent</span><span className="le-metaValue">{lastAttempt?.meetingInviteSent ? "Yes" : "No"}</span></div> : null}
+                              {String(lastAttempt?.meetingPlace || "").trim() ? <div><span className="le-metaLabel">Meeting Place</span><span className="le-metaValue">{lastAttempt.meetingPlace}</span></div> : null}
+                              {String(lastAttempt?.meetingStatus || "").trim() ? <div><span className="le-metaLabel">Status</span><span className="le-metaValue">{lastAttempt.meetingStatus}</span></div> : null}
                             </div>
+                          ) : (
+                            <p className="le-muted" style={{ marginTop: 8 }}>
+                              No saved meeting schedule yet.
+                            </p>
                           )}
-
-                          <div className="le-actions">
-                            <button
-                              type="button"
-                              className="le-btn secondary"
-                              onClick={() =>
-                                setMeetingForm({
-                                  meetingDate: "",
-                                  meetingStartTime: "",
-                                  meetingDurationMin: 120,
-                                  meetingMode: "",
-                                  meetingPlatform: "",
-                                  meetingPlatformOther: "",
-                                  meetingLink: "",
-                                  meetingInviteSent: false,
-                                  meetingPlace: "",
-                                })
-                              }
-                              disabled={savingMeeting}
-                            >
-                              Cancel
-                            </button>
-                            <button type="button" className="le-btn primary" onClick={submitScheduleMeeting} disabled={savingMeeting}>
-                              {savingMeeting ? "Saving..." : "Save Meeting"}
-                            </button>
-                          </div>
                         </div>
                       )}
 
-                    </>
-                  )}
-
-                      {showProposalPanel && (
+                      {showProposalPanel && isProposalGenerateViewed && (
                         <div className="le-block">
                           <h4 className="le-blockTitle">{proposalUiActivityKey === "Generate Proposal" ? "Generate Proposal" : "Saved Initial Quotation Proposal Details"}</h4>
                           {proposalUiActivityKey === "Generate Proposal" ? (
@@ -5989,7 +5800,7 @@ function AgentLeadEngagement() {
                         </div>
                       )}
 
-                      {showProposalPanel && proposalUiActivityKey !== "Generate Proposal" ? (
+                      {showProposalPanel && isProposalAttendanceViewed ? (
                         <div className="le-block">
                           <h4 className="le-blockTitle">Prospect Attendance</h4>
 
@@ -6117,7 +5928,7 @@ function AgentLeadEngagement() {
                         </div>
                       ) : null}
 
-                      {showProposalPanel && (proposalUiActivityKey === "Present Proposal" || proposalUiActivityKey === "Schedule Application Submission" || Boolean(proposalPresentationForm.presentedAt)) ? (
+                      {showProposalPanel && isProposalPresentationViewed ? (
                         <div className="le-block">
                           <h4 className="le-blockTitle">{isProposalPresentationEditable ? "Present Proposal" : "Proposal Presentation"}</h4>
 
@@ -6219,7 +6030,7 @@ function AgentLeadEngagement() {
                         </div>
                       ) : null}
 
-                      {showProposalPanel && (proposalUiActivityKey === "Schedule Application Submission" || Boolean(applicationMeetingSaved?.startAt)) ? (
+                      {showProposalPanel && isProposalScheduleApplicationViewed ? (
                         <div className="le-block">
                           {!applicationMeetingSaved ? <h4 className="le-blockTitle">Schedule Application Submission</h4> : null}
 
@@ -6476,6 +6287,7 @@ function AgentLeadEngagement() {
 
                   {showNeedsAssessmentPanel && (
                     <>
+                      {needsAssessmentViewedActivityKey === "Record Prospect Attendance" ? (
                       <div className="le-block">
                         <h4 className="le-blockTitle">Prospect Attendance</h4>
                         {needsAssessmentLoading ? <p className="le-muted">Loading needs assessment...</p> : null}
@@ -6489,7 +6301,7 @@ function AgentLeadEngagement() {
                                 name="prospect-attendance"
                                 checked={needsAssessmentForm.attendanceChoice === "YES"}
                                 onChange={() => setNeedsAssessmentForm((f) => ({ ...f, attendanceChoice: "YES" }))}
-                                disabled={!isNeedsAssessmentEditableNow || isNeedsAssessmentLocked || needsAssessmentSaving}
+                                disabled={!isNeedsAssessmentCurrentViewEditable || isNeedsAssessmentLocked || needsAssessmentSaving}
                               />
                               <span>Yes</span>
                             </label>
@@ -6499,7 +6311,7 @@ function AgentLeadEngagement() {
                                 name="prospect-attendance"
                                 checked={needsAssessmentForm.attendanceChoice === "NO"}
                                 onChange={() => setNeedsAssessmentForm((f) => ({ ...f, attendanceChoice: "NO", attendanceProofImageDataUrl: "", attendanceProofFileName: "" }))}
-                                disabled={!isNeedsAssessmentEditableNow || isNeedsAssessmentLocked || needsAssessmentSaving}
+                                disabled={!isNeedsAssessmentCurrentViewEditable || isNeedsAssessmentLocked || needsAssessmentSaving}
                               />
                               <span>No</span>
                             </label>
@@ -6547,8 +6359,11 @@ function AgentLeadEngagement() {
                                     };
                                     reader.readAsDataURL(file);
                                   }}
-                                  disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving}
+                                  disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}
                                 />
+                                {needsAssessmentForm.attendanceProofFileName ? (
+                                  <p className="le-smallNote">Selected file: {needsAssessmentForm.attendanceProofFileName}</p>
+                                ) : null}
                               </div>
                             ) : null}
                             {attendanceProofInlineError ? (
@@ -6568,11 +6383,37 @@ function AgentLeadEngagement() {
                                 Upload proof of attendance first to proceed to Prospect&apos;s Basic Information.
                               </p>
                             )}
+
+                            {isNeedsAssessmentCurrentViewEditable && !isNeedsAssessmentLocked ? (
+                              <div className="le-actions" style={{ marginTop: 10 }}>
+                                <button
+                                  type="button"
+                                  className="le-btn secondary"
+                                  onClick={() => {
+                                    setNeedsAssessmentError("");
+                                    setNeedsAssessmentSavedAt("");
+                                    fetchNeedsAssessment();
+                                  }}
+                                  disabled={needsAssessmentSaving}
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  type="button"
+                                  className="le-btn primary"
+                                  onClick={submitNeedsAssessmentAttendanceOnly}
+                                  disabled={needsAssessmentSaving}
+                                >
+                                  {needsAssessmentSaving ? "Saving..." : "Save"}
+                                </button>
+                              </div>
+                            ) : null}
                           </>
                         )}
                       </div>
+                      ) : null}
 
-                      {needsAssessmentForm.attendanceChoice === "YES" && !isNeedsAssessmentLocked && String(needsAssessmentForm.attendanceProofImageDataUrl || "").trim() && (
+                      {isNeedsAnalysisViewed && needsAssessmentForm.attendanceChoice === "YES" && !isNeedsAssessmentLocked && String(needsAssessmentForm.attendanceProofImageDataUrl || "").trim() && (
                         <div className="le-block">
                           <div className="le-blockHeader">
                             <h4 className="le-blockTitle">Prospect&apos;s Basic Information</h4>
@@ -6605,7 +6446,7 @@ function AgentLeadEngagement() {
                                   basicInformation: { ...f.basicInformation, civilStatus: e.target.value },
                                 }))
                               }
-                              disabled={!isNeedsAssessmentEditableNow}
+                              disabled={!isNeedsAssessmentCurrentViewEditable}
                             >
                               <option value="">Select</option>
                               <option value="Single">Single</option>
@@ -6616,6 +6457,26 @@ function AgentLeadEngagement() {
                             </select>
                           </div>
                           {renderNeedsAssessmentError("civilStatus")}
+
+                          <div className="le-formRow">
+                            <label className="le-label">Sex *</label>
+                            <select
+                              className="le-input"
+                              value={needsAssessmentForm.basicInformation.sex || ""}
+                              onChange={(e) =>
+                                setNeedsAssessmentForm((f) => ({
+                                  ...f,
+                                  basicInformation: { ...f.basicInformation, sex: e.target.value },
+                                }))
+                              }
+                              disabled={!isNeedsAssessmentCurrentViewEditable}
+                            >
+                              <option value="">Select</option>
+                              <option value="Male">Male</option>
+                              <option value="Female">Female</option>
+                            </select>
+                          </div>
+                          {renderNeedsAssessmentError("sex")}
 
                           <div className="le-formRow">
                             <label className="le-label">Birthday *</label>
@@ -6634,7 +6495,7 @@ function AgentLeadEngagement() {
                                   },
                                 }));
                               }}
-                              disabled={!isNeedsAssessmentEditableNow}
+                              disabled={!isNeedsAssessmentCurrentViewEditable}
                             />
                           </div>
                           {renderNeedsAssessmentError("birthday")}
@@ -6659,7 +6520,7 @@ function AgentLeadEngagement() {
                                   },
                                 }))
                               }
-                              disabled={!isNeedsAssessmentEditableNow}
+                              disabled={!isNeedsAssessmentCurrentViewEditable}
                             >
                               <option value="Employed">Employed</option>
                               <option value="Self-Employed">Self-Employed</option>
@@ -6680,7 +6541,7 @@ function AgentLeadEngagement() {
                                   basicInformation: { ...f.basicInformation, occupation: e.target.value },
                                 }))
                               }
-                              disabled={!isNeedsAssessmentEditableNow}
+                              disabled={!isNeedsAssessmentCurrentViewEditable}
                             />
                           </div>
                           )}
@@ -6692,7 +6553,7 @@ function AgentLeadEngagement() {
                               className="le-input"
                               value={needsAssessmentForm.basicInformation.addressLine || ""}
                               onChange={(e) => setNeedsAssessmentForm((f) => ({ ...f, basicInformation: { ...f.basicInformation, addressLine: e.target.value } }))}
-                              disabled={!isNeedsAssessmentEditableNow}
+                              disabled={!isNeedsAssessmentCurrentViewEditable}
                             />
                           </div>
                           {renderNeedsAssessmentError("addressLine")}
@@ -6703,7 +6564,7 @@ function AgentLeadEngagement() {
                               className="le-input"
                               value={needsAssessmentForm.basicInformation.barangay || ""}
                               onChange={(e) => setNeedsAssessmentForm((f) => ({ ...f, basicInformation: { ...f.basicInformation, barangay: e.target.value } }))}
-                              disabled={!isNeedsAssessmentEditableNow}
+                              disabled={!isNeedsAssessmentCurrentViewEditable}
                             />
                           </div>
                           {renderNeedsAssessmentError("barangay")}
@@ -6727,7 +6588,7 @@ function AgentLeadEngagement() {
                                   },
                                 }));
                               }}
-                              disabled={!isNeedsAssessmentEditableNow}
+                              disabled={!isNeedsAssessmentCurrentViewEditable}
                             >
                               <option value="">Select city</option>
 
@@ -6743,7 +6604,7 @@ function AgentLeadEngagement() {
                                 className="le-input"
                                 value={needsAssessmentForm.basicInformation.otherCity || ""}
                                 onChange={(e) => setNeedsAssessmentForm((f) => ({ ...f, basicInformation: { ...f.basicInformation, otherCity: e.target.value } }))}
-                                disabled={!isNeedsAssessmentEditableNow}
+                                disabled={!isNeedsAssessmentCurrentViewEditable}
                               />
                             </div>
                           )}
@@ -6756,7 +6617,7 @@ function AgentLeadEngagement() {
                               value={needsAssessmentForm.basicInformation.region || ""}
                               onChange={(e) => setNeedsAssessmentForm((f) => ({ ...f, basicInformation: { ...f.basicInformation, region: e.target.value } }))}
                               readOnly={String(needsAssessmentForm.basicInformation.city || "") !== "Other"}
-                              disabled={!isNeedsAssessmentEditableNow}
+                              disabled={!isNeedsAssessmentCurrentViewEditable}
                             />
                           </div>
                           {renderNeedsAssessmentError("region")}
@@ -6768,7 +6629,7 @@ function AgentLeadEngagement() {
                               inputMode="numeric"
                               value={needsAssessmentForm.basicInformation.zipCode || ""}
                               onChange={(e) => setNeedsAssessmentForm((f) => ({ ...f, basicInformation: { ...f.basicInformation, zipCode: String(e.target.value).replace(/[^\d]/g, "").slice(0, 4) } }))}
-                              disabled={!isNeedsAssessmentEditableNow}
+                              disabled={!isNeedsAssessmentCurrentViewEditable}
                             />
                           </div>
 
@@ -6785,7 +6646,7 @@ function AgentLeadEngagement() {
                               type="button"
                               className="le-btn secondary"
                               onClick={addDependent}
-                              disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving}
+                              disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}
                             >
                               + Add Another Dependent
                             </button>
@@ -6793,11 +6654,11 @@ function AgentLeadEngagement() {
 
                           {(needsAssessmentForm.dependents || []).map((d, idx) => (
                             <div key={`dep-${idx}`} className="le-attemptItem" style={{ marginTop: 10 }}>
-                              <div className="le-formRow"><label className="le-label">Name *</label><input className="le-input" value={d.name || ""} onChange={(e) => updateDependent(idx, "name", e.target.value)} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving} /></div>
-                              <div className="le-formRow"><label className="le-label">Age *</label><input className="le-input" inputMode="numeric" value={d.age ?? ""} onChange={(e) => updateDependent(idx, "age", String(e.target.value).replace(/[^\d]/g, ""))} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving} /></div>
-                              <div className="le-formRow"><label className="le-label">Gender *</label><select className="le-input" value={d.gender || ""} onChange={(e) => updateDependent(idx, "gender", e.target.value)} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving}><option value="">Select</option><option value="Male">Male</option><option value="Female">Female</option></select></div>
-                              <div className="le-formRow"><label className="le-label">Relationship *</label><select className="le-input" value={d.relationship || ""} onChange={(e) => updateDependent(idx, "relationship", e.target.value)} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving}><option value="">Select</option><option value="Child">Child</option><option value="Parent">Parent</option><option value="Sibling">Sibling</option></select></div>
-                              <div className="le-actions"><button type="button" className="le-btn secondary" onClick={() => removeDependent(idx)} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving}>Remove</button></div>
+                              <div className="le-formRow"><label className="le-label">Name *</label><input className="le-input" value={d.name || ""} onChange={(e) => updateDependent(idx, "name", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
+                              <div className="le-formRow"><label className="le-label">Age *</label><input className="le-input" inputMode="numeric" value={d.age ?? ""} onChange={(e) => updateDependent(idx, "age", String(e.target.value).replace(/[^\d]/g, ""))} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
+                              <div className="le-formRow"><label className="le-label">Gender *</label><select className="le-input" value={d.gender || ""} onChange={(e) => updateDependent(idx, "gender", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}><option value="">Select</option><option value="Male">Male</option><option value="Female">Female</option></select></div>
+                              <div className="le-formRow"><label className="le-label">Relationship *</label><select className="le-input" value={d.relationship || ""} onChange={(e) => updateDependent(idx, "relationship", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}><option value="">Select</option><option value="Child">Child</option><option value="Parent">Parent</option><option value="Sibling">Sibling</option></select></div>
+                              <div className="le-actions"><button type="button" className="le-btn secondary" onClick={() => removeDependent(idx)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}>Remove</button></div>
                             </div>
                           ))}
                           {renderNeedsAssessmentError("dependents")}
@@ -6837,7 +6698,7 @@ function AgentLeadEngagement() {
                             <>
                               <div className="le-formRow">
                                 <label className="le-label">Current Priority *</label>
-                                <select className="le-input" value={needsAssessmentForm.needsPriorities?.currentPriority || ""} onChange={(e) => updateNeedsPriorities("currentPriority", e.target.value)} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving}>
+                                <select className="le-input" value={needsAssessmentForm.needsPriorities?.currentPriority || ""} onChange={(e) => updateNeedsPriorities("currentPriority", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}>
                                   <option value="">Select</option><option value="Protection">Protection</option><option value="Health">Health</option><option value="Investment">Investment</option>
                                 </select>
                               </div>
@@ -6845,7 +6706,7 @@ function AgentLeadEngagement() {
 
                               <div className="le-formRow">
                                 <label className="le-label">Approximate Monthly Income (All Sources) *</label>
-                                <select className="le-input" value={needsAssessmentForm.needsPriorities?.monthlyIncomeBand || ""} onChange={(e) => updateNeedsPriorities("monthlyIncomeBand", e.target.value)} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving}>
+                                <select className="le-input" value={needsAssessmentForm.needsPriorities?.monthlyIncomeBand || ""} onChange={(e) => updateNeedsPriorities("monthlyIncomeBand", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}>
                                   <option value="">Select bracket</option>
                                   {INCOME_BAND_OPTIONS.map((item) => (<option key={item.value} value={item.value}>{item.label}</option>))}
                                 </select>
@@ -6855,23 +6716,23 @@ function AgentLeadEngagement() {
                               {["BELOW_15000", "ABOVE_500000"].includes(String(needsAssessmentForm.needsPriorities?.monthlyIncomeBand || "")) && (
                                 <div className="le-formRow">
                                   <label className="le-label">Manual Monthly Income Amount (Php) *</label>
-                                  <input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.monthlyIncomeAmount ?? ""} onChange={(e) => updateNeedsPriorities("monthlyIncomeAmount", e.target.value)} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving} />
+                                  <input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.monthlyIncomeAmount ?? ""} onChange={(e) => updateNeedsPriorities("monthlyIncomeAmount", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} />
                                 </div>
                               )}
                               {renderNeedsAssessmentError("monthlyIncomeAmount")}
 
-                              <div className="le-formRow"><label className="le-label">Minimum Willing Monthly Premium (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.minPremium ?? ""} onChange={(e) => updateNeedsPriorities("minPremium", e.target.value)} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving} /></div>
+                              <div className="le-formRow"><label className="le-label">Minimum Willing Monthly Premium (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.minPremium ?? ""} onChange={(e) => updateNeedsPriorities("minPremium", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
                               {renderNeedsAssessmentError("minPremium")}
-                              <div className="le-formRow"><label className="le-label">Maximum Willing Monthly Premium (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.maxPremium ?? ""} onChange={(e) => updateNeedsPriorities("maxPremium", e.target.value)} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving} /></div>
+                              <div className="le-formRow"><label className="le-label">Maximum Willing Monthly Premium (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.maxPremium ?? ""} onChange={(e) => updateNeedsPriorities("maxPremium", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
                               {renderNeedsAssessmentError("maxPremium")}
 
                               {needsPrioritiesDerived.priority === "Protection" && (
                                 <>
-                                  <div className="le-formRow"><label className="le-label">Approximate Monthly Spend (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.protection?.monthlySpend ?? ""} onChange={(e) => updateNeedsPrioritySection("protection", "monthlySpend", e.target.value)} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving} /></div>
+                                  <div className="le-formRow"><label className="le-label">Approximate Monthly Spend (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.protection?.monthlySpend ?? ""} onChange={(e) => updateNeedsPrioritySection("protection", "monthlySpend", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
                                   {renderNeedsAssessmentError("protectionMonthlySpend")}
                                   <div className="le-formRow"><label className="le-label">Number of Dependents</label><input className="le-input" value={needsPrioritiesDerived.numberOfDependents} disabled /></div>
                                   <div className="le-formRow"><label className="le-label">Years to Protect Income</label><input className="le-input" value={needsPrioritiesDerived.yearsToProtectIncome} disabled /></div>
-                                  <div className="le-formRow"><label className="le-label">Savings for Protection (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.protection?.savingsForProtection ?? ""} onChange={(e) => updateNeedsPrioritySection("protection", "savingsForProtection", e.target.value)} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving} /></div>
+                                  <div className="le-formRow"><label className="le-label">Savings for Protection (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.protection?.savingsForProtection ?? ""} onChange={(e) => updateNeedsPrioritySection("protection", "savingsForProtection", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
                                   {renderNeedsAssessmentError("protectionSavings")}
                                   <div className="le-formRow"><label className="le-label">Protection Gap (Php)</label><input className="le-input" value={Number.isFinite(needsPrioritiesDerived.protectionGap) ? needsPrioritiesDerived.protectionGap : ""} disabled /></div>
                                 </>
@@ -6879,9 +6740,9 @@ function AgentLeadEngagement() {
 
                               {needsPrioritiesDerived.priority === "Health" && (
                                 <>
-                                  <div className="le-formRow"><label className="le-label">Approx. Amount to Cover Critical Illness (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.health?.amountToCoverCriticalIllness ?? ""} onChange={(e) => updateNeedsPrioritySection("health", "amountToCoverCriticalIllness", e.target.value)} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving} /></div>
+                                  <div className="le-formRow"><label className="le-label">Approx. Amount to Cover Critical Illness (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.health?.amountToCoverCriticalIllness ?? ""} onChange={(e) => updateNeedsPrioritySection("health", "amountToCoverCriticalIllness", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
                                   {renderNeedsAssessmentError("healthAmount")}
-                                  <div className="le-formRow"><label className="le-label">Savings for Critical Illness (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.health?.savingsForCriticalIllness ?? ""} onChange={(e) => updateNeedsPrioritySection("health", "savingsForCriticalIllness", e.target.value)} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving} /></div>
+                                  <div className="le-formRow"><label className="le-label">Savings for Critical Illness (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.health?.savingsForCriticalIllness ?? ""} onChange={(e) => updateNeedsPrioritySection("health", "savingsForCriticalIllness", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
                                   {renderNeedsAssessmentError("healthSavings")}
                                   <div className="le-formRow"><label className="le-label">Critical Illness and Hospitalization Gap (Php)</label><input className="le-input" value={Number.isFinite(needsPrioritiesDerived.criticalIllnessGap) ? needsPrioritiesDerived.criticalIllnessGap : ""} disabled /></div>
                                 </>
@@ -6889,15 +6750,15 @@ function AgentLeadEngagement() {
 
                               {needsPrioritiesDerived.priority === "Investment" && (
                                 <>
-                                  <div className="le-formRow"><label className="le-label">Savings Plan *</label><select className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.savingsPlan || ""} onChange={(e) => updateNeedsPrioritySection("investment", "savingsPlan", e.target.value)} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving}><option value="">Select</option><option value="Home">Home</option><option value="Vehicle">Vehicle</option><option value="Holiday">Holiday</option><option value="Early Retirement">Early Retirement</option><option value="Other">Other</option></select></div>
+                                  <div className="le-formRow"><label className="le-label">Savings Plan *</label><select className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.savingsPlan || ""} onChange={(e) => updateNeedsPrioritySection("investment", "savingsPlan", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}><option value="">Select</option><option value="Home">Home</option><option value="Vehicle">Vehicle</option><option value="Holiday">Holiday</option><option value="Early Retirement">Early Retirement</option><option value="Other">Other</option></select></div>
                                   {renderNeedsAssessmentError("investmentSavingsPlan")}
-                                  {String(needsAssessmentForm.needsPriorities?.investment?.savingsPlan || "") === "Other" && (<div className="le-formRow"><label className="le-label">Other Savings Plan *</label><input className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.savingsPlanOther || ""} onChange={(e) => updateNeedsPrioritySection("investment", "savingsPlanOther", e.target.value)} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving} /></div>)}
+                                  {String(needsAssessmentForm.needsPriorities?.investment?.savingsPlan || "") === "Other" && (<div className="le-formRow"><label className="le-label">Other Savings Plan *</label><input className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.savingsPlanOther || ""} onChange={(e) => updateNeedsPrioritySection("investment", "savingsPlanOther", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>)}
                                   {renderNeedsAssessmentError("investmentSavingsPlanOther")}
-                                  <div className="le-formRow"><label className="le-label">Target Savings Amount (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.investment?.targetSavingsAmount ?? ""} onChange={(e) => updateNeedsPrioritySection("investment", "targetSavingsAmount", e.target.value)} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving} /></div>
+                                  <div className="le-formRow"><label className="le-label">Target Savings Amount (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.investment?.targetSavingsAmount ?? ""} onChange={(e) => updateNeedsPrioritySection("investment", "targetSavingsAmount", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
                                   {renderNeedsAssessmentError("investmentTargetAmount")}
-                                  <div className="le-formRow"><label className="le-label">Target Year to Utilize Savings *</label><input className="le-input" inputMode="numeric" value={needsAssessmentForm.needsPriorities?.investment?.targetUtilizationYear ?? ""} onChange={(e) => updateNeedsPrioritySection("investment", "targetUtilizationYear", String(e.target.value).replace(/[^\d]/g, "").slice(0, 4))} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving} /></div>
+                                  <div className="le-formRow"><label className="le-label">Target Year to Utilize Savings *</label><input className="le-input" inputMode="numeric" value={needsAssessmentForm.needsPriorities?.investment?.targetUtilizationYear ?? ""} onChange={(e) => updateNeedsPrioritySection("investment", "targetUtilizationYear", String(e.target.value).replace(/[^\d]/g, "").slice(0, 4))} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
                                   {renderNeedsAssessmentError("investmentTargetYear")}
-                                  <div className="le-formRow"><label className="le-label">Savings for Investment (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.investment?.savingsForInvestment ?? ""} onChange={(e) => updateNeedsPrioritySection("investment", "savingsForInvestment", e.target.value)} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving} /></div>
+                                  <div className="le-formRow"><label className="le-label">Savings for Investment (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.investment?.savingsForInvestment ?? ""} onChange={(e) => updateNeedsPrioritySection("investment", "savingsForInvestment", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
                                   {renderNeedsAssessmentError("investmentSavings")}
                                   <div className="le-formRow"><label className="le-label">Savings Gap (Php)</label><input className="le-input" value={Number.isFinite(needsPrioritiesDerived.savingsGap) ? needsPrioritiesDerived.savingsGap : ""} disabled /></div>
 
@@ -6905,12 +6766,12 @@ function AgentLeadEngagement() {
                                   <p className="le-muted" style={{ marginTop: 6, marginBottom: 6 }}>Subsection 1: Risk Appetite Survey</p>
                                   {renderNeedsAssessmentError("investmentRiskProfiler")}
 
-                                  <div className="le-formRow"><label className="le-label">INVESTMENT HORIZON *</label><p className="le-muted" style={{ marginTop: 4, marginBottom: 8 }}>How long will you allow your money to grow before you feel the need to have access to it?</p><select className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.riskProfiler?.investmentHorizon || ""} onChange={(e) => updateNeedsPrioritySection("investment", "riskProfiler", { ...(needsAssessmentForm.needsPriorities?.investment?.riskProfiler || {}), investmentHorizon: e.target.value })} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving}><option value="">Select</option><option value="LT_3">Less than three years</option><option value="BETWEEN_3_7">Between three and seven years</option><option value="BETWEEN_7_10">Longer than seven years but less than 10 years</option><option value="AT_LEAST_10">At least 10 years</option></select></div>
-                                  <div className="le-formRow"><label className="le-label">INVESTMENT GOAL *</label><p className="le-muted" style={{ marginTop: 4, marginBottom: 8 }}>What is your goal for this investment?</p><select className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.riskProfiler?.investmentGoal || ""} onChange={(e) => updateNeedsPrioritySection("investment", "riskProfiler", { ...(needsAssessmentForm.needsPriorities?.investment?.riskProfiler || {}), investmentGoal: e.target.value })} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving}><option value="">Select</option><option value="CAPITAL_PRESERVATION">Capital preservation with a potential return that is slightly higher than time deposit rate</option><option value="STEADY_GROWTH">Steady growth in capital</option><option value="SIGNIFICANT_APPRECIATION">A significant level of capital appreciation</option></select></div>
-                                  <div className="le-formRow"><label className="le-label">EXPERIENCE WITH INVESTMENTS AND/OR FINANCIAL MARKETS *</label><p className="le-muted" style={{ marginTop: 4, marginBottom: 8 }}>Have you had any experience investing in the following:</p><p className="le-smallNote" style={{ marginTop: 0, marginBottom: 8 }}>I. Mutual funds, unit investment trust funds, unit-linked insurance policies, local government and/or corporate bonds, listed stocks in the Philippine Stock Market</p><p className="le-smallNote" style={{ marginTop: 0, marginBottom: 8 }}>II. Foreign investments (stocks, bonds, funds outside the Philippine market), foreign currencies, hedge funds, derivatives (options, futures, forwards, etc.)</p><select className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.riskProfiler?.marketExperience || ""} onChange={(e) => updateNeedsPrioritySection("investment", "riskProfiler", { ...(needsAssessmentForm.needsPriorities?.investment?.riskProfiler || {}), marketExperience: e.target.value })} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving}><option value="">Select</option><option value="NONE">None of the above</option><option value="I_ONLY">In "I" only</option><option value="II_ONLY">In "II" only</option><option value="BOTH">In both "I" and "II"</option></select></div>
-                                  <div className="le-formRow"><label className="le-label">REACTION TO SHORT-TERM VOLATILITY *</label><p className="le-muted" style={{ marginTop: 4, marginBottom: 8 }}>What will you do if you experience a significant drop (e.g. 30%) in fund value within a year?</p><select className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.riskProfiler?.volatilityReaction || ""} onChange={(e) => updateNeedsPrioritySection("investment", "riskProfiler", { ...(needsAssessmentForm.needsPriorities?.investment?.riskProfiler || {}), volatilityReaction: e.target.value })} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving}><option value="">Select</option><option value="FULL_WITHDRAW">Make a full withdrawal</option><option value="LESS_RISKY">Switch to a less risky fund</option><option value="HOLD">Do nothing or hold on to the funds</option><option value="TOP_UPS">Do top-ups or make additional investments</option></select></div>
-                                  <div className="le-formRow"><label className="le-label">AFFORDABILITY TO CAPITAL LOSS *</label><p className="le-muted" style={{ marginTop: 4, marginBottom: 8 }}>In the long term (more than five years), what is the level of capital loss you can afford to take?</p><select className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.riskProfiler?.capitalLossAffordability || ""} onChange={(e) => updateNeedsPrioritySection("investment", "riskProfiler", { ...(needsAssessmentForm.needsPriorities?.investment?.riskProfiler || {}), capitalLossAffordability: e.target.value })} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving}><option value="">Select</option><option value="NO_LOSS">I cannot afford a loss</option><option value="UP_TO_5">I can afford up to 5% loss</option><option value="UP_TO_10">I can afford up to 10% loss</option><option value="ABOVE_10">I can afford more than 10% loss</option></select></div>
-                                  <div className="le-formRow"><label className="le-label">RISK AND RETURN TRADE-OFF *</label><p className="le-muted" style={{ marginTop: 4, marginBottom: 8 }}>Which of the sample portfolio would you prefer?</p><select className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.riskProfiler?.riskReturnTradeoff || ""} onChange={(e) => updateNeedsPrioritySection("investment", "riskProfiler", { ...(needsAssessmentForm.needsPriorities?.investment?.riskProfiler || {}), riskReturnTradeoff: e.target.value })} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving}><option value="">Select</option><option value="PORTFOLIO_A">Portfolio A: 4% Potential annual gain, -3% Potential annual loss</option><option value="PORTFOLIO_B">Portfolio B: 6% Potential annual gain, -6% Potential annual loss</option><option value="PORTFOLIO_C">Portfolio C: 10% Potential annual gain, -12% Potential annual loss</option><option value="PORTFOLIO_D">Portfolio D: 20% or more Potential annual gain, -28% or more Potential annual loss</option></select></div>
+                                  <div className="le-formRow"><label className="le-label">INVESTMENT HORIZON *</label><p className="le-muted" style={{ marginTop: 4, marginBottom: 8 }}>How long will you allow your money to grow before you feel the need to have access to it?</p><select className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.riskProfiler?.investmentHorizon || ""} onChange={(e) => updateNeedsPrioritySection("investment", "riskProfiler", { ...(needsAssessmentForm.needsPriorities?.investment?.riskProfiler || {}), investmentHorizon: e.target.value })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}><option value="">Select</option><option value="LT_3">Less than three years</option><option value="BETWEEN_3_7">Between three and seven years</option><option value="BETWEEN_7_10">Longer than seven years but less than 10 years</option><option value="AT_LEAST_10">At least 10 years</option></select></div>
+                                  <div className="le-formRow"><label className="le-label">INVESTMENT GOAL *</label><p className="le-muted" style={{ marginTop: 4, marginBottom: 8 }}>What is your goal for this investment?</p><select className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.riskProfiler?.investmentGoal || ""} onChange={(e) => updateNeedsPrioritySection("investment", "riskProfiler", { ...(needsAssessmentForm.needsPriorities?.investment?.riskProfiler || {}), investmentGoal: e.target.value })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}><option value="">Select</option><option value="CAPITAL_PRESERVATION">Capital preservation with a potential return that is slightly higher than time deposit rate</option><option value="STEADY_GROWTH">Steady growth in capital</option><option value="SIGNIFICANT_APPRECIATION">A significant level of capital appreciation</option></select></div>
+                                  <div className="le-formRow"><label className="le-label">EXPERIENCE WITH INVESTMENTS AND/OR FINANCIAL MARKETS *</label><p className="le-muted" style={{ marginTop: 4, marginBottom: 8 }}>Have you had any experience investing in the following:</p><p className="le-smallNote" style={{ marginTop: 0, marginBottom: 8 }}>I. Mutual funds, unit investment trust funds, unit-linked insurance policies, local government and/or corporate bonds, listed stocks in the Philippine Stock Market</p><p className="le-smallNote" style={{ marginTop: 0, marginBottom: 8 }}>II. Foreign investments (stocks, bonds, funds outside the Philippine market), foreign currencies, hedge funds, derivatives (options, futures, forwards, etc.)</p><select className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.riskProfiler?.marketExperience || ""} onChange={(e) => updateNeedsPrioritySection("investment", "riskProfiler", { ...(needsAssessmentForm.needsPriorities?.investment?.riskProfiler || {}), marketExperience: e.target.value })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}><option value="">Select</option><option value="NONE">None of the above</option><option value="I_ONLY">In "I" only</option><option value="II_ONLY">In "II" only</option><option value="BOTH">In both "I" and "II"</option></select></div>
+                                  <div className="le-formRow"><label className="le-label">REACTION TO SHORT-TERM VOLATILITY *</label><p className="le-muted" style={{ marginTop: 4, marginBottom: 8 }}>What will you do if you experience a significant drop (e.g. 30%) in fund value within a year?</p><select className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.riskProfiler?.volatilityReaction || ""} onChange={(e) => updateNeedsPrioritySection("investment", "riskProfiler", { ...(needsAssessmentForm.needsPriorities?.investment?.riskProfiler || {}), volatilityReaction: e.target.value })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}><option value="">Select</option><option value="FULL_WITHDRAW">Make a full withdrawal</option><option value="LESS_RISKY">Switch to a less risky fund</option><option value="HOLD">Do nothing or hold on to the funds</option><option value="TOP_UPS">Do top-ups or make additional investments</option></select></div>
+                                  <div className="le-formRow"><label className="le-label">AFFORDABILITY TO CAPITAL LOSS *</label><p className="le-muted" style={{ marginTop: 4, marginBottom: 8 }}>In the long term (more than five years), what is the level of capital loss you can afford to take?</p><select className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.riskProfiler?.capitalLossAffordability || ""} onChange={(e) => updateNeedsPrioritySection("investment", "riskProfiler", { ...(needsAssessmentForm.needsPriorities?.investment?.riskProfiler || {}), capitalLossAffordability: e.target.value })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}><option value="">Select</option><option value="NO_LOSS">I cannot afford a loss</option><option value="UP_TO_5">I can afford up to 5% loss</option><option value="UP_TO_10">I can afford up to 10% loss</option><option value="ABOVE_10">I can afford more than 10% loss</option></select></div>
+                                  <div className="le-formRow"><label className="le-label">RISK AND RETURN TRADE-OFF *</label><p className="le-muted" style={{ marginTop: 4, marginBottom: 8 }}>Which of the sample portfolio would you prefer?</p><select className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.riskProfiler?.riskReturnTradeoff || ""} onChange={(e) => updateNeedsPrioritySection("investment", "riskProfiler", { ...(needsAssessmentForm.needsPriorities?.investment?.riskProfiler || {}), riskReturnTradeoff: e.target.value })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}><option value="">Select</option><option value="PORTFOLIO_A">Portfolio A: 4% Potential annual gain, -3% Potential annual loss</option><option value="PORTFOLIO_B">Portfolio B: 6% Potential annual gain, -6% Potential annual loss</option><option value="PORTFOLIO_C">Portfolio C: 10% Potential annual gain, -12% Potential annual loss</option><option value="PORTFOLIO_D">Portfolio D: 20% or more Potential annual gain, -28% or more Potential annual loss</option></select></div>
 
                                   <h5 className="le-attemptSectionHeader" style={{ marginTop: 10 }}>Investor Risk Profile</h5>
                                   <div className="le-formRow"><label className="le-label">Risk Profile Score</label><input className="le-input" value={needsPrioritiesDerived.riskProfileScore ?? ""} disabled /></div>
@@ -6935,7 +6796,7 @@ function AgentLeadEngagement() {
                                             <div><span className="le-metaLabel">Fund</span><span className="le-metaValue">{fund.fundName}</span></div>
                                             <div><span className="le-metaLabel">Currency</span><span className="le-metaValue">{fund.currency}</span></div>
                                             <div><span className="le-metaLabel">Risk Rating</span><span className="le-metaValue">{fund.riskRating}</span></div>
-                                            <div><span className="le-metaLabel">Allocation (%)</span><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.investment?.fundChoice?.allocations?.[fund.key] ?? ""} onChange={(e) => updateNeedsPrioritySection("investment", "fundChoice", { ...(needsAssessmentForm.needsPriorities?.investment?.fundChoice || {}), allocations: { ...(needsAssessmentForm.needsPriorities?.investment?.fundChoice?.allocations || {}), [fund.key]: String(e.target.value).replace(/[^\d.]/g, "") } })} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving} /></div>
+                                            <div><span className="le-metaLabel">Allocation (%)</span><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.investment?.fundChoice?.allocations?.[fund.key] ?? ""} onChange={(e) => updateNeedsPrioritySection("investment", "fundChoice", { ...(needsAssessmentForm.needsPriorities?.investment?.fundChoice || {}), allocations: { ...(needsAssessmentForm.needsPriorities?.investment?.fundChoice?.allocations || {}), [fund.key]: String(e.target.value).replace(/[^\d.]/g, "") } })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
                                           </div>
                                         </div>
                                       ))}
@@ -6950,7 +6811,7 @@ function AgentLeadEngagement() {
                                           <div><span className="le-metaLabel">Fund</span><span className="le-metaValue">{fund.fundName}</span></div>
                                           <div><span className="le-metaLabel">Currency</span><span className="le-metaValue">{fund.currency}</span></div>
                                           <div><span className="le-metaLabel">Risk Rating</span><span className="le-metaValue">{fund.riskRating}</span></div>
-                                          <div><span className="le-metaLabel">Allocation (%)</span><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.investment?.fundChoice?.allocations?.[fund.key] ?? ""} onChange={(e) => updateNeedsPrioritySection("investment", "fundChoice", { ...(needsAssessmentForm.needsPriorities?.investment?.fundChoice || {}), allocations: { ...(needsAssessmentForm.needsPriorities?.investment?.fundChoice?.allocations || {}), [fund.key]: String(e.target.value).replace(/[^\d.]/g, "") } })} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving} /></div>
+                                          <div><span className="le-metaLabel">Allocation (%)</span><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.investment?.fundChoice?.allocations?.[fund.key] ?? ""} onChange={(e) => updateNeedsPrioritySection("investment", "fundChoice", { ...(needsAssessmentForm.needsPriorities?.investment?.fundChoice || {}), allocations: { ...(needsAssessmentForm.needsPriorities?.investment?.fundChoice?.allocations || {}), [fund.key]: String(e.target.value).replace(/[^\d.]/g, "") } })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
                                         </div>
                                       </div>
                                     ))}
@@ -6959,7 +6820,7 @@ function AgentLeadEngagement() {
                                   <div className="le-formRow"><label className="le-label">Total Allocation (%)</label><input className="le-input" value={Number.isFinite(needsPrioritiesDerived.totalFundAllocation) ? needsPrioritiesDerived.totalFundAllocation : ""} disabled /></div>
                                   <div className="le-formRow"><label className="le-label">Fund Match</label><input className="le-input" value={needsPrioritiesDerived.fundMatch} disabled /></div>
                                   {needsPrioritiesDerived.fundMatch === "No" && (
-                                    <div className="le-formRow"><label className="le-label">Reason for Mismatch *</label><textarea className="le-input" rows={3} value={needsAssessmentForm.needsPriorities?.investment?.fundChoice?.mismatchReason || ""} onChange={(e) => updateNeedsPrioritySection("investment", "fundChoice", { ...(needsAssessmentForm.needsPriorities?.investment?.fundChoice || {}), mismatchReason: e.target.value })} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving} /></div>
+                                    <div className="le-formRow"><label className="le-label">Reason for Mismatch *</label><textarea className="le-input" rows={3} value={needsAssessmentForm.needsPriorities?.investment?.fundChoice?.mismatchReason || ""} onChange={(e) => updateNeedsPrioritySection("investment", "fundChoice", { ...(needsAssessmentForm.needsPriorities?.investment?.fundChoice || {}), mismatchReason: e.target.value })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
                                   )}
                                 </>
                               )}
@@ -6986,9 +6847,8 @@ function AgentLeadEngagement() {
                                               selectedProductId: String(product?._id || ""),
                                               requestedFrequency: "Monthly",
                                               requestedPremiumPayment: needsAssessmentForm.needsPriorities?.minPremium ?? "",
-                                              methodForInitialPayment: "",
                                             })}
-                                            disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving}
+                                            disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}
                                           >
                                             {isSelected ? "Selected" : "Select"}
                                           </button>
@@ -7000,12 +6860,10 @@ function AgentLeadEngagement() {
                               )}
                               {renderNeedsAssessmentError("selectedProductId")}
 
-                              <div className="le-formRow"><label className="le-label">Requested Frequency of Premium Payment *</label><select className="le-input" value={needsAssessmentForm.needsPriorities?.productSelection?.requestedFrequency || "Monthly"} onChange={(e) => { const v = e.target.value; updateNeedsPriorities("productSelection", { ...(needsAssessmentForm.needsPriorities?.productSelection || {}), requestedFrequency: v, requestedPremiumPayment: v === "Monthly" ? (needsAssessmentForm.needsPriorities?.minPremium ?? "") : "" }); }} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving}><option value="Monthly">Monthly</option><option value="Quarterly">Quarterly</option><option value="Half-yearly">Half-yearly</option><option value="Yearly">Yearly</option></select></div>
+                              <div className="le-formRow"><label className="le-label">Requested Frequency of Premium Payment *</label><select className="le-input" value={needsAssessmentForm.needsPriorities?.productSelection?.requestedFrequency || "Monthly"} onChange={(e) => { const v = e.target.value; updateNeedsPriorities("productSelection", { ...(needsAssessmentForm.needsPriorities?.productSelection || {}), requestedFrequency: v, requestedPremiumPayment: v === "Monthly" ? (needsAssessmentForm.needsPriorities?.minPremium ?? "") : "" }); }} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}><option value="Monthly">Monthly</option><option value="Quarterly">Quarterly</option><option value="Half-yearly">Half-yearly</option><option value="Yearly">Yearly</option></select></div>
                               {renderNeedsAssessmentError("requestedFrequency")}
-                              <div className="le-formRow"><label className="le-label">Requested Premium Payment (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.productSelection?.requestedPremiumPayment ?? ""} onChange={(e) => updateNeedsPriorities("productSelection", { ...(needsAssessmentForm.needsPriorities?.productSelection || {}), requestedPremiumPayment: e.target.value })} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving} /></div>
+                              <div className="le-formRow"><label className="le-label">Requested Premium Payment (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.productSelection?.requestedPremiumPayment ?? ""} onChange={(e) => updateNeedsPriorities("productSelection", { ...(needsAssessmentForm.needsPriorities?.productSelection || {}), requestedPremiumPayment: e.target.value })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
                               {renderNeedsAssessmentError("requestedPremiumPayment")}
-                              <div className="le-formRow"><label className="le-label">Method for Initial Payment *</label><select className="le-input" value={needsAssessmentForm.needsPriorities?.productSelection?.methodForInitialPayment || ""} onChange={(e) => updateNeedsPriorities("productSelection", { ...(needsAssessmentForm.needsPriorities?.productSelection || {}), methodForInitialPayment: e.target.value })} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving}><option value="">Select</option><option value="Credit Card / Debit Card">Credit Card / Debit Card</option><option value="Mobile Wallet / GCash">Mobile Wallet / GCash</option><option value="Dated Check">Dated Check</option><option value="Bills Payments">Bills Payments</option></select></div>
-                              {renderNeedsAssessmentError("methodForInitialPayment")}
 
                               <h5 className="le-attemptSectionHeader" style={{ marginTop: 14 }}>Optional Riders</h5>
                               <div className="le-attemptList" style={{ marginTop: 8 }}>
@@ -7034,7 +6892,7 @@ function AgentLeadEngagement() {
                                               current[idx] = { ...current[idx], enabled: !enabled };
                                               updateNeedsPriorities("optionalRiders", current);
                                             }}
-                                            disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving}
+                                            disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}
                                           >
                                             <span className="le-toggleTrack" aria-hidden="true">
                                               <span className="le-toggleThumb" />
@@ -7050,7 +6908,7 @@ function AgentLeadEngagement() {
 
 
                               <h5 className="le-attemptSectionHeader" style={{ marginTop: 14 }}>Notes (Optional)</h5>
-                              <div className="le-formRow"><label className="le-label">Notes about selected product and optional riders</label><textarea className="le-input" rows={3} value={needsAssessmentForm.needsPriorities?.productRidersNotes || ""} onChange={(e) => updateNeedsPriorities("productRidersNotes", e.target.value)} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving} /></div>
+                              <div className="le-formRow"><label className="le-label">Notes about selected product and optional riders</label><textarea className="le-input" rows={3} value={needsAssessmentForm.needsPriorities?.productRidersNotes || ""} onChange={(e) => updateNeedsPriorities("productRidersNotes", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
 
                             </>
                           )}
@@ -7080,7 +6938,7 @@ function AgentLeadEngagement() {
                         </div>
                       )}
 
-                      {showProposalSchedulingSection && (
+                      {showProposalSchedulingSection && isNeedsAnalysisViewed && (
                         <div>
                           <div className="le-block" style={{ marginTop: 16 }}>
                             <h4 className="le-blockTitle">Saved Needs Assessment Details</h4>
@@ -7139,7 +6997,6 @@ function AgentLeadEngagement() {
                               {(availableProducts || []).find((p) => String(p?._id || "") === String(needsAssessmentForm.needsPriorities?.productSelection?.selectedProductId || ""))?.productName ? <div><span className="le-metaLabel">Selected Product</span><span className="le-metaValue">{(availableProducts || []).find((p) => String(p?._id || "") === String(needsAssessmentForm.needsPriorities?.productSelection?.selectedProductId || ""))?.productName}</span></div> : null}
                               {needsAssessmentForm.needsPriorities?.productSelection?.requestedPremiumPayment !== "" && needsAssessmentForm.needsPriorities?.productSelection?.requestedPremiumPayment !== null && needsAssessmentForm.needsPriorities?.productSelection?.requestedPremiumPayment !== undefined ? <div><span className="le-metaLabel">Requested Premium Payment</span><span className="le-metaValue">{needsAssessmentForm.needsPriorities.productSelection.requestedPremiumPayment}</span></div> : null}
                               {String(needsAssessmentForm.needsPriorities?.productSelection?.requestedFrequency || "").trim() ? <div><span className="le-metaLabel">Requested Frequency</span><span className="le-metaValue">{needsAssessmentForm.needsPriorities.productSelection.requestedFrequency}</span></div> : null}
-                              {String(needsAssessmentForm.needsPriorities?.productSelection?.methodForInitialPayment || "").trim() ? <div><span className="le-metaLabel">Initial Payment Method</span><span className="le-metaValue">{needsAssessmentForm.needsPriorities.productSelection.methodForInitialPayment}</span></div> : null}
                             </div>
 
                             {needsPrioritiesDerived.priority === "Protection" ? (
@@ -7224,6 +7081,10 @@ function AgentLeadEngagement() {
                             <p className="le-smallNote" style={{ color: "#0f766e", marginTop: 12, marginBottom: 8 }}>Saved successfully.</p>
                           ) : null}
 
+                        </div>
+                      )}
+
+                      {showProposalSchedulingSection && isNeedsScheduleViewed && (
                           <div className="le-block" style={{ marginTop: 16 }}>
                             {!proposalMeetingSaved ? <h4 className="le-blockTitle">Schedule Proposal Presentation</h4> : null}
                             {proposalMeetingSaved ? (
@@ -7258,7 +7119,7 @@ function AgentLeadEngagement() {
                                   setProposalMeetingForm((f) => ({ ...f, meetingDate: v }));
                                   setProposalMeetingFieldErrors((prev) => ({ ...prev, meetingDate: "", meetingStartTime: "" }));
                                 }}
-                                disabled={savingProposalMeeting}
+                                disabled={!isNeedsScheduleEditable || savingProposalMeeting}
                               />
                               {proposalMeetingFieldErrors.meetingDate ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{proposalMeetingFieldErrors.meetingDate}</p> : null}
                             </div>
@@ -7272,7 +7133,7 @@ function AgentLeadEngagement() {
                                   setProposalMeetingForm((f) => ({ ...f, meetingStartTime: v }));
                                   setProposalMeetingFieldErrors((prev) => ({ ...prev, meetingStartTime: "" }));
                                 }}
-                                disabled={savingProposalMeeting}
+                                disabled={!isNeedsScheduleEditable || savingProposalMeeting}
                               >
                                 <option value="">Select Time</option>
                                 {proposalMeetingStartSlots.map((t) => {
@@ -7297,7 +7158,7 @@ function AgentLeadEngagement() {
                                   setProposalMeetingForm((f) => ({ ...f, meetingDurationMin: Number(e.target.value) }));
                                   setProposalMeetingFieldErrors((prev) => ({ ...prev, meetingDurationMin: "", meetingStartTime: "" }));
                                 }}
-                                disabled={savingProposalMeeting}
+                                disabled={!isNeedsScheduleEditable || savingProposalMeeting}
                               >
                                 <option value={30}>30 mins</option>
                                 <option value={60}>60 mins</option>
@@ -7323,7 +7184,7 @@ function AgentLeadEngagement() {
                                   }));
                                   setProposalMeetingFieldErrors((prev) => ({ ...prev, meetingMode: "" }));
                                 }}
-                                disabled={savingProposalMeeting}
+                                disabled={!isNeedsScheduleEditable || savingProposalMeeting}
                               >
                                 <option value="">Select</option>
                                 <option value="Online">Online</option>
@@ -7343,7 +7204,7 @@ function AgentLeadEngagement() {
                                       setProposalMeetingForm((f) => ({ ...f, meetingPlatform: e.target.value }));
                                       setProposalMeetingFieldErrors((prev) => ({ ...prev, meetingPlatform: "", meetingPlatformOther: "" }));
                                     }}
-                                    disabled={savingProposalMeeting}
+                                    disabled={!isNeedsScheduleEditable || savingProposalMeeting}
                                   >
                                     <option value="">Select</option>
                                     <option value="Zoom">Zoom</option>
@@ -7362,7 +7223,7 @@ function AgentLeadEngagement() {
                                         setProposalMeetingForm((f) => ({ ...f, meetingPlatformOther: e.target.value }));
                                         setProposalMeetingFieldErrors((prev) => ({ ...prev, meetingPlatformOther: "" }));
                                       }}
-                                      disabled={savingProposalMeeting}
+                                      disabled={!isNeedsScheduleEditable || savingProposalMeeting}
                                     />
                                     {proposalMeetingFieldErrors.meetingPlatformOther ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{proposalMeetingFieldErrors.meetingPlatformOther}</p> : null}
                                   </div>
@@ -7377,7 +7238,7 @@ function AgentLeadEngagement() {
                                       setProposalMeetingFieldErrors((prev) => ({ ...prev, meetingLink: "" }));
                                     }}
                                     placeholder="https://..."
-                                    disabled={savingProposalMeeting}
+                                    disabled={!isNeedsScheduleEditable || savingProposalMeeting}
                                   />
                                   {proposalMeetingFieldErrors.meetingLink ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{proposalMeetingFieldErrors.meetingLink}</p> : null}
                                 </div>
@@ -7390,7 +7251,7 @@ function AgentLeadEngagement() {
                                         setProposalMeetingForm((f) => ({ ...f, meetingInviteSent: e.target.checked }));
                                         setProposalMeetingFieldErrors((prev) => ({ ...prev, meetingInviteSent: "" }));
                                       }}
-                                      disabled={savingProposalMeeting}
+                                      disabled={!isNeedsScheduleEditable || savingProposalMeeting}
                                     />
                                     <span>I confirm invite link has been sent (required)</span>
                                   </label>
@@ -7409,7 +7270,7 @@ function AgentLeadEngagement() {
                                     setProposalMeetingForm((f) => ({ ...f, meetingPlace: e.target.value }));
                                     setProposalMeetingFieldErrors((prev) => ({ ...prev, meetingPlace: "" }));
                                   }}
-                                  disabled={savingProposalMeeting}
+                                  disabled={!isNeedsScheduleEditable || savingProposalMeeting}
                                 />
                                 {proposalMeetingFieldErrors.meetingPlace ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{proposalMeetingFieldErrors.meetingPlace}</p> : null}
                               </div>
@@ -7424,7 +7285,7 @@ function AgentLeadEngagement() {
                                   setProposalMeetingFieldErrors({});
                                   fetchNeedsAssessment();
                                 }}
-                                disabled={savingProposalMeeting}
+                                disabled={!isNeedsScheduleEditable || savingProposalMeeting}
                               >
                                 Cancel
                               </button>
@@ -7432,7 +7293,7 @@ function AgentLeadEngagement() {
                                 type="button"
                                 className="le-btn primary"
                                 onClick={submitScheduleProposalPresentation}
-                                disabled={savingProposalMeeting}
+                                disabled={!isNeedsScheduleEditable || savingProposalMeeting}
                               >
                                 {savingProposalMeeting ? "Saving..." : "Save Proposal Presentation Schedule"}
                               </button>
@@ -7443,7 +7304,6 @@ function AgentLeadEngagement() {
                             ) : null}
 
                           </div>
-                        </div>
                       )}
                     </>
                   )}
