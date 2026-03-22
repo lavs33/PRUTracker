@@ -49,14 +49,23 @@ function getPortalHeading(roleType) {
 
 function getScopeLabel(scope = {}) {
   if (scope.role === "BM") {
-    return [scope.branchName, scope.areaName].filter(Boolean).join(" • ") || "Branch scope";
+    return (
+      [scope.branchName, scope.areaName].filter(Boolean).join(" • ") ||
+      "Branch scope"
+    );
   }
 
-  return [scope.unitName, scope.branchName, scope.areaName].filter(Boolean).join(" • ") || "Unit scope";
+  return (
+    [scope.unitName, scope.branchName, scope.areaName]
+      .filter(Boolean)
+      .join(" • ") || "Unit scope"
+  );
 }
 
 function getPresetLabel(value) {
-  return DATE_PRESETS.find((option) => option.value === value)?.label || "All Time";
+  return (
+    DATE_PRESETS.find((option) => option.value === value)?.label || "All Time"
+  );
 }
 
 function normalizeSearchValue(value) {
@@ -76,11 +85,29 @@ function buildFilter(rows, query, fields) {
   const queryTokens = normalizedQuery.split(" ");
 
   return rows.filter((row) => {
-    const normalizedFields = fields.map((field) => normalizeSearchValue(row?.[field] || "")).filter(Boolean);
+    const normalizedFields = fields
+      .map((field) => normalizeSearchValue(row?.[field] || ""))
+      .filter(Boolean);
     const combinedFields = normalizedFields.join(" ");
 
-    return normalizedFields.some((value) => value.includes(normalizedQuery)) || queryTokens.every((token) => combinedFields.includes(token));
+    return (
+      normalizedFields.some((value) => value.includes(normalizedQuery)) ||
+      queryTokens.every((token) => combinedFields.includes(token))
+    );
   });
+}
+
+function sortByAgentCode(rows = []) {
+  return [...rows].sort((left, right) =>
+    String(left?.username || "").localeCompare(
+      String(right?.username || ""),
+      undefined,
+      {
+        numeric: true,
+        sensitivity: "base",
+      },
+    ),
+  );
 }
 
 function escapeHtml(value) {
@@ -121,7 +148,8 @@ function createPrintableReport({
 
   const chunkRows = (rows, size) => {
     const chunks = [];
-    for (let index = 0; index < rows.length; index += size) chunks.push(rows.slice(index, index + size));
+    for (let index = 0; index < rows.length; index += size)
+      chunks.push(rows.slice(index, index + size));
     return chunks.length ? chunks : [[]];
   };
 
@@ -170,7 +198,7 @@ function createPrintableReport({
                   <div class="pdf-detail-item">
                     <b>${escapeHtml(item.label)}</b>
                     <span>${escapeHtml(item.value)}</span>
-                  </div>`
+                  </div>`,
               )
               .join("")}
           </div>
@@ -184,7 +212,7 @@ function createPrintableReport({
               <article class="pdf-filter-card">
                 <span>${escapeHtml(item.label)}</span>
                 <strong>${escapeHtml(item.value)}</strong>
-              </article>`
+              </article>`,
           )
           .join("")}
       </section>
@@ -196,7 +224,7 @@ function createPrintableReport({
               <article class="pdf-stat-card ${escapeHtml(item.tone || "")}">
                 <span>${escapeHtml(item.label)}</span>
                 <strong>${escapeHtml(item.value)}</strong>
-              </article>`
+              </article>`,
           )
           .join("")}
       </section>
@@ -216,11 +244,11 @@ function createPrintableReport({
                           <div class="pdf-analytics-row">
                             <span>${escapeHtml(row.label)}</span>
                             <strong>${escapeHtml(row.value)}</strong>
-                          </div>`
+                          </div>`,
                       )
                       .join("")}
                   </div>
-                </article>`
+                </article>`,
             )
             .join("")}
         </div>
@@ -247,9 +275,12 @@ function createPrintableReport({
                           (row) => `
                             <tr>
                               ${page.columns
-                                .map((column) => `<td>${escapeHtml(column.render ? column.render(row) : row?.[column.key] ?? "—")}</td>`)
+                                .map(
+                                  (column) =>
+                                    `<td>${escapeHtml(column.render ? column.render(row) : (row?.[column.key] ?? "—"))}</td>`,
+                                )
                                 .join("")}
-                            </tr>`
+                            </tr>`,
                         )
                         .join("")
                     : `<tr><td colspan="${page.columns.length}" class="empty-row">${escapeHtml(page.emptyMessage)}</td></tr>`
@@ -259,7 +290,7 @@ function createPrintableReport({
           </section>
           ${renderFooter(index + 2)}
         </section>
-      `
+      `,
     )
     .join("");
 
@@ -340,13 +371,23 @@ function Toolbar({
       <div className="manager-toolbar__filters">
         <label className="manager-search" htmlFor={searchId}>
           <FaSearch size={14} />
-          <input id={searchId} type="search" placeholder={searchPlaceholder} value={searchValue} onChange={onSearchChange} />
+          <input
+            id={searchId}
+            type="search"
+            placeholder={searchPlaceholder}
+            value={searchValue}
+            onChange={onSearchChange}
+          />
         </label>
 
         {onDatePresetChange && (
           <label className="manager-select" htmlFor={`${searchId}-date-preset`}>
             <span>Date Range</span>
-            <select id={`${searchId}-date-preset`} value={datePreset} onChange={onDatePresetChange}>
+            <select
+              id={`${searchId}-date-preset`}
+              value={datePreset}
+              onChange={onDatePresetChange}
+            >
               {DATE_PRESETS.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
@@ -368,7 +409,9 @@ function Toolbar({
 function ManagerPortal({ roleType }) {
   const navigate = useNavigate();
   const { username } = useParams();
-  const normalizedRole = String(roleType || "").trim().toUpperCase();
+  const normalizedRole = String(roleType || "")
+    .trim()
+    .toUpperCase();
   const [activeView, setActiveView] = useState("dashboard");
   const [agentSearch, setAgentSearch] = useState("");
   const [taskSearch, setTaskSearch] = useState("");
@@ -397,7 +440,9 @@ function ManagerPortal({ roleType }) {
     }
 
     if (user.username !== username) {
-      navigate(`/${normalizedRole.toLowerCase()}/${user.username}`, { replace: true });
+      navigate(`/${normalizedRole.toLowerCase()}/${user.username}`, {
+        replace: true,
+      });
     }
   }, [navigate, normalizedRole, user, username]);
 
@@ -420,13 +465,18 @@ function ManagerPortal({ roleType }) {
           taskDatePreset,
           salesDatePreset,
         });
-        const res = await fetch(`${API_BASE}/api/manager/portal?${params.toString()}`, {
-          signal: controller.signal,
-        });
+        const res = await fetch(
+          `${API_BASE}/api/manager/portal?${params.toString()}`,
+          {
+            signal: controller.signal,
+          },
+        );
         const data = await res.json();
 
         if (!res.ok) {
-          throw new Error(data?.message || "Failed to load manager portal data.");
+          throw new Error(
+            data?.message || "Failed to load manager portal data.",
+          );
         }
 
         setPortalData(data);
@@ -440,7 +490,14 @@ function ManagerPortal({ roleType }) {
 
     fetchPortalData();
     return () => controller.abort();
-  }, [normalizedRole, refreshCount, salesDatePreset, taskDatePreset, user?.id, user?.role]);
+  }, [
+    normalizedRole,
+    refreshCount,
+    salesDatePreset,
+    taskDatePreset,
+    user?.id,
+    user?.role,
+  ]);
 
   const handleLogout = () => {
     localStorage.removeItem("managerPortalUser");
@@ -462,78 +519,233 @@ function ManagerPortal({ roleType }) {
     conversionRate: 0,
     completionRate: 0,
     activePolicyRate: 0,
-    frequencyPremiumBreakdown: { monthlyPremium: 0, quarterlyPremium: 0, halfYearlyPremium: 0, yearlyPremium: 0 },
+    frequencyPremiumBreakdown: {
+      monthlyPremium: 0,
+      quarterlyPremium: 0,
+      halfYearlyPremium: 0,
+      yearlyPremium: 0,
+    },
   };
   const taskSummary = portalData?.taskSummary || summary;
   const salesSummary = portalData?.salesSummary || summary;
 
   const filteredAgents = useMemo(
-    () => buildFilter(portalData?.agents || [], agentSearch, ["username", "name", "unit", "branch"]),
-    [agentSearch, portalData?.agents]
+    () =>
+      sortByAgentCode(
+        buildFilter(portalData?.agents || [], agentSearch, [
+          "username",
+          "name",
+          "unit",
+          "branch",
+        ]),
+      ),
+    [agentSearch, portalData?.agents],
   );
   const filteredTaskRows = useMemo(
-    () => buildFilter(portalData?.taskRows || [], taskSearch, ["username", "name", "topTaskType"]),
-    [portalData?.taskRows, taskSearch]
+    () =>
+      sortByAgentCode(
+        buildFilter(portalData?.taskRows || [], taskSearch, [
+          "username",
+          "name",
+          "unit",
+          "topTaskType",
+        ]),
+      ),
+    [portalData?.taskRows, taskSearch],
   );
   const filteredSalesRows = useMemo(
-    () => buildFilter(portalData?.salesRows || [], salesSearch, ["username", "name"]),
-    [portalData?.salesRows, salesSearch]
+    () =>
+      sortByAgentCode(
+        buildFilter(portalData?.salesRows || [], salesSearch, [
+          "username",
+          "name",
+          "unit",
+        ]),
+      ),
+    [portalData?.salesRows, salesSearch],
   );
 
   const scope = portalData?.scope || {};
   const scopeLabel = getScopeLabel(scope);
-  const generatedAtLabel = portalData?.reportContext?.generatedAt ? formatDateTime(portalData.reportContext.generatedAt) : null;
-  const taskPeriodLabel = portalData?.reportContext?.taskPeriodLabel || getPresetLabel(taskDatePreset);
-  const salesPeriodLabel = portalData?.reportContext?.salesPeriodLabel || getPresetLabel(salesDatePreset);
+  const generatedAtLabel = portalData?.reportContext?.generatedAt
+    ? formatDateTime(portalData.reportContext.generatedAt)
+    : null;
+  const taskPeriodLabel =
+    portalData?.reportContext?.taskPeriodLabel ||
+    getPresetLabel(taskDatePreset);
+  const salesPeriodLabel =
+    portalData?.reportContext?.salesPeriodLabel ||
+    getPresetLabel(salesDatePreset);
+  const totalUnitsInScope =
+    normalizedRole === "BM"
+      ? new Set(
+          (portalData?.agents || [])
+            .map((agent) => String(agent?.unit || "").trim())
+            .filter(Boolean),
+        ).size
+      : scope.unitName
+        ? 1
+        : 0;
 
-  const summaryCards = [
-    { label: "Agents in Scope", value: summary.totalAgents },
-    { label: "Open Tasks", value: summary.totalOpenTasks },
-    { label: "Conversion Rate", value: `${summary.conversionRate}%` },
-    { label: "Annual Premium", value: formatMoney(summary.totalAnnualPremium) },
-  ];
+  const summaryCards =
+    normalizedRole === "BM"
+      ? [
+          { label: "Total Units", value: totalUnitsInScope },
+          { label: "Agents in Scope", value: summary.totalAgents },
+          { label: "Open Tasks", value: summary.totalOpenTasks },
+          {
+            label: "Annual Premium",
+            value: formatMoney(summary.totalAnnualPremium),
+          },
+        ]
+      : [
+          { label: "Agents in Scope", value: summary.totalAgents },
+          { label: "Open Tasks", value: summary.totalOpenTasks },
+          { label: "Conversion Rate", value: `${summary.conversionRate}%` },
+          {
+            label: "Annual Premium",
+            value: formatMoney(summary.totalAnnualPremium),
+          },
+        ];
 
   const taskReportColumns = [
     { key: "username", label: "Username" },
     { key: "name", label: "Name" },
+    { key: "unit", label: "Unit" },
     { key: "totalTasks", label: "Total Tasks" },
     { key: "openTasks", label: "Open" },
     { key: "overdueTasks", label: "Overdue Open" },
     { key: "closedTasks", label: "Done" },
     { key: "delayedDoneTasks", label: "Delayed Done" },
-    { key: "completionRate", label: "Completion Rate", render: (row) => `${row.completionRate}%` },
+    {
+      key: "completionRate",
+      label: "Completion Rate",
+      render: (row) => `${row.completionRate}%`,
+    },
     { key: "topTaskType", label: "Top Task Type" },
   ];
 
   const salesReportColumns = [
     { key: "username", label: "Username" },
     { key: "name", label: "Name" },
+    { key: "unit", label: "Unit" },
     { key: "leads", label: "Leads" },
     { key: "converted", label: "Converted" },
-    { key: "conversionRate", label: "Conversion Rate", render: (row) => `${row.conversionRate}%` },
+    {
+      key: "conversionRate",
+      label: "Conversion Rate",
+      render: (row) => `${row.conversionRate}%`,
+    },
     { key: "totalPolicies", label: "Policies" },
     { key: "activePolicies", label: "Active" },
-    { key: "annualPremium", label: "Annual Premium", render: (row) => formatMoney(row.annualPremium) },
-    { key: "monthlyPremium", label: "Monthly", render: (row) => formatMoney(row.monthlyPremium) },
-    { key: "quarterlyPremium", label: "Quarterly", render: (row) => formatMoney(row.quarterlyPremium) },
-    { key: "halfYearlyPremium", label: "Half-yearly", render: (row) => formatMoney(row.halfYearlyPremium) },
+    {
+      key: "annualPremium",
+      label: "Annual Premium",
+      render: (row) => formatMoney(row.annualPremium),
+    },
+    {
+      key: "monthlyPremium",
+      label: "Monthly",
+      render: (row) => formatMoney(row.monthlyPremium),
+    },
+    {
+      key: "quarterlyPremium",
+      label: "Quarterly",
+      render: (row) => formatMoney(row.quarterlyPremium),
+    },
+    {
+      key: "halfYearlyPremium",
+      label: "Half-yearly",
+      render: (row) => formatMoney(row.halfYearlyPremium),
+    },
   ];
 
-  const managerNameLabel = normalizedRole === "AUM" ? "AUM Name" : normalizedRole === "UM" ? "UM Name" : "BM Name";
+  const managerNameLabel =
+    normalizedRole === "AUM"
+      ? "AUM Name"
+      : normalizedRole === "UM"
+        ? "UM Name"
+        : "BM Name";
 
-  const unitDetails = [
-    { label: normalizedRole === "BM" ? "Branch Manager Code" : "Unit Manager Code", value: user?.username || "—" },
-    { label: managerNameLabel, value: [user?.firstName, user?.lastName].filter(Boolean).join(" ") || user?.username || "—" },
-    { label: normalizedRole === "BM" ? "Branch" : "Unit", value: normalizedRole === "BM" ? scope.branchName || "—" : scope.unitName || "—" },
-    { label: normalizedRole === "BM" ? "Area" : "Branch", value: normalizedRole === "BM" ? scope.areaName || "—" : scope.branchName || "—" },
-    { label: normalizedRole === "BM" ? "Total Units" : "Area", value: normalizedRole === "BM" ? "Branch scope" : scope.areaName || "—" },
+  const reportTitlePrefix = normalizedRole === "BM" ? "Branch" : "Unit";
+  const reportDetailsTitle =
+    normalizedRole === "BM" ? "Branch Details" : "Unit Details";
+  const reportTaskTitle = `${reportTitlePrefix} Task Performance Report`;
+  const reportSalesTitle = `${reportTitlePrefix} Sales Performance Report`;
+  const taskDetailTitle = `${reportTitlePrefix} Task Detail`;
+  const salesDetailTitle = `${reportTitlePrefix} Sales Detail`;
+  const topTaskTypeLeader = [...filteredTaskRows].sort((left, right) => {
+    if (right.totalTasks !== left.totalTasks)
+      return Number(right.totalTasks || 0) - Number(left.totalTasks || 0);
+    return String(left?.username || "").localeCompare(
+      String(right?.username || ""),
+      undefined,
+      {
+        numeric: true,
+        sensitivity: "base",
+      },
+    );
+  })[0];
+  const topSalesRows = [...filteredSalesRows].sort((left, right) => {
+    if (right.annualPremium !== left.annualPremium)
+      return Number(right.annualPremium || 0) - Number(left.annualPremium || 0);
+    if (right.converted !== left.converted)
+      return Number(right.converted || 0) - Number(left.converted || 0);
+    return String(left?.username || "").localeCompare(
+      String(right?.username || ""),
+      undefined,
+      {
+        numeric: true,
+        sensitivity: "base",
+      },
+    );
+  });
+  const reportDetails = [
+    {
+      label: normalizedRole === "BM" ? "BM Code" : "Unit Manager Code",
+      value: user?.username || "—",
+    },
+    {
+      label: managerNameLabel,
+      value:
+        [user?.firstName, user?.lastName].filter(Boolean).join(" ") ||
+        user?.username ||
+        "—",
+    },
+    {
+      label: normalizedRole === "BM" ? "Branch" : "Unit",
+      value:
+        normalizedRole === "BM"
+          ? scope.branchName || "—"
+          : scope.unitName || "—",
+    },
+    {
+      label: normalizedRole === "BM" ? "Area" : "Branch",
+      value:
+        normalizedRole === "BM"
+          ? scope.areaName || "—"
+          : scope.branchName || "—",
+    },
+    {
+      label: normalizedRole === "BM" ? "Total Units" : "Area",
+      value:
+        normalizedRole === "BM"
+          ? String(totalUnitsInScope)
+          : scope.areaName || "—",
+    },
     { label: "Agents in Scope", value: String(summary.totalAgents || 0) },
   ];
 
   const generateTaskPdfReport = () => {
     const statusDistribution = [
-      { label: "Open", value: `${taskSummary.totalOpenTasks} (${taskSummary.totalOpenTasks + taskSummary.totalClosedTasks ? Math.round((taskSummary.totalOpenTasks / (taskSummary.totalOpenTasks + taskSummary.totalClosedTasks)) * 100) : 0}%)` },
-      { label: "Done", value: `${taskSummary.totalClosedTasks} (${taskSummary.completionRate}%)` },
+      {
+        label: "Open",
+        value: `${taskSummary.totalOpenTasks} (${taskSummary.totalOpenTasks + taskSummary.totalClosedTasks ? Math.round((taskSummary.totalOpenTasks / (taskSummary.totalOpenTasks + taskSummary.totalClosedTasks)) * 100) : 0}%)`,
+      },
+      {
+        label: "Done",
+        value: `${taskSummary.totalClosedTasks} (${taskSummary.completionRate}%)`,
+      },
       { label: "Overdue Open", value: `${taskSummary.totalOverdueTasks}` },
       {
         label: "Delayed Done",
@@ -541,18 +753,21 @@ function ManagerPortal({ roleType }) {
       },
     ];
     const typeBreakdown = filteredTaskRows
-      .map((row) => ({ label: row.name || row.username, value: `${row.topTaskType || "—"} • ${row.totalTasks || 0} tasks` }))
+      .map((row) => ({
+        label: row.name || row.username,
+        value: `${row.topTaskType || "—"} • ${row.totalTasks || 0} tasks`,
+      }))
       .slice(0, 8);
 
     createPrintableReport({
-      filename: `${user?.username || normalizedRole} - Unit Task Performance Report`,
-      title: "Unit Task Performance Report",
+      filename: `${user?.username || normalizedRole} - ${reportTaskTitle}`,
+      title: reportTaskTitle,
       periodLabel:
         taskDatePreset === "ALL"
           ? `${taskPeriodLabel}${filteredTaskRows.length ? ` • Updated ${generatedAtLabel || formatDateTime(new Date())}` : ""}`
           : `${formatDate(new Date(Date.now() - (taskDatePreset === "30d" ? 30 : 90) * 24 * 60 * 60 * 1000))} to ${formatDate(new Date())}`,
-      detailsTitle: "Unit Details",
-      details: unitDetails,
+      detailsTitle: reportDetailsTitle,
+      details: reportDetails,
       filters: [
         { label: "Date Range Filter", value: taskPeriodLabel },
         { label: "Search Filter", value: taskSearch.trim() || "All" },
@@ -560,29 +775,74 @@ function ManagerPortal({ roleType }) {
         { label: "Rows Included", value: String(filteredTaskRows.length) },
       ],
       statCards: [
-        { label: "Total Tasks", value: filteredTaskRows.reduce((sum, row) => sum + Number(row.totalTasks || 0), 0), tone: "red" },
+        {
+          label: "Total Tasks",
+          value: filteredTaskRows.reduce(
+            (sum, row) => sum + Number(row.totalTasks || 0),
+            0,
+          ),
+          tone: "red",
+        },
         { label: "Open", value: taskSummary.totalOpenTasks, tone: "blue" },
         { label: "Done", value: taskSummary.totalClosedTasks, tone: "green" },
-        { label: "Overdue", value: taskSummary.totalOverdueTasks, tone: "gold" },
-        { label: "Completion Rate", value: `${taskSummary.completionRate}%`, tone: "blue" },
         {
-          label: "Late Completion Rate",
-          value: `${filteredTaskRows.reduce((sum, row) => sum + Number(row.closedTasks || 0), 0) ? Math.round((filteredTaskRows.reduce((sum, row) => sum + Number(row.delayedDoneTasks || 0), 0) / Math.max(filteredTaskRows.reduce((sum, row) => sum + Number(row.closedTasks || 0), 0), 1)) * 100) : 0}%`,
+          label: "Overdue",
+          value: taskSummary.totalOverdueTasks,
           tone: "gold",
         },
-        { label: "Agents Listed", value: filteredTaskRows.length, tone: "green" },
-        { label: "Top Task Type", value: filteredTaskRows[0]?.topTaskType || "—", tone: "red" },
+        {
+          label: "Completion Rate",
+          value: `${taskSummary.completionRate}%`,
+          tone: "blue",
+        },
+        {
+          label: "Late Completion Rate",
+          value: `${
+            filteredTaskRows.reduce(
+              (sum, row) => sum + Number(row.closedTasks || 0),
+              0,
+            )
+              ? Math.round(
+                  (filteredTaskRows.reduce(
+                    (sum, row) => sum + Number(row.delayedDoneTasks || 0),
+                    0,
+                  ) /
+                    Math.max(
+                      filteredTaskRows.reduce(
+                        (sum, row) => sum + Number(row.closedTasks || 0),
+                        0,
+                      ),
+                      1,
+                    )) *
+                    100,
+                )
+              : 0
+          }%`,
+          tone: "gold",
+        },
+        {
+          label: "Agents Listed",
+          value: filteredTaskRows.length,
+          tone: "green",
+        },
+        {
+          label: "Top Task Type",
+          value: topTaskTypeLeader?.topTaskType || "—",
+          tone: "red",
+        },
       ],
       analyticsSections: [
         { title: "Status Distribution", rows: statusDistribution },
         {
           title: "Task Type Performance",
-          rows: typeBreakdown.length ? typeBreakdown : [{ label: "No task rows", value: "No rows available." }],
+          rows: typeBreakdown.length
+            ? typeBreakdown
+            : [{ label: "No task rows", value: "No rows available." }],
         },
       ],
       tableSections: [
         {
-          title: "Unit Task Detail",
+          title: taskDetailTitle,
           columns: taskReportColumns,
           rows: filteredTaskRows,
           pageSize: 14,
@@ -601,14 +861,14 @@ function ManagerPortal({ roleType }) {
     };
 
     createPrintableReport({
-      filename: `${user?.username || normalizedRole} - Unit Sales Performance Report`,
-      title: "Unit Sales Performance Report",
+      filename: `${user?.username || normalizedRole} - ${reportSalesTitle}`,
+      title: reportSalesTitle,
       periodLabel:
         salesDatePreset === "ALL"
           ? salesPeriodLabel
           : `${formatDate(new Date(Date.now() - (salesDatePreset === "30d" ? 30 : 90) * 24 * 60 * 60 * 1000))} to ${formatDate(new Date())}`,
-      detailsTitle: "Unit Details",
-      details: unitDetails,
+      detailsTitle: reportDetailsTitle,
+      details: reportDetails,
       filters: [
         { label: "Date Range Filter", value: salesPeriodLabel },
         { label: "Search Filter", value: salesSearch.trim() || "All" },
@@ -617,34 +877,73 @@ function ManagerPortal({ roleType }) {
       ],
       statCards: [
         { label: "Total Leads", value: salesSummary.totalLeads, tone: "red" },
-        { label: "Converted", value: salesSummary.totalConverted, tone: "green" },
+        {
+          label: "Converted",
+          value: salesSummary.totalConverted,
+          tone: "green",
+        },
         { label: "Policies", value: salesSummary.totalPolicies, tone: "blue" },
-        { label: "Active Policy Rate", value: `${salesSummary.activePolicyRate}%`, tone: "gold" },
-        { label: "Annual Premium", value: formatMoney(salesSummary.totalAnnualPremium), tone: "blue" },
-        { label: "Monthly Premium", value: formatMoney(frequencyBreakdown.monthlyPremium), tone: "green" },
-        { label: "Quarterly Premium", value: formatMoney(frequencyBreakdown.quarterlyPremium), tone: "gold" },
-        { label: "Half-yearly Premium", value: formatMoney(frequencyBreakdown.halfYearlyPremium), tone: "red" },
+        {
+          label: "Active Policy Rate",
+          value: `${salesSummary.activePolicyRate}%`,
+          tone: "gold",
+        },
+        {
+          label: "Annual Premium",
+          value: formatMoney(salesSummary.totalAnnualPremium),
+          tone: "blue",
+        },
+        {
+          label: "Monthly Premium",
+          value: formatMoney(frequencyBreakdown.monthlyPremium),
+          tone: "green",
+        },
+        {
+          label: "Quarterly Premium",
+          value: formatMoney(frequencyBreakdown.quarterlyPremium),
+          tone: "gold",
+        },
+        {
+          label: "Half-yearly Premium",
+          value: formatMoney(frequencyBreakdown.halfYearlyPremium),
+          tone: "red",
+        },
       ],
       analyticsSections: [
         {
           title: "Frequency Premium Breakdown",
           rows: [
-            { label: "Monthly", value: formatMoney(frequencyBreakdown.monthlyPremium) },
-            { label: "Quarterly", value: formatMoney(frequencyBreakdown.quarterlyPremium) },
-            { label: "Half-yearly", value: formatMoney(frequencyBreakdown.halfYearlyPremium) },
-            { label: "Yearly", value: formatMoney(frequencyBreakdown.yearlyPremium) },
+            {
+              label: "Monthly",
+              value: formatMoney(frequencyBreakdown.monthlyPremium),
+            },
+            {
+              label: "Quarterly",
+              value: formatMoney(frequencyBreakdown.quarterlyPremium),
+            },
+            {
+              label: "Half-yearly",
+              value: formatMoney(frequencyBreakdown.halfYearlyPremium),
+            },
+            {
+              label: "Yearly",
+              value: formatMoney(frequencyBreakdown.yearlyPremium),
+            },
           ],
         },
         {
           title: "Top Sales Producers",
-          rows: filteredSalesRows.length
-            ? filteredSalesRows.slice(0, 8).map((row) => ({ label: row.name || row.username, value: formatMoney(row.annualPremium) }))
+          rows: topSalesRows.length
+            ? topSalesRows.slice(0, 8).map((row) => ({
+                label: row.name || row.username,
+                value: formatMoney(row.annualPremium),
+              }))
             : [{ label: "No sales rows", value: "No rows available." }],
         },
       ],
       tableSections: [
         {
-          title: "Unit Sales Detail",
+          title: salesDetailTitle,
           columns: salesReportColumns,
           rows: filteredSalesRows,
           pageSize: 12,
@@ -680,10 +979,17 @@ function ManagerPortal({ roleType }) {
               <p className="manager-hero__eyebrow">{normalizedRole} Portal</p>
               <h1>{getPortalHeading(normalizedRole)}</h1>
               <p>
-                Monitor {scopeLabel} with live backend metrics, agent-inclusive unit coverage, auto-updating date-filtered tables, and printable reports.
+                Monitor {scopeLabel} with live backend metrics,{" "}
+                {normalizedRole === "BM" ? "branch-wide" : "unit-wide"} agent
+                coverage, auto-updating date-filtered tables, and printable
+                reports.
               </p>
               <div className="manager-hero__meta-row">
-                {generatedAtLabel && <small className="manager-hero__meta">Updated {generatedAtLabel}</small>}
+                {generatedAtLabel && (
+                  <small className="manager-hero__meta">
+                    Updated {generatedAtLabel}
+                  </small>
+                )}
                 <button
                   type="button"
                   className="manager-refresh-btn"
@@ -704,14 +1010,29 @@ function ManagerPortal({ roleType }) {
             </div>
           </section>
 
-          {isLoading && <section className="manager-panel manager-feedback">Loading manager portal data...</section>}
-          {loadError && <section className="manager-panel manager-feedback manager-feedback--error">{loadError}</section>}
+          {isLoading && (
+            <section className="manager-panel manager-feedback">
+              Loading manager portal data...
+            </section>
+          )}
+          {loadError && (
+            <section className="manager-panel manager-feedback manager-feedback--error">
+              {loadError}
+            </section>
+          )}
 
           {!isLoading && !loadError && activeView === "dashboard" && (
             <section className="manager-panel">
               <div className="manager-panel__head">
-                <h2>{normalizedRole === "BM" ? "Branch Overview" : "Unit Overview"}</h2>
-                <p>High-level pulse of workload, conversion output, and premium momentum across the current manager scope.</p>
+                <h2>
+                  {normalizedRole === "BM"
+                    ? "Branch Overview"
+                    : "Unit Overview"}
+                </h2>
+                <p>
+                  High-level pulse of workload, conversion output, and premium
+                  momentum across the current manager scope.
+                </p>
               </div>
               <div className="manager-kpi-grid">
                 <div>
@@ -755,12 +1076,19 @@ function ManagerPortal({ roleType }) {
               <div className="manager-panel__head">
                 <div>
                   <h2>Agents in Scope</h2>
-                  <p>The scoped agent list includes the current {normalizedRole} account’s underlying agent record in both the count and the list.</p>
+                  <p>
+                    The scoped agent list includes the current {normalizedRole}{" "}
+                    account’s underlying agent record in both the count and the
+                    list.
+                  </p>
                 </div>
               </div>
 
               <div className="manager-toolbar manager-toolbar--search-only">
-                <label className="manager-search" htmlFor="manager-agents-search">
+                <label
+                  className="manager-search"
+                  htmlFor="manager-agents-search"
+                >
                   <FaSearch size={14} />
                   <input
                     id="manager-agents-search"
@@ -807,7 +1135,11 @@ function ManagerPortal({ roleType }) {
                 </table>
               </div>
 
-              {!filteredAgents.length && <div className="manager-empty-state">No agents matched this search yet.</div>}
+              {!filteredAgents.length && (
+                <div className="manager-empty-state">
+                  No agents matched this search yet.
+                </div>
+              )}
             </section>
           )}
 
@@ -815,8 +1147,17 @@ function ManagerPortal({ roleType }) {
             <section className="manager-panel">
               <div className="manager-panel__head">
                 <div>
-                  <h2>{normalizedRole === "BM" ? "Branch Task Progress" : "Unit Task Progress"}</h2>
-                  <p>Review filtered unit task execution by agent, without branch search, then generate a PDF report in the requested unit-report format.</p>
+                  <h2>
+                    {normalizedRole === "BM"
+                      ? "Branch Task Progress"
+                      : "Unit Task Progress"}
+                  </h2>
+                  <p>
+                    Review filtered{" "}
+                    {normalizedRole === "BM" ? "branch" : "unit"} task execution
+                    by agent, sorted by agent code, then generate a matching PDF
+                    report.
+                  </p>
                 </div>
               </div>
 
@@ -843,14 +1184,17 @@ function ManagerPortal({ roleType }) {
                 searchId="manager-task-search"
                 searchValue={taskSearch}
                 onSearchChange={(e) => setTaskSearch(e.target.value)}
-                searchPlaceholder="Search username, name, or task type"
+                searchPlaceholder="Search username, name, unit, or task type"
                 datePreset={taskDatePreset}
                 onDatePresetChange={(e) => setTaskDatePreset(e.target.value)}
                 onPdfClick={generateTaskPdfReport}
                 pdfLabel="Generate Task Report (PDF)"
               />
 
-              <div className="manager-filter-note">Showing <strong>{taskPeriodLabel}</strong> task data. Reports use the same date range automatically.</div>
+              <div className="manager-filter-note">
+                Showing <strong>{taskPeriodLabel}</strong> task data. Reports
+                use the same date range automatically.
+              </div>
 
               <div className="manager-table-wrap">
                 <table className="manager-table manager-table--wide">
@@ -858,6 +1202,7 @@ function ManagerPortal({ roleType }) {
                     <tr>
                       <th>Username</th>
                       <th>Name</th>
+                      <th>Unit</th>
                       <th>Total Tasks</th>
                       <th>Open</th>
                       <th>Overdue</th>
@@ -872,6 +1217,7 @@ function ManagerPortal({ roleType }) {
                       <tr key={row.id}>
                         <td>{row.username}</td>
                         <td>{row.name}</td>
+                        <td>{row.unit || "—"}</td>
                         <td>{row.totalTasks}</td>
                         <td>{row.openTasks}</td>
                         <td>{row.overdueTasks}</td>
@@ -885,7 +1231,11 @@ function ManagerPortal({ roleType }) {
                 </table>
               </div>
 
-              {!filteredTaskRows.length && <div className="manager-empty-state">No task rows matched this search yet.</div>}
+              {!filteredTaskRows.length && (
+                <div className="manager-empty-state">
+                  No task rows matched this search yet.
+                </div>
+              )}
             </section>
           )}
 
@@ -893,8 +1243,15 @@ function ManagerPortal({ roleType }) {
             <section className="manager-panel">
               <div className="manager-panel__head">
                 <div>
-                  <h2>{normalizedRole === "BM" ? "Branch Sales Performance" : "Unit Sales Performance"}</h2>
-                  <p>Track filtered agent conversion, policy outcomes, and premium-frequency breakdowns, without branch or unit search terms.</p>
+                  <h2>
+                    {normalizedRole === "BM"
+                      ? "Branch Sales Performance"
+                      : "Unit Sales Performance"}
+                  </h2>
+                  <p>
+                    Track filtered agent conversion, policy outcomes, and
+                    premium-frequency breakdowns, sorted by agent code.
+                  </p>
                 </div>
               </div>
 
@@ -917,19 +1274,33 @@ function ManagerPortal({ roleType }) {
                 </div>
                 <div>
                   <span>Annual Premium</span>
-                  <strong>{formatMoney(salesSummary.totalAnnualPremium)}</strong>
+                  <strong>
+                    {formatMoney(salesSummary.totalAnnualPremium)}
+                  </strong>
                 </div>
                 <div>
                   <span>Monthly Premium</span>
-                  <strong>{formatMoney(salesSummary.frequencyPremiumBreakdown?.monthlyPremium)}</strong>
+                  <strong>
+                    {formatMoney(
+                      salesSummary.frequencyPremiumBreakdown?.monthlyPremium,
+                    )}
+                  </strong>
                 </div>
                 <div>
                   <span>Quarterly Premium</span>
-                  <strong>{formatMoney(salesSummary.frequencyPremiumBreakdown?.quarterlyPremium)}</strong>
+                  <strong>
+                    {formatMoney(
+                      salesSummary.frequencyPremiumBreakdown?.quarterlyPremium,
+                    )}
+                  </strong>
                 </div>
                 <div>
                   <span>Half-yearly Premium</span>
-                  <strong>{formatMoney(salesSummary.frequencyPremiumBreakdown?.halfYearlyPremium)}</strong>
+                  <strong>
+                    {formatMoney(
+                      salesSummary.frequencyPremiumBreakdown?.halfYearlyPremium,
+                    )}
+                  </strong>
                 </div>
               </div>
 
@@ -937,14 +1308,17 @@ function ManagerPortal({ roleType }) {
                 searchId="manager-sales-search"
                 searchValue={salesSearch}
                 onSearchChange={(e) => setSalesSearch(e.target.value)}
-                searchPlaceholder="Search username or name"
+                searchPlaceholder="Search username, name, or unit"
                 datePreset={salesDatePreset}
                 onDatePresetChange={(e) => setSalesDatePreset(e.target.value)}
                 onPdfClick={generateSalesPdfReport}
                 pdfLabel="Generate Sales Report (PDF)"
               />
 
-              <div className="manager-filter-note">Showing <strong>{salesPeriodLabel}</strong> sales data. Reports use the same date range automatically.</div>
+              <div className="manager-filter-note">
+                Showing <strong>{salesPeriodLabel}</strong> sales data. Reports
+                use the same date range automatically.
+              </div>
 
               <div className="manager-table-wrap">
                 <table className="manager-table manager-table--wide manager-table--sales">
@@ -952,6 +1326,7 @@ function ManagerPortal({ roleType }) {
                     <tr>
                       <th>Username</th>
                       <th>Name</th>
+                      <th>Unit</th>
                       <th>Leads</th>
                       <th>Converted</th>
                       <th>Conversion Rate</th>
@@ -969,6 +1344,7 @@ function ManagerPortal({ roleType }) {
                       <tr key={row.id}>
                         <td>{row.username}</td>
                         <td>{row.name}</td>
+                        <td>{row.unit || "—"}</td>
                         <td>{row.leads}</td>
                         <td>{row.converted}</td>
                         <td>{row.conversionRate}%</td>
@@ -985,7 +1361,11 @@ function ManagerPortal({ roleType }) {
                 </table>
               </div>
 
-              {!filteredSalesRows.length && <div className="manager-empty-state">No sales rows matched this search yet.</div>}
+              {!filteredSalesRows.length && (
+                <div className="manager-empty-state">
+                  No sales rows matched this search yet.
+                </div>
+              )}
             </section>
           )}
         </main>
