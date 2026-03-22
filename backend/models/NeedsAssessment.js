@@ -86,11 +86,6 @@ const needsAssessmentSchema = new mongoose.Schema(
           enum: ["Monthly", "Quarterly", "Half-yearly", "Yearly"],
           default: "Monthly",
         },
-        methodForInitialPayment: {
-          type: String,
-          enum: ["Credit Card / Debit Card", "Mobile Wallet / GCash", "Dated Check", "Bills Payments"],
-          default: undefined,
-        },
       },
       optionalRiders: [
         {
