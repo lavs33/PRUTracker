@@ -256,6 +256,71 @@
  color: #da291c;
 }
 
+.le-activityTracker--interactive button {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-height: 44px;
+  padding: 8px 18px;
+  border-radius: 999px;
+  background: #e5e7eb;
+  color: #6b7280;
+  font-weight: 900;
+  font-size: 12px;
+  line-height: 1.1;
+  font-family: "FSAlbertArabic", sans-serif;
+  border: 1px solid #d1d5db;
+  cursor: pointer;
+}
+
+.le-activityTracker--interactive button.active,
+.le-activityTracker--interactive button.done,
+.le-activityTracker--interactive button.current {
+  background: rgba(218, 41, 28, 0.12);
+  border-color: rgba(218, 41, 28, 0.35);
+  color: #da291c;
+}
+
+.le-activityTracker--interactive button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.le-activityTracker__label {
+  display: block;
+  font-family: inherit;
+}
+
+.le-activityTracker__status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(218, 41, 28, 0.12);
+  color: #da291c;
+  font-size: 10px;
+  font-weight: 700;
+  font-family: inherit;
+  line-height: 1;
+}
+
+.le-subactivityShell {
+  margin-top: 12px;
+}
+
+.le-subactivityNav {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.le-subactivityHint {
+  margin-top: 8px;
+}
+
 .le-block {
   margin-top: 14px;
   padding-top: 14px;
