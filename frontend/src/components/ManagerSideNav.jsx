@@ -1,20 +1,41 @@
-import { FaChartLine, FaHome, FaTasks, FaUsers } from "react-icons/fa";
+import { FaBars, FaChartLine, FaChevronLeft, FaChevronRight, FaHome, FaTasks, FaUsers } from "react-icons/fa";
 import "./ManagerSideNav.css";
 
 const NAV_ITEMS = [
-  { key: "dashboard", label: "Dashboard", icon: <FaHome size={20} /> },
-  { key: "agents", label: "Agents", icon: <FaUsers size={20} /> },
-  { key: "task_progress", label: "Task Progress", icon: <FaTasks size={20} /> },
-  { key: "sales_performance", label: "Sales Performance", icon: <FaChartLine size={20} /> },
+  { key: "dashboard", label: "Dashboard", icon: <FaHome size={18} /> },
+  { key: "agents", label: "Agents", icon: <FaUsers size={18} /> },
+  { key: "task_progress", label: "Task Progress", icon: <FaTasks size={18} /> },
+  { key: "sales_performance", label: "Sales Performance", icon: <FaChartLine size={18} /> },
 ];
 
-function ManagerSideNav({ roleLabel, active, onNavigate }) {
+function ManagerSideNav({ roleLabel, active, onNavigate, collapsed, onToggle }) {
   return (
-    <aside className="manager-side-nav">
+    <aside className={`manager-side-nav ${collapsed ? "collapsed" : ""}`}>
       <div className="manager-side-nav__head">
-        <span className="manager-side-nav__eyebrow">Manager Workspace</span>
-        <strong>{roleLabel} Portal</strong>
-        <small>Unit visibility, coaching, and team performance.</small>
+        <div className="manager-side-nav__topline">
+          <span className="manager-side-nav__eyebrow">Manager Workspace</span>
+          <button
+            type="button"
+            className="manager-side-nav__toggle"
+            onClick={onToggle}
+            aria-label={collapsed ? "Expand manager navigation" : "Collapse manager navigation"}
+            title={collapsed ? "Expand navigation" : "Collapse navigation"}
+          >
+            {collapsed ? <FaChevronRight size={14} /> : <FaChevronLeft size={14} />}
+          </button>
+        </div>
+
+        <div className="manager-side-nav__branding">
+          <span className="manager-side-nav__brand-icon">
+            <FaBars size={14} />
+          </span>
+          {!collapsed && (
+            <div>
+              <strong>{roleLabel} Portal</strong>
+              <small>Team visibility, coaching, and performance insights.</small>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="manager-side-nav__list">
@@ -24,9 +45,10 @@ function ManagerSideNav({ roleLabel, active, onNavigate }) {
             type="button"
             className={`manager-side-nav__item ${active === item.key ? "active" : ""}`}
             onClick={() => onNavigate(item.key)}
+            title={collapsed ? item.label : undefined}
           >
             <span className="manager-side-nav__icon">{item.icon}</span>
-            <span>{item.label}</span>
+            {!collapsed && <span>{item.label}</span>}
           </button>
         ))}
       </div>
