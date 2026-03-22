@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { FaChevronRight } from "react-icons/fa";
 import TopNav from "./components/TopNav";
@@ -6,6 +6,57 @@ import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
 import "./AgentLeadEngagement.css";
 import { PH_CITY_REGION_OPTIONS, CITY_TO_REGION } from "./constants/phCityRegionOptions";
+
+function SubactivityNavigator({
+  steps,
+  currentIndex,
+  viewedIndex,
+  onSelect,
+  onBack,
+  onNext,
+  nextLabel,
+  nextDisabled = false,
+  helperText = "",
+}) {
+  return (
+    <div className="le-subactivityShell">
+      <div className="le-activityTracker le-activityTracker--interactive">
+        {steps.map((step, idx) => {
+          const isDone = idx < currentIndex;
+          const isActive = idx === viewedIndex;
+          const isCurrent = idx === currentIndex;
+          const isReachable = idx <= currentIndex;
+
+          return (
+            <button
+              key={step.key}
+              type="button"
+              className={`${isReachable ? "active" : ""} ${isDone ? "done" : ""} ${isActive ? "current" : ""}`.trim()}
+              onClick={() => onSelect(step.key)}
+              disabled={!isReachable}
+              aria-current={isActive ? "step" : undefined}
+              title={!isReachable ? "Finish the current subactivity first." : undefined}
+            >
+              <span className="le-activityTracker__label">{step.label}</span>
+              {isCurrent ? <small className="le-activityTracker__status">Current</small> : null}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="le-subactivityNav">
+        <button type="button" className="le-btn secondary" onClick={onBack} disabled={viewedIndex <= 0}>
+          Back
+        </button>
+        <button type="button" className="le-btn primary" onClick={onNext} disabled={nextDisabled}>
+          {nextLabel}
+        </button>
+      </div>
+
+      {helperText ? <p className="le-smallNote le-subactivityHint">{helperText}</p> : null}
+    </div>
+  );
+}
 
 function AgentLeadEngagement() {
   const navigate = useNavigate();
@@ -71,6 +122,7 @@ function AgentLeadEngagement() {
   const [needsAssessmentError, setNeedsAssessmentError] = useState("");
   const [needsAssessmentSavedAt, setNeedsAssessmentSavedAt] = useState("");
   const [needsAssessmentCurrentActivityKey, setNeedsAssessmentCurrentActivityKey] = useState("Record Prospect Attendance");
+  const [needsAssessmentViewedActivityKey, setNeedsAssessmentViewedActivityKey] = useState("");
   const [needsAssessmentOutcomeActivity, setNeedsAssessmentOutcomeActivity] = useState("");
   const [proposalMeetingForm, setProposalMeetingForm] = useState({
     meetingDate: "",
@@ -88,6 +140,7 @@ function AgentLeadEngagement() {
   const [proposalMeetingError, setProposalMeetingError] = useState("");
   const [proposalMeetingFieldErrors, setProposalMeetingFieldErrors] = useState({});
   const [proposalCurrentActivityKey, setProposalCurrentActivityKey] = useState("Generate Proposal");
+  const [proposalViewedActivityKey, setProposalViewedActivityKey] = useState("");
   const [proposalGenerateForm, setProposalGenerateForm] = useState({
     chosenProductId: "",
     chosenProductName: "",
@@ -172,7 +225,9 @@ function AgentLeadEngagement() {
   const [applicationSubmissionSaving, setApplicationSubmissionSaving] = useState(false);
   const [applicationSubmissionError, setApplicationSubmissionError] = useState("");
   const [applicationSubmissionScreenshotInputKey, setApplicationSubmissionScreenshotInputKey] = useState(0);
+  const [applicationViewedActivityKey, setApplicationViewedActivityKey] = useState("");
   const [policyCurrentActivityKey, setPolicyCurrentActivityKey] = useState("Record Policy Application Status");
+  const [policyViewedActivityKey, setPolicyViewedActivityKey] = useState("");
   const [policyStatusForm, setPolicyStatusForm] = useState({
     status: "",
     issuanceDate: "",
@@ -778,7 +833,7 @@ function AgentLeadEngagement() {
     setNeedsAssessmentSavedAt("");
     setNeedsAssessmentError("");
 
-    if (!isNeedsAssessmentEditableNow) return;
+    if (!isNeedsAssessmentCurrentViewEditable) return;
 
     if (needsAssessmentForm.attendanceChoice !== "YES") {
       setNeedsAssessmentError("Prospect attendance must be marked YES before saving.");
@@ -1109,6 +1164,27 @@ function AgentLeadEngagement() {
     []
   );
 
+  const syncViewedStepWithCurrent = useCallback((steps, currentKey, setViewedKey, previousCurrentRef) => {
+    const fallbackKey = steps[0]?.key || "";
+    const nextCurrentKey = steps.some((step) => step.key === currentKey) ? currentKey : fallbackKey;
+
+    setViewedKey((existing) => {
+      const existingIndex = steps.findIndex((step) => step.key === existing);
+      const currentIndex = steps.findIndex((step) => step.key === nextCurrentKey);
+      const previousCurrentKey = previousCurrentRef.current;
+
+      const shouldSnapToCurrent =
+        !existing ||
+        existingIndex < 0 ||
+        existingIndex > currentIndex ||
+        (previousCurrentKey && existing === previousCurrentKey && previousCurrentKey !== nextCurrentKey);
+
+      return shouldSnapToCurrent ? nextCurrentKey : existing;
+    });
+
+    previousCurrentRef.current = nextCurrentKey;
+  }, []);
+
   const CHANNELS = useMemo(() => ["Call", "SMS", "WhatsApp", "Viber", "Telegram"], []);
   const cityOptions = useMemo(() => [...PH_CITY_REGION_OPTIONS].sort((a, b) => a.city.localeCompare(b.city)), []);
   const availableProductsByPriority = useMemo(() => {
@@ -1434,8 +1510,6 @@ function AgentLeadEngagement() {
 
   // Activity tracker only relevant when Contacting panel is shown
   const showContactingTracker = showContactingPanel;
-  const showProposalTracker = showProposalPanel;
-  const showPolicyIssuanceTracker = showPolicyIssuancePanel;
 
   // Current activity (badge + tracker)
   const currentActivityKeyRaw = String(engagement?.currentActivityKey || "").trim();
@@ -1756,6 +1830,98 @@ function AgentLeadEngagement() {
         ? "Perform Needs Analysis"
         : "Schedule Proposal Presentation"
       : needsActivityKeyRaw;
+
+  const previousNeedsCurrentActivityRef = useRef("");
+  const previousProposalCurrentActivityRef = useRef("");
+  const previousApplicationCurrentActivityRef = useRef("");
+  const previousPolicyCurrentActivityRef = useRef("");
+
+  useEffect(() => {
+    syncViewedStepWithCurrent(
+      NEEDS_ASSESSMENT_STEPS_UI,
+      needsActivityKeyRaw,
+      setNeedsAssessmentViewedActivityKey,
+      previousNeedsCurrentActivityRef
+    );
+  }, [NEEDS_ASSESSMENT_STEPS_UI, needsActivityKeyRaw, syncViewedStepWithCurrent]);
+
+  useEffect(() => {
+    syncViewedStepWithCurrent(
+      PROPOSAL_STEPS_UI,
+      proposalUiActivityKey,
+      setProposalViewedActivityKey,
+      previousProposalCurrentActivityRef
+    );
+  }, [PROPOSAL_STEPS_UI, proposalUiActivityKey, syncViewedStepWithCurrent]);
+
+  useEffect(() => {
+    syncViewedStepWithCurrent(
+      APPLICATION_STEPS_UI,
+      applicationUiActivityKey,
+      setApplicationViewedActivityKey,
+      previousApplicationCurrentActivityRef
+    );
+  }, [APPLICATION_STEPS_UI, applicationUiActivityKey, syncViewedStepWithCurrent]);
+
+  useEffect(() => {
+    syncViewedStepWithCurrent(
+      POLICY_ISSUANCE_STEPS_UI,
+      policyIssuanceUiActivityKey,
+      setPolicyViewedActivityKey,
+      previousPolicyCurrentActivityRef
+    );
+  }, [POLICY_ISSUANCE_STEPS_UI, policyIssuanceUiActivityKey, syncViewedStepWithCurrent]);
+
+  const getStepIndex = useCallback(
+    (steps, key) => {
+      const idx = steps.findIndex((step) => step.key === key);
+      return idx >= 0 ? idx : 0;
+    },
+    []
+  );
+
+  const selectReachableViewedStep = useCallback(
+    (steps, stepKey, currentIndex, setViewedKey) => {
+      const nextIndex = steps.findIndex((step) => step.key === stepKey);
+      if (nextIndex < 0 || nextIndex > currentIndex) return;
+      setViewedKey(stepKey);
+    },
+    []
+  );
+
+  const needsCurrentStepIndex = getStepIndex(NEEDS_ASSESSMENT_STEPS_UI, needsActivityKeyRaw);
+  const needsViewedStepIndex = getStepIndex(NEEDS_ASSESSMENT_STEPS_UI, needsAssessmentViewedActivityKey || needsActivityKeyRaw);
+  const proposalCurrentStepIndex = getStepIndex(PROPOSAL_STEPS_UI, proposalUiActivityKey);
+  const proposalViewedStepIndex = getStepIndex(PROPOSAL_STEPS_UI, proposalViewedActivityKey || proposalUiActivityKey);
+  const applicationCurrentStepIndex = getStepIndex(APPLICATION_STEPS_UI, applicationUiActivityKey);
+  const applicationViewedStepIndex = getStepIndex(APPLICATION_STEPS_UI, applicationViewedActivityKey || applicationUiActivityKey);
+  const policyCurrentStepIndex = getStepIndex(POLICY_ISSUANCE_STEPS_UI, policyIssuanceUiActivityKey);
+  const policyViewedStepIndex = getStepIndex(POLICY_ISSUANCE_STEPS_UI, policyViewedActivityKey || policyIssuanceUiActivityKey);
+
+  const isNeedsAssessmentCurrentViewEditable =
+    isNeedsAssessmentEditableNow && needsAssessmentViewedActivityKey === needsActivityKeyRaw;
+  const isNeedsAttendanceEditable =
+    isNeedsAssessmentCurrentViewEditable &&
+    needsActivityKeyRaw === "Record Prospect Attendance" &&
+    needsAssessmentViewedActivityKey === "Record Prospect Attendance";
+  const isNeedsScheduleEditable =
+    isNeedsAssessmentCurrentViewEditable &&
+    needsActivityKeyRaw === "Schedule Proposal Presentation" &&
+    needsAssessmentViewedActivityKey === "Schedule Proposal Presentation";
+  const isNeedsAnalysisViewed = needsAssessmentViewedActivityKey === "Perform Needs Analysis";
+  const isNeedsScheduleViewed = needsAssessmentViewedActivityKey === "Schedule Proposal Presentation";
+
+  const isProposalGenerateViewed = proposalViewedActivityKey === "Generate Proposal";
+  const isProposalAttendanceViewed = proposalViewedActivityKey === "Record Prospect Attendance";
+  const isProposalPresentationViewed = proposalViewedActivityKey === "Present Proposal";
+  const isProposalScheduleApplicationViewed = proposalViewedActivityKey === "Schedule Application Submission";
+  const isApplicationAttendanceViewed = applicationViewedActivityKey === "Record Prospect Attendance";
+  const isApplicationPremiumViewed = applicationViewedActivityKey === "Record Premium Payment Transfer";
+  const isApplicationSubmissionViewed = applicationViewedActivityKey === "Record Application Submission";
+  const isPolicyStatusViewed = policyViewedActivityKey === "Record Policy Application Status";
+  const isPolicyInitialEorViewed = policyViewedActivityKey === "Upload Initial Premium eOR";
+  const isPolicySummaryViewed = policyViewedActivityKey === "Upload Policy Summary";
+  const isPolicyCoverageViewed = policyViewedActivityKey === "Record Coverage Duration Details";
 
   const attendanceProofErrorMessages = useMemo(
     () => [
@@ -3170,6 +3336,111 @@ function AgentLeadEngagement() {
   const shouldShowStageActivityBadge =
     !isLeadClosed && !isViewedStageFullyFinished && String(stageActivityBadge || "").trim() && stageActivityBadge !== "—";
 
+  const submitNeedsAssessmentAttendanceOnly = async () => {
+    try {
+      setNeedsAssessmentError("");
+      if (!isNeedsAttendanceEditable) return;
+      if (needsAssessmentForm.attendanceChoice !== "YES") {
+        setNeedsAssessmentError("Prospect attendance must be marked YES before saving.");
+        return;
+      }
+
+      const attendanceProofImageDataUrl = String(needsAssessmentForm.attendanceProofImageDataUrl || "").trim();
+      const attendanceProofFileName = String(needsAssessmentForm.attendanceProofFileName || "").trim();
+      if (!attendanceProofImageDataUrl) {
+        setNeedsAssessmentError("Please upload a proof of attendance image before proceeding.");
+        return;
+      }
+      if (!/^data:image\/(?:jpeg|png);base64,/i.test(attendanceProofImageDataUrl)) {
+        setNeedsAssessmentError("Proof of attendance must be a JPG, JPEG, or PNG image.");
+        return;
+      }
+
+      setNeedsAssessmentSaving(true);
+      const res = await fetch(`${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/needs-assessment/attendance?userId=${user.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          attended: true,
+          attendanceProofImageDataUrl,
+          attendanceProofFileName,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.message || "Failed to record attendance.");
+      await fetchNeedsAssessment();
+      await fetchEngagement();
+    } catch (err) {
+      setNeedsAssessmentError(err?.message || "Failed to record attendance.");
+    } finally {
+      setNeedsAssessmentSaving(false);
+    }
+  };
+
+  const goToPreviousViewedStep = useCallback((steps, viewedIndex, setViewedKey) => {
+    if (viewedIndex <= 0) return;
+    setViewedKey(steps[viewedIndex - 1]?.key || steps[0]?.key || "");
+  }, []);
+
+  const goToNextViewedStep = useCallback((steps, viewedIndex, currentIndex, setViewedKey) => {
+    if (viewedIndex >= currentIndex) return;
+    setViewedKey(steps[Math.min(viewedIndex + 1, currentIndex)]?.key || steps[currentIndex]?.key || "");
+  }, []);
+
+  const handleNeedsNext = () => {
+    if (needsViewedStepIndex < needsCurrentStepIndex) {
+      goToNextViewedStep(NEEDS_ASSESSMENT_STEPS_UI, needsViewedStepIndex, needsCurrentStepIndex, setNeedsAssessmentViewedActivityKey);
+      return;
+    }
+
+    if (needsAssessmentViewedActivityKey === "Record Prospect Attendance") {
+      submitNeedsAssessmentAttendanceOnly();
+      return;
+    }
+    if (needsAssessmentViewedActivityKey === "Perform Needs Analysis") {
+      onSaveNeedsAssessment();
+      return;
+    }
+    if (needsAssessmentViewedActivityKey === "Schedule Proposal Presentation") {
+      submitScheduleProposalPresentation();
+    }
+  };
+
+  const handleProposalNext = () => {
+    if (proposalViewedStepIndex < proposalCurrentStepIndex) {
+      goToNextViewedStep(PROPOSAL_STEPS_UI, proposalViewedStepIndex, proposalCurrentStepIndex, setProposalViewedActivityKey);
+      return;
+    }
+
+    if (proposalViewedActivityKey === "Generate Proposal") return void submitGenerateProposal();
+    if (proposalViewedActivityKey === "Record Prospect Attendance") return void submitProposalAttendance();
+    if (proposalViewedActivityKey === "Present Proposal") return void submitProposalPresentation();
+    if (proposalViewedActivityKey === "Schedule Application Submission") return void submitScheduleApplicationSubmission();
+  };
+
+  const handleApplicationNext = () => {
+    if (applicationViewedStepIndex < applicationCurrentStepIndex) {
+      goToNextViewedStep(APPLICATION_STEPS_UI, applicationViewedStepIndex, applicationCurrentStepIndex, setApplicationViewedActivityKey);
+      return;
+    }
+
+    if (applicationViewedActivityKey === "Record Prospect Attendance") return void submitApplicationAttendance();
+    if (applicationViewedActivityKey === "Record Premium Payment Transfer") return void submitApplicationPremiumPaymentTransfer();
+    if (applicationViewedActivityKey === "Record Application Submission") return void submitApplicationSubmission();
+  };
+
+  const handlePolicyNext = () => {
+    if (policyViewedStepIndex < policyCurrentStepIndex) {
+      goToNextViewedStep(POLICY_ISSUANCE_STEPS_UI, policyViewedStepIndex, policyCurrentStepIndex, setPolicyViewedActivityKey);
+      return;
+    }
+
+    if (policyViewedActivityKey === "Record Policy Application Status") return void submitPolicyApplicationStatus();
+    if (policyViewedActivityKey === "Upload Initial Premium eOR") return void submitPolicyInitialEor();
+    if (policyViewedActivityKey === "Upload Policy Summary") return void submitPolicySummary();
+    if (policyViewedActivityKey === "Record Coverage Duration Details") return void submitPolicyCoverageDetails();
+  };
+
   const onPolicySummaryPicked = (file) => {
     if (!file) {
       setPolicySummaryForm((f) => ({ ...f, policySummaryFileDataUrl: "", policySummaryFileName: "" }));
@@ -3768,52 +4039,134 @@ function AgentLeadEngagement() {
                     </div>
                   )}
 
-                  {showProposalTracker && (
-                    <div className="le-activityTracker">
-                      {PROPOSAL_STEPS_UI.map((step, idx) => {
-                        const currentIdx = Math.max(0, PROPOSAL_STEPS_UI.findIndex((x) => x.key === proposalUiActivityKey));
-                        const isDone = idx < currentIdx;
-                        const isActive = idx === currentIdx;
-                        return (
-                          <span key={step.key} className={`${isDone ? "done" : ""} ${isActive ? "active current" : ""}`.trim()}>
-                            {step.label}
-                          </span>
-                        );
-                      })}
-                    </div>
+                  {showNeedsAssessmentPanel && (
+                    <SubactivityNavigator
+                      steps={NEEDS_ASSESSMENT_STEPS_UI}
+                      currentIndex={needsCurrentStepIndex}
+                      viewedIndex={needsViewedStepIndex}
+                      onSelect={(stepKey) =>
+                        selectReachableViewedStep(
+                          NEEDS_ASSESSMENT_STEPS_UI,
+                          stepKey,
+                          needsCurrentStepIndex,
+                          setNeedsAssessmentViewedActivityKey
+                        )
+                      }
+                      onBack={() =>
+                        goToPreviousViewedStep(
+                          NEEDS_ASSESSMENT_STEPS_UI,
+                          needsViewedStepIndex,
+                          setNeedsAssessmentViewedActivityKey
+                        )
+                      }
+                      onNext={handleNeedsNext}
+                      nextLabel={needsViewedStepIndex < needsCurrentStepIndex ? "Next" : "Save & Next"}
+                      nextDisabled={
+                        needsAssessmentSaving ||
+                        (!isViewingCurrentStage && needsViewedStepIndex >= needsCurrentStepIndex)
+                      }
+                      helperText={
+                        needsViewedStepIndex < needsCurrentStepIndex
+                          ? "Viewing a previously saved subactivity. You can move forward, but earlier steps stay read-only."
+                          : "Use Save & Next to progress. Completed subactivities can still be reopened for read-only viewing."
+                      }
+                    />
+                  )}
+
+                  {showProposalPanel && (
+                    <SubactivityNavigator
+                      steps={PROPOSAL_STEPS_UI}
+                      currentIndex={proposalCurrentStepIndex}
+                      viewedIndex={proposalViewedStepIndex}
+                      onSelect={(stepKey) =>
+                        selectReachableViewedStep(
+                          PROPOSAL_STEPS_UI,
+                          stepKey,
+                          proposalCurrentStepIndex,
+                          setProposalViewedActivityKey
+                        )
+                      }
+                      onBack={() =>
+                        goToPreviousViewedStep(
+                          PROPOSAL_STEPS_UI,
+                          proposalViewedStepIndex,
+                          setProposalViewedActivityKey
+                        )
+                      }
+                      onNext={handleProposalNext}
+                      nextLabel={proposalViewedStepIndex < proposalCurrentStepIndex ? "Next" : "Save & Next"}
+                      nextDisabled={(!isViewingCurrentStage && proposalViewedStepIndex >= proposalCurrentStepIndex)}
+                      helperText={
+                        proposalViewedStepIndex < proposalCurrentStepIndex
+                          ? "Viewing a previously saved proposal subactivity in read-only mode."
+                          : "Save the current proposal subactivity before moving to the next one."
+                      }
+                    />
                   )}
 
                   {showApplicationPanel && (
-                    <div className="le-activityTracker">
-                      {APPLICATION_STEPS_UI.map((step, idx) => {
-                        const currentIdx = Math.max(0, APPLICATION_STEPS_UI.findIndex((x) => x.key === applicationUiActivityKey));
-                        const isDone = idx < currentIdx;
-                        const isActive = idx === currentIdx;
-                        return (
-                          <span key={step.key} className={`${isDone ? "done" : ""} ${isActive ? "active current" : ""}`.trim()}>
-                            {step.label}
-                          </span>
-                        );
-                      })}
-                    </div>
+                    <SubactivityNavigator
+                      steps={APPLICATION_STEPS_UI}
+                      currentIndex={applicationCurrentStepIndex}
+                      viewedIndex={applicationViewedStepIndex}
+                      onSelect={(stepKey) =>
+                        selectReachableViewedStep(
+                          APPLICATION_STEPS_UI,
+                          stepKey,
+                          applicationCurrentStepIndex,
+                          setApplicationViewedActivityKey
+                        )
+                      }
+                      onBack={() =>
+                        goToPreviousViewedStep(
+                          APPLICATION_STEPS_UI,
+                          applicationViewedStepIndex,
+                          setApplicationViewedActivityKey
+                        )
+                      }
+                      onNext={handleApplicationNext}
+                      nextLabel={applicationViewedStepIndex < applicationCurrentStepIndex ? "Next" : "Save & Next"}
+                      nextDisabled={(!isViewingCurrentStage && applicationViewedStepIndex >= applicationCurrentStepIndex)}
+                      helperText={
+                        applicationViewedStepIndex < applicationCurrentStepIndex
+                          ? "Viewing a previously saved application subactivity in read-only mode."
+                          : "Save the current application subactivity before moving to the next one."
+                      }
+                    />
                   )}
 
-                  {showPolicyIssuanceTracker && (
-                    <div className="le-activityTracker">
-                      {POLICY_ISSUANCE_STEPS_UI.map((step, idx) => {
-                        const currentIdx = Math.max(0, POLICY_ISSUANCE_STEPS_UI.findIndex((x) => x.key === policyIssuanceUiActivityKey));
-                        const isDone = idx < currentIdx;
-                        const isActive = idx === currentIdx;
-                        return (
-                          <span key={step.key} className={`${isDone ? "done" : ""} ${isActive ? "active current" : ""}`.trim()}>
-                            {step.label}
-                          </span>
-                        );
-                      })}
-                    </div>
+                  {showPolicyIssuancePanel && (
+                    <SubactivityNavigator
+                      steps={POLICY_ISSUANCE_STEPS_UI}
+                      currentIndex={policyCurrentStepIndex}
+                      viewedIndex={policyViewedStepIndex}
+                      onSelect={(stepKey) =>
+                        selectReachableViewedStep(
+                          POLICY_ISSUANCE_STEPS_UI,
+                          stepKey,
+                          policyCurrentStepIndex,
+                          setPolicyViewedActivityKey
+                        )
+                      }
+                      onBack={() =>
+                        goToPreviousViewedStep(
+                          POLICY_ISSUANCE_STEPS_UI,
+                          policyViewedStepIndex,
+                          setPolicyViewedActivityKey
+                        )
+                      }
+                      onNext={handlePolicyNext}
+                      nextLabel={policyViewedStepIndex < policyCurrentStepIndex ? "Next" : "Save & Next"}
+                      nextDisabled={(!isViewingCurrentStage && policyViewedStepIndex >= policyCurrentStepIndex)}
+                      helperText={
+                        policyViewedStepIndex < policyCurrentStepIndex
+                          ? "Viewing a previously saved policy issuance subactivity in read-only mode."
+                          : "Save the current policy issuance subactivity before moving to the next one."
+                      }
+                    />
                   )}
 
-                  {showApplicationPanel && (
+                  {showApplicationPanel && isApplicationAttendanceViewed && (
                     <>
                       <div className="le-block">
                         <div className="le-attemptMeta">
@@ -3853,7 +4206,7 @@ function AgentLeadEngagement() {
                       <div className="le-block">
                         <h4 className="le-blockTitle">Prospect Attendance</h4>
 
-                        {hasSavedApplicationAttendance ? (
+                        {isApplicationAttendanceViewed && hasSavedApplicationAttendance ? (
                           <>
                             <div className="le-formRow">
                               <label className="le-label">Prospect Attended?</label>
@@ -3981,7 +4334,7 @@ function AgentLeadEngagement() {
                         )}
                       </div>
 
-                      {hasSavedApplicationAttendance ? (
+                      {isApplicationPremiumViewed && hasSavedApplicationAttendance ? (
                         <div className="le-block">
                           <h4 className="le-blockTitle">{hasSavedApplicationPremiumPaymentTransfer ? "Premium Payment Transfer Details" : "Record Premium Payment Transfer"}</h4>
 
@@ -4156,7 +4509,7 @@ function AgentLeadEngagement() {
                         </div>
                       ) : null}
 
-                      {hasSavedApplicationAttendance && hasSavedApplicationPremiumPaymentTransfer ? (
+                      {isApplicationSubmissionViewed && hasSavedApplicationAttendance && hasSavedApplicationPremiumPaymentTransfer ? (
                         <div className="le-block">
                           <h4 className="le-blockTitle">{hasSavedApplicationSubmission ? "Application Submission Details" : "Record Application Submission"}</h4>
 
@@ -4267,7 +4620,7 @@ function AgentLeadEngagement() {
 
 
 
-                  {showPolicyIssuancePanel && (
+                  {showPolicyIssuancePanel && isPolicyStatusViewed && (
                     <>
                       <div className="le-block">
                         <h4 className="le-blockTitle">{hasSavedPolicyApplicationStatus ? "Policy Application Status Details" : "Record Policy Application Status"}</h4>
@@ -4370,7 +4723,7 @@ function AgentLeadEngagement() {
                         )}
                       </div>
 
-                      {hasSavedPolicyApplicationStatus && policyStatusForm.status === "Issued" ? (
+                      {isPolicyInitialEorViewed && hasSavedPolicyApplicationStatus && policyStatusForm.status === "Issued" ? (
                         <div className="le-block">
                           <h4 className="le-blockTitle">{hasSavedPolicyInitialPremiumEor ? "Initial Premium eOR Details" : "Upload Initial Premium eOR"}</h4>
 
@@ -4497,7 +4850,7 @@ function AgentLeadEngagement() {
                       ) : null}
 
 
-                      {hasSavedPolicyInitialPremiumEor ? (
+                      {isPolicySummaryViewed && hasSavedPolicyInitialPremiumEor ? (
                         <div className="le-block">
                           <h4 className="le-blockTitle">{hasSavedPolicySummary ? "Policy Summary Details" : "Upload Policy Summary"}</h4>
 
@@ -4597,7 +4950,7 @@ function AgentLeadEngagement() {
                       ) : null}
 
 
-                      {hasSavedPolicySummary ? (
+                      {isPolicyCoverageViewed && hasSavedPolicySummary ? (
                         <div className="le-block">
                           <h4 className="le-blockTitle">{hasSavedPolicyCoverageDetails ? "Coverage Duration Details" : "Record Coverage Duration Details"}</h4>
 
@@ -5838,7 +6191,7 @@ function AgentLeadEngagement() {
                     </>
                   )}
 
-                      {showProposalPanel && (
+                      {showProposalPanel && isProposalGenerateViewed && (
                         <div className="le-block">
                           <h4 className="le-blockTitle">{proposalUiActivityKey === "Generate Proposal" ? "Generate Proposal" : "Saved Initial Quotation Proposal Details"}</h4>
                           {proposalUiActivityKey === "Generate Proposal" ? (
@@ -5989,7 +6342,7 @@ function AgentLeadEngagement() {
                         </div>
                       )}
 
-                      {showProposalPanel && proposalUiActivityKey !== "Generate Proposal" ? (
+                      {showProposalPanel && isProposalAttendanceViewed ? (
                         <div className="le-block">
                           <h4 className="le-blockTitle">Prospect Attendance</h4>
 
@@ -6117,7 +6470,7 @@ function AgentLeadEngagement() {
                         </div>
                       ) : null}
 
-                      {showProposalPanel && (proposalUiActivityKey === "Present Proposal" || proposalUiActivityKey === "Schedule Application Submission" || Boolean(proposalPresentationForm.presentedAt)) ? (
+                      {showProposalPanel && isProposalPresentationViewed ? (
                         <div className="le-block">
                           <h4 className="le-blockTitle">{isProposalPresentationEditable ? "Present Proposal" : "Proposal Presentation"}</h4>
 
@@ -6219,7 +6572,7 @@ function AgentLeadEngagement() {
                         </div>
                       ) : null}
 
-                      {showProposalPanel && (proposalUiActivityKey === "Schedule Application Submission" || Boolean(applicationMeetingSaved?.startAt)) ? (
+                      {showProposalPanel && isProposalScheduleApplicationViewed ? (
                         <div className="le-block">
                           {!applicationMeetingSaved ? <h4 className="le-blockTitle">Schedule Application Submission</h4> : null}
 
@@ -6476,6 +6829,7 @@ function AgentLeadEngagement() {
 
                   {showNeedsAssessmentPanel && (
                     <>
+                      {needsAssessmentViewedActivityKey === "Record Prospect Attendance" ? (
                       <div className="le-block">
                         <h4 className="le-blockTitle">Prospect Attendance</h4>
                         {needsAssessmentLoading ? <p className="le-muted">Loading needs assessment...</p> : null}
@@ -6489,7 +6843,7 @@ function AgentLeadEngagement() {
                                 name="prospect-attendance"
                                 checked={needsAssessmentForm.attendanceChoice === "YES"}
                                 onChange={() => setNeedsAssessmentForm((f) => ({ ...f, attendanceChoice: "YES" }))}
-                                disabled={!isNeedsAssessmentEditableNow || isNeedsAssessmentLocked || needsAssessmentSaving}
+                                disabled={!isNeedsAssessmentCurrentViewEditable || isNeedsAssessmentLocked || needsAssessmentSaving}
                               />
                               <span>Yes</span>
                             </label>
@@ -6499,7 +6853,7 @@ function AgentLeadEngagement() {
                                 name="prospect-attendance"
                                 checked={needsAssessmentForm.attendanceChoice === "NO"}
                                 onChange={() => setNeedsAssessmentForm((f) => ({ ...f, attendanceChoice: "NO", attendanceProofImageDataUrl: "", attendanceProofFileName: "" }))}
-                                disabled={!isNeedsAssessmentEditableNow || isNeedsAssessmentLocked || needsAssessmentSaving}
+                                disabled={!isNeedsAssessmentCurrentViewEditable || isNeedsAssessmentLocked || needsAssessmentSaving}
                               />
                               <span>No</span>
                             </label>
@@ -6547,7 +6901,7 @@ function AgentLeadEngagement() {
                                     };
                                     reader.readAsDataURL(file);
                                   }}
-                                  disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving}
+                                  disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}
                                 />
                               </div>
                             ) : null}
@@ -6571,8 +6925,9 @@ function AgentLeadEngagement() {
                           </>
                         )}
                       </div>
+                      ) : null}
 
-                      {needsAssessmentForm.attendanceChoice === "YES" && !isNeedsAssessmentLocked && String(needsAssessmentForm.attendanceProofImageDataUrl || "").trim() && (
+                      {(isNeedsAnalysisViewed || isNeedsScheduleViewed) && needsAssessmentForm.attendanceChoice === "YES" && !isNeedsAssessmentLocked && String(needsAssessmentForm.attendanceProofImageDataUrl || "").trim() && (
                         <div className="le-block">
                           <div className="le-blockHeader">
                             <h4 className="le-blockTitle">Prospect&apos;s Basic Information</h4>
@@ -6605,7 +6960,7 @@ function AgentLeadEngagement() {
                                   basicInformation: { ...f.basicInformation, civilStatus: e.target.value },
                                 }))
                               }
-                              disabled={!isNeedsAssessmentEditableNow}
+                              disabled={!isNeedsAssessmentCurrentViewEditable}
                             >
                               <option value="">Select</option>
                               <option value="Single">Single</option>
@@ -6634,7 +6989,7 @@ function AgentLeadEngagement() {
                                   },
                                 }));
                               }}
-                              disabled={!isNeedsAssessmentEditableNow}
+                              disabled={!isNeedsAssessmentCurrentViewEditable}
                             />
                           </div>
                           {renderNeedsAssessmentError("birthday")}
@@ -6659,7 +7014,7 @@ function AgentLeadEngagement() {
                                   },
                                 }))
                               }
-                              disabled={!isNeedsAssessmentEditableNow}
+                              disabled={!isNeedsAssessmentCurrentViewEditable}
                             >
                               <option value="Employed">Employed</option>
                               <option value="Self-Employed">Self-Employed</option>
@@ -6680,7 +7035,7 @@ function AgentLeadEngagement() {
                                   basicInformation: { ...f.basicInformation, occupation: e.target.value },
                                 }))
                               }
-                              disabled={!isNeedsAssessmentEditableNow}
+                              disabled={!isNeedsAssessmentCurrentViewEditable}
                             />
                           </div>
                           )}
@@ -6692,7 +7047,7 @@ function AgentLeadEngagement() {
                               className="le-input"
                               value={needsAssessmentForm.basicInformation.addressLine || ""}
                               onChange={(e) => setNeedsAssessmentForm((f) => ({ ...f, basicInformation: { ...f.basicInformation, addressLine: e.target.value } }))}
-                              disabled={!isNeedsAssessmentEditableNow}
+                              disabled={!isNeedsAssessmentCurrentViewEditable}
                             />
                           </div>
                           {renderNeedsAssessmentError("addressLine")}
@@ -6703,7 +7058,7 @@ function AgentLeadEngagement() {
                               className="le-input"
                               value={needsAssessmentForm.basicInformation.barangay || ""}
                               onChange={(e) => setNeedsAssessmentForm((f) => ({ ...f, basicInformation: { ...f.basicInformation, barangay: e.target.value } }))}
-                              disabled={!isNeedsAssessmentEditableNow}
+                              disabled={!isNeedsAssessmentCurrentViewEditable}
                             />
                           </div>
                           {renderNeedsAssessmentError("barangay")}
@@ -6727,7 +7082,7 @@ function AgentLeadEngagement() {
                                   },
                                 }));
                               }}
-                              disabled={!isNeedsAssessmentEditableNow}
+                              disabled={!isNeedsAssessmentCurrentViewEditable}
                             >
                               <option value="">Select city</option>
 
@@ -6743,7 +7098,7 @@ function AgentLeadEngagement() {
                                 className="le-input"
                                 value={needsAssessmentForm.basicInformation.otherCity || ""}
                                 onChange={(e) => setNeedsAssessmentForm((f) => ({ ...f, basicInformation: { ...f.basicInformation, otherCity: e.target.value } }))}
-                                disabled={!isNeedsAssessmentEditableNow}
+                                disabled={!isNeedsAssessmentCurrentViewEditable}
                               />
                             </div>
                           )}
@@ -6756,7 +7111,7 @@ function AgentLeadEngagement() {
                               value={needsAssessmentForm.basicInformation.region || ""}
                               onChange={(e) => setNeedsAssessmentForm((f) => ({ ...f, basicInformation: { ...f.basicInformation, region: e.target.value } }))}
                               readOnly={String(needsAssessmentForm.basicInformation.city || "") !== "Other"}
-                              disabled={!isNeedsAssessmentEditableNow}
+                              disabled={!isNeedsAssessmentCurrentViewEditable}
                             />
                           </div>
                           {renderNeedsAssessmentError("region")}
@@ -6768,7 +7123,7 @@ function AgentLeadEngagement() {
                               inputMode="numeric"
                               value={needsAssessmentForm.basicInformation.zipCode || ""}
                               onChange={(e) => setNeedsAssessmentForm((f) => ({ ...f, basicInformation: { ...f.basicInformation, zipCode: String(e.target.value).replace(/[^\d]/g, "").slice(0, 4) } }))}
-                              disabled={!isNeedsAssessmentEditableNow}
+                              disabled={!isNeedsAssessmentCurrentViewEditable}
                             />
                           </div>
 
@@ -6785,7 +7140,7 @@ function AgentLeadEngagement() {
                               type="button"
                               className="le-btn secondary"
                               onClick={addDependent}
-                              disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving}
+                              disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}
                             >
                               + Add Another Dependent
                             </button>
@@ -6793,11 +7148,11 @@ function AgentLeadEngagement() {
 
                           {(needsAssessmentForm.dependents || []).map((d, idx) => (
                             <div key={`dep-${idx}`} className="le-attemptItem" style={{ marginTop: 10 }}>
-                              <div className="le-formRow"><label className="le-label">Name *</label><input className="le-input" value={d.name || ""} onChange={(e) => updateDependent(idx, "name", e.target.value)} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving} /></div>
-                              <div className="le-formRow"><label className="le-label">Age *</label><input className="le-input" inputMode="numeric" value={d.age ?? ""} onChange={(e) => updateDependent(idx, "age", String(e.target.value).replace(/[^\d]/g, ""))} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving} /></div>
-                              <div className="le-formRow"><label className="le-label">Gender *</label><select className="le-input" value={d.gender || ""} onChange={(e) => updateDependent(idx, "gender", e.target.value)} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving}><option value="">Select</option><option value="Male">Male</option><option value="Female">Female</option></select></div>
-                              <div className="le-formRow"><label className="le-label">Relationship *</label><select className="le-input" value={d.relationship || ""} onChange={(e) => updateDependent(idx, "relationship", e.target.value)} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving}><option value="">Select</option><option value="Child">Child</option><option value="Parent">Parent</option><option value="Sibling">Sibling</option></select></div>
-                              <div className="le-actions"><button type="button" className="le-btn secondary" onClick={() => removeDependent(idx)} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving}>Remove</button></div>
+                              <div className="le-formRow"><label className="le-label">Name *</label><input className="le-input" value={d.name || ""} onChange={(e) => updateDependent(idx, "name", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
+                              <div className="le-formRow"><label className="le-label">Age *</label><input className="le-input" inputMode="numeric" value={d.age ?? ""} onChange={(e) => updateDependent(idx, "age", String(e.target.value).replace(/[^\d]/g, ""))} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
+                              <div className="le-formRow"><label className="le-label">Gender *</label><select className="le-input" value={d.gender || ""} onChange={(e) => updateDependent(idx, "gender", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}><option value="">Select</option><option value="Male">Male</option><option value="Female">Female</option></select></div>
+                              <div className="le-formRow"><label className="le-label">Relationship *</label><select className="le-input" value={d.relationship || ""} onChange={(e) => updateDependent(idx, "relationship", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}><option value="">Select</option><option value="Child">Child</option><option value="Parent">Parent</option><option value="Sibling">Sibling</option></select></div>
+                              <div className="le-actions"><button type="button" className="le-btn secondary" onClick={() => removeDependent(idx)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}>Remove</button></div>
                             </div>
                           ))}
                           {renderNeedsAssessmentError("dependents")}
@@ -6837,7 +7192,7 @@ function AgentLeadEngagement() {
                             <>
                               <div className="le-formRow">
                                 <label className="le-label">Current Priority *</label>
-                                <select className="le-input" value={needsAssessmentForm.needsPriorities?.currentPriority || ""} onChange={(e) => updateNeedsPriorities("currentPriority", e.target.value)} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving}>
+                                <select className="le-input" value={needsAssessmentForm.needsPriorities?.currentPriority || ""} onChange={(e) => updateNeedsPriorities("currentPriority", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}>
                                   <option value="">Select</option><option value="Protection">Protection</option><option value="Health">Health</option><option value="Investment">Investment</option>
                                 </select>
                               </div>
@@ -6845,7 +7200,7 @@ function AgentLeadEngagement() {
 
                               <div className="le-formRow">
                                 <label className="le-label">Approximate Monthly Income (All Sources) *</label>
-                                <select className="le-input" value={needsAssessmentForm.needsPriorities?.monthlyIncomeBand || ""} onChange={(e) => updateNeedsPriorities("monthlyIncomeBand", e.target.value)} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving}>
+                                <select className="le-input" value={needsAssessmentForm.needsPriorities?.monthlyIncomeBand || ""} onChange={(e) => updateNeedsPriorities("monthlyIncomeBand", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}>
                                   <option value="">Select bracket</option>
                                   {INCOME_BAND_OPTIONS.map((item) => (<option key={item.value} value={item.value}>{item.label}</option>))}
                                 </select>
@@ -6855,23 +7210,23 @@ function AgentLeadEngagement() {
                               {["BELOW_15000", "ABOVE_500000"].includes(String(needsAssessmentForm.needsPriorities?.monthlyIncomeBand || "")) && (
                                 <div className="le-formRow">
                                   <label className="le-label">Manual Monthly Income Amount (Php) *</label>
-                                  <input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.monthlyIncomeAmount ?? ""} onChange={(e) => updateNeedsPriorities("monthlyIncomeAmount", e.target.value)} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving} />
+                                  <input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.monthlyIncomeAmount ?? ""} onChange={(e) => updateNeedsPriorities("monthlyIncomeAmount", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} />
                                 </div>
                               )}
                               {renderNeedsAssessmentError("monthlyIncomeAmount")}
 
-                              <div className="le-formRow"><label className="le-label">Minimum Willing Monthly Premium (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.minPremium ?? ""} onChange={(e) => updateNeedsPriorities("minPremium", e.target.value)} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving} /></div>
+                              <div className="le-formRow"><label className="le-label">Minimum Willing Monthly Premium (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.minPremium ?? ""} onChange={(e) => updateNeedsPriorities("minPremium", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
                               {renderNeedsAssessmentError("minPremium")}
-                              <div className="le-formRow"><label className="le-label">Maximum Willing Monthly Premium (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.maxPremium ?? ""} onChange={(e) => updateNeedsPriorities("maxPremium", e.target.value)} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving} /></div>
+                              <div className="le-formRow"><label className="le-label">Maximum Willing Monthly Premium (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.maxPremium ?? ""} onChange={(e) => updateNeedsPriorities("maxPremium", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
                               {renderNeedsAssessmentError("maxPremium")}
 
                               {needsPrioritiesDerived.priority === "Protection" && (
                                 <>
-                                  <div className="le-formRow"><label className="le-label">Approximate Monthly Spend (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.protection?.monthlySpend ?? ""} onChange={(e) => updateNeedsPrioritySection("protection", "monthlySpend", e.target.value)} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving} /></div>
+                                  <div className="le-formRow"><label className="le-label">Approximate Monthly Spend (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.protection?.monthlySpend ?? ""} onChange={(e) => updateNeedsPrioritySection("protection", "monthlySpend", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
                                   {renderNeedsAssessmentError("protectionMonthlySpend")}
                                   <div className="le-formRow"><label className="le-label">Number of Dependents</label><input className="le-input" value={needsPrioritiesDerived.numberOfDependents} disabled /></div>
                                   <div className="le-formRow"><label className="le-label">Years to Protect Income</label><input className="le-input" value={needsPrioritiesDerived.yearsToProtectIncome} disabled /></div>
-                                  <div className="le-formRow"><label className="le-label">Savings for Protection (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.protection?.savingsForProtection ?? ""} onChange={(e) => updateNeedsPrioritySection("protection", "savingsForProtection", e.target.value)} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving} /></div>
+                                  <div className="le-formRow"><label className="le-label">Savings for Protection (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.protection?.savingsForProtection ?? ""} onChange={(e) => updateNeedsPrioritySection("protection", "savingsForProtection", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
                                   {renderNeedsAssessmentError("protectionSavings")}
                                   <div className="le-formRow"><label className="le-label">Protection Gap (Php)</label><input className="le-input" value={Number.isFinite(needsPrioritiesDerived.protectionGap) ? needsPrioritiesDerived.protectionGap : ""} disabled /></div>
                                 </>
@@ -6879,9 +7234,9 @@ function AgentLeadEngagement() {
 
                               {needsPrioritiesDerived.priority === "Health" && (
                                 <>
-                                  <div className="le-formRow"><label className="le-label">Approx. Amount to Cover Critical Illness (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.health?.amountToCoverCriticalIllness ?? ""} onChange={(e) => updateNeedsPrioritySection("health", "amountToCoverCriticalIllness", e.target.value)} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving} /></div>
+                                  <div className="le-formRow"><label className="le-label">Approx. Amount to Cover Critical Illness (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.health?.amountToCoverCriticalIllness ?? ""} onChange={(e) => updateNeedsPrioritySection("health", "amountToCoverCriticalIllness", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
                                   {renderNeedsAssessmentError("healthAmount")}
-                                  <div className="le-formRow"><label className="le-label">Savings for Critical Illness (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.health?.savingsForCriticalIllness ?? ""} onChange={(e) => updateNeedsPrioritySection("health", "savingsForCriticalIllness", e.target.value)} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving} /></div>
+                                  <div className="le-formRow"><label className="le-label">Savings for Critical Illness (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.health?.savingsForCriticalIllness ?? ""} onChange={(e) => updateNeedsPrioritySection("health", "savingsForCriticalIllness", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
                                   {renderNeedsAssessmentError("healthSavings")}
                                   <div className="le-formRow"><label className="le-label">Critical Illness and Hospitalization Gap (Php)</label><input className="le-input" value={Number.isFinite(needsPrioritiesDerived.criticalIllnessGap) ? needsPrioritiesDerived.criticalIllnessGap : ""} disabled /></div>
                                 </>
@@ -6889,15 +7244,15 @@ function AgentLeadEngagement() {
 
                               {needsPrioritiesDerived.priority === "Investment" && (
                                 <>
-                                  <div className="le-formRow"><label className="le-label">Savings Plan *</label><select className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.savingsPlan || ""} onChange={(e) => updateNeedsPrioritySection("investment", "savingsPlan", e.target.value)} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving}><option value="">Select</option><option value="Home">Home</option><option value="Vehicle">Vehicle</option><option value="Holiday">Holiday</option><option value="Early Retirement">Early Retirement</option><option value="Other">Other</option></select></div>
+                                  <div className="le-formRow"><label className="le-label">Savings Plan *</label><select className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.savingsPlan || ""} onChange={(e) => updateNeedsPrioritySection("investment", "savingsPlan", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}><option value="">Select</option><option value="Home">Home</option><option value="Vehicle">Vehicle</option><option value="Holiday">Holiday</option><option value="Early Retirement">Early Retirement</option><option value="Other">Other</option></select></div>
                                   {renderNeedsAssessmentError("investmentSavingsPlan")}
-                                  {String(needsAssessmentForm.needsPriorities?.investment?.savingsPlan || "") === "Other" && (<div className="le-formRow"><label className="le-label">Other Savings Plan *</label><input className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.savingsPlanOther || ""} onChange={(e) => updateNeedsPrioritySection("investment", "savingsPlanOther", e.target.value)} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving} /></div>)}
+                                  {String(needsAssessmentForm.needsPriorities?.investment?.savingsPlan || "") === "Other" && (<div className="le-formRow"><label className="le-label">Other Savings Plan *</label><input className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.savingsPlanOther || ""} onChange={(e) => updateNeedsPrioritySection("investment", "savingsPlanOther", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>)}
                                   {renderNeedsAssessmentError("investmentSavingsPlanOther")}
-                                  <div className="le-formRow"><label className="le-label">Target Savings Amount (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.investment?.targetSavingsAmount ?? ""} onChange={(e) => updateNeedsPrioritySection("investment", "targetSavingsAmount", e.target.value)} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving} /></div>
+                                  <div className="le-formRow"><label className="le-label">Target Savings Amount (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.investment?.targetSavingsAmount ?? ""} onChange={(e) => updateNeedsPrioritySection("investment", "targetSavingsAmount", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
                                   {renderNeedsAssessmentError("investmentTargetAmount")}
-                                  <div className="le-formRow"><label className="le-label">Target Year to Utilize Savings *</label><input className="le-input" inputMode="numeric" value={needsAssessmentForm.needsPriorities?.investment?.targetUtilizationYear ?? ""} onChange={(e) => updateNeedsPrioritySection("investment", "targetUtilizationYear", String(e.target.value).replace(/[^\d]/g, "").slice(0, 4))} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving} /></div>
+                                  <div className="le-formRow"><label className="le-label">Target Year to Utilize Savings *</label><input className="le-input" inputMode="numeric" value={needsAssessmentForm.needsPriorities?.investment?.targetUtilizationYear ?? ""} onChange={(e) => updateNeedsPrioritySection("investment", "targetUtilizationYear", String(e.target.value).replace(/[^\d]/g, "").slice(0, 4))} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
                                   {renderNeedsAssessmentError("investmentTargetYear")}
-                                  <div className="le-formRow"><label className="le-label">Savings for Investment (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.investment?.savingsForInvestment ?? ""} onChange={(e) => updateNeedsPrioritySection("investment", "savingsForInvestment", e.target.value)} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving} /></div>
+                                  <div className="le-formRow"><label className="le-label">Savings for Investment (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.investment?.savingsForInvestment ?? ""} onChange={(e) => updateNeedsPrioritySection("investment", "savingsForInvestment", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
                                   {renderNeedsAssessmentError("investmentSavings")}
                                   <div className="le-formRow"><label className="le-label">Savings Gap (Php)</label><input className="le-input" value={Number.isFinite(needsPrioritiesDerived.savingsGap) ? needsPrioritiesDerived.savingsGap : ""} disabled /></div>
 
@@ -6905,12 +7260,12 @@ function AgentLeadEngagement() {
                                   <p className="le-muted" style={{ marginTop: 6, marginBottom: 6 }}>Subsection 1: Risk Appetite Survey</p>
                                   {renderNeedsAssessmentError("investmentRiskProfiler")}
 
-                                  <div className="le-formRow"><label className="le-label">INVESTMENT HORIZON *</label><p className="le-muted" style={{ marginTop: 4, marginBottom: 8 }}>How long will you allow your money to grow before you feel the need to have access to it?</p><select className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.riskProfiler?.investmentHorizon || ""} onChange={(e) => updateNeedsPrioritySection("investment", "riskProfiler", { ...(needsAssessmentForm.needsPriorities?.investment?.riskProfiler || {}), investmentHorizon: e.target.value })} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving}><option value="">Select</option><option value="LT_3">Less than three years</option><option value="BETWEEN_3_7">Between three and seven years</option><option value="BETWEEN_7_10">Longer than seven years but less than 10 years</option><option value="AT_LEAST_10">At least 10 years</option></select></div>
-                                  <div className="le-formRow"><label className="le-label">INVESTMENT GOAL *</label><p className="le-muted" style={{ marginTop: 4, marginBottom: 8 }}>What is your goal for this investment?</p><select className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.riskProfiler?.investmentGoal || ""} onChange={(e) => updateNeedsPrioritySection("investment", "riskProfiler", { ...(needsAssessmentForm.needsPriorities?.investment?.riskProfiler || {}), investmentGoal: e.target.value })} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving}><option value="">Select</option><option value="CAPITAL_PRESERVATION">Capital preservation with a potential return that is slightly higher than time deposit rate</option><option value="STEADY_GROWTH">Steady growth in capital</option><option value="SIGNIFICANT_APPRECIATION">A significant level of capital appreciation</option></select></div>
-                                  <div className="le-formRow"><label className="le-label">EXPERIENCE WITH INVESTMENTS AND/OR FINANCIAL MARKETS *</label><p className="le-muted" style={{ marginTop: 4, marginBottom: 8 }}>Have you had any experience investing in the following:</p><p className="le-smallNote" style={{ marginTop: 0, marginBottom: 8 }}>I. Mutual funds, unit investment trust funds, unit-linked insurance policies, local government and/or corporate bonds, listed stocks in the Philippine Stock Market</p><p className="le-smallNote" style={{ marginTop: 0, marginBottom: 8 }}>II. Foreign investments (stocks, bonds, funds outside the Philippine market), foreign currencies, hedge funds, derivatives (options, futures, forwards, etc.)</p><select className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.riskProfiler?.marketExperience || ""} onChange={(e) => updateNeedsPrioritySection("investment", "riskProfiler", { ...(needsAssessmentForm.needsPriorities?.investment?.riskProfiler || {}), marketExperience: e.target.value })} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving}><option value="">Select</option><option value="NONE">None of the above</option><option value="I_ONLY">In "I" only</option><option value="II_ONLY">In "II" only</option><option value="BOTH">In both "I" and "II"</option></select></div>
-                                  <div className="le-formRow"><label className="le-label">REACTION TO SHORT-TERM VOLATILITY *</label><p className="le-muted" style={{ marginTop: 4, marginBottom: 8 }}>What will you do if you experience a significant drop (e.g. 30%) in fund value within a year?</p><select className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.riskProfiler?.volatilityReaction || ""} onChange={(e) => updateNeedsPrioritySection("investment", "riskProfiler", { ...(needsAssessmentForm.needsPriorities?.investment?.riskProfiler || {}), volatilityReaction: e.target.value })} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving}><option value="">Select</option><option value="FULL_WITHDRAW">Make a full withdrawal</option><option value="LESS_RISKY">Switch to a less risky fund</option><option value="HOLD">Do nothing or hold on to the funds</option><option value="TOP_UPS">Do top-ups or make additional investments</option></select></div>
-                                  <div className="le-formRow"><label className="le-label">AFFORDABILITY TO CAPITAL LOSS *</label><p className="le-muted" style={{ marginTop: 4, marginBottom: 8 }}>In the long term (more than five years), what is the level of capital loss you can afford to take?</p><select className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.riskProfiler?.capitalLossAffordability || ""} onChange={(e) => updateNeedsPrioritySection("investment", "riskProfiler", { ...(needsAssessmentForm.needsPriorities?.investment?.riskProfiler || {}), capitalLossAffordability: e.target.value })} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving}><option value="">Select</option><option value="NO_LOSS">I cannot afford a loss</option><option value="UP_TO_5">I can afford up to 5% loss</option><option value="UP_TO_10">I can afford up to 10% loss</option><option value="ABOVE_10">I can afford more than 10% loss</option></select></div>
-                                  <div className="le-formRow"><label className="le-label">RISK AND RETURN TRADE-OFF *</label><p className="le-muted" style={{ marginTop: 4, marginBottom: 8 }}>Which of the sample portfolio would you prefer?</p><select className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.riskProfiler?.riskReturnTradeoff || ""} onChange={(e) => updateNeedsPrioritySection("investment", "riskProfiler", { ...(needsAssessmentForm.needsPriorities?.investment?.riskProfiler || {}), riskReturnTradeoff: e.target.value })} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving}><option value="">Select</option><option value="PORTFOLIO_A">Portfolio A: 4% Potential annual gain, -3% Potential annual loss</option><option value="PORTFOLIO_B">Portfolio B: 6% Potential annual gain, -6% Potential annual loss</option><option value="PORTFOLIO_C">Portfolio C: 10% Potential annual gain, -12% Potential annual loss</option><option value="PORTFOLIO_D">Portfolio D: 20% or more Potential annual gain, -28% or more Potential annual loss</option></select></div>
+                                  <div className="le-formRow"><label className="le-label">INVESTMENT HORIZON *</label><p className="le-muted" style={{ marginTop: 4, marginBottom: 8 }}>How long will you allow your money to grow before you feel the need to have access to it?</p><select className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.riskProfiler?.investmentHorizon || ""} onChange={(e) => updateNeedsPrioritySection("investment", "riskProfiler", { ...(needsAssessmentForm.needsPriorities?.investment?.riskProfiler || {}), investmentHorizon: e.target.value })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}><option value="">Select</option><option value="LT_3">Less than three years</option><option value="BETWEEN_3_7">Between three and seven years</option><option value="BETWEEN_7_10">Longer than seven years but less than 10 years</option><option value="AT_LEAST_10">At least 10 years</option></select></div>
+                                  <div className="le-formRow"><label className="le-label">INVESTMENT GOAL *</label><p className="le-muted" style={{ marginTop: 4, marginBottom: 8 }}>What is your goal for this investment?</p><select className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.riskProfiler?.investmentGoal || ""} onChange={(e) => updateNeedsPrioritySection("investment", "riskProfiler", { ...(needsAssessmentForm.needsPriorities?.investment?.riskProfiler || {}), investmentGoal: e.target.value })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}><option value="">Select</option><option value="CAPITAL_PRESERVATION">Capital preservation with a potential return that is slightly higher than time deposit rate</option><option value="STEADY_GROWTH">Steady growth in capital</option><option value="SIGNIFICANT_APPRECIATION">A significant level of capital appreciation</option></select></div>
+                                  <div className="le-formRow"><label className="le-label">EXPERIENCE WITH INVESTMENTS AND/OR FINANCIAL MARKETS *</label><p className="le-muted" style={{ marginTop: 4, marginBottom: 8 }}>Have you had any experience investing in the following:</p><p className="le-smallNote" style={{ marginTop: 0, marginBottom: 8 }}>I. Mutual funds, unit investment trust funds, unit-linked insurance policies, local government and/or corporate bonds, listed stocks in the Philippine Stock Market</p><p className="le-smallNote" style={{ marginTop: 0, marginBottom: 8 }}>II. Foreign investments (stocks, bonds, funds outside the Philippine market), foreign currencies, hedge funds, derivatives (options, futures, forwards, etc.)</p><select className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.riskProfiler?.marketExperience || ""} onChange={(e) => updateNeedsPrioritySection("investment", "riskProfiler", { ...(needsAssessmentForm.needsPriorities?.investment?.riskProfiler || {}), marketExperience: e.target.value })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}><option value="">Select</option><option value="NONE">None of the above</option><option value="I_ONLY">In "I" only</option><option value="II_ONLY">In "II" only</option><option value="BOTH">In both "I" and "II"</option></select></div>
+                                  <div className="le-formRow"><label className="le-label">REACTION TO SHORT-TERM VOLATILITY *</label><p className="le-muted" style={{ marginTop: 4, marginBottom: 8 }}>What will you do if you experience a significant drop (e.g. 30%) in fund value within a year?</p><select className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.riskProfiler?.volatilityReaction || ""} onChange={(e) => updateNeedsPrioritySection("investment", "riskProfiler", { ...(needsAssessmentForm.needsPriorities?.investment?.riskProfiler || {}), volatilityReaction: e.target.value })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}><option value="">Select</option><option value="FULL_WITHDRAW">Make a full withdrawal</option><option value="LESS_RISKY">Switch to a less risky fund</option><option value="HOLD">Do nothing or hold on to the funds</option><option value="TOP_UPS">Do top-ups or make additional investments</option></select></div>
+                                  <div className="le-formRow"><label className="le-label">AFFORDABILITY TO CAPITAL LOSS *</label><p className="le-muted" style={{ marginTop: 4, marginBottom: 8 }}>In the long term (more than five years), what is the level of capital loss you can afford to take?</p><select className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.riskProfiler?.capitalLossAffordability || ""} onChange={(e) => updateNeedsPrioritySection("investment", "riskProfiler", { ...(needsAssessmentForm.needsPriorities?.investment?.riskProfiler || {}), capitalLossAffordability: e.target.value })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}><option value="">Select</option><option value="NO_LOSS">I cannot afford a loss</option><option value="UP_TO_5">I can afford up to 5% loss</option><option value="UP_TO_10">I can afford up to 10% loss</option><option value="ABOVE_10">I can afford more than 10% loss</option></select></div>
+                                  <div className="le-formRow"><label className="le-label">RISK AND RETURN TRADE-OFF *</label><p className="le-muted" style={{ marginTop: 4, marginBottom: 8 }}>Which of the sample portfolio would you prefer?</p><select className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.riskProfiler?.riskReturnTradeoff || ""} onChange={(e) => updateNeedsPrioritySection("investment", "riskProfiler", { ...(needsAssessmentForm.needsPriorities?.investment?.riskProfiler || {}), riskReturnTradeoff: e.target.value })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}><option value="">Select</option><option value="PORTFOLIO_A">Portfolio A: 4% Potential annual gain, -3% Potential annual loss</option><option value="PORTFOLIO_B">Portfolio B: 6% Potential annual gain, -6% Potential annual loss</option><option value="PORTFOLIO_C">Portfolio C: 10% Potential annual gain, -12% Potential annual loss</option><option value="PORTFOLIO_D">Portfolio D: 20% or more Potential annual gain, -28% or more Potential annual loss</option></select></div>
 
                                   <h5 className="le-attemptSectionHeader" style={{ marginTop: 10 }}>Investor Risk Profile</h5>
                                   <div className="le-formRow"><label className="le-label">Risk Profile Score</label><input className="le-input" value={needsPrioritiesDerived.riskProfileScore ?? ""} disabled /></div>
@@ -6935,7 +7290,7 @@ function AgentLeadEngagement() {
                                             <div><span className="le-metaLabel">Fund</span><span className="le-metaValue">{fund.fundName}</span></div>
                                             <div><span className="le-metaLabel">Currency</span><span className="le-metaValue">{fund.currency}</span></div>
                                             <div><span className="le-metaLabel">Risk Rating</span><span className="le-metaValue">{fund.riskRating}</span></div>
-                                            <div><span className="le-metaLabel">Allocation (%)</span><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.investment?.fundChoice?.allocations?.[fund.key] ?? ""} onChange={(e) => updateNeedsPrioritySection("investment", "fundChoice", { ...(needsAssessmentForm.needsPriorities?.investment?.fundChoice || {}), allocations: { ...(needsAssessmentForm.needsPriorities?.investment?.fundChoice?.allocations || {}), [fund.key]: String(e.target.value).replace(/[^\d.]/g, "") } })} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving} /></div>
+                                            <div><span className="le-metaLabel">Allocation (%)</span><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.investment?.fundChoice?.allocations?.[fund.key] ?? ""} onChange={(e) => updateNeedsPrioritySection("investment", "fundChoice", { ...(needsAssessmentForm.needsPriorities?.investment?.fundChoice || {}), allocations: { ...(needsAssessmentForm.needsPriorities?.investment?.fundChoice?.allocations || {}), [fund.key]: String(e.target.value).replace(/[^\d.]/g, "") } })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
                                           </div>
                                         </div>
                                       ))}
@@ -6950,7 +7305,7 @@ function AgentLeadEngagement() {
                                           <div><span className="le-metaLabel">Fund</span><span className="le-metaValue">{fund.fundName}</span></div>
                                           <div><span className="le-metaLabel">Currency</span><span className="le-metaValue">{fund.currency}</span></div>
                                           <div><span className="le-metaLabel">Risk Rating</span><span className="le-metaValue">{fund.riskRating}</span></div>
-                                          <div><span className="le-metaLabel">Allocation (%)</span><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.investment?.fundChoice?.allocations?.[fund.key] ?? ""} onChange={(e) => updateNeedsPrioritySection("investment", "fundChoice", { ...(needsAssessmentForm.needsPriorities?.investment?.fundChoice || {}), allocations: { ...(needsAssessmentForm.needsPriorities?.investment?.fundChoice?.allocations || {}), [fund.key]: String(e.target.value).replace(/[^\d.]/g, "") } })} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving} /></div>
+                                          <div><span className="le-metaLabel">Allocation (%)</span><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.investment?.fundChoice?.allocations?.[fund.key] ?? ""} onChange={(e) => updateNeedsPrioritySection("investment", "fundChoice", { ...(needsAssessmentForm.needsPriorities?.investment?.fundChoice || {}), allocations: { ...(needsAssessmentForm.needsPriorities?.investment?.fundChoice?.allocations || {}), [fund.key]: String(e.target.value).replace(/[^\d.]/g, "") } })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
                                         </div>
                                       </div>
                                     ))}
@@ -6959,7 +7314,7 @@ function AgentLeadEngagement() {
                                   <div className="le-formRow"><label className="le-label">Total Allocation (%)</label><input className="le-input" value={Number.isFinite(needsPrioritiesDerived.totalFundAllocation) ? needsPrioritiesDerived.totalFundAllocation : ""} disabled /></div>
                                   <div className="le-formRow"><label className="le-label">Fund Match</label><input className="le-input" value={needsPrioritiesDerived.fundMatch} disabled /></div>
                                   {needsPrioritiesDerived.fundMatch === "No" && (
-                                    <div className="le-formRow"><label className="le-label">Reason for Mismatch *</label><textarea className="le-input" rows={3} value={needsAssessmentForm.needsPriorities?.investment?.fundChoice?.mismatchReason || ""} onChange={(e) => updateNeedsPrioritySection("investment", "fundChoice", { ...(needsAssessmentForm.needsPriorities?.investment?.fundChoice || {}), mismatchReason: e.target.value })} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving} /></div>
+                                    <div className="le-formRow"><label className="le-label">Reason for Mismatch *</label><textarea className="le-input" rows={3} value={needsAssessmentForm.needsPriorities?.investment?.fundChoice?.mismatchReason || ""} onChange={(e) => updateNeedsPrioritySection("investment", "fundChoice", { ...(needsAssessmentForm.needsPriorities?.investment?.fundChoice || {}), mismatchReason: e.target.value })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
                                   )}
                                 </>
                               )}
@@ -6988,7 +7343,7 @@ function AgentLeadEngagement() {
                                               requestedPremiumPayment: needsAssessmentForm.needsPriorities?.minPremium ?? "",
                                               methodForInitialPayment: "",
                                             })}
-                                            disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving}
+                                            disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}
                                           >
                                             {isSelected ? "Selected" : "Select"}
                                           </button>
@@ -7000,11 +7355,11 @@ function AgentLeadEngagement() {
                               )}
                               {renderNeedsAssessmentError("selectedProductId")}
 
-                              <div className="le-formRow"><label className="le-label">Requested Frequency of Premium Payment *</label><select className="le-input" value={needsAssessmentForm.needsPriorities?.productSelection?.requestedFrequency || "Monthly"} onChange={(e) => { const v = e.target.value; updateNeedsPriorities("productSelection", { ...(needsAssessmentForm.needsPriorities?.productSelection || {}), requestedFrequency: v, requestedPremiumPayment: v === "Monthly" ? (needsAssessmentForm.needsPriorities?.minPremium ?? "") : "" }); }} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving}><option value="Monthly">Monthly</option><option value="Quarterly">Quarterly</option><option value="Half-yearly">Half-yearly</option><option value="Yearly">Yearly</option></select></div>
+                              <div className="le-formRow"><label className="le-label">Requested Frequency of Premium Payment *</label><select className="le-input" value={needsAssessmentForm.needsPriorities?.productSelection?.requestedFrequency || "Monthly"} onChange={(e) => { const v = e.target.value; updateNeedsPriorities("productSelection", { ...(needsAssessmentForm.needsPriorities?.productSelection || {}), requestedFrequency: v, requestedPremiumPayment: v === "Monthly" ? (needsAssessmentForm.needsPriorities?.minPremium ?? "") : "" }); }} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}><option value="Monthly">Monthly</option><option value="Quarterly">Quarterly</option><option value="Half-yearly">Half-yearly</option><option value="Yearly">Yearly</option></select></div>
                               {renderNeedsAssessmentError("requestedFrequency")}
-                              <div className="le-formRow"><label className="le-label">Requested Premium Payment (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.productSelection?.requestedPremiumPayment ?? ""} onChange={(e) => updateNeedsPriorities("productSelection", { ...(needsAssessmentForm.needsPriorities?.productSelection || {}), requestedPremiumPayment: e.target.value })} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving} /></div>
+                              <div className="le-formRow"><label className="le-label">Requested Premium Payment (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.productSelection?.requestedPremiumPayment ?? ""} onChange={(e) => updateNeedsPriorities("productSelection", { ...(needsAssessmentForm.needsPriorities?.productSelection || {}), requestedPremiumPayment: e.target.value })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
                               {renderNeedsAssessmentError("requestedPremiumPayment")}
-                              <div className="le-formRow"><label className="le-label">Method for Initial Payment *</label><select className="le-input" value={needsAssessmentForm.needsPriorities?.productSelection?.methodForInitialPayment || ""} onChange={(e) => updateNeedsPriorities("productSelection", { ...(needsAssessmentForm.needsPriorities?.productSelection || {}), methodForInitialPayment: e.target.value })} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving}><option value="">Select</option><option value="Credit Card / Debit Card">Credit Card / Debit Card</option><option value="Mobile Wallet / GCash">Mobile Wallet / GCash</option><option value="Dated Check">Dated Check</option><option value="Bills Payments">Bills Payments</option></select></div>
+                              <div className="le-formRow"><label className="le-label">Method for Initial Payment *</label><select className="le-input" value={needsAssessmentForm.needsPriorities?.productSelection?.methodForInitialPayment || ""} onChange={(e) => updateNeedsPriorities("productSelection", { ...(needsAssessmentForm.needsPriorities?.productSelection || {}), methodForInitialPayment: e.target.value })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}><option value="">Select</option><option value="Credit Card / Debit Card">Credit Card / Debit Card</option><option value="Mobile Wallet / GCash">Mobile Wallet / GCash</option><option value="Dated Check">Dated Check</option><option value="Bills Payments">Bills Payments</option></select></div>
                               {renderNeedsAssessmentError("methodForInitialPayment")}
 
                               <h5 className="le-attemptSectionHeader" style={{ marginTop: 14 }}>Optional Riders</h5>
@@ -7034,7 +7389,7 @@ function AgentLeadEngagement() {
                                               current[idx] = { ...current[idx], enabled: !enabled };
                                               updateNeedsPriorities("optionalRiders", current);
                                             }}
-                                            disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving}
+                                            disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}
                                           >
                                             <span className="le-toggleTrack" aria-hidden="true">
                                               <span className="le-toggleThumb" />
@@ -7050,7 +7405,7 @@ function AgentLeadEngagement() {
 
 
                               <h5 className="le-attemptSectionHeader" style={{ marginTop: 14 }}>Notes (Optional)</h5>
-                              <div className="le-formRow"><label className="le-label">Notes about selected product and optional riders</label><textarea className="le-input" rows={3} value={needsAssessmentForm.needsPriorities?.productRidersNotes || ""} onChange={(e) => updateNeedsPriorities("productRidersNotes", e.target.value)} disabled={!isNeedsAssessmentEditableNow || needsAssessmentSaving} /></div>
+                              <div className="le-formRow"><label className="le-label">Notes about selected product and optional riders</label><textarea className="le-input" rows={3} value={needsAssessmentForm.needsPriorities?.productRidersNotes || ""} onChange={(e) => updateNeedsPriorities("productRidersNotes", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
 
                             </>
                           )}
@@ -7224,6 +7579,7 @@ function AgentLeadEngagement() {
                             <p className="le-smallNote" style={{ color: "#0f766e", marginTop: 12, marginBottom: 8 }}>Saved successfully.</p>
                           ) : null}
 
+                          {isNeedsScheduleViewed ? (
                           <div className="le-block" style={{ marginTop: 16 }}>
                             {!proposalMeetingSaved ? <h4 className="le-blockTitle">Schedule Proposal Presentation</h4> : null}
                             {proposalMeetingSaved ? (
@@ -7258,7 +7614,7 @@ function AgentLeadEngagement() {
                                   setProposalMeetingForm((f) => ({ ...f, meetingDate: v }));
                                   setProposalMeetingFieldErrors((prev) => ({ ...prev, meetingDate: "", meetingStartTime: "" }));
                                 }}
-                                disabled={savingProposalMeeting}
+                                disabled={!isNeedsScheduleEditable || savingProposalMeeting}
                               />
                               {proposalMeetingFieldErrors.meetingDate ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{proposalMeetingFieldErrors.meetingDate}</p> : null}
                             </div>
@@ -7272,7 +7628,7 @@ function AgentLeadEngagement() {
                                   setProposalMeetingForm((f) => ({ ...f, meetingStartTime: v }));
                                   setProposalMeetingFieldErrors((prev) => ({ ...prev, meetingStartTime: "" }));
                                 }}
-                                disabled={savingProposalMeeting}
+                                disabled={!isNeedsScheduleEditable || savingProposalMeeting}
                               >
                                 <option value="">Select Time</option>
                                 {proposalMeetingStartSlots.map((t) => {
@@ -7297,7 +7653,7 @@ function AgentLeadEngagement() {
                                   setProposalMeetingForm((f) => ({ ...f, meetingDurationMin: Number(e.target.value) }));
                                   setProposalMeetingFieldErrors((prev) => ({ ...prev, meetingDurationMin: "", meetingStartTime: "" }));
                                 }}
-                                disabled={savingProposalMeeting}
+                                disabled={!isNeedsScheduleEditable || savingProposalMeeting}
                               >
                                 <option value={30}>30 mins</option>
                                 <option value={60}>60 mins</option>
@@ -7323,7 +7679,7 @@ function AgentLeadEngagement() {
                                   }));
                                   setProposalMeetingFieldErrors((prev) => ({ ...prev, meetingMode: "" }));
                                 }}
-                                disabled={savingProposalMeeting}
+                                disabled={!isNeedsScheduleEditable || savingProposalMeeting}
                               >
                                 <option value="">Select</option>
                                 <option value="Online">Online</option>
@@ -7343,7 +7699,7 @@ function AgentLeadEngagement() {
                                       setProposalMeetingForm((f) => ({ ...f, meetingPlatform: e.target.value }));
                                       setProposalMeetingFieldErrors((prev) => ({ ...prev, meetingPlatform: "", meetingPlatformOther: "" }));
                                     }}
-                                    disabled={savingProposalMeeting}
+                                    disabled={!isNeedsScheduleEditable || savingProposalMeeting}
                                   >
                                     <option value="">Select</option>
                                     <option value="Zoom">Zoom</option>
@@ -7362,7 +7718,7 @@ function AgentLeadEngagement() {
                                         setProposalMeetingForm((f) => ({ ...f, meetingPlatformOther: e.target.value }));
                                         setProposalMeetingFieldErrors((prev) => ({ ...prev, meetingPlatformOther: "" }));
                                       }}
-                                      disabled={savingProposalMeeting}
+                                      disabled={!isNeedsScheduleEditable || savingProposalMeeting}
                                     />
                                     {proposalMeetingFieldErrors.meetingPlatformOther ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{proposalMeetingFieldErrors.meetingPlatformOther}</p> : null}
                                   </div>
@@ -7377,7 +7733,7 @@ function AgentLeadEngagement() {
                                       setProposalMeetingFieldErrors((prev) => ({ ...prev, meetingLink: "" }));
                                     }}
                                     placeholder="https://..."
-                                    disabled={savingProposalMeeting}
+                                    disabled={!isNeedsScheduleEditable || savingProposalMeeting}
                                   />
                                   {proposalMeetingFieldErrors.meetingLink ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{proposalMeetingFieldErrors.meetingLink}</p> : null}
                                 </div>
@@ -7390,7 +7746,7 @@ function AgentLeadEngagement() {
                                         setProposalMeetingForm((f) => ({ ...f, meetingInviteSent: e.target.checked }));
                                         setProposalMeetingFieldErrors((prev) => ({ ...prev, meetingInviteSent: "" }));
                                       }}
-                                      disabled={savingProposalMeeting}
+                                      disabled={!isNeedsScheduleEditable || savingProposalMeeting}
                                     />
                                     <span>I confirm invite link has been sent (required)</span>
                                   </label>
@@ -7409,7 +7765,7 @@ function AgentLeadEngagement() {
                                     setProposalMeetingForm((f) => ({ ...f, meetingPlace: e.target.value }));
                                     setProposalMeetingFieldErrors((prev) => ({ ...prev, meetingPlace: "" }));
                                   }}
-                                  disabled={savingProposalMeeting}
+                                  disabled={!isNeedsScheduleEditable || savingProposalMeeting}
                                 />
                                 {proposalMeetingFieldErrors.meetingPlace ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{proposalMeetingFieldErrors.meetingPlace}</p> : null}
                               </div>
@@ -7424,7 +7780,7 @@ function AgentLeadEngagement() {
                                   setProposalMeetingFieldErrors({});
                                   fetchNeedsAssessment();
                                 }}
-                                disabled={savingProposalMeeting}
+                                disabled={!isNeedsScheduleEditable || savingProposalMeeting}
                               >
                                 Cancel
                               </button>
@@ -7432,7 +7788,7 @@ function AgentLeadEngagement() {
                                 type="button"
                                 className="le-btn primary"
                                 onClick={submitScheduleProposalPresentation}
-                                disabled={savingProposalMeeting}
+                                disabled={!isNeedsScheduleEditable || savingProposalMeeting}
                               >
                                 {savingProposalMeeting ? "Saving..." : "Save Proposal Presentation Schedule"}
                               </button>
@@ -7443,6 +7799,7 @@ function AgentLeadEngagement() {
                             ) : null}
 
                           </div>
+                          ) : null}
                         </div>
                       )}
                     </>
