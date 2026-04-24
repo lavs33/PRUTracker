@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { FaChevronRight } from "react-icons/fa";
+import { FaChevronRight, FaEdit } from "react-icons/fa";
 import TopNav from "./components/TopNav";
 import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
@@ -72,6 +72,7 @@ function AgentLeadEngagement() {
   // ✅ Add Attempt UI
   const [showAddAttempt, setShowAddAttempt] = useState(false);
   const [addingAttempt, setAddingAttempt] = useState(false);
+  const [editingAttemptId, setEditingAttemptId] = useState("");
   const [attemptErrors, setAttemptErrors] = useState({});
   const [attemptForm, setAttemptForm] = useState({
     primaryChannel: "",
@@ -2212,7 +2213,7 @@ function AgentLeadEngagement() {
   };
 
 
-  const validateAttempt = () => {
+  const validateAttempt = ({ requireResponse = true } = {}) => {
     const e = {};
     const primary = String(attemptForm.primaryChannel || "").trim();
     const response = String(attemptForm.response || "").trim();
@@ -2233,8 +2234,10 @@ function AgentLeadEngagement() {
       }
     }
 
-    if (!response) e.response = "Response is required.";
-    if (response && !RESPONSES.includes(response)) e.response = "Invalid response.";
+    if (requireResponse) {
+      if (!response) e.response = "Response is required.";
+      if (response && !RESPONSES.includes(response)) e.response = "Invalid response.";
+    }
 
     return e;
   };
@@ -2251,19 +2254,39 @@ function AgentLeadEngagement() {
 
   const onOpenAddAttempt = () => {
     if (!canAddAttempt) return;
+    setEditingAttemptId("");
     setShowAddAttempt(true);
     resetAttemptForm();
     resetProgressiveSubForms();
   };
 
+  const onOpenEditAttempt = (attempt) => {
+    if (isContactingReadOnly) return;
+    const attemptId = String(attempt?.attemptId || "").trim();
+    if (!attemptId) return;
+
+    setEditingAttemptId(attemptId);
+    setAttemptErrors({});
+    setShowAddAttempt(true);
+    setAttemptForm({
+      primaryChannel: String(attempt?.primaryChannel || "").trim(),
+      otherChannels: Array.isArray(attempt?.otherChannels) ? attempt.otherChannels : [],
+      response: String(attempt?.response || "").trim(),
+      attemptedAtLabel: attempt?.attemptedAt ? formatDateTime(attempt.attemptedAt) : "",
+      notes: String(attempt?.notes || ""),
+    });
+  };
+
   const onCancelAddAttempt = () => {
+    setEditingAttemptId("");
     setShowAddAttempt(false);
     resetAttemptForm();
     resetProgressiveSubForms();
   };
 
   const onSubmitAttempt = async () => {
-    const errs = validateAttempt();
+    const isEditingAttempt = Boolean(editingAttemptId);
+    const errs = validateAttempt({ requireResponse: !isEditingAttempt });
 
     setAttemptErrors(errs);
     if (Object.keys(errs).length) return;
@@ -2271,24 +2294,34 @@ function AgentLeadEngagement() {
     try {
       setAddingAttempt(true);
 
-      const res = await fetch(
-        `${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/contact-attempts?userId=${user.id}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+      const endpoint = isEditingAttempt
+        ? `${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/contact-attempts/${editingAttemptId}?userId=${user.id}`
+        : `${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/contact-attempts?userId=${user.id}`;
+      const method = isEditingAttempt ? "PATCH" : "POST";
+      const payload = isEditingAttempt
+        ? {
+            primaryChannel: attemptForm.primaryChannel,
+            otherChannels: attemptForm.otherChannels,
+            notes: String(attemptForm.notes || "").trim(),
+          }
+        : {
             primaryChannel: attemptForm.primaryChannel,
             otherChannels: attemptForm.otherChannels,
             response: String(attemptForm.response || "").trim(),
             notes: String(attemptForm.notes || "").trim(),
-          }),
-        }
-      );
+          };
+
+      const res = await fetch(endpoint, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
 
       const data = await res.json();
-      if (!res.ok) throw new Error(data?.message || "Failed to add contact attempt.");
+      if (!res.ok) throw new Error(data?.message || `Failed to ${isEditingAttempt ? "update" : "add"} contact attempt.`);
 
       await refreshCurrentProgressView();
+      setEditingAttemptId("");
       setShowAddAttempt(false);
       resetAttemptForm();
       resetProgressiveSubForms();
@@ -5101,11 +5134,17 @@ function AgentLeadEngagement() {
                               </div>
                             ) : null}
 
-                            <div className="le-activitySectionHeader">1. Attempt Contact</div>
+                            <div className="le-activitySectionHeader">
+                              {editingAttemptId ? "Edit Contact Attempt" : "1. Attempt Contact"}
+                            </div>
 
                             <div className="le-formRow">
                               <label className="le-label">Attempt No.</label>
-                              <input className="le-input" value={`#${nextAttemptNo}`} disabled />
+                              <input
+                                className="le-input"
+                                value={editingAttemptId ? `#${attempts.find((a) => a.attemptId === editingAttemptId)?.attemptNo || "—"}` : `#${nextAttemptNo}`}
+                                disabled
+                              />
                             </div>
 
                             <div className="le-formRow">
@@ -5193,7 +5232,7 @@ function AgentLeadEngagement() {
                                     meetingPlace: undefined,
                                   }));
                                 }}
-                                disabled={addingAttempt}
+                                disabled={addingAttempt || Boolean(editingAttemptId)}
                               >
                                 <option value="">Select</option>
                                 {RESPONSES.map((r) => (
@@ -5227,7 +5266,7 @@ function AgentLeadEngagement() {
                                 Cancel
                               </button>
                               <button type="button" className="le-btn primary" onClick={onSubmitAttempt} disabled={addingAttempt}>
-                                {addingAttempt ? "Saving..." : "Save"}
+                                {addingAttempt ? "Saving..." : editingAttemptId ? "Save Changes" : "Save"}
                               </button>
                             </div>
                           </div>
@@ -5239,7 +5278,22 @@ function AgentLeadEngagement() {
                               <div key={a.attemptNo} className="le-attemptItem">
                                 <div className="le-attemptTop">
                                   <strong>Attempt #{a.attemptNo}</strong>
-                                  <span className="le-attemptDate">{formatDateTime(a.attemptedAt)}</span>
+                                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                                    <span className="le-attemptDate">{formatDateTime(a.attemptedAt)}</span>
+                                    {!isContactingReadOnly && String(a.attemptId || "").trim() ? (
+                                      <button
+                                        type="button"
+                                        className="le-btn secondary"
+                                        style={{ padding: "4px 8px" }}
+                                        onClick={() => onOpenEditAttempt(a)}
+                                        disabled={addingAttempt}
+                                        title="Edit contact attempt (result is read-only)"
+                                      >
+                                        <FaEdit style={{ marginRight: 6 }} />
+                                        Edit
+                                      </button>
+                                    ) : null}
+                                  </div>
                                 </div>
 
                                 <div className="le-attemptMeta">
