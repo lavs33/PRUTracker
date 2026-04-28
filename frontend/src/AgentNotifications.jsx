@@ -109,8 +109,14 @@ function AgentNotifications() {
     async (signal) => {
       if (!user?.id) return;
 
+      const qs = new URLSearchParams({
+        userId: user.id,
+        entityType: "Task",
+      });
+      if (typeFilter) qs.set("type", typeFilter);
+
       const res = await fetch(
-        `${API_BASE}/api/notifications/counts?userId=${user.id}&entityType=Task`,
+        `${API_BASE}/api/notifications/counts?${qs.toString()}`,
         signal ? { signal } : undefined
       );
       const data = await res.json();
@@ -122,7 +128,7 @@ function AgentNotifications() {
         read: Number(data?.read || 0),
       });
     },
-    [API_BASE, user?.id]
+    [API_BASE, user?.id, typeFilter]
   );
 
   // Fetch notifications list for current tab + filters
