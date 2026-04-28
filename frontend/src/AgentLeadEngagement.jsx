@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { FaChevronRight } from "react-icons/fa";
+import { FaChevronRight, FaEdit } from "react-icons/fa";
 import TopNav from "./components/TopNav";
 import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
@@ -72,6 +72,7 @@ function AgentLeadEngagement() {
   // ✅ Add Attempt UI
   const [showAddAttempt, setShowAddAttempt] = useState(false);
   const [addingAttempt, setAddingAttempt] = useState(false);
+  const [editingAttemptId, setEditingAttemptId] = useState("");
   const [attemptErrors, setAttemptErrors] = useState({});
   const [attemptForm, setAttemptForm] = useState({
     primaryChannel: "",
@@ -1530,13 +1531,16 @@ function AgentLeadEngagement() {
       ? engagement.contactAttempts
       : [];
     const list = [...source];
-    return list.sort((a, b) => Number(a.attemptNo || 0) - Number(b.attemptNo || 0));
+    return list.sort((a, b) => Number(b.attemptNo || 0) - Number(a.attemptNo || 0));
   }, [engagement?.attempts, engagement?.contactAttempts]);
-  const lastAttempt = attempts.length ? attempts[attempts.length - 1] : null;
+  const lastAttempt = attempts.length ? attempts[0] : null;
 
   // UI stage: if there are attempts but backend still says Not Started, show Contacting on UI
   const rawStage = engagement?.currentStage || "Not Started";
   const stage = rawStage === "Not Started" && attempts.length > 0 ? "Contacting" : rawStage;
+  const isLeadClosed = String(lead?.status || "").trim().toLowerCase() === "closed";
+  const isLeadDropped = String(lead?.status || "").trim().toLowerCase() === "dropped";
+  const isLeadInProgress = String(lead?.status || "").trim().toLowerCase() === "in progress";
 
   // Not Started => no active pipeline step
   const safeIndex = stage === "Not Started" ? -1 : PIPELINE_STEPS.indexOf(stage);
@@ -1559,13 +1563,27 @@ function AgentLeadEngagement() {
   const futureStageSubactivityHelperText =
     "This stage is still ahead in the lead journey. Its subactivities stay gray until the progression reaches them.";
 
-  const isNeedsAssessmentEditableNow = showNeedsAssessmentPanel && isViewingCurrentStage && stage === "Needs Assessment";
-  const isProposalEditableNow = showProposalPanel && isViewingCurrentStage && stage === "Proposal";
+  const isNeedsAssessmentEditableNow =
+    showNeedsAssessmentPanel &&
+    isViewingCurrentStage &&
+    stage === "Needs Assessment" &&
+    !isLeadClosed &&
+    !isLeadDropped;
+  const isProposalEditableNow =
+    showProposalPanel &&
+    isViewingCurrentStage &&
+    stage === "Proposal" &&
+    !isLeadClosed &&
+    !isLeadDropped;
 
   // Editable when viewing Contacting while current stage is Contacting,
   // or when current stage is Not Started and user moved into Contacting view
   // to create the very first attempt.
-  const isContactingEditableNow = showContactingPanel && (stage === "Contacting" || stage === "Not Started");
+  const isContactingEditableNow =
+    showContactingPanel &&
+    (stage === "Contacting" || stage === "Not Started") &&
+    !isLeadClosed &&
+    !isLeadDropped;
   const isContactingReadOnly = !isContactingEditableNow;
 
   // Activity tracker only relevant when Contacting panel is shown
@@ -2148,9 +2166,28 @@ function AgentLeadEngagement() {
       ? policyIssuanceUiActivityKey
       : "";
 
-  const isLeadClosed = String(lead?.status || "").trim().toLowerCase() === "closed";
-  const showCurrentSubactivityStatus = isViewingCurrentStage && !isLeadClosed;
-  const closedLeadSubactivityHelperText = "This lead is closed. Subactivities are view-only.";
+  const showCurrentSubactivityStatus = isViewingCurrentStage && !isLeadClosed && !isLeadDropped;
+  const closedLeadSubactivityHelperText = "";
+
+  const setStageViewIfAllowed = useCallback(
+    (nextStage) => {
+      if (isLeadDropped || isLeadInProgress) {
+        const nextIndex = PIPELINE_STEPS.indexOf(nextStage);
+        if (nextIndex > safeIndex) return;
+      }
+      setSelectedStageView(nextStage);
+    },
+    [isLeadDropped, isLeadInProgress, PIPELINE_STEPS, safeIndex]
+  );
+
+  useEffect(() => {
+    if (!isLeadDropped && !isLeadInProgress) return;
+    if (selectedStageView === "CURRENT") return;
+    const selectedIndex = PIPELINE_STEPS.indexOf(selectedStageView);
+    if (selectedIndex > safeIndex) {
+      setSelectedStageView("CURRENT");
+    }
+  }, [isLeadDropped, isLeadInProgress, selectedStageView, PIPELINE_STEPS, safeIndex]);
 
   const mainTitle = viewStage === "Not Started" ? "Not Started" : viewStage || "—";
 
@@ -2195,24 +2232,7 @@ function AgentLeadEngagement() {
     });
   };
 
-  const resetProgressiveSubForms = () => {
-    setValidateForm({ phoneValidation: "" });
-    setInterestForm({ interestLevel: "", preferredChannel: "", preferredChannelOther: "" });
-    setMeetingForm({
-      meetingDate: "",
-      meetingStartTime: "",
-      meetingDurationMin: 120,
-      meetingMode: "",
-      meetingPlatform: "",
-      meetingPlatformOther: "",
-      meetingLink: "",
-      meetingInviteSent: false,
-      meetingPlace: "",
-    });
-  };
-
-
-  const validateAttempt = () => {
+  const validateAttempt = ({ requireResponse = true } = {}) => {
     const e = {};
     const primary = String(attemptForm.primaryChannel || "").trim();
     const response = String(attemptForm.response || "").trim();
@@ -2233,8 +2253,10 @@ function AgentLeadEngagement() {
       }
     }
 
-    if (!response) e.response = "Response is required.";
-    if (response && !RESPONSES.includes(response)) e.response = "Invalid response.";
+    if (requireResponse) {
+      if (!response) e.response = "Response is required.";
+      if (response && !RESPONSES.includes(response)) e.response = "Invalid response.";
+    }
 
     return e;
   };
@@ -2251,19 +2273,47 @@ function AgentLeadEngagement() {
 
   const onOpenAddAttempt = () => {
     if (!canAddAttempt) return;
+    setEditingAttemptId("");
     setShowAddAttempt(true);
     resetAttemptForm();
-    resetProgressiveSubForms();
+  };
+
+  const onOpenEditAttempt = (attempt) => {
+    if (isContactingReadOnly) return;
+    if (isLeadClosed || isLeadDropped) return;
+    const attemptId = String(attempt?.attemptId || "").trim();
+    if (!attemptId) return;
+
+    setEditingAttemptId(attemptId);
+    setAttemptErrors({});
+    setShowAddAttempt(true);
+    setAttemptForm({
+      primaryChannel: String(attempt?.primaryChannel || "").trim(),
+      otherChannels: Array.isArray(attempt?.otherChannels) ? attempt.otherChannels : [],
+      response: String(attempt?.response || "").trim(),
+      attemptedAtLabel: attempt?.attemptedAt ? formatDateTime(attempt.attemptedAt) : "",
+      notes: String(attempt?.notes || ""),
+    });
   };
 
   const onCancelAddAttempt = () => {
+    setEditingAttemptId("");
     setShowAddAttempt(false);
     resetAttemptForm();
-    resetProgressiveSubForms();
+  };
+
+  const mapAttemptServerErrorToFields = (message) => {
+    const msg = String(message || "").trim();
+    if (!msg) return {};
+    if (/primarychannel/i.test(msg)) return { primaryChannel: msg };
+    if (/otherchannels/i.test(msg)) return { otherChannels: msg };
+    if (/response/i.test(msg)) return { response: msg };
+    return { _global: msg };
   };
 
   const onSubmitAttempt = async () => {
-    const errs = validateAttempt();
+    const isEditingAttempt = Boolean(editingAttemptId);
+    const errs = validateAttempt({ requireResponse: true });
 
     setAttemptErrors(errs);
     if (Object.keys(errs).length) return;
@@ -2271,41 +2321,49 @@ function AgentLeadEngagement() {
     try {
       setAddingAttempt(true);
 
-      const res = await fetch(
-        `${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/contact-attempts?userId=${user.id}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+      const endpoint = isEditingAttempt
+        ? `${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/contact-attempts/${editingAttemptId}?userId=${user.id}`
+        : `${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/contact-attempts?userId=${user.id}`;
+      const method = isEditingAttempt ? "PATCH" : "POST";
+      const payload = isEditingAttempt
+        ? {
             primaryChannel: attemptForm.primaryChannel,
             otherChannels: attemptForm.otherChannels,
             response: String(attemptForm.response || "").trim(),
             notes: String(attemptForm.notes || "").trim(),
-          }),
-        }
-      );
+          }
+        : {
+            primaryChannel: attemptForm.primaryChannel,
+            otherChannels: attemptForm.otherChannels,
+            response: String(attemptForm.response || "").trim(),
+            notes: String(attemptForm.notes || "").trim(),
+          };
+
+      const res = await fetch(endpoint, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
 
       const data = await res.json();
-      if (!res.ok) throw new Error(data?.message || "Failed to add contact attempt.");
+      if (!res.ok) throw new Error(data?.message || `Failed to ${isEditingAttempt ? "update" : "add"} contact attempt.`);
 
       await refreshCurrentProgressView();
+      setEditingAttemptId("");
       setShowAddAttempt(false);
       resetAttemptForm();
-      resetProgressiveSubForms();
     } catch (err) {
-      setAttemptErrors((er) => ({
-        ...er,
-        _global: err?.message || "Cannot connect to server. Is backend running?",
-      }));
+      const mapped = mapAttemptServerErrorToFields(err?.message || "Cannot connect to server. Is backend running?");
+      setAttemptErrors((er) => ({ ...er, ...mapped }));
     } finally {
       setAddingAttempt(false);
     }
   };
 
-  const submitValidateContact = async () => {
+  const submitValidateContact = async (overrideResult = "") => {
     try {
       setValidateError("");
-      const result = String(validateForm.phoneValidation || "").trim().toUpperCase();
+      const result = String(overrideResult || validateForm.phoneValidation || "").trim().toUpperCase();
       if (!result) {
         setValidateError("Please select a validation result.");
         return;
@@ -3339,7 +3397,11 @@ function AgentLeadEngagement() {
   ]);
 
   const shouldShowStageActivityBadge =
-    !isLeadClosed && !isViewedStageFullyFinished && String(stageActivityBadge || "").trim() && stageActivityBadge !== "—";
+    !isLeadClosed &&
+    !isLeadDropped &&
+    !isViewedStageFullyFinished &&
+    String(stageActivityBadge || "").trim() &&
+    stageActivityBadge !== "—";
 
   const onPolicySummaryPicked = (file) => {
     if (!file) {
@@ -3729,6 +3791,41 @@ function AgentLeadEngagement() {
                 <span className="le-crumbCurrent">Lead Engagement</span>
               </div>
 
+              {engagement.isBlocked && (
+                <div className="le-modalOverlay" style={{ zIndex: 1000000 }}>
+                  <div className="le-modalCard" style={{ width: "min(760px, calc(100% - 32px))" }}>
+                    <button
+                      type="button"
+                      className="le-modalClose"
+                      aria-label="Back to lead details"
+                      onClick={goBackToLeadDetails}
+                      title="Back to Lead Details"
+                    >
+                      ×
+                    </button>
+
+                    <h3 className="le-modalTitle">Lead Engagement is temporarily locked</h3>
+                    <p className="le-modalText">
+                      This lead was marked as <strong>Wrong Contact</strong>. Please update the prospect phone number in
+                      Prospect Details to unlock this engagement and continue Contacting activities.
+                    </p>
+
+                    <div className="le-modalActions">
+                      <button type="button" className="le-btn secondary" onClick={goBackToLeadDetails}>
+                        Back to Lead Details
+                      </button>
+                      <button
+                        type="button"
+                        className="le-btn primary"
+                        onClick={() => navigate(`/agent/${username}/prospects/${prospectId}/full`)}
+                      >
+                        Update Contact Info
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Summary Row */}
               <div className="le-summaryRow">
                 {/* Prospect Summary */}
@@ -3849,18 +3946,25 @@ function AgentLeadEngagement() {
                 {PIPELINE_STEPS.map((step, i) => {
                   const isActive = safeIndex === i;
                   const isDone = safeIndex > i;
+                  const stageDisabledForFuture =
+                    (isLeadDropped && i > safeIndex) || (isLeadInProgress && i > safeIndex);
 
                   return (
                     <div
                       key={step}
                       className="le-pipelineGroup"
                       role="button"
-                      tabIndex={0}
-                      onClick={() => setSelectedStageView(step)}
+                      tabIndex={stageDisabledForFuture ? -1 : 0}
+                      aria-disabled={stageDisabledForFuture}
+                      onClick={() => {
+                        if (stageDisabledForFuture) return;
+                        setStageViewIfAllowed(step);
+                      }}
                       onKeyDown={(e) => {
+                        if (stageDisabledForFuture) return;
                         if (e.key === "Enter" || e.key === " ") {
                           e.preventDefault();
-                          setSelectedStageView(step);
+                          setStageViewIfAllowed(step);
                         }
                       }}
                     >
@@ -3896,7 +4000,13 @@ function AgentLeadEngagement() {
                     </p>
                   )}
 
-                  {!isViewingCurrentStage && (
+                  {(isLeadClosed || isLeadDropped) && (
+                    <p className="le-muted" style={{ marginTop: 8, marginBottom: 10 }}>
+                      This lead is closed or dropped. Subactivities are view-only.
+                    </p>
+                  )}
+
+                  {!isViewingCurrentStage && !(isLeadClosed || isLeadDropped) && (
                     <p className="le-muted" style={{ marginTop: 8, marginBottom: 10 }}>
                       You are viewing a non-current stage. This section is read-only.
                     </p>
@@ -3916,7 +4026,7 @@ function AgentLeadEngagement() {
                         )
                       }
                       helperText={
-                        isLeadClosed
+                        isLeadClosed || isLeadDropped
                           ? closedLeadSubactivityHelperText
                           : contactingViewedStepIndex < contactingCurrentStepIndex
                           ? "Viewing a previously saved subactivity. Click the current subactivity to resume editing."
@@ -3958,7 +4068,7 @@ function AgentLeadEngagement() {
                           ? isViewingFutureStage
                             ? futureStageSubactivityHelperText
                             : ""
-                          : isLeadClosed
+                          : isLeadClosed || isLeadDropped
                           ? closedLeadSubactivityHelperText
                           : needsViewedStepIndex < needsCurrentStepIndex
                           ? "Viewing a previously saved subactivity. Click the current subactivity to resume editing."
@@ -3989,7 +4099,7 @@ function AgentLeadEngagement() {
                           ? isViewingFutureStage
                             ? futureStageSubactivityHelperText
                             : ""
-                          : isLeadClosed
+                          : isLeadClosed || isLeadDropped
                           ? closedLeadSubactivityHelperText
                           : proposalViewedStepIndex < proposalCurrentStepIndex
                           ? "Viewing a previously saved proposal subactivity in read-only mode. Click the current subactivity to resume editing."
@@ -4020,7 +4130,7 @@ function AgentLeadEngagement() {
                           ? isViewingFutureStage
                             ? futureStageSubactivityHelperText
                             : ""
-                          : isLeadClosed
+                          : isLeadClosed || isLeadDropped
                           ? closedLeadSubactivityHelperText
                           : applicationViewedStepIndex < applicationCurrentStepIndex
                           ? "Viewing a previously saved application subactivity in read-only mode. Click the current subactivity to resume editing."
@@ -4051,7 +4161,7 @@ function AgentLeadEngagement() {
                           ? isViewingFutureStage
                             ? futureStageSubactivityHelperText
                             : ""
-                          : isLeadClosed
+                          : isLeadClosed || isLeadDropped
                           ? closedLeadSubactivityHelperText
                           : policyViewedStepIndex < policyCurrentStepIndex
                           ? "Viewing a previously saved policy issuance subactivity in read-only mode. Click the current subactivity to resume editing."
@@ -5068,12 +5178,6 @@ function AgentLeadEngagement() {
                     </>
                   )}
 
-                  {showContactingPanel && isContactingReadOnly && (
-                    <p className="le-muted" style={{ marginBottom: 10 }}>
-                      Contacting records are view-only at this stage. Add Attempt and edits are disabled.
-                    </p>
-                  )}
-
                   {showContactingPanel && isAttemptContactViewed && (
                     <>
                       <div className="le-block">
@@ -5101,11 +5205,17 @@ function AgentLeadEngagement() {
                               </div>
                             ) : null}
 
-                            <div className="le-activitySectionHeader">1. Attempt Contact</div>
+                            <div className="le-activitySectionHeader">
+                              {editingAttemptId ? "Edit Contact Attempt" : "1. Attempt Contact"}
+                            </div>
 
                             <div className="le-formRow">
                               <label className="le-label">Attempt No.</label>
-                              <input className="le-input" value={`#${nextAttemptNo}`} disabled />
+                              <input
+                                className="le-input"
+                                value={editingAttemptId ? `#${attempts.find((a) => a.attemptId === editingAttemptId)?.attemptNo || "—"}` : `#${nextAttemptNo}`}
+                                disabled
+                              />
                             </div>
 
                             <div className="le-formRow">
@@ -5173,9 +5283,6 @@ function AgentLeadEngagement() {
                                 onChange={(e) => {
                                   const nextResponse = e.target.value;
                                   setAttemptForm((f) => ({ ...f, response: nextResponse }));
-                                  if (nextResponse !== "Responded") {
-                                    resetProgressiveSubForms();
-                                  }
                                   setAttemptErrors((er) => ({
                                     ...er,
                                     response: undefined,
@@ -5227,19 +5334,39 @@ function AgentLeadEngagement() {
                                 Cancel
                               </button>
                               <button type="button" className="le-btn primary" onClick={onSubmitAttempt} disabled={addingAttempt}>
-                                {addingAttempt ? "Saving..." : "Save"}
+                                {addingAttempt ? "Saving..." : editingAttemptId ? "Save Changes" : "Save"}
                               </button>
                             </div>
                           </div>
                         )}
 
-                        <div className="le-attemptList">
-                          {attempts.map((a) => {
-                            return (
-                              <div key={a.attemptNo} className="le-attemptItem">
+                        {!showAddAttempt && !editingAttemptId && (
+                          <div className="le-attemptList">
+                            {attempts.map((a) => {
+                              return (
+                                <div key={a.attemptNo} className="le-attemptItem">
                                 <div className="le-attemptTop">
                                   <strong>Attempt #{a.attemptNo}</strong>
-                                  <span className="le-attemptDate">{formatDateTime(a.attemptedAt)}</span>
+                                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                                    <span className="le-attemptDate">{formatDateTime(a.attemptedAt)}</span>
+                                    {!isContactingReadOnly &&
+                                    !isLeadClosed &&
+                                    !isLeadDropped &&
+                                    String(a.attemptId || "").trim() &&
+                                    String(lastAttempt?.attemptId || "") === String(a.attemptId || "") ? (
+                                      <button
+                                        type="button"
+                                        className="le-btn secondary"
+                                        style={{ padding: "4px 8px" }}
+                                        onClick={() => onOpenEditAttempt(a)}
+                                        disabled={addingAttempt}
+                                        title="Edit latest contact attempt"
+                                      >
+                                        <FaEdit style={{ marginRight: 6 }} />
+                                        Edit
+                                      </button>
+                                    ) : null}
+                                  </div>
                                 </div>
 
                                 <div className="le-attemptMeta">
@@ -5269,16 +5396,17 @@ function AgentLeadEngagement() {
                                     <div className="le-metaValue">{a.notes}</div>
                                   </div>
                                 ) : null}
-                              </div>
-                            );
-                          })}
+                                </div>
+                              );
+                            })}
 
-                          {!showAddAttempt && attempts.length === 0 && (
-                            <div className="le-muted" style={{ padding: "10px 0" }}>
-                              No contact attempts yet.
-                            </div>
-                          )}
-                        </div>
+                            {!showAddAttempt && attempts.length === 0 && (
+                              <div className="le-muted" style={{ padding: "10px 0" }}>
+                                No contact attempts yet.
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </>
                   )}
@@ -5350,12 +5478,32 @@ function AgentLeadEngagement() {
                               </div>
                             </>
                           ) : savedPhoneValidationResult ? (
-                            <div className="le-attemptMeta" style={{ marginTop: 8 }}>
-                              <div>
-                                <span className="le-metaLabel">Phone Number Correct?</span>
-                                <span className="le-metaValue">{savedPhoneValidationResult === "CORRECT" ? "Correct" : "Wrong"}</span>
+                            <>
+                              <div className="le-attemptMeta" style={{ marginTop: 8 }}>
+                                <div>
+                                  <span className="le-metaLabel">Phone Number Correct?</span>
+                                  <span className="le-metaValue">{savedPhoneValidationResult === "CORRECT" ? "Correct" : "Wrong"}</span>
+                                </div>
                               </div>
-                            </div>
+
+                              {savedPhoneValidationResult === "CORRECT" &&
+                              !validatingContact &&
+                              !isEngagementBlocked &&
+                              !isLeadClosed &&
+                              !isLeadDropped ? (
+                                <div className="le-actions" style={{ justifyContent: "flex-start", marginTop: 10 }}>
+                                  <button
+                                    type="button"
+                                    className="le-btn secondary"
+                                    onClick={() => submitValidateContact("WRONG_CONTACT")}
+                                    disabled={validatingContact}
+                                    title="Edit validation from Correct to Wrong Contact"
+                                  >
+                                    Mark as Wrong Contact
+                                  </button>
+                                </div>
+                              ) : null}
+                            </>
                           ) : (
                             <p className="le-muted" style={{ marginTop: 8 }}>
                               No saved validation result yet.
