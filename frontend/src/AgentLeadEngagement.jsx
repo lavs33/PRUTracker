@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { FaChevronRight } from "react-icons/fa";
+import { FaChevronRight, FaEdit } from "react-icons/fa";
 import TopNav from "./components/TopNav";
 import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
@@ -72,6 +72,7 @@ function AgentLeadEngagement() {
   // ✅ Add Attempt UI
   const [showAddAttempt, setShowAddAttempt] = useState(false);
   const [addingAttempt, setAddingAttempt] = useState(false);
+  const [editingAttemptId, setEditingAttemptId] = useState("");
   const [attemptErrors, setAttemptErrors] = useState({});
   const [attemptForm, setAttemptForm] = useState({
     primaryChannel: "",
@@ -85,6 +86,7 @@ function AgentLeadEngagement() {
   const [contactingViewedActivityKey, setContactingViewedActivityKey] = useState("");
   const [validatingContact, setValidatingContact] = useState(false);
   const [validateError, setValidateError] = useState("");
+  const [validateFieldErrors, setValidateFieldErrors] = useState({});
 
   const [interestForm, setInterestForm] = useState({
     interestLevel: "",
@@ -93,6 +95,8 @@ function AgentLeadEngagement() {
   });
   const [savingInterest, setSavingInterest] = useState(false);
   const [interestError, setInterestError] = useState("");
+  const [interestFieldErrors, setInterestFieldErrors] = useState({});
+  const [confirmNotInterestedModalOpen, setConfirmNotInterestedModalOpen] = useState(false);
   const [dropOutcomeModal, setDropOutcomeModal] = useState(null);
 
   const [meetingForm, setMeetingForm] = useState({
@@ -108,6 +112,11 @@ function AgentLeadEngagement() {
   });
   const [savingMeeting, setSavingMeeting] = useState(false);
   const [meetingError, setMeetingError] = useState("");
+  const [meetingFieldErrors, setMeetingFieldErrors] = useState({});
+  const [contactingRescheduleMode, setContactingRescheduleMode] = useState(false);
+  const [rescheduleFromNeedsMode, setRescheduleFromNeedsMode] = useState(false);
+  const [rescheduleOriginalMeetingAt, setRescheduleOriginalMeetingAt] = useState(null);
+  const [needsAttendanceRescheduleLock, setNeedsAttendanceRescheduleLock] = useState(false);
 
   const [needsAssessmentLoading, setNeedsAssessmentLoading] = useState(false);
   const [needsAssessmentSaving, setNeedsAssessmentSaving] = useState(false);
@@ -1426,7 +1435,6 @@ function AgentLeadEngagement() {
     const list = [];
     const start = new Date();
     start.setHours(0, 0, 0, 0);
-    start.setDate(start.getDate() + 1);
 
     for (let i = 0; i < 30; i += 1) {
       const d = new Date(start);
@@ -1452,7 +1460,36 @@ function AgentLeadEngagement() {
     return slots;
   }, []);
 
-  const meetingStartSlots = useMemo(() => buildMeetingStartSlots(meetingForm.meetingDurationMin), [buildMeetingStartSlots, meetingForm.meetingDurationMin]);
+  const contactingMeetingStartSlots = useMemo(() => {
+    const allSlots = buildMeetingStartSlots(meetingForm.meetingDurationMin);
+    const selectedDate = String(meetingForm.meetingDate || "").trim();
+    if (!selectedDate) return allSlots.filter((slot) => Number(slot.split(":")[0]) < 19 || slot === "19:00");
+
+    const today = toLocalDateInputValue(new Date());
+    const maxStartMinutes = 19 * 60;
+    const baseSlots = allSlots.filter((slot) => {
+      const [hh, mm] = slot.split(":").map(Number);
+      return hh * 60 + mm <= maxStartMinutes;
+    });
+
+    if (selectedDate !== today) return baseSlots;
+
+    const now = new Date();
+    const nowMinutes = now.getHours() * 60 + now.getMinutes();
+    const nextHalfHour = Math.ceil(nowMinutes / 30) * 30;
+    const nowFiltered = baseSlots.filter((slot) => {
+      const [hh, mm] = slot.split(":").map(Number);
+      return hh * 60 + mm >= nextHalfHour;
+    });
+    if (!rescheduleFromNeedsMode) return nowFiltered;
+
+    const original = rescheduleOriginalMeetingAt ? new Date(rescheduleOriginalMeetingAt) : null;
+    if (!original || Number.isNaN(original.getTime())) return nowFiltered;
+    return nowFiltered.filter((slot) => {
+      const candidate = combineDateAndTimeLocal(selectedDate, slot);
+      return candidate && candidate.getTime() > original.getTime();
+    });
+  }, [buildMeetingStartSlots, meetingForm.meetingDate, meetingForm.meetingDurationMin, rescheduleFromNeedsMode, rescheduleOriginalMeetingAt]);
   const proposalMeetingStartSlots = useMemo(() => buildMeetingStartSlots(proposalMeetingForm.meetingDurationMin), [buildMeetingStartSlots, proposalMeetingForm.meetingDurationMin]);
   const applicationMeetingStartSlots = useMemo(() => buildMeetingStartSlots(applicationMeetingForm.meetingDurationMin), [buildMeetingStartSlots, applicationMeetingForm.meetingDurationMin]);
 
@@ -1530,13 +1567,16 @@ function AgentLeadEngagement() {
       ? engagement.contactAttempts
       : [];
     const list = [...source];
-    return list.sort((a, b) => Number(a.attemptNo || 0) - Number(b.attemptNo || 0));
+    return list.sort((a, b) => Number(b.attemptNo || 0) - Number(a.attemptNo || 0));
   }, [engagement?.attempts, engagement?.contactAttempts]);
-  const lastAttempt = attempts.length ? attempts[attempts.length - 1] : null;
+  const lastAttempt = attempts.length ? attempts[0] : null;
 
   // UI stage: if there are attempts but backend still says Not Started, show Contacting on UI
   const rawStage = engagement?.currentStage || "Not Started";
   const stage = rawStage === "Not Started" && attempts.length > 0 ? "Contacting" : rawStage;
+  const isLeadClosed = String(lead?.status || "").trim().toLowerCase() === "closed";
+  const isLeadDropped = String(lead?.status || "").trim().toLowerCase() === "dropped";
+  const isLeadInProgress = String(lead?.status || "").trim().toLowerCase() === "in progress";
 
   // Not Started => no active pipeline step
   const safeIndex = stage === "Not Started" ? -1 : PIPELINE_STEPS.indexOf(stage);
@@ -1559,13 +1599,27 @@ function AgentLeadEngagement() {
   const futureStageSubactivityHelperText =
     "This stage is still ahead in the lead journey. Its subactivities stay gray until the progression reaches them.";
 
-  const isNeedsAssessmentEditableNow = showNeedsAssessmentPanel && isViewingCurrentStage && stage === "Needs Assessment";
-  const isProposalEditableNow = showProposalPanel && isViewingCurrentStage && stage === "Proposal";
+  const isNeedsAssessmentEditableNow =
+    showNeedsAssessmentPanel &&
+    isViewingCurrentStage &&
+    stage === "Needs Assessment" &&
+    !isLeadClosed &&
+    !isLeadDropped;
+  const isProposalEditableNow =
+    showProposalPanel &&
+    isViewingCurrentStage &&
+    stage === "Proposal" &&
+    !isLeadClosed &&
+    !isLeadDropped;
 
   // Editable when viewing Contacting while current stage is Contacting,
   // or when current stage is Not Started and user moved into Contacting view
   // to create the very first attempt.
-  const isContactingEditableNow = showContactingPanel && (stage === "Contacting" || stage === "Not Started");
+  const isContactingEditableNow =
+    showContactingPanel &&
+    (stage === "Contacting" || stage === "Not Started") &&
+    !isLeadClosed &&
+    !isLeadDropped;
   const isContactingReadOnly = !isContactingEditableNow;
 
   // Activity tracker only relevant when Contacting panel is shown
@@ -2001,7 +2055,9 @@ function AgentLeadEngagement() {
   const isAssessInterestEditable =
     isContactingCurrentViewEditable && contactingCurrentActivityKey === "Assess Interest" && !savedInterestLevel;
   const isScheduleMeetingEditable =
-    isContactingCurrentViewEditable && contactingCurrentActivityKey === "Schedule Meeting";
+    (isContactingCurrentViewEditable && contactingCurrentActivityKey === "Schedule Meeting") ||
+    rescheduleFromNeedsMode ||
+    contactingRescheduleMode;
 
   const isNeedsAssessmentCurrentViewEditable =
     isNeedsAssessmentEditableNow && needsAssessmentViewedActivityKey === needsActivityKeyRaw;
@@ -2148,9 +2204,29 @@ function AgentLeadEngagement() {
       ? policyIssuanceUiActivityKey
       : "";
 
-  const isLeadClosed = String(lead?.status || "").trim().toLowerCase() === "closed";
-  const showCurrentSubactivityStatus = isViewingCurrentStage && !isLeadClosed;
-  const closedLeadSubactivityHelperText = "This lead is closed. Subactivities are view-only.";
+  const showCurrentSubactivityStatus = isViewingCurrentStage && !isLeadClosed && !isLeadDropped;
+  const closedLeadSubactivityHelperText = "";
+
+  const setStageViewIfAllowed = useCallback(
+    (nextStage) => {
+      if (needsAttendanceRescheduleLock && nextStage !== "Contacting") return;
+      if (isLeadDropped || isLeadInProgress) {
+        const nextIndex = PIPELINE_STEPS.indexOf(nextStage);
+        if (nextIndex > safeIndex) return;
+      }
+      setSelectedStageView(nextStage);
+    },
+    [needsAttendanceRescheduleLock, isLeadDropped, isLeadInProgress, PIPELINE_STEPS, safeIndex]
+  );
+
+  useEffect(() => {
+    if (!isLeadDropped && !isLeadInProgress) return;
+    if (selectedStageView === "CURRENT") return;
+    const selectedIndex = PIPELINE_STEPS.indexOf(selectedStageView);
+    if (selectedIndex > safeIndex) {
+      setSelectedStageView("CURRENT");
+    }
+  }, [isLeadDropped, isLeadInProgress, selectedStageView, PIPELINE_STEPS, safeIndex]);
 
   const mainTitle = viewStage === "Not Started" ? "Not Started" : viewStage || "—";
 
@@ -2195,24 +2271,7 @@ function AgentLeadEngagement() {
     });
   };
 
-  const resetProgressiveSubForms = () => {
-    setValidateForm({ phoneValidation: "" });
-    setInterestForm({ interestLevel: "", preferredChannel: "", preferredChannelOther: "" });
-    setMeetingForm({
-      meetingDate: "",
-      meetingStartTime: "",
-      meetingDurationMin: 120,
-      meetingMode: "",
-      meetingPlatform: "",
-      meetingPlatformOther: "",
-      meetingLink: "",
-      meetingInviteSent: false,
-      meetingPlace: "",
-    });
-  };
-
-
-  const validateAttempt = () => {
+  const validateAttempt = ({ requireResponse = true } = {}) => {
     const e = {};
     const primary = String(attemptForm.primaryChannel || "").trim();
     const response = String(attemptForm.response || "").trim();
@@ -2233,8 +2292,10 @@ function AgentLeadEngagement() {
       }
     }
 
-    if (!response) e.response = "Response is required.";
-    if (response && !RESPONSES.includes(response)) e.response = "Invalid response.";
+    if (requireResponse) {
+      if (!response) e.response = "Response is required.";
+      if (response && !RESPONSES.includes(response)) e.response = "Invalid response.";
+    }
 
     return e;
   };
@@ -2251,19 +2312,47 @@ function AgentLeadEngagement() {
 
   const onOpenAddAttempt = () => {
     if (!canAddAttempt) return;
+    setEditingAttemptId("");
     setShowAddAttempt(true);
     resetAttemptForm();
-    resetProgressiveSubForms();
+  };
+
+  const onOpenEditAttempt = (attempt) => {
+    if (isContactingReadOnly) return;
+    if (isLeadClosed || isLeadDropped) return;
+    const attemptId = String(attempt?.attemptId || "").trim();
+    if (!attemptId) return;
+
+    setEditingAttemptId(attemptId);
+    setAttemptErrors({});
+    setShowAddAttempt(true);
+    setAttemptForm({
+      primaryChannel: String(attempt?.primaryChannel || "").trim(),
+      otherChannels: Array.isArray(attempt?.otherChannels) ? attempt.otherChannels : [],
+      response: String(attempt?.response || "").trim(),
+      attemptedAtLabel: attempt?.attemptedAt ? formatDateTime(attempt.attemptedAt) : "",
+      notes: String(attempt?.notes || ""),
+    });
   };
 
   const onCancelAddAttempt = () => {
+    setEditingAttemptId("");
     setShowAddAttempt(false);
     resetAttemptForm();
-    resetProgressiveSubForms();
+  };
+
+  const mapAttemptServerErrorToFields = (message) => {
+    const msg = String(message || "").trim();
+    if (!msg) return {};
+    if (/primarychannel/i.test(msg)) return { primaryChannel: msg };
+    if (/otherchannels/i.test(msg)) return { otherChannels: msg };
+    if (/response/i.test(msg)) return { response: msg };
+    return { _global: msg };
   };
 
   const onSubmitAttempt = async () => {
-    const errs = validateAttempt();
+    const isEditingAttempt = Boolean(editingAttemptId);
+    const errs = validateAttempt({ requireResponse: true });
 
     setAttemptErrors(errs);
     if (Object.keys(errs).length) return;
@@ -2271,43 +2360,52 @@ function AgentLeadEngagement() {
     try {
       setAddingAttempt(true);
 
-      const res = await fetch(
-        `${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/contact-attempts?userId=${user.id}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+      const endpoint = isEditingAttempt
+        ? `${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/contact-attempts/${editingAttemptId}?userId=${user.id}`
+        : `${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/contact-attempts?userId=${user.id}`;
+      const method = isEditingAttempt ? "PATCH" : "POST";
+      const payload = isEditingAttempt
+        ? {
             primaryChannel: attemptForm.primaryChannel,
             otherChannels: attemptForm.otherChannels,
             response: String(attemptForm.response || "").trim(),
             notes: String(attemptForm.notes || "").trim(),
-          }),
-        }
-      );
+          }
+        : {
+            primaryChannel: attemptForm.primaryChannel,
+            otherChannels: attemptForm.otherChannels,
+            response: String(attemptForm.response || "").trim(),
+            notes: String(attemptForm.notes || "").trim(),
+          };
+
+      const res = await fetch(endpoint, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
 
       const data = await res.json();
-      if (!res.ok) throw new Error(data?.message || "Failed to add contact attempt.");
+      if (!res.ok) throw new Error(data?.message || `Failed to ${isEditingAttempt ? "update" : "add"} contact attempt.`);
 
       await refreshCurrentProgressView();
+      setEditingAttemptId("");
       setShowAddAttempt(false);
       resetAttemptForm();
-      resetProgressiveSubForms();
     } catch (err) {
-      setAttemptErrors((er) => ({
-        ...er,
-        _global: err?.message || "Cannot connect to server. Is backend running?",
-      }));
+      const mapped = mapAttemptServerErrorToFields(err?.message || "Cannot connect to server. Is backend running?");
+      setAttemptErrors((er) => ({ ...er, ...mapped }));
     } finally {
       setAddingAttempt(false);
     }
   };
 
-  const submitValidateContact = async () => {
+  const submitValidateContact = async (overrideResult = "") => {
     try {
       setValidateError("");
-      const result = String(validateForm.phoneValidation || "").trim().toUpperCase();
+      setValidateFieldErrors({});
+      const result = String(overrideResult || validateForm.phoneValidation || "").trim().toUpperCase();
       if (!result) {
-        setValidateError("Please select a validation result.");
+        setValidateFieldErrors({ phoneValidation: "Please select a validation result." });
         return;
       }
 
@@ -2335,28 +2433,8 @@ function AgentLeadEngagement() {
     }
   };
 
-  const submitAssessInterest = async () => {
+  const saveAssessInterest = async (interestLevel) => {
     try {
-      setInterestError("");
-
-      const interestLevel = String(interestForm.interestLevel || "").trim().toUpperCase();
-      if (!["INTERESTED", "NOT_INTERESTED"].includes(interestLevel)) {
-        setInterestError("Please select a valid interest level.");
-        return;
-      }
-
-      if (interestLevel === "INTERESTED") {
-        const pc = String(interestForm.preferredChannel || "").trim();
-        if (!["SMS", "WhatsApp", "Viber", "Telegram", "Other"].includes(pc)) {
-          setInterestError("Please select a preferred communication channel.");
-          return;
-        }
-        if (pc === "Other" && !String(interestForm.preferredChannelOther || "").trim()) {
-          setInterestError("Please specify the other communication channel.");
-          return;
-        }
-      }
-
       setSavingInterest(true);
 
       const res = await fetch(
@@ -2397,9 +2475,91 @@ function AgentLeadEngagement() {
     }
   };
 
+  const submitAssessInterest = async () => {
+    setInterestError("");
+    setInterestFieldErrors({});
+
+    const interestLevel = String(interestForm.interestLevel || "").trim().toUpperCase();
+    if (!["INTERESTED", "NOT_INTERESTED"].includes(interestLevel)) {
+      setInterestFieldErrors({ interestLevel: "Please select a valid interest level." });
+      return;
+    }
+
+    if (interestLevel === "INTERESTED") {
+      const pc = String(interestForm.preferredChannel || "").trim();
+      if (!["SMS", "WhatsApp", "Viber", "Telegram", "Other"].includes(pc)) {
+        setInterestFieldErrors({ preferredChannel: "Please select a preferred communication channel." });
+        return;
+      }
+      if (pc === "Other" && !String(interestForm.preferredChannelOther || "").trim()) {
+        setInterestFieldErrors({ preferredChannelOther: "Please specify the other communication channel." });
+        return;
+      }
+    }
+
+    if (interestLevel === "NOT_INTERESTED") {
+      setConfirmNotInterestedModalOpen(true);
+      return;
+    }
+
+    await saveAssessInterest(interestLevel);
+  };
+
+  const confirmNotInterestedAndDrop = async () => {
+    setConfirmNotInterestedModalOpen(false);
+    await saveAssessInterest("NOT_INTERESTED");
+  };
+
+  const requestMarkAsNotInterested = () => {
+    setInterestError("");
+    setConfirmNotInterestedModalOpen(true);
+  };
+
+  const startRescheduleFromNeeds = () => {
+    setMeetingError("");
+    setMeetingFieldErrors({});
+    setSelectedStageView("Contacting");
+    setContactingViewedActivityKey("Schedule Meeting");
+    setRescheduleOriginalMeetingAt(lastAttempt?.meetingAt || null);
+    setMeetingForm({
+      meetingDate: lastAttempt?.meetingAt ? toDateInputValue(lastAttempt.meetingAt) : "",
+      meetingStartTime: lastAttempt?.meetingAt
+        ? `${String(new Date(lastAttempt.meetingAt).getHours()).padStart(2, "0")}:${String(new Date(lastAttempt.meetingAt).getMinutes()).padStart(2, "0")}`
+        : "",
+      meetingDurationMin: Number(lastAttempt?.meetingDurationMin || 120),
+      meetingMode: String(lastAttempt?.meetingMode || ""),
+      meetingPlatform: String(lastAttempt?.meetingPlatform || ""),
+      meetingPlatformOther: String(lastAttempt?.meetingPlatformOther || ""),
+      meetingLink: String(lastAttempt?.meetingLink || ""),
+      meetingInviteSent: Boolean(lastAttempt?.meetingInviteSent),
+      meetingPlace: String(lastAttempt?.meetingPlace || ""),
+    });
+    setNeedsAttendanceRescheduleLock(true);
+    setRescheduleFromNeedsMode(true);
+  };
+
+  const startRescheduleFromContacting = () => {
+    setMeetingError("");
+    setMeetingFieldErrors({});
+    setMeetingForm({
+      meetingDate: "",
+      meetingStartTime: "",
+      meetingDurationMin: Number(lastAttempt?.meetingDurationMin || 120),
+      meetingMode: String(lastAttempt?.meetingMode || ""),
+      meetingPlatform: String(lastAttempt?.meetingPlatform || ""),
+      meetingPlatformOther: String(lastAttempt?.meetingPlatformOther || ""),
+      meetingLink: String(lastAttempt?.meetingLink || ""),
+      meetingInviteSent: Boolean(lastAttempt?.meetingInviteSent),
+      meetingPlace: String(lastAttempt?.meetingPlace || ""),
+    });
+    setRescheduleOriginalMeetingAt(lastAttempt?.meetingAt || null);
+    setContactingRescheduleMode(true);
+  };
+
   const submitScheduleMeeting = async () => {
     try {
       setMeetingError("");
+      setMeetingFieldErrors({});
 
       const meetingDate = String(meetingForm.meetingDate || "").trim();
       const meetingStartTime = String(meetingForm.meetingStartTime || "").trim();
@@ -2407,55 +2567,64 @@ function AgentLeadEngagement() {
       const meetingMode = String(meetingForm.meetingMode || "").trim();
 
       if (!meetingDate) {
-        setMeetingError("Meeting date is required.");
+        setMeetingFieldErrors({ meetingDate: "Meeting date is required." });
         return;
       }
       if (!meetingStartTime) {
-        setMeetingError("Meeting start time is required.");
+        setMeetingFieldErrors({ meetingStartTime: "Meeting start time is required." });
         return;
       }
       if (![30, 60, 90, 120].includes(meetingDurationMin)) {
-        setMeetingError("Meeting duration must be 30, 60, 90, or 120 minutes.");
+        setMeetingFieldErrors({ meetingDurationMin: "Meeting duration must be 30, 60, 90, or 120 minutes." });
         return;
       }
       if (isSlotBooked(meetingDate, meetingStartTime, meetingDurationMin)) {
-        setMeetingError("Selected time is already booked.");
+        setMeetingFieldErrors({ meetingStartTime: "Selected time is already booked." });
         return;
       }
 
       if (!["Online", "Face-to-face"].includes(meetingMode)) {
-        setMeetingError("Please select meeting mode.");
+        setMeetingFieldErrors({ meetingMode: "Please select meeting mode." });
         return;
       }
 
       if (meetingMode === "Online") {
         const platform = String(meetingForm.meetingPlatform || "").trim();
         if (!["Zoom", "Google Meet", "Other"].includes(platform)) {
-          setMeetingError("Please select online platform.");
+          setMeetingFieldErrors({ meetingPlatform: "Please select online platform." });
           return;
         }
         if (platform === "Other" && !String(meetingForm.meetingPlatformOther || "").trim()) {
-          setMeetingError("Please specify other platform.");
+          setMeetingFieldErrors({ meetingPlatformOther: "Please specify other platform." });
           return;
         }
         const link = String(meetingForm.meetingLink || "").trim();
         if (!link) {
-          setMeetingError("Meeting link is required for online meetings.");
+          setMeetingFieldErrors({ meetingLink: "Meeting link is required for online meetings." });
           return;
         }
         if (!isValidHttpUrl(link)) {
-          setMeetingError("Meeting link must be a valid http/https URL.");
+          setMeetingFieldErrors({ meetingLink: "Meeting link must be a valid http/https URL." });
           return;
         }
         if (meetingForm.meetingInviteSent !== true) {
-          setMeetingError("Meeting invite must be sent before saving.");
+          setMeetingFieldErrors({ meetingInviteSent: "Meeting invite must be sent before saving." });
           return;
         }
       }
 
       if (meetingMode === "Face-to-face" && !String(meetingForm.meetingPlace || "").trim()) {
-        setMeetingError("Meeting place is required for face-to-face meetings.");
+        setMeetingFieldErrors({ meetingPlace: "Meeting place is required for face-to-face meetings." });
         return;
+      }
+
+      if (contactingRescheduleMode && rescheduleOriginalMeetingAt) {
+        const previousDt = new Date(rescheduleOriginalMeetingAt);
+        const nextDt = combineDateAndTimeLocal(meetingDate, meetingStartTime);
+        if (nextDt && previousDt.getTime() === nextDt.getTime()) {
+          setMeetingFieldErrors({ meetingStartTime: "Rescheduled meeting time cannot be the same as previous meeting time." });
+          return;
+        }
       }
 
       setSavingMeeting(true);
@@ -2478,6 +2647,7 @@ function AgentLeadEngagement() {
             meetingLink: meetingMode === "Online" ? String(meetingForm.meetingLink || "").trim() : undefined,
             meetingInviteSent: Boolean(meetingForm.meetingInviteSent),
             meetingPlace: meetingMode === "Face-to-face" ? String(meetingForm.meetingPlace || "").trim() : undefined,
+            rescheduleFromNeeds: Boolean(rescheduleFromNeedsMode || contactingRescheduleMode),
           }),
         }
       );
@@ -2486,6 +2656,22 @@ function AgentLeadEngagement() {
       if (!res.ok) throw new Error(data?.message || "Failed to schedule meeting.");
 
       await refreshCurrentProgressView();
+      if (rescheduleFromNeedsMode) {
+        setRescheduleFromNeedsMode(false);
+        setRescheduleOriginalMeetingAt(null);
+        setNeedsAttendanceRescheduleLock(false);
+        setNeedsAssessmentForm((f) => ({
+          ...f,
+          attendanceChoice: "",
+          attendanceProofImageDataUrl: "",
+          attendanceProofFileName: "",
+        }));
+        setSelectedStageView("CURRENT");
+      }
+      if (contactingRescheduleMode) {
+        setContactingRescheduleMode(false);
+        setRescheduleOriginalMeetingAt(null);
+      }
     } catch (err) {
       setMeetingError(err?.message || "Cannot connect to server. Is backend running?");
     } finally {
@@ -3339,7 +3525,11 @@ function AgentLeadEngagement() {
   ]);
 
   const shouldShowStageActivityBadge =
-    !isLeadClosed && !isViewedStageFullyFinished && String(stageActivityBadge || "").trim() && stageActivityBadge !== "—";
+    !isLeadClosed &&
+    !isLeadDropped &&
+    !isViewedStageFullyFinished &&
+    String(stageActivityBadge || "").trim() &&
+    stageActivityBadge !== "—";
 
   const onPolicySummaryPicked = (file) => {
     if (!file) {
@@ -3729,6 +3919,41 @@ function AgentLeadEngagement() {
                 <span className="le-crumbCurrent">Lead Engagement</span>
               </div>
 
+              {engagement.isBlocked && (
+                <div className="le-modalOverlay" style={{ zIndex: 1000000 }}>
+                  <div className="le-modalCard" style={{ width: "min(760px, calc(100% - 32px))" }}>
+                    <button
+                      type="button"
+                      className="le-modalClose"
+                      aria-label="Back to lead details"
+                      onClick={goBackToLeadDetails}
+                      title="Back to Lead Details"
+                    >
+                      ×
+                    </button>
+
+                    <h3 className="le-modalTitle">Lead Engagement is temporarily locked</h3>
+                    <p className="le-modalText">
+                      This lead was marked as <strong>Wrong Contact</strong>. Please update the prospect phone number in
+                      Prospect Details to unlock this engagement and continue Contacting activities.
+                    </p>
+
+                    <div className="le-modalActions">
+                      <button type="button" className="le-btn secondary" onClick={goBackToLeadDetails}>
+                        Back to Lead Details
+                      </button>
+                      <button
+                        type="button"
+                        className="le-btn primary"
+                        onClick={() => navigate(`/agent/${username}/prospects/${prospectId}/full`)}
+                      >
+                        Update Contact Info
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Summary Row */}
               <div className="le-summaryRow">
                 {/* Prospect Summary */}
@@ -3849,18 +4074,25 @@ function AgentLeadEngagement() {
                 {PIPELINE_STEPS.map((step, i) => {
                   const isActive = safeIndex === i;
                   const isDone = safeIndex > i;
+                  const stageDisabledForFuture =
+                    (isLeadDropped && i > safeIndex) || (isLeadInProgress && i > safeIndex);
 
                   return (
                     <div
                       key={step}
                       className="le-pipelineGroup"
                       role="button"
-                      tabIndex={0}
-                      onClick={() => setSelectedStageView(step)}
+                      tabIndex={stageDisabledForFuture ? -1 : 0}
+                      aria-disabled={stageDisabledForFuture}
+                      onClick={() => {
+                        if (stageDisabledForFuture) return;
+                        setStageViewIfAllowed(step);
+                      }}
                       onKeyDown={(e) => {
+                        if (stageDisabledForFuture) return;
                         if (e.key === "Enter" || e.key === " ") {
                           e.preventDefault();
-                          setSelectedStageView(step);
+                          setStageViewIfAllowed(step);
                         }
                       }}
                     >
@@ -3896,7 +4128,13 @@ function AgentLeadEngagement() {
                     </p>
                   )}
 
-                  {!isViewingCurrentStage && (
+                  {(isLeadClosed || isLeadDropped) && (
+                    <p className="le-muted" style={{ marginTop: 8, marginBottom: 10 }}>
+                      This lead is closed or dropped. Subactivities are view-only.
+                    </p>
+                  )}
+
+                  {!isViewingCurrentStage && !(isLeadClosed || isLeadDropped) && (
                     <p className="le-muted" style={{ marginTop: 8, marginBottom: 10 }}>
                       You are viewing a non-current stage. This section is read-only.
                     </p>
@@ -3916,7 +4154,7 @@ function AgentLeadEngagement() {
                         )
                       }
                       helperText={
-                        isLeadClosed
+                        isLeadClosed || isLeadDropped
                           ? closedLeadSubactivityHelperText
                           : contactingViewedStepIndex < contactingCurrentStepIndex
                           ? "Viewing a previously saved subactivity. Click the current subactivity to resume editing."
@@ -3958,7 +4196,7 @@ function AgentLeadEngagement() {
                           ? isViewingFutureStage
                             ? futureStageSubactivityHelperText
                             : ""
-                          : isLeadClosed
+                          : isLeadClosed || isLeadDropped
                           ? closedLeadSubactivityHelperText
                           : needsViewedStepIndex < needsCurrentStepIndex
                           ? "Viewing a previously saved subactivity. Click the current subactivity to resume editing."
@@ -3989,7 +4227,7 @@ function AgentLeadEngagement() {
                           ? isViewingFutureStage
                             ? futureStageSubactivityHelperText
                             : ""
-                          : isLeadClosed
+                          : isLeadClosed || isLeadDropped
                           ? closedLeadSubactivityHelperText
                           : proposalViewedStepIndex < proposalCurrentStepIndex
                           ? "Viewing a previously saved proposal subactivity in read-only mode. Click the current subactivity to resume editing."
@@ -4020,7 +4258,7 @@ function AgentLeadEngagement() {
                           ? isViewingFutureStage
                             ? futureStageSubactivityHelperText
                             : ""
-                          : isLeadClosed
+                          : isLeadClosed || isLeadDropped
                           ? closedLeadSubactivityHelperText
                           : applicationViewedStepIndex < applicationCurrentStepIndex
                           ? "Viewing a previously saved application subactivity in read-only mode. Click the current subactivity to resume editing."
@@ -4051,7 +4289,7 @@ function AgentLeadEngagement() {
                           ? isViewingFutureStage
                             ? futureStageSubactivityHelperText
                             : ""
-                          : isLeadClosed
+                          : isLeadClosed || isLeadDropped
                           ? closedLeadSubactivityHelperText
                           : policyViewedStepIndex < policyCurrentStepIndex
                           ? "Viewing a previously saved policy issuance subactivity in read-only mode. Click the current subactivity to resume editing."
@@ -5068,12 +5306,6 @@ function AgentLeadEngagement() {
                     </>
                   )}
 
-                  {showContactingPanel && isContactingReadOnly && (
-                    <p className="le-muted" style={{ marginBottom: 10 }}>
-                      Contacting records are view-only at this stage. Add Attempt and edits are disabled.
-                    </p>
-                  )}
-
                   {showContactingPanel && isAttemptContactViewed && (
                     <>
                       <div className="le-block">
@@ -5101,11 +5333,17 @@ function AgentLeadEngagement() {
                               </div>
                             ) : null}
 
-                            <div className="le-activitySectionHeader">1. Attempt Contact</div>
+                            <div className="le-activitySectionHeader">
+                              {editingAttemptId ? "Edit Contact Attempt" : "1. Attempt Contact"}
+                            </div>
 
                             <div className="le-formRow">
                               <label className="le-label">Attempt No.</label>
-                              <input className="le-input" value={`#${nextAttemptNo}`} disabled />
+                              <input
+                                className="le-input"
+                                value={editingAttemptId ? `#${attempts.find((a) => a.attemptId === editingAttemptId)?.attemptNo || "—"}` : `#${nextAttemptNo}`}
+                                disabled
+                              />
                             </div>
 
                             <div className="le-formRow">
@@ -5173,9 +5411,6 @@ function AgentLeadEngagement() {
                                 onChange={(e) => {
                                   const nextResponse = e.target.value;
                                   setAttemptForm((f) => ({ ...f, response: nextResponse }));
-                                  if (nextResponse !== "Responded") {
-                                    resetProgressiveSubForms();
-                                  }
                                   setAttemptErrors((er) => ({
                                     ...er,
                                     response: undefined,
@@ -5227,19 +5462,39 @@ function AgentLeadEngagement() {
                                 Cancel
                               </button>
                               <button type="button" className="le-btn primary" onClick={onSubmitAttempt} disabled={addingAttempt}>
-                                {addingAttempt ? "Saving..." : "Save"}
+                                {addingAttempt ? "Saving..." : editingAttemptId ? "Save Changes" : "Save"}
                               </button>
                             </div>
                           </div>
                         )}
 
-                        <div className="le-attemptList">
-                          {attempts.map((a) => {
-                            return (
-                              <div key={a.attemptNo} className="le-attemptItem">
+                        {!showAddAttempt && !editingAttemptId && (
+                          <div className="le-attemptList">
+                            {attempts.map((a) => {
+                              return (
+                                <div key={a.attemptNo} className="le-attemptItem">
                                 <div className="le-attemptTop">
                                   <strong>Attempt #{a.attemptNo}</strong>
-                                  <span className="le-attemptDate">{formatDateTime(a.attemptedAt)}</span>
+                                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                                    <span className="le-attemptDate">{formatDateTime(a.attemptedAt)}</span>
+                                    {!isContactingReadOnly &&
+                                    !isLeadClosed &&
+                                    !isLeadDropped &&
+                                    String(a.attemptId || "").trim() &&
+                                    String(lastAttempt?.attemptId || "") === String(a.attemptId || "") ? (
+                                      <button
+                                        type="button"
+                                        className="le-btn secondary"
+                                        style={{ padding: "4px 8px" }}
+                                        onClick={() => onOpenEditAttempt(a)}
+                                        disabled={addingAttempt}
+                                        title="Edit latest contact attempt"
+                                      >
+                                        <FaEdit style={{ marginRight: 6 }} />
+                                        Edit
+                                      </button>
+                                    ) : null}
+                                  </div>
                                 </div>
 
                                 <div className="le-attemptMeta">
@@ -5269,16 +5524,17 @@ function AgentLeadEngagement() {
                                     <div className="le-metaValue">{a.notes}</div>
                                   </div>
                                 ) : null}
-                              </div>
-                            );
-                          })}
+                                </div>
+                              );
+                            })}
 
-                          {!showAddAttempt && attempts.length === 0 && (
-                            <div className="le-muted" style={{ padding: "10px 0" }}>
-                              No contact attempts yet.
-                            </div>
-                          )}
-                        </div>
+                            {!showAddAttempt && attempts.length === 0 && (
+                              <div className="le-muted" style={{ padding: "10px 0" }}>
+                                No contact attempts yet.
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </>
                   )}
@@ -5318,6 +5574,7 @@ function AgentLeadEngagement() {
                                   onChange={(e) => {
                                     setValidateForm({ phoneValidation: e.target.value });
                                     setValidateError("");
+                                    setValidateFieldErrors((prev) => ({ ...prev, phoneValidation: "" }));
                                   }}
                                   disabled={validatingContact || uiLocked || isContactingReadOnly}
                                 >
@@ -5325,6 +5582,11 @@ function AgentLeadEngagement() {
                                   <option value="CORRECT">Correct</option>
                                   <option value="WRONG_CONTACT">Wrong</option>
                                 </select>
+                                {validateFieldErrors.phoneValidation ? (
+                                  <div className="le-formError" style={{ color: "#DA291C", marginTop: 6 }}>
+                                    {validateFieldErrors.phoneValidation}
+                                  </div>
+                                ) : null}
                               </div>
 
                               <div className="le-actions">
@@ -5334,6 +5596,7 @@ function AgentLeadEngagement() {
                                   onClick={() => {
                                     setValidateForm({ phoneValidation: "" });
                                     setValidateError("");
+                                    setValidateFieldErrors({});
                                   }}
                                   disabled={validatingContact || uiLocked || isContactingReadOnly}
                                 >
@@ -5342,7 +5605,7 @@ function AgentLeadEngagement() {
                                 <button
                                   type="button"
                                   className="le-btn primary"
-                                  onClick={submitValidateContact}
+                                  onClick={() => submitValidateContact()}
                                   disabled={validatingContact || uiLocked || isContactingReadOnly}
                                 >
                                   {validatingContact ? "Saving..." : "Save"}
@@ -5350,12 +5613,33 @@ function AgentLeadEngagement() {
                               </div>
                             </>
                           ) : savedPhoneValidationResult ? (
-                            <div className="le-attemptMeta" style={{ marginTop: 8 }}>
-                              <div>
-                                <span className="le-metaLabel">Phone Number Correct?</span>
-                                <span className="le-metaValue">{savedPhoneValidationResult === "CORRECT" ? "Correct" : "Wrong"}</span>
+                            <>
+                              <div className="le-attemptTop" style={{ marginTop: 8, alignItems: "center" }}>
+                                <div>
+                                  <span className="le-metaLabel">Phone Number Correct?</span>
+                                  <span className="le-metaValue">{savedPhoneValidationResult === "CORRECT" ? "Correct" : "Wrong"}</span>
+                                </div>
+
+                                {savedPhoneValidationResult === "CORRECT" &&
+                                isValidateContactEditable &&
+                                !validatingContact &&
+                                !isEngagementBlocked &&
+                                !isLeadClosed &&
+                                !isLeadDropped ? (
+                                  <button
+                                    type="button"
+                                    className="le-btn secondary"
+                                    style={{ padding: "4px 8px" }}
+                                    onClick={() => submitValidateContact("WRONG_CONTACT")}
+                                    disabled={validatingContact}
+                                    title="Mark as Wrong Contact"
+                                  >
+                                    <FaEdit style={{ marginRight: 6 }} />
+                                    Mark as Wrong Contact
+                                  </button>
+                                ) : null}
                               </div>
-                            </div>
+                            </>
                           ) : (
                             <p className="le-muted" style={{ marginTop: 8 }}>
                               No saved validation result yet.
@@ -5382,12 +5666,20 @@ function AgentLeadEngagement() {
                                   className="le-input"
                                   value={interestForm.interestLevel}
                                   onChange={(e) =>
-                                    setInterestForm((f) => ({
-                                      ...f,
-                                      interestLevel: e.target.value,
-                                      preferredChannel: "",
-                                      preferredChannelOther: "",
-                                    }))
+                                    {
+                                      setInterestForm((f) => ({
+                                        ...f,
+                                        interestLevel: e.target.value,
+                                        preferredChannel: "",
+                                        preferredChannelOther: "",
+                                      }));
+                                      setInterestFieldErrors((prev) => ({
+                                        ...prev,
+                                        interestLevel: "",
+                                        preferredChannel: "",
+                                        preferredChannelOther: "",
+                                      }));
+                                    }
                                   }
                                   disabled={savingInterest}
                                 >
@@ -5395,6 +5687,11 @@ function AgentLeadEngagement() {
                                   <option value="INTERESTED">Interested</option>
                                   <option value="NOT_INTERESTED">Not Interested</option>
                                 </select>
+                                {interestFieldErrors.interestLevel ? (
+                                  <div className="le-formError" style={{ color: "#DA291C", marginTop: 6 }}>
+                                    {interestFieldErrors.interestLevel}
+                                  </div>
+                                ) : null}
                               </div>
 
                               {interestForm.interestLevel === "INTERESTED" && (
@@ -5404,7 +5701,14 @@ function AgentLeadEngagement() {
                                     <select
                                       className="le-input"
                                       value={interestForm.preferredChannel}
-                                      onChange={(e) => setInterestForm((f) => ({ ...f, preferredChannel: e.target.value }))}
+                                      onChange={(e) => {
+                                        setInterestForm((f) => ({ ...f, preferredChannel: e.target.value }));
+                                        setInterestFieldErrors((prev) => ({
+                                          ...prev,
+                                          preferredChannel: "",
+                                          preferredChannelOther: "",
+                                        }));
+                                      }}
                                       disabled={savingInterest}
                                     >
                                       <option value="">Select</option>
@@ -5414,6 +5718,11 @@ function AgentLeadEngagement() {
                                       <option value="Telegram">Telegram</option>
                                       <option value="Other">Other</option>
                                     </select>
+                                    {interestFieldErrors.preferredChannel ? (
+                                      <div className="le-formError" style={{ color: "#DA291C", marginTop: 6 }}>
+                                        {interestFieldErrors.preferredChannel}
+                                      </div>
+                                    ) : null}
                                   </div>
 
                                   {interestForm.preferredChannel === "Other" && (
@@ -5427,6 +5736,11 @@ function AgentLeadEngagement() {
                                         }
                                         disabled={savingInterest}
                                       />
+                                      {interestFieldErrors.preferredChannelOther ? (
+                                        <div className="le-formError" style={{ color: "#DA291C", marginTop: 6 }}>
+                                          {interestFieldErrors.preferredChannelOther}
+                                        </div>
+                                      ) : null}
                                     </div>
                                   )}
                                 </>
@@ -5437,7 +5751,10 @@ function AgentLeadEngagement() {
                                   type="button"
                                   className="le-btn secondary"
                                   onClick={() =>
-                                    setInterestForm({ interestLevel: "", preferredChannel: "", preferredChannelOther: "" })
+                                    {
+                                      setInterestForm({ interestLevel: "", preferredChannel: "", preferredChannelOther: "" });
+                                      setInterestFieldErrors({});
+                                    }
                                   }
                                   disabled={savingInterest}
                                 >
@@ -5449,24 +5766,47 @@ function AgentLeadEngagement() {
                               </div>
                             </>
                           ) : savedInterestLevel ? (
-                            <div className="le-attemptMeta" style={{ marginTop: 8 }}>
-                              <div>
-                                <span className="le-metaLabel">Interest Level</span>
-                                <span className="le-metaValue">{savedInterestLevel}</span>
+                            <>
+                              <div className="le-attemptTop" style={{ marginTop: 8, alignItems: "center" }}>
+                                <div>
+                                  <span className="le-metaLabel">Interest Level</span>
+                                  <span className="le-metaValue">{savedInterestLevel}</span>
+                                </div>
+
+                                {savedInterestLevel === "INTERESTED" &&
+                                isContactingCurrentViewEditable &&
+                                !savingInterest &&
+                                !isEngagementBlocked &&
+                                !isLeadClosed &&
+                                !isLeadDropped ? (
+                                  <button
+                                    type="button"
+                                    className="le-btn secondary"
+                                    style={{ padding: "4px 8px" }}
+                                    onClick={requestMarkAsNotInterested}
+                                    disabled={savingInterest}
+                                    title="Mark as Not Interested"
+                                  >
+                                    <FaEdit style={{ marginRight: 6 }} />
+                                    Mark as Not Interested
+                                  </button>
+                                ) : null}
                               </div>
-                              {String(lastAttempt?.preferredChannel || "").trim() ? (
-                                <div>
-                                  <span className="le-metaLabel">Preferred Communication Channel</span>
-                                  <span className="le-metaValue">{lastAttempt.preferredChannel}</span>
-                                </div>
-                              ) : null}
-                              {String(lastAttempt?.preferredChannelOther || "").trim() ? (
-                                <div>
-                                  <span className="le-metaLabel">Preferred Channel (Other)</span>
-                                  <span className="le-metaValue">{lastAttempt.preferredChannelOther}</span>
-                                </div>
-                              ) : null}
-                            </div>
+                              <div className="le-attemptMeta" style={{ marginTop: 8 }}>
+                                {String(lastAttempt?.preferredChannel || "").trim() ? (
+                                  <div>
+                                    <span className="le-metaLabel">Preferred Communication Channel</span>
+                                    <span className="le-metaValue">{lastAttempt.preferredChannel}</span>
+                                  </div>
+                                ) : null}
+                                {String(lastAttempt?.preferredChannelOther || "").trim() ? (
+                                  <div>
+                                    <span className="le-metaLabel">Preferred Channel (Other)</span>
+                                    <span className="le-metaValue">{lastAttempt.preferredChannelOther}</span>
+                                  </div>
+                                ) : null}
+                              </div>
+                            </>
                           ) : (
                             <p className="le-muted" style={{ marginTop: 8 }}>
                               No saved interest assessment yet.
@@ -5500,6 +5840,11 @@ function AgentLeadEngagement() {
                                     <option key={d.value} value={d.value}>{d.label}</option>
                                   ))}
                                 </select>
+                                {meetingFieldErrors.meetingDate ? (
+                                  <div className="le-formError" style={{ color: "#DA291C", marginTop: 6 }}>
+                                    {meetingFieldErrors.meetingDate}
+                                  </div>
+                                ) : null}
                               </div>
 
                               <div className="le-formRow">
@@ -5515,6 +5860,11 @@ function AgentLeadEngagement() {
                                   <option value={90}>90 mins</option>
                                   <option value={120}>120 mins</option>
                                 </select>
+                                {meetingFieldErrors.meetingDurationMin ? (
+                                  <div className="le-formError" style={{ color: "#DA291C", marginTop: 6 }}>
+                                    {meetingFieldErrors.meetingDurationMin}
+                                  </div>
+                                ) : null}
                               </div>
 
                               <div className="le-formRow">
@@ -5526,7 +5876,7 @@ function AgentLeadEngagement() {
                                   disabled={savingMeeting || !meetingForm.meetingDate}
                                 >
                                   <option value="">Select time</option>
-                                  {meetingStartSlots.map((slot) => {
+                                  {contactingMeetingStartSlots.map((slot) => {
                                     const booked = isSlotBooked(meetingForm.meetingDate, slot, meetingForm.meetingDurationMin);
                                     return (
                                       <option key={slot} value={slot} disabled={booked}>
@@ -5535,6 +5885,11 @@ function AgentLeadEngagement() {
                                     );
                                   })}
                                 </select>
+                                {meetingFieldErrors.meetingStartTime ? (
+                                  <div className="le-formError" style={{ color: "#DA291C", marginTop: 6 }}>
+                                    {meetingFieldErrors.meetingStartTime}
+                                  </div>
+                                ) : null}
                               </div>
 
                               <div className="le-formRow">
@@ -5558,6 +5913,11 @@ function AgentLeadEngagement() {
                                   <option value="Online">Online</option>
                                   <option value="Face-to-face">Face-to-face</option>
                                 </select>
+                                {meetingFieldErrors.meetingMode ? (
+                                  <div className="le-formError" style={{ color: "#DA291C", marginTop: 6 }}>
+                                    {meetingFieldErrors.meetingMode}
+                                  </div>
+                                ) : null}
                               </div>
 
                               {meetingForm.meetingMode === "Online" && (
@@ -5575,6 +5935,11 @@ function AgentLeadEngagement() {
                                       <option value="Google Meet">Google Meet</option>
                                       <option value="Other">Other</option>
                                     </select>
+                                    {meetingFieldErrors.meetingPlatform ? (
+                                      <div className="le-formError" style={{ color: "#DA291C", marginTop: 6 }}>
+                                        {meetingFieldErrors.meetingPlatform}
+                                      </div>
+                                    ) : null}
                                   </div>
 
                                   {meetingForm.meetingPlatform === "Other" && (
@@ -5588,6 +5953,11 @@ function AgentLeadEngagement() {
                                         }
                                         disabled={savingMeeting}
                                       />
+                                      {meetingFieldErrors.meetingPlatformOther ? (
+                                        <div className="le-formError" style={{ color: "#DA291C", marginTop: 6 }}>
+                                          {meetingFieldErrors.meetingPlatformOther}
+                                        </div>
+                                      ) : null}
                                     </div>
                                   )}
 
@@ -5600,6 +5970,11 @@ function AgentLeadEngagement() {
                                       disabled={savingMeeting}
                                       placeholder="https://example.com/meeting-link"
                                     />
+                                    {meetingFieldErrors.meetingLink ? (
+                                      <div className="le-formError" style={{ color: "#DA291C", marginTop: 6 }}>
+                                        {meetingFieldErrors.meetingLink}
+                                      </div>
+                                    ) : null}
                                   </div>
 
                                   <div className="le-formRow">
@@ -5612,6 +5987,11 @@ function AgentLeadEngagement() {
                                       />
                                       <span>I confirm invite link has been sent (required)</span>
                                     </label>
+                                    {meetingFieldErrors.meetingInviteSent ? (
+                                      <div className="le-formError" style={{ color: "#DA291C", marginTop: 6 }}>
+                                        {meetingFieldErrors.meetingInviteSent}
+                                      </div>
+                                    ) : null}
                                   </div>
                                 </>
                               )}
@@ -5626,6 +6006,11 @@ function AgentLeadEngagement() {
                                     disabled={savingMeeting}
                                     placeholder="Enter full place/address"
                                   />
+                                  {meetingFieldErrors.meetingPlace ? (
+                                    <div className="le-formError" style={{ color: "#DA291C", marginTop: 6 }}>
+                                      {meetingFieldErrors.meetingPlace}
+                                    </div>
+                                  ) : null}
                                 </div>
                               )}
 
@@ -5633,7 +6018,7 @@ function AgentLeadEngagement() {
                                 <button
                                   type="button"
                                   className="le-btn secondary"
-                                  onClick={() =>
+                                  onClick={() => {
                                     setMeetingForm({
                                       meetingDate: "",
                                       meetingStartTime: "",
@@ -5644,8 +6029,18 @@ function AgentLeadEngagement() {
                                       meetingLink: "",
                                       meetingInviteSent: false,
                                       meetingPlace: "",
-                                    })
-                                  }
+                                    });
+                                    if (rescheduleFromNeedsMode) {
+                                      setRescheduleFromNeedsMode(false);
+                                      setRescheduleOriginalMeetingAt(null);
+                                      setNeedsAttendanceRescheduleLock(false);
+                                      setSelectedStageView("CURRENT");
+                                    }
+                                    if (contactingRescheduleMode) {
+                                      setContactingRescheduleMode(false);
+                                      setRescheduleOriginalMeetingAt(null);
+                                    }
+                                  }}
                                   disabled={savingMeeting}
                                 >
                                   Cancel
@@ -5656,8 +6051,21 @@ function AgentLeadEngagement() {
                               </div>
                             </>
                           ) : hasSavedContactMeeting ? (
-                            <div className="le-attemptMeta" style={{ marginTop: 8 }}>
-                              {lastAttempt?.meetingAt ? <div><span className="le-metaLabel">Meeting Date & Time</span><span className="le-metaValue">{formatDateTime(lastAttempt.meetingAt)}</span></div> : null}
+                            <>
+                              <div className="le-attemptMeta" style={{ marginTop: 8 }}>
+                                {lastAttempt?.meetingAt ? <div><span className="le-metaLabel">Meeting Date & Time</span><span className="le-metaValue">{formatDateTime(lastAttempt.meetingAt)}</span></div> : null}
+                                {needsAssessmentCurrentActivityKey === "Record Prospect Attendance" ? (
+                                  <div style={{ marginTop: 8 }}>
+                                    <button
+                                      type="button"
+                                      className="le-btn secondary"
+                                      onClick={startRescheduleFromContacting}
+                                      disabled={savingMeeting}
+                                    >
+                                      Reschedule Meeting
+                                    </button>
+                                  </div>
+                                ) : null}
                               {Number(lastAttempt?.meetingDurationMin || 0) > 0 ? <div><span className="le-metaLabel">Meeting Duration</span><span className="le-metaValue">{lastAttempt.meetingDurationMin} mins</span></div> : null}
                               {lastAttempt?.meetingEndAt ? <div><span className="le-metaLabel">Meeting Ends</span><span className="le-metaValue">{formatDateTime(lastAttempt.meetingEndAt)}</span></div> : null}
                               {String(lastAttempt?.meetingMode || "").trim() ? <div><span className="le-metaLabel">Meeting Mode</span><span className="le-metaValue">{lastAttempt.meetingMode}</span></div> : null}
@@ -5667,7 +6075,8 @@ function AgentLeadEngagement() {
                               {String(lastAttempt?.meetingMode || "").trim() === "Online" ? <div><span className="le-metaLabel">Meeting Invite Sent</span><span className="le-metaValue">{lastAttempt?.meetingInviteSent ? "Yes" : "No"}</span></div> : null}
                               {String(lastAttempt?.meetingPlace || "").trim() ? <div><span className="le-metaLabel">Meeting Place</span><span className="le-metaValue">{lastAttempt.meetingPlace}</span></div> : null}
                               {String(lastAttempt?.meetingStatus || "").trim() ? <div><span className="le-metaLabel">Status</span><span className="le-metaValue">{lastAttempt.meetingStatus}</span></div> : null}
-                            </div>
+                              </div>
+                            </>
                           ) : (
                             <p className="le-muted" style={{ marginTop: 8 }}>
                               No saved meeting schedule yet.
@@ -6328,7 +6737,7 @@ function AgentLeadEngagement() {
                                 name="prospect-attendance"
                                 checked={needsAssessmentForm.attendanceChoice === "YES"}
                                 onChange={() => setNeedsAssessmentForm((f) => ({ ...f, attendanceChoice: "YES" }))}
-                                disabled={!isNeedsAssessmentCurrentViewEditable || isNeedsAssessmentLocked || needsAssessmentSaving}
+                                disabled={!isNeedsAssessmentCurrentViewEditable || isNeedsAssessmentLocked || needsAttendanceRescheduleLock || needsAssessmentSaving}
                               />
                               <span>Yes</span>
                             </label>
@@ -6338,7 +6747,7 @@ function AgentLeadEngagement() {
                                 name="prospect-attendance"
                                 checked={needsAssessmentForm.attendanceChoice === "NO"}
                                 onChange={() => setNeedsAssessmentForm((f) => ({ ...f, attendanceChoice: "NO", attendanceProofImageDataUrl: "", attendanceProofFileName: "" }))}
-                                disabled={!isNeedsAssessmentCurrentViewEditable || isNeedsAssessmentLocked || needsAssessmentSaving}
+                                disabled={!isNeedsAssessmentCurrentViewEditable || isNeedsAssessmentLocked || needsAttendanceRescheduleLock || needsAssessmentSaving}
                               />
                               <span>No</span>
                             </label>
@@ -6346,15 +6755,28 @@ function AgentLeadEngagement() {
                         </div>
                         {renderNeedsAssessmentError("attendanceChoice")}
 
+                        {needsAttendanceRescheduleLock ? (
+                          <div className="le-formError" style={{ marginTop: 8 }}>
+                            Please reschedule meeting first. Prospect did not attend the scheduled needs assessment meeting.
+                          </div>
+                        ) : null}
+
                         {needsAssessmentForm.attendanceChoice === "NO" ? (
-                          <p className="le-muted" style={{ marginTop: 8 }}>
-                            Prospect must be marked as attended before Prospect&apos;s Basic Information can be completed.
-                          </p>
+                          <div style={{ marginTop: 10 }}>
+                            <button
+                              type="button"
+                              className="le-btn secondary"
+                              onClick={startRescheduleFromNeeds}
+                              disabled={!isNeedsAssessmentCurrentViewEditable || isNeedsAssessmentLocked || needsAttendanceRescheduleLock || needsAssessmentSaving}
+                            >
+                              Reschedule Meeting
+                            </button>
+                          </div>
                         ) : null}
 
                         {needsAssessmentForm.attendanceChoice === "YES" && (
                           <>
-                            {!isNeedsAssessmentLocked ? (
+                            {!isNeedsAssessmentLocked && !needsAttendanceRescheduleLock ? (
                               <div className="le-formRow" style={{ marginTop: 8 }}>
                                 <label className="le-label">Proof of Attendance (JPG, JPEG, PNG) *</label>
                                 <input
@@ -6411,7 +6833,7 @@ function AgentLeadEngagement() {
                               </p>
                             )}
 
-                            {isNeedsAssessmentCurrentViewEditable && !isNeedsAssessmentLocked ? (
+                            {isNeedsAssessmentCurrentViewEditable && !isNeedsAssessmentLocked && !needsAttendanceRescheduleLock ? (
                               <div className="le-actions" style={{ marginTop: 10 }}>
                                 <button
                                   type="button"
@@ -7397,6 +7819,47 @@ function AgentLeadEngagement() {
           )}
         </main>
       </div>
+
+      {confirmNotInterestedModalOpen ? (
+        <div className="le-modalOverlay" role="dialog" aria-modal="true" aria-labelledby="le-confirm-drop-title">
+          <div className="le-modalCard">
+            <button
+              type="button"
+              className="le-modalClose"
+              aria-label="Close not interested confirmation"
+              onClick={() => setConfirmNotInterestedModalOpen(false)}
+              disabled={savingInterest}
+            >
+              ×
+            </button>
+            <h3 className="le-modalTitle" id="le-confirm-drop-title">Confirm lead drop</h3>
+            <p className="le-modalText">
+              Marking this lead as <strong>Not Interested</strong> will automatically drop the lead and lock further subactivity progress.
+            </p>
+            <p className="le-modalText" style={{ marginTop: 8 }}>
+              Do you want to continue?
+            </p>
+            <div className="le-modalActions">
+              <button
+                type="button"
+                className="le-btn secondary"
+                onClick={() => setConfirmNotInterestedModalOpen(false)}
+                disabled={savingInterest}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="le-btn primary"
+                onClick={confirmNotInterestedAndDrop}
+                disabled={savingInterest}
+              >
+                {savingInterest ? "Confirming..." : "Confirm"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {dropOutcomeModal ? (
         <div className="le-modalOverlay" role="dialog" aria-modal="true" aria-labelledby="le-drop-modal-title">
