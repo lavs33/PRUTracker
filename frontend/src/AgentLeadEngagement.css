@@ -408,6 +408,12 @@
   color: #373a36;
 }
 
+
+.le-metaActionRow {
+  grid-column: 1 / -1;
+  margin-top: 0;
+}
+
 .le-muted {
   margin: 10px 0 0 0;
   font-size: 13px;
