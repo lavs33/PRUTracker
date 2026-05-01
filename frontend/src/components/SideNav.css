@@ -2,6 +2,7 @@
   position: sticky;
   top: 14px;
   align-self: flex-start;
+  flex-shrink: 0;
   height: calc(100vh - 28px);
   width: 252px;
   background: #373a36;

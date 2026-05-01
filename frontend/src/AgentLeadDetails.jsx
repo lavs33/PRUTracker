@@ -779,7 +779,7 @@ const handleSideNav = (key) => {
                     <div className="ld-policyDate">{formatDateShort(leadEngagement?.updatedAt)}</div>
                   </div>
 
-                  {lead.status !== "Closed" && (
+                  {lead.status !== "Closed" && lead.status !== "Dropped" && (
                     <div className="ld-policyBottom">
                       <div className="ld-policyStatusRow">
                         <span className="ld-policyStatusLabel">Current Stage</span>

@@ -10,6 +10,7 @@
 
 .le-content {
   flex: 1;
+  min-width: 0;
   padding: 26px;
   font-family: "FSAlbertArabic", sans-serif;
 }
@@ -100,8 +101,9 @@
   padding: 18px 20px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 0; 
+  justify-content: flex-start;
+  gap: 10px;
+  flex-wrap: wrap;
   margin-bottom: 14px;
   font-family: "FSAlbertArabic", sans-serif;
   box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.06);
@@ -110,7 +112,9 @@
 .le-pipelineGroup {
   display: flex;
   align-items: center;
-  gap: 14px; 
+  gap: 14px;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .le-pipelineStep {
@@ -161,7 +165,8 @@
 
 .le-stepText {
   font-size: 16px;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
   letter-spacing: 0.2px;
 }
 

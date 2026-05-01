@@ -31,6 +31,8 @@ function AgentNotifications() {
   const [loading, setLoading] = useState(true);
   const [apiError, setApiError] = useState("");
   const [notifs, setNotifs] = useState([]);
+  const [markingAllRead, setMarkingAllRead] = useState(false);
+  const [markingNotifId, setMarkingNotifId] = useState("");
 
   // counts state (always numeric)
   const [counts, setCounts] = useState({ unread: 0, read: 0 });
@@ -109,8 +111,14 @@ function AgentNotifications() {
     async (signal) => {
       if (!user?.id) return;
 
+      const qs = new URLSearchParams({
+        userId: user.id,
+        entityType: "Task",
+      });
+      if (typeFilter) qs.set("type", typeFilter);
+
       const res = await fetch(
-        `${API_BASE}/api/notifications/counts?userId=${user.id}&entityType=Task`,
+        `${API_BASE}/api/notifications/counts?${qs.toString()}`,
         signal ? { signal } : undefined
       );
       const data = await res.json();
@@ -122,7 +130,7 @@ function AgentNotifications() {
         read: Number(data?.read || 0),
       });
     },
-    [API_BASE, user?.id]
+    [API_BASE, user?.id, typeFilter]
   );
 
   // Fetch notifications list for current tab + filters
@@ -188,23 +196,47 @@ function AgentNotifications() {
     return "notif-pill";
   };
 
-  // Mark read ONLY on click Open 
-  const openNotif = async (n) => {
-    if (!user?.id) return;
-
+  const markNotifAsRead = async (notifId) => {
+    if (!user?.id || !notifId) return;
+    setMarkingNotifId(String(notifId));
     try {
-      if (n.status === "Unread") {
-        await fetch(`${API_BASE}/api/notifications/${n._id}/read?userId=${user.id}`, {
-          method: "PATCH",
-        });
-
-        // refresh counts + list after marking read
-        await Promise.all([fetchCounts(), fetchNotifs()]);
-      }
-    } catch {
-      // ignore mark-read errors; still navigate
+      const res = await fetch(`${API_BASE}/api/notifications/${notifId}/read?userId=${user.id}`, {
+        method: "PATCH",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.message || "Failed to mark notification as read.");
+      await Promise.all([fetchCounts(), fetchNotifs()]);
+    } catch (err) {
+      setApiError(err?.message || "Failed to mark notification as read.");
+    } finally {
+      setMarkingNotifId("");
     }
+  };
 
+  const markAllAsRead = async () => {
+    if (!user?.id) return;
+    setMarkingAllRead(true);
+    try {
+      const qs = new URLSearchParams({
+        userId: user.id,
+        entityType: "Task",
+      });
+      if (typeFilter) qs.set("type", typeFilter);
+
+      const res = await fetch(`${API_BASE}/api/notifications/read-all?${qs.toString()}`, {
+        method: "PATCH",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.message || "Failed to mark all notifications as read.");
+      await Promise.all([fetchCounts(), fetchNotifs()]);
+    } catch (err) {
+      setApiError(err?.message || "Failed to mark all notifications as read.");
+    } finally {
+      setMarkingAllRead(false);
+    }
+  };
+
+  const openNotif = async (n) => {
     if (n.prospectId && n.leadId) {
       navigate(`/agent/${username}/prospects/${n.prospectId}/leads/${n.leadId}/engage`);
       return;
@@ -232,9 +264,20 @@ function AgentNotifications() {
       </div>
 
       <div className="notif-right">
-        <button type="button" className="notif-btn secondary" onClick={() => openNotif(n)}>
-          Open
-        </button>
+        {tab === "unread" ? (
+          <button
+            type="button"
+            className="notif-btn secondary"
+            onClick={() => markNotifAsRead(n._id)}
+            disabled={markingNotifId === String(n._id) || markingAllRead}
+          >
+            {markingNotifId === String(n._id) ? "Marking..." : "Mark as Read"}
+          </button>
+        ) : (
+          <button type="button" className="notif-btn secondary" onClick={() => openNotif(n)}>
+            Open
+          </button>
+        )}
       </div>
     </div>
   );
@@ -297,6 +340,15 @@ function AgentNotifications() {
 
               <button type="button" className="notif-btn ghost" onClick={() => setTypeFilter("")}>
                 Clear
+              </button>
+
+              <button
+                type="button"
+                className="notif-btn secondary"
+                onClick={markAllAsRead}
+                disabled={tab !== "unread" || markingAllRead || counts.unread <= 0}
+              >
+                {markingAllRead ? "Marking..." : "Mark All as Read"}
               </button>
             </div>
           </div>
