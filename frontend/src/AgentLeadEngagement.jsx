@@ -6055,7 +6055,7 @@ function AgentLeadEngagement() {
                               <div className="le-attemptMeta" style={{ marginTop: 8 }}>
                                 {lastAttempt?.meetingAt ? <div><span className="le-metaLabel">Meeting Date & Time</span><span className="le-metaValue">{formatDateTime(lastAttempt.meetingAt)}</span></div> : null}
                                 {needsAssessmentCurrentActivityKey === "Record Prospect Attendance" ? (
-                                  <div style={{ marginTop: 8 }}>
+                                  <div className="le-metaActionRow">
                                     <button
                                       type="button"
                                       className="le-btn secondary"
