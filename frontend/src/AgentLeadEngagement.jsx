@@ -2578,7 +2578,21 @@ function AgentLeadEngagement() {
         setMeetingFieldErrors({ meetingDurationMin: "Meeting duration must be 30, 60, 90, or 120 minutes." });
         return;
       }
-      if (isSlotBooked(meetingDate, meetingStartTime, meetingDurationMin)) {
+      const latestWindows = await fetchMeetingAvailability();
+      const proposedStart = combineDateAndTimeLocal(meetingDate, meetingStartTime);
+      const proposedEnd = proposedStart ? new Date(proposedStart.getTime() + meetingDurationMin * 60 * 1000) : null;
+      const hasRealtimeConflict = Boolean(proposedStart && proposedEnd) && (latestWindows || []).some((w) => {
+        const ws = w?.startAt ? new Date(w.startAt) : null;
+        const we = w?.endAt ? new Date(w.endAt) : null;
+        if (!ws || !we || Number.isNaN(ws.getTime()) || Number.isNaN(we.getTime())) return false;
+        if (rescheduleOriginalMeetingAt && ws.getTime() === new Date(rescheduleOriginalMeetingAt).getTime()) return false;
+        return ws < proposedEnd && we > proposedStart;
+      });
+      if (hasRealtimeConflict) {
+        setMeetingFieldErrors({ meetingStartTime: "Selected time is already booked." });
+        return;
+      }
+      if (isSlotBooked(meetingDate, meetingStartTime, meetingDurationMin, rescheduleOriginalMeetingAt)) {
         setMeetingFieldErrors({ meetingStartTime: "Selected time is already booked." });
         return;
       }
@@ -5877,7 +5891,7 @@ function AgentLeadEngagement() {
                                 >
                                   <option value="">Select time</option>
                                   {contactingMeetingStartSlots.map((slot) => {
-                                    const booked = isSlotBooked(meetingForm.meetingDate, slot, meetingForm.meetingDurationMin);
+                                    const booked = isSlotBooked(meetingForm.meetingDate, slot, meetingForm.meetingDurationMin, rescheduleOriginalMeetingAt);
                                     return (
                                       <option key={slot} value={slot} disabled={booked}>
                                         {formatTimeLabel(slot)}{booked ? " (Booked)" : ""}
