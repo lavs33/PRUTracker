@@ -6054,28 +6054,28 @@ function AgentLeadEngagement() {
                             <>
                               <div className="le-attemptMeta" style={{ marginTop: 8 }}>
                                 {lastAttempt?.meetingAt ? <div><span className="le-metaLabel">Meeting Date & Time</span><span className="le-metaValue">{formatDateTime(lastAttempt.meetingAt)}</span></div> : null}
-                                {needsAssessmentCurrentActivityKey === "Record Prospect Attendance" ? (
-                                  <div style={{ marginTop: 8 }}>
-                                    <button
-                                      type="button"
-                                      className="le-btn secondary"
-                                      onClick={startRescheduleFromContacting}
-                                      disabled={savingMeeting}
-                                    >
-                                      Reschedule Meeting
-                                    </button>
-                                  </div>
-                                ) : null}
-                              {Number(lastAttempt?.meetingDurationMin || 0) > 0 ? <div><span className="le-metaLabel">Meeting Duration</span><span className="le-metaValue">{lastAttempt.meetingDurationMin} mins</span></div> : null}
-                              {lastAttempt?.meetingEndAt ? <div><span className="le-metaLabel">Meeting Ends</span><span className="le-metaValue">{formatDateTime(lastAttempt.meetingEndAt)}</span></div> : null}
-                              {String(lastAttempt?.meetingMode || "").trim() ? <div><span className="le-metaLabel">Meeting Mode</span><span className="le-metaValue">{lastAttempt.meetingMode}</span></div> : null}
-                              {String(lastAttempt?.meetingPlatform || "").trim() ? <div><span className="le-metaLabel">Meeting Platform</span><span className="le-metaValue">{lastAttempt.meetingPlatform}</span></div> : null}
-                              {String(lastAttempt?.meetingPlatformOther || "").trim() ? <div><span className="le-metaLabel">Meeting Platform (Other)</span><span className="le-metaValue">{lastAttempt.meetingPlatformOther}</span></div> : null}
-                              {String(lastAttempt?.meetingLink || "").trim() ? <div><span className="le-metaLabel">Meeting Link</span><span className="le-metaValue">{lastAttempt.meetingLink}</span></div> : null}
-                              {String(lastAttempt?.meetingMode || "").trim() === "Online" ? <div><span className="le-metaLabel">Meeting Invite Sent</span><span className="le-metaValue">{lastAttempt?.meetingInviteSent ? "Yes" : "No"}</span></div> : null}
-                              {String(lastAttempt?.meetingPlace || "").trim() ? <div><span className="le-metaLabel">Meeting Place</span><span className="le-metaValue">{lastAttempt.meetingPlace}</span></div> : null}
-                              {String(lastAttempt?.meetingStatus || "").trim() ? <div><span className="le-metaLabel">Status</span><span className="le-metaValue">{lastAttempt.meetingStatus}</span></div> : null}
+                                {Number(lastAttempt?.meetingDurationMin || 0) > 0 ? <div><span className="le-metaLabel">Meeting Duration</span><span className="le-metaValue">{lastAttempt.meetingDurationMin} mins</span></div> : null}
+                                {lastAttempt?.meetingEndAt ? <div><span className="le-metaLabel">Meeting Ends</span><span className="le-metaValue">{formatDateTime(lastAttempt.meetingEndAt)}</span></div> : null}
+                                {String(lastAttempt?.meetingMode || "").trim() ? <div><span className="le-metaLabel">Meeting Mode</span><span className="le-metaValue">{lastAttempt.meetingMode}</span></div> : null}
+                                {String(lastAttempt?.meetingPlatform || "").trim() ? <div><span className="le-metaLabel">Meeting Platform</span><span className="le-metaValue">{lastAttempt.meetingPlatform}</span></div> : null}
+                                {String(lastAttempt?.meetingPlatformOther || "").trim() ? <div><span className="le-metaLabel">Meeting Platform (Other)</span><span className="le-metaValue">{lastAttempt.meetingPlatformOther}</span></div> : null}
+                                {String(lastAttempt?.meetingLink || "").trim() ? <div><span className="le-metaLabel">Meeting Link</span><span className="le-metaValue">{lastAttempt.meetingLink}</span></div> : null}
+                                {String(lastAttempt?.meetingMode || "").trim() === "Online" ? <div><span className="le-metaLabel">Meeting Invite Sent</span><span className="le-metaValue">{lastAttempt?.meetingInviteSent ? "Yes" : "No"}</span></div> : null}
+                                {String(lastAttempt?.meetingPlace || "").trim() ? <div><span className="le-metaLabel">Meeting Place</span><span className="le-metaValue">{lastAttempt.meetingPlace}</span></div> : null}
+                                {String(lastAttempt?.meetingStatus || "").trim() ? <div><span className="le-metaLabel">Status</span><span className="le-metaValue">{lastAttempt.meetingStatus}</span></div> : null}
                               </div>
+                              {needsAssessmentCurrentActivityKey === "Record Prospect Attendance" ? (
+                                <div style={{ marginTop: 12 }}>
+                                  <button
+                                    type="button"
+                                    className="le-btn secondary"
+                                    onClick={startRescheduleFromContacting}
+                                    disabled={savingMeeting}
+                                  >
+                                    Reschedule Meeting
+                                  </button>
+                                </div>
+                              ) : null}
                             </>
                           ) : (
                             <p className="le-muted" style={{ marginTop: 8 }}>
@@ -6762,16 +6762,18 @@ function AgentLeadEngagement() {
                         ) : null}
 
                         {needsAssessmentForm.attendanceChoice === "NO" ? (
-                          <div style={{ marginTop: 10 }}>
+                          <p className="le-muted" style={{ marginTop: 8 }}>
+                            Needs Assessment Meeting can be rescheduled.{" "}
                             <button
                               type="button"
-                              className="le-btn secondary"
+                              className="le-btn ghost"
+                              style={{ padding: 0, border: 0, background: "transparent", textDecoration: "underline" }}
                               onClick={startRescheduleFromNeeds}
                               disabled={!isNeedsAssessmentCurrentViewEditable || isNeedsAssessmentLocked || needsAttendanceRescheduleLock || needsAssessmentSaving}
                             >
-                              Reschedule Meeting
+                              Go to Schedule Meeting
                             </button>
-                          </div>
+                          </p>
                         ) : null}
 
                         {needsAssessmentForm.attendanceChoice === "YES" && (

@@ -1456,6 +1456,15 @@ async function createTaskAddedNotifications({
 
 async function ensureTaskMissedNotificationsForUser(userObjectId) {
   const now = new Date();
+  const openTasks = await Task.find({
+    assignedToUserId: userObjectId,
+    status: { $in: ["Open", "Overdue"] },
+    dueAt: { $ne: null },
+  })
+    .select("_id title dueAt prospectId leadEngagementId")
+    .lean();
+
+  const dueTodayPendingTasks = openTasks.filter((task) => task?.dueAt && isDueTodayInManila(task.dueAt));
   const overdueTasks = await Task.find({
     assignedToUserId: userObjectId,
     status: "Open",
@@ -1464,9 +1473,10 @@ async function ensureTaskMissedNotificationsForUser(userObjectId) {
     .select("_id title dueAt prospectId leadEngagementId")
     .lean();
 
-  if (!overdueTasks.length) return;
+  if (!overdueTasks.length && !dueTodayPendingTasks.length) return;
 
-  const prospectIds = uniqueValidObjectIdStrings(overdueTasks.map((task) => task.prospectId));
+  const contextTasks = [...overdueTasks, ...dueTodayPendingTasks];
+  const prospectIds = uniqueValidObjectIdStrings(contextTasks.map((task) => task.prospectId));
   const prospects = prospectIds.length
     ? await Prospect.find({ _id: { $in: prospectIds } })
         .select("firstName middleName lastName")
@@ -1479,7 +1489,7 @@ async function ensureTaskMissedNotificationsForUser(userObjectId) {
     })
   );
 
-  const engagementIds = uniqueValidObjectIdStrings(overdueTasks.map((task) => task.leadEngagementId));
+  const engagementIds = uniqueValidObjectIdStrings(contextTasks.map((task) => task.leadEngagementId));
   const engagementDocs = engagementIds.length
     ? await LeadEngagement.find({ _id: { $in: engagementIds } }).select("_id leadId").lean()
     : [];
@@ -1526,8 +1536,41 @@ async function ensureTaskMissedNotificationsForUser(userObjectId) {
     })
     .filter(Boolean);
 
-  if (!writes.length) return;
-  await Notification.bulkWrite(writes, { ordered: false });
+  if (writes.length) {
+    await Notification.bulkWrite(writes, { ordered: false });
+  }
+
+  const dueTodayWrites = dueTodayPendingTasks
+    .map((task) => {
+      const dueKey = dateKeyInTZ(task.dueAt, "Asia/Manila");
+      if (!dueKey) return null;
+      const dedupeKey = `TASK_DUE_TODAY:${task._id}:${dueKey}`;
+      const prospectName = prospectNameById.get(String(task.prospectId || "")) || "this prospect";
+      const leadCode = leadCodeByEngagementId.get(String(task.leadEngagementId || "")) || "—";
+      return {
+        updateOne: {
+          filter: { assignedToUserId: userObjectId, dedupeKey },
+          update: {
+            $setOnInsert: {
+              assignedToUserId: userObjectId,
+              type: "TASK_DUE_TODAY",
+              title: "Task due today",
+              message: `${task.title || "Task"} for ${prospectName} (Lead ${leadCode}) is due today at ${formatTimeInManila(task.dueAt)}.`,
+              status: "Unread",
+              entityType: "Task",
+              entityId: task._id,
+              dedupeKey,
+            },
+          },
+          upsert: true,
+        },
+      };
+    })
+    .filter(Boolean);
+
+  if (dueTodayWrites.length) {
+    await Notification.bulkWrite(dueTodayWrites, { ordered: false });
+  }
 }
 
 /**
