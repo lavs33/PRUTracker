@@ -6719,51 +6719,45 @@ function isMeetingSlotValidWindow(startAt, durationMin) {
  * requested agent/user so new schedules can be checked for overlap.
  */
 async function getAgentMeetingWindows(userObjectId, from, to, session) {
-  // Meeting records are linked through lead engagement ids, so first gather
-  // the leads whose prospects belong to the requested agent.
-  const leads = await Lead.find({})
-    .select("_id prospectId")
-    .session(session || null)
-    .lean();
-
-  const prospectIds = [...new Set(leads.map((l) => String(l.prospectId)).filter(Boolean))];
-  const prospects = prospectIds.length
-    ? await Prospect.find({ _id: { $in: prospectIds }, assignedToUserId: userObjectId })
-        .select("_id")
-        .session(session || null)
-        .lean()
-    : [];
-
-  const allowedProspectIds = new Set(prospects.map((p) => String(p._id)));
-  const leadIdsForAgent = leads
-    .filter((l) => allowedProspectIds.has(String(l.prospectId)))
-    .map((l) => l._id);
-
-  if (!leadIdsForAgent.length) return [];
-
-  const engagements = await LeadEngagement.find({ leadId: { $in: leadIdsForAgent } })
-    .select("_id")
-    .session(session || null)
-    .lean();
-
-  const engagementIds = engagements.map((e) => e._id);
-  if (!engagementIds.length) return [];
-
-  const q = {
-    leadEngagementId: { $in: engagementIds },
-    status: { $ne: "Cancelled" },
-  };
-
+  const matchStage = { status: { $ne: "Cancelled" } };
   if (from || to) {
-    q.startAt = {};
-    if (from) q.startAt.$gte = from;
-    if (to) q.startAt.$lt = to;
+    matchStage.startAt = {};
+    if (from) matchStage.startAt.$gte = from;
+    if (to) matchStage.startAt.$lt = to;
   }
 
-  const meetings = await ScheduledMeeting.find(q)
-    .select("startAt endAt durationMin")
-    .session(session || null)
-    .lean();
+  const meetings = await ScheduledMeeting.aggregate([
+    { $match: matchStage },
+    {
+      $lookup: {
+        from: "leadengagements",
+        localField: "leadEngagementId",
+        foreignField: "_id",
+        as: "engagement",
+      },
+    },
+    { $unwind: "$engagement" },
+    {
+      $lookup: {
+        from: "leads",
+        localField: "engagement.leadId",
+        foreignField: "_id",
+        as: "lead",
+      },
+    },
+    { $unwind: "$lead" },
+    {
+      $lookup: {
+        from: "prospects",
+        localField: "lead.prospectId",
+        foreignField: "_id",
+        as: "prospect",
+      },
+    },
+    { $unwind: "$prospect" },
+    { $match: { "prospect.assignedToUserId": userObjectId } },
+    { $project: { _id: 0, startAt: 1, endAt: 1, durationMin: 1 } },
+  ]).session(session || null);
 
   // Normalize every meeting to an explicit [start, end) window. Older rows may
   // be missing endAt, so durationMin is used as a fallback for conflict checks.
@@ -6810,7 +6804,6 @@ app.get("/api/agents/:agentId/meeting-availability", async (req, res) => {
     const userObjectId = new mongoose.Types.ObjectId(userId);
     const start = new Date();
     start.setHours(0, 0, 0, 0);
-    start.setDate(start.getDate() + 1);
 
     const end = new Date(start);
     end.setDate(end.getDate() + days);
