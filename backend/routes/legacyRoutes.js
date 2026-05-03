@@ -7041,10 +7041,13 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
           leadCode: lead.leadCode,
           session,
         });
-      } else if (appointmentTask.status !== "Done") {
+      } else {
         appointmentTask.title = appointmentTitle;
         appointmentTask.description = appointmentDescription;
         appointmentTask.dueAt = appointmentDueAt;
+        appointmentTask.status = "Open";
+        appointmentTask.completedAt = null;
+        appointmentTask.wasDelayed = false;
         await appointmentTask.save({ session });
       }
 
