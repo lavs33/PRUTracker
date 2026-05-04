@@ -256,7 +256,7 @@ function AgentNotifications() {
         <div className="notif-topline">
           {n.status === "Unread" ? <span className="notif-dot" aria-label="Unread" /> : null}
           <span className={typePillClass(n.type)}>{n.type}</span>
-          <span className="notif-time">{formatWhen(n.createdAt)}</span>
+          <span className="notif-time">{formatWhen(n.updatedAt || n.createdAt)}</span>
         </div>
 
         <div className="notif-title">{n.title}</div>
