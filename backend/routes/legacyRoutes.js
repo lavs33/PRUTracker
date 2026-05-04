@@ -1419,43 +1419,73 @@ async function createTaskAddedNotifications({
   prospectFullName,
   leadCode,
   session,
+  includeTaskAdded = true,
 }) {
-  await Notification.create(
-    [
-      {
-        assignedToUserId,
-        type: "TASK_ADDED",
-        title: "New task added",
-        message: `${task.title} was created for ${prospectFullName} (Lead ${leadCode || "—"}).`,
-        status: "Unread",
-        entityType: "Task",
-        entityId: task._id,
+  const writes = [];
+
+  if (includeTaskAdded) {
+    writes.push({
+      updateOne: {
+        filter: {
+          assignedToUserId,
+          dedupeKey: `TASK_ADDED:${task._id}`,
+        },
+        update: {
+          $setOnInsert: {
+            assignedToUserId,
+            type: "TASK_ADDED",
+            title: "New task added",
+            message: `${task.title} was created for ${prospectFullName} (Lead ${leadCode || "—"}).`,
+            status: "Unread",
+            entityType: "Task",
+            entityId: task._id,
+            dedupeKey: `TASK_ADDED:${task._id}`,
+          },
+        },
+        upsert: true,
       },
-    ],
-    { session }
-  );
+    });
+  }
 
   if (task?.dueAt && isDueTodayInManila(task.dueAt)) {
-    await Notification.create(
-      [
-        {
+    const dueTodayDedupeKey = `TASK_DUE_TODAY:${task._id}:${dateKeyInTZ(task.dueAt, "Asia/Manila")}`;
+    writes.push({
+      updateOne: {
+        filter: {
           assignedToUserId,
-          type: "TASK_DUE_TODAY",
-          title: "Task due today",
-          message: `${task.title} for ${prospectFullName} (Lead ${leadCode || "—"}) is due today at ${formatTimeInManila(task.dueAt)}.`,
-          status: "Unread",
-          entityType: "Task",
-          entityId: task._id,
-          dedupeKey: `TASK_DUE_TODAY:${task._id}:${dateKeyInTZ(task.dueAt, "Asia/Manila")}`,
+          dedupeKey: dueTodayDedupeKey,
         },
-      ],
-      { session }
-    );
+        update: {
+          $set: {
+            title: "Task due today",
+            message: `${task.title} for ${prospectFullName} (Lead ${leadCode || "—"}) is due today at ${formatTimeInManila(task.dueAt)}.`,
+            status: "Unread",
+            entityType: "Task",
+            entityId: task._id,
+          },
+          $setOnInsert: {
+            assignedToUserId,
+            type: "TASK_DUE_TODAY",
+            dedupeKey: dueTodayDedupeKey,
+          },
+        },
+        upsert: true,
+      },
+    });
+  }
+
+  if (writes.length) {
+    await Notification.bulkWrite(writes, { session });
   }
 }
 
-async function ensureTaskMissedNotificationsForUser(userObjectId) {
+async function ensureTaskMissedNotificationsForUser(userObjectId, { forceUnread = false, taskIds = null } = {}) {
   const now = new Date();
+  const scopedTaskIds = Array.isArray(taskIds)
+    ? [...new Set(taskIds.map((id) => toValidObjectIdString(id)).filter(Boolean))]
+    : [];
+  const scopedTaskIdSet = new Set(scopedTaskIds);
+  const refreshAt = new Date();
   const openTasks = await Task.find({
     assignedToUserId: userObjectId,
     status: { $in: ["Open", "Overdue"] },
@@ -1463,12 +1493,16 @@ async function ensureTaskMissedNotificationsForUser(userObjectId) {
   })
     .select("_id title dueAt prospectId leadEngagementId")
     .lean();
+  const scopedOpenTasks = scopedTaskIdSet.size
+    ? openTasks.filter((task) => scopedTaskIdSet.has(String(task?._id || "")))
+    : openTasks;
 
-  const dueTodayPendingTasks = openTasks.filter((task) => task?.dueAt && isDueTodayInManila(task.dueAt));
+  const dueTodayPendingTasks = scopedOpenTasks.filter((task) => task?.dueAt && isDueTodayInManila(task.dueAt));
   const overdueTasks = await Task.find({
     assignedToUserId: userObjectId,
     status: "Open",
     dueAt: { $lt: now },
+    ...(scopedTaskIds.length ? { _id: { $in: scopedTaskIds } } : {}),
   })
     .select("_id title dueAt prospectId leadEngagementId")
     .lean();
@@ -1519,14 +1553,16 @@ async function ensureTaskMissedNotificationsForUser(userObjectId) {
         updateOne: {
           filter: { assignedToUserId: userObjectId, dedupeKey },
           update: {
+            $set: {
+              title: "Task missed",
+              message: `${task.title || "Task"} for ${prospectName} (Lead ${leadCode}) is now overdue.`,
+              entityType: "Task",
+              entityId: task._id,
+              ...(forceUnread ? { status: "Unread", readAt: null, createdAt: refreshAt } : {}),
+            },
             $setOnInsert: {
               assignedToUserId: userObjectId,
               type: "TASK_MISSED",
-              title: "Task missed",
-              message: `${task.title || "Task"} for ${prospectName} (Lead ${leadCode}) is now overdue.`,
-              status: "Unread",
-              entityType: "Task",
-              entityId: task._id,
               dedupeKey,
             },
           },
@@ -1551,14 +1587,16 @@ async function ensureTaskMissedNotificationsForUser(userObjectId) {
         updateOne: {
           filter: { assignedToUserId: userObjectId, dedupeKey },
           update: {
+            $set: {
+              title: "Task due today",
+              message: `${task.title || "Task"} for ${prospectName} (Lead ${leadCode}) is due today at ${formatTimeInManila(task.dueAt)}.`,
+              entityType: "Task",
+              entityId: task._id,
+              ...(forceUnread ? { status: "Unread", readAt: null, createdAt: refreshAt } : {}),
+            },
             $setOnInsert: {
               assignedToUserId: userObjectId,
               type: "TASK_DUE_TODAY",
-              title: "Task due today",
-              message: `${task.title || "Task"} for ${prospectName} (Lead ${leadCode}) is due today at ${formatTimeInManila(task.dueAt)}.`,
-              status: "Unread",
-              entityType: "Task",
-              entityId: task._id,
               dedupeKey,
             },
           },
@@ -3883,6 +3921,7 @@ app.put("/api/prospects/:prospectId", async (req, res) => {
 
     let saved = null;
 
+    let appointmentTaskIdForNotif = null;
     await session.withTransaction(async () => {
       /**
        * Authorization + fetch:
@@ -6719,51 +6758,45 @@ function isMeetingSlotValidWindow(startAt, durationMin) {
  * requested agent/user so new schedules can be checked for overlap.
  */
 async function getAgentMeetingWindows(userObjectId, from, to, session) {
-  // Meeting records are linked through lead engagement ids, so first gather
-  // the leads whose prospects belong to the requested agent.
-  const leads = await Lead.find({})
-    .select("_id prospectId")
-    .session(session || null)
-    .lean();
-
-  const prospectIds = [...new Set(leads.map((l) => String(l.prospectId)).filter(Boolean))];
-  const prospects = prospectIds.length
-    ? await Prospect.find({ _id: { $in: prospectIds }, assignedToUserId: userObjectId })
-        .select("_id")
-        .session(session || null)
-        .lean()
-    : [];
-
-  const allowedProspectIds = new Set(prospects.map((p) => String(p._id)));
-  const leadIdsForAgent = leads
-    .filter((l) => allowedProspectIds.has(String(l.prospectId)))
-    .map((l) => l._id);
-
-  if (!leadIdsForAgent.length) return [];
-
-  const engagements = await LeadEngagement.find({ leadId: { $in: leadIdsForAgent } })
-    .select("_id")
-    .session(session || null)
-    .lean();
-
-  const engagementIds = engagements.map((e) => e._id);
-  if (!engagementIds.length) return [];
-
-  const q = {
-    leadEngagementId: { $in: engagementIds },
-    status: { $ne: "Cancelled" },
-  };
-
+  const matchStage = { status: { $ne: "Cancelled" } };
   if (from || to) {
-    q.startAt = {};
-    if (from) q.startAt.$gte = from;
-    if (to) q.startAt.$lt = to;
+    matchStage.startAt = {};
+    if (from) matchStage.startAt.$gte = from;
+    if (to) matchStage.startAt.$lt = to;
   }
 
-  const meetings = await ScheduledMeeting.find(q)
-    .select("startAt endAt durationMin")
-    .session(session || null)
-    .lean();
+  const meetings = await ScheduledMeeting.aggregate([
+    { $match: matchStage },
+    {
+      $lookup: {
+        from: "leadengagements",
+        localField: "leadEngagementId",
+        foreignField: "_id",
+        as: "engagement",
+      },
+    },
+    { $unwind: "$engagement" },
+    {
+      $lookup: {
+        from: "leads",
+        localField: "engagement.leadId",
+        foreignField: "_id",
+        as: "lead",
+      },
+    },
+    { $unwind: "$lead" },
+    {
+      $lookup: {
+        from: "prospects",
+        localField: "lead.prospectId",
+        foreignField: "_id",
+        as: "prospect",
+      },
+    },
+    { $unwind: "$prospect" },
+    { $match: { "prospect.assignedToUserId": userObjectId } },
+    { $project: { _id: 1, startAt: 1, endAt: 1, durationMin: 1 } },
+  ]).session(session || null);
 
   // Normalize every meeting to an explicit [start, end) window. Older rows may
   // be missing endAt, so durationMin is used as a fallback for conflict checks.
@@ -6778,7 +6811,7 @@ async function getAgentMeetingWindows(userObjectId, from, to, session) {
         end = new Date(start.getTime() + duration * 60 * 1000);
       }
 
-      return { start, end };
+      return { id: m._id ? String(m._id) : "", start, end };
     })
     .filter(Boolean);
 }
@@ -6810,7 +6843,6 @@ app.get("/api/agents/:agentId/meeting-availability", async (req, res) => {
     const userObjectId = new mongoose.Types.ObjectId(userId);
     const start = new Date();
     start.setHours(0, 0, 0, 0);
-    start.setDate(start.getDate() + 1);
 
     const end = new Date(start);
     end.setDate(end.getDate() + days);
@@ -6906,9 +6938,17 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
       }
 
       const endAt = new Date(dt.getTime() + durationMin * 60 * 1000);
+      const meetingType = "Needs Assessment";
+      const existingMeeting = await ScheduledMeeting.findOne({
+        leadEngagementId: engagement._id,
+        meetingType,
+      }).session(session);
 
       const windows = await getAgentMeetingWindows(userObjectId, null, null, session);
-      if (hasMeetingConflict(dt, endAt, windows)) {
+      const conflictWindows = existingMeeting
+        ? windows.filter((w) => String(w?.id || "") !== String(existingMeeting._id))
+        : windows;
+      if (hasMeetingConflict(dt, endAt, conflictWindows)) {
         throw Object.assign(new Error("Selected time slot conflicts with an existing meeting."), {
           status: 409,
           code: "MEETING_CONFLICT",
@@ -6950,12 +6990,6 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
 
       attempt.outcomeActivity = "Schedule Meeting";
       await attempt.save({ session });
-
-      const meetingType = "Needs Assessment";
-      const existingMeeting = await ScheduledMeeting.findOne({
-        leadEngagementId: engagement._id,
-        meetingType,
-      }).session(session);
 
       if (existingMeeting) {
         if (allowRescheduleFromNeeds && new Date(existingMeeting.startAt).getTime() === dt.getTime()) {
@@ -7021,6 +7055,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
       const appointmentTitle = `Meeting scheduled with ${prospect.firstName}`;
       const appointmentDescription = `Attend scheduled meeting with ${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName} (Lead ${lead.leadCode || "—"}). Meeting window: ${formatDateTimeInManila(dt)} to ${formatDateTimeInManila(endAt)} (Asia/Manila).`;
       const appointmentDueAt = new Date(endAt.getTime() + 15 * 60 * 1000);
+      const prospectFullName = `${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName}`.trim();
 
       if (!appointmentTask) {
         appointmentTask = await Task.create(
@@ -7040,7 +7075,6 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
           { session }
         ).then((docs) => docs[0]);
 
-        const prospectFullName = `${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName}`.trim();
         await createTaskAddedNotifications({
           assignedToUserId: userObjectId,
           task: appointmentTask,
@@ -7048,13 +7082,25 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
           leadCode: lead.leadCode,
           session,
         });
-      } else if (appointmentTask.status !== "Done") {
+      } else {
         appointmentTask.title = appointmentTitle;
         appointmentTask.description = appointmentDescription;
         appointmentTask.dueAt = appointmentDueAt;
+        appointmentTask.status = "Open";
+        appointmentTask.completedAt = null;
+        appointmentTask.wasDelayed = false;
         await appointmentTask.save({ session });
-      }
 
+        await createTaskAddedNotifications({
+          assignedToUserId: userObjectId,
+          task: appointmentTask,
+          prospectFullName,
+          leadCode: lead.leadCode,
+          session,
+          includeTaskAdded: false,
+        });
+      }
+      appointmentTaskIdForNotif = appointmentTask?._id || null;
       if (!allowRescheduleFromNeeds) {
         const now = new Date();
         engagement.currentStage = "Needs Assessment";
@@ -7084,6 +7130,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
       }
       await engagement.save({ session });
     });
+    await ensureTaskMissedNotificationsForUser(userObjectId, { forceUnread: true, taskIds: [appointmentTaskIdForNotif] });
 
     return res.json({
       message: Boolean(rescheduleFromNeeds)
@@ -7274,6 +7321,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/attendance",
     const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
     const leadObjectId = new mongoose.Types.ObjectId(leadId);
 
+    let presentationTaskIdForNotif = null;
     await session.withTransaction(async () => {
       const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).session(session);
       if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
@@ -7986,8 +8034,18 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/schedule-pro
         presentationTask.description = presentationDescription;
         presentationTask.dueAt = presentationDueAt;
         await presentationTask.save({ session });
-      }
 
+        const prospectFullName = `${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName}`.trim();
+        await createTaskAddedNotifications({
+          assignedToUserId: userObjectId,
+          task: presentationTask,
+          prospectFullName,
+          leadCode: lead.leadCode,
+          session,
+          includeTaskAdded: false,
+        });
+      }
+      presentationTaskIdForNotif = presentationTask?._id || null;
       na.outcomeActivity = "Schedule Proposal Presentation";
       await na.save({ session });
 
@@ -8026,6 +8084,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/schedule-pro
         { upsert: true, session }
       );
     });
+    await ensureTaskMissedNotificationsForUser(userObjectId, { forceUnread: true, taskIds: [presentationTaskIdForNotif] });
 
     return res.json({ message: "Proposal presentation scheduled. Proposal stage activated." });
   } catch (err) {
@@ -8058,6 +8117,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/generate", async (re
     const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
     const leadObjectId = new mongoose.Types.ObjectId(leadId);
 
+    let applicationTaskIdForNotif = null;
     await session.withTransaction(async () => {
       const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).session(session);
       if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
@@ -9493,8 +9553,18 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/schedule-application
         applicationTask.description = appointmentDescription;
         applicationTask.dueAt = appointmentDueAt;
         await applicationTask.save({ session });
-      }
 
+        const prospectFullName = `${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName}`.trim();
+        await createTaskAddedNotifications({
+          assignedToUserId: userObjectId,
+          task: applicationTask,
+          prospectFullName,
+          leadCode: lead.leadCode,
+          session,
+          includeTaskAdded: false,
+        });
+      }
+      applicationTaskIdForNotif = applicationTask?._id || null;
       engagement.currentStage = "Application";
       engagement.currentActivityKey = "Schedule Application Submission";
       engagement.stageCompletedAt = now;
@@ -9526,6 +9596,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/schedule-application
         { upsert: true, session }
       );
     });
+    await ensureTaskMissedNotificationsForUser(userObjectId, { forceUnread: true, taskIds: [applicationTaskIdForNotif] });
 
     return res.json({
       message: "Application submission meeting scheduled.",
