@@ -6719,51 +6719,45 @@ function isMeetingSlotValidWindow(startAt, durationMin) {
  * requested agent/user so new schedules can be checked for overlap.
  */
 async function getAgentMeetingWindows(userObjectId, from, to, session) {
-  // Meeting records are linked through lead engagement ids, so first gather
-  // the leads whose prospects belong to the requested agent.
-  const leads = await Lead.find({})
-    .select("_id prospectId")
-    .session(session || null)
-    .lean();
-
-  const prospectIds = [...new Set(leads.map((l) => String(l.prospectId)).filter(Boolean))];
-  const prospects = prospectIds.length
-    ? await Prospect.find({ _id: { $in: prospectIds }, assignedToUserId: userObjectId })
-        .select("_id")
-        .session(session || null)
-        .lean()
-    : [];
-
-  const allowedProspectIds = new Set(prospects.map((p) => String(p._id)));
-  const leadIdsForAgent = leads
-    .filter((l) => allowedProspectIds.has(String(l.prospectId)))
-    .map((l) => l._id);
-
-  if (!leadIdsForAgent.length) return [];
-
-  const engagements = await LeadEngagement.find({ leadId: { $in: leadIdsForAgent } })
-    .select("_id")
-    .session(session || null)
-    .lean();
-
-  const engagementIds = engagements.map((e) => e._id);
-  if (!engagementIds.length) return [];
-
-  const q = {
-    leadEngagementId: { $in: engagementIds },
-    status: { $ne: "Cancelled" },
-  };
-
+  const matchStage = { status: { $ne: "Cancelled" } };
   if (from || to) {
-    q.startAt = {};
-    if (from) q.startAt.$gte = from;
-    if (to) q.startAt.$lt = to;
+    matchStage.startAt = {};
+    if (from) matchStage.startAt.$gte = from;
+    if (to) matchStage.startAt.$lt = to;
   }
 
-  const meetings = await ScheduledMeeting.find(q)
-    .select("startAt endAt durationMin")
-    .session(session || null)
-    .lean();
+  const meetings = await ScheduledMeeting.aggregate([
+    { $match: matchStage },
+    {
+      $lookup: {
+        from: "leadengagements",
+        localField: "leadEngagementId",
+        foreignField: "_id",
+        as: "engagement",
+      },
+    },
+    { $unwind: "$engagement" },
+    {
+      $lookup: {
+        from: "leads",
+        localField: "engagement.leadId",
+        foreignField: "_id",
+        as: "lead",
+      },
+    },
+    { $unwind: "$lead" },
+    {
+      $lookup: {
+        from: "prospects",
+        localField: "lead.prospectId",
+        foreignField: "_id",
+        as: "prospect",
+      },
+    },
+    { $unwind: "$prospect" },
+    { $match: { "prospect.assignedToUserId": userObjectId } },
+    { $project: { _id: 1, startAt: 1, endAt: 1, durationMin: 1 } },
+  ]).session(session || null);
 
   // Normalize every meeting to an explicit [start, end) window. Older rows may
   // be missing endAt, so durationMin is used as a fallback for conflict checks.
@@ -6778,7 +6772,7 @@ async function getAgentMeetingWindows(userObjectId, from, to, session) {
         end = new Date(start.getTime() + duration * 60 * 1000);
       }
 
-      return { start, end };
+      return { id: m._id ? String(m._id) : "", start, end };
     })
     .filter(Boolean);
 }
@@ -6810,7 +6804,6 @@ app.get("/api/agents/:agentId/meeting-availability", async (req, res) => {
     const userObjectId = new mongoose.Types.ObjectId(userId);
     const start = new Date();
     start.setHours(0, 0, 0, 0);
-    start.setDate(start.getDate() + 1);
 
     const end = new Date(start);
     end.setDate(end.getDate() + days);
@@ -6906,9 +6899,17 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
       }
 
       const endAt = new Date(dt.getTime() + durationMin * 60 * 1000);
+      const meetingType = "Needs Assessment";
+      const existingMeeting = await ScheduledMeeting.findOne({
+        leadEngagementId: engagement._id,
+        meetingType,
+      }).session(session);
 
       const windows = await getAgentMeetingWindows(userObjectId, null, null, session);
-      if (hasMeetingConflict(dt, endAt, windows)) {
+      const conflictWindows = existingMeeting
+        ? windows.filter((w) => String(w?.id || "") !== String(existingMeeting._id))
+        : windows;
+      if (hasMeetingConflict(dt, endAt, conflictWindows)) {
         throw Object.assign(new Error("Selected time slot conflicts with an existing meeting."), {
           status: 409,
           code: "MEETING_CONFLICT",
@@ -6950,12 +6951,6 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
 
       attempt.outcomeActivity = "Schedule Meeting";
       await attempt.save({ session });
-
-      const meetingType = "Needs Assessment";
-      const existingMeeting = await ScheduledMeeting.findOne({
-        leadEngagementId: engagement._id,
-        meetingType,
-      }).session(session);
 
       if (existingMeeting) {
         if (allowRescheduleFromNeeds && new Date(existingMeeting.startAt).getTime() === dt.getTime()) {
@@ -7021,6 +7016,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
       const appointmentTitle = `Meeting scheduled with ${prospect.firstName}`;
       const appointmentDescription = `Attend scheduled meeting with ${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName} (Lead ${lead.leadCode || "—"}). Meeting window: ${formatDateTimeInManila(dt)} to ${formatDateTimeInManila(endAt)} (Asia/Manila).`;
       const appointmentDueAt = new Date(endAt.getTime() + 15 * 60 * 1000);
+      const prospectFullName = `${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName}`.trim();
 
       if (!appointmentTask) {
         appointmentTask = await Task.create(
@@ -7040,7 +7036,6 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
           { session }
         ).then((docs) => docs[0]);
 
-        const prospectFullName = `${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName}`.trim();
         await createTaskAddedNotifications({
           assignedToUserId: userObjectId,
           task: appointmentTask,
@@ -7048,11 +7043,22 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
           leadCode: lead.leadCode,
           session,
         });
-      } else if (appointmentTask.status !== "Done") {
+      } else {
         appointmentTask.title = appointmentTitle;
         appointmentTask.description = appointmentDescription;
         appointmentTask.dueAt = appointmentDueAt;
+        appointmentTask.status = "Open";
+        appointmentTask.completedAt = null;
+        appointmentTask.wasDelayed = false;
         await appointmentTask.save({ session });
+
+        await createTaskAddedNotifications({
+          assignedToUserId: userObjectId,
+          task: appointmentTask,
+          prospectFullName,
+          leadCode: lead.leadCode,
+          session,
+        });
       }
 
       if (!allowRescheduleFromNeeds) {
