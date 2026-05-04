@@ -64,8 +64,8 @@ function createNotificationsController({
       }
 
       let notifs = await Notification.find(query)
-        .sort({ createdAt: -1 })
-        .select("assignedToUserId type title message status readAt entityType entityId createdAt")
+        .sort({ updatedAt: -1, createdAt: -1 })
+        .select("assignedToUserId type title message status readAt entityType entityId createdAt updatedAt")
         .lean();
 
       if (String(includeRefs) === "1" && notifs.length) {
