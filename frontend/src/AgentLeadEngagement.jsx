@@ -1843,6 +1843,10 @@ function AgentLeadEngagement() {
 
   const shouldRefreshMeetingAvailability =
     showAddAttempt ||
+    ((showContactingPanel && isViewingCurrentStage && !isContactingReadOnly) &&
+      (contactingViewedActivityKey === "Schedule Meeting" || contactingCurrentActivityKey === "Schedule Meeting")) ||
+    rescheduleFromNeedsMode ||
+    contactingRescheduleMode ||
     (showNeedsAssessmentPanel && showProposalSchedulingSection && !proposalMeetingSaved) ||
     (showProposalPanel && proposalUiActivityKey === "Schedule Application Submission" && !applicationMeetingSaved);
 
@@ -2061,6 +2065,17 @@ function AgentLeadEngagement() {
 
   const isNeedsAssessmentCurrentViewEditable =
     isNeedsAssessmentEditableNow && needsAssessmentViewedActivityKey === needsActivityKeyRaw;
+  const isNeedsAttendanceChoiceLocked =
+    needsAssessmentViewedActivityKey === "Record Prospect Attendance" &&
+    needsActivityKeyRaw !== "Record Prospect Attendance";
+  const canEditNeedsAttendanceProof =
+    showNeedsAssessmentPanel &&
+    isViewingCurrentStage &&
+    stage === "Needs Assessment" &&
+    !isLeadClosed &&
+    !isLeadDropped &&
+    needsAssessmentViewedActivityKey === "Record Prospect Attendance" &&
+    needsAssessmentForm.attendanceChoice === "YES";
   const isNeedsScheduleEditable =
     isNeedsAssessmentCurrentViewEditable &&
     needsActivityKeyRaw === "Schedule Proposal Presentation" &&
@@ -2578,7 +2593,21 @@ function AgentLeadEngagement() {
         setMeetingFieldErrors({ meetingDurationMin: "Meeting duration must be 30, 60, 90, or 120 minutes." });
         return;
       }
-      if (isSlotBooked(meetingDate, meetingStartTime, meetingDurationMin)) {
+      const latestWindows = await fetchMeetingAvailability();
+      const proposedStart = combineDateAndTimeLocal(meetingDate, meetingStartTime);
+      const proposedEnd = proposedStart ? new Date(proposedStart.getTime() + meetingDurationMin * 60 * 1000) : null;
+      const hasRealtimeConflict = Boolean(proposedStart && proposedEnd) && (latestWindows || []).some((w) => {
+        const ws = w?.startAt ? new Date(w.startAt) : null;
+        const we = w?.endAt ? new Date(w.endAt) : null;
+        if (!ws || !we || Number.isNaN(ws.getTime()) || Number.isNaN(we.getTime())) return false;
+        if (rescheduleOriginalMeetingAt && ws.getTime() === new Date(rescheduleOriginalMeetingAt).getTime()) return false;
+        return ws < proposedEnd && we > proposedStart;
+      });
+      if (hasRealtimeConflict) {
+        setMeetingFieldErrors({ meetingStartTime: "Selected time is already booked." });
+        return;
+      }
+      if (isSlotBooked(meetingDate, meetingStartTime, meetingDurationMin, rescheduleOriginalMeetingAt)) {
         setMeetingFieldErrors({ meetingStartTime: "Selected time is already booked." });
         return;
       }
@@ -2673,7 +2702,12 @@ function AgentLeadEngagement() {
         setRescheduleOriginalMeetingAt(null);
       }
     } catch (err) {
-      setMeetingError(err?.message || "Cannot connect to server. Is backend running?");
+      const msg = err?.message || "Cannot connect to server. Is backend running?";
+      if (/conflicts with an existing meeting|already booked|MEETING_CONFLICT/i.test(msg)) {
+        setMeetingFieldErrors({ meetingStartTime: "Selected time is already booked." });
+      } else {
+        setMeetingError(msg);
+      }
     } finally {
       setSavingMeeting(false);
     }
@@ -5877,10 +5911,14 @@ function AgentLeadEngagement() {
                                 >
                                   <option value="">Select time</option>
                                   {contactingMeetingStartSlots.map((slot) => {
-                                    const booked = isSlotBooked(meetingForm.meetingDate, slot, meetingForm.meetingDurationMin);
+                                    const booked = isSlotBooked(meetingForm.meetingDate, slot, meetingForm.meetingDurationMin, rescheduleOriginalMeetingAt);
+                                    const initialSlotTime = rescheduleOriginalMeetingAt
+                                      ? `${String(new Date(rescheduleOriginalMeetingAt).getHours()).padStart(2, "0")}:${String(new Date(rescheduleOriginalMeetingAt).getMinutes()).padStart(2, "0")}`
+                                      : "";
+                                    const isInitialSetting = Boolean(rescheduleOriginalMeetingAt) && meetingForm.meetingDate === toDateInputValue(rescheduleOriginalMeetingAt) && slot === initialSlotTime;
                                     return (
-                                      <option key={slot} value={slot} disabled={booked}>
-                                        {formatTimeLabel(slot)}{booked ? " (Booked)" : ""}
+                                      <option key={slot} value={slot} disabled={booked || isInitialSetting}>
+                                        {formatTimeLabel(slot)}{isInitialSetting ? " (INITIAL SETTING)" : booked ? " (BOOKED)" : ""}
                                       </option>
                                     );
                                   })}
@@ -6064,18 +6102,6 @@ function AgentLeadEngagement() {
                                 {String(lastAttempt?.meetingPlace || "").trim() ? <div><span className="le-metaLabel">Meeting Place</span><span className="le-metaValue">{lastAttempt.meetingPlace}</span></div> : null}
                                 {String(lastAttempt?.meetingStatus || "").trim() ? <div><span className="le-metaLabel">Status</span><span className="le-metaValue">{lastAttempt.meetingStatus}</span></div> : null}
                               </div>
-                              {needsAssessmentCurrentActivityKey === "Record Prospect Attendance" ? (
-                                <div style={{ marginTop: 12 }}>
-                                  <button
-                                    type="button"
-                                    className="le-btn secondary"
-                                    onClick={startRescheduleFromContacting}
-                                    disabled={savingMeeting}
-                                  >
-                                    Reschedule Meeting
-                                  </button>
-                                </div>
-                              ) : null}
                             </>
                           ) : (
                             <p className="le-muted" style={{ marginTop: 8 }}>
@@ -6546,9 +6572,13 @@ function AgentLeadEngagement() {
                                     const booked = applicationMeetingForm.meetingDate
                                       ? isSlotBooked(applicationMeetingForm.meetingDate, slot, applicationMeetingForm.meetingDurationMin, applicationMeetingSaved?.startAt)
                                       : false;
+                                    const initialSlotTime = applicationMeetingSaved?.startAt
+                                      ? `${String(new Date(applicationMeetingSaved.startAt).getHours()).padStart(2, "0")}:${String(new Date(applicationMeetingSaved.startAt).getMinutes()).padStart(2, "0")}`
+                                      : "";
+                                    const isInitialSetting = Boolean(applicationMeetingSaved?.startAt) && applicationMeetingForm.meetingDate === toDateInputValue(applicationMeetingSaved.startAt) && slot === initialSlotTime;
                                     return (
-                                      <option key={`app-time-${slot}`} value={slot} disabled={booked}>
-                                        {formatTimeLabel(slot)}{booked ? " (Booked)" : ""}
+                                      <option key={`app-time-${slot}`} value={slot} disabled={booked || isInitialSetting}>
+                                        {formatTimeLabel(slot)}{isInitialSetting ? " (INITIAL SETTING)" : booked ? " (BOOKED)" : ""}
                                       </option>
                                     );
                                   })}
@@ -6737,7 +6767,7 @@ function AgentLeadEngagement() {
                                 name="prospect-attendance"
                                 checked={needsAssessmentForm.attendanceChoice === "YES"}
                                 onChange={() => setNeedsAssessmentForm((f) => ({ ...f, attendanceChoice: "YES" }))}
-                                disabled={!isNeedsAssessmentCurrentViewEditable || isNeedsAssessmentLocked || needsAttendanceRescheduleLock || needsAssessmentSaving}
+                                disabled={!isNeedsAssessmentCurrentViewEditable || isNeedsAssessmentLocked || needsAttendanceRescheduleLock || needsAssessmentSaving || isNeedsAttendanceChoiceLocked}
                               />
                               <span>Yes</span>
                             </label>
@@ -6747,7 +6777,7 @@ function AgentLeadEngagement() {
                                 name="prospect-attendance"
                                 checked={needsAssessmentForm.attendanceChoice === "NO"}
                                 onChange={() => setNeedsAssessmentForm((f) => ({ ...f, attendanceChoice: "NO", attendanceProofImageDataUrl: "", attendanceProofFileName: "" }))}
-                                disabled={!isNeedsAssessmentCurrentViewEditable || isNeedsAssessmentLocked || needsAttendanceRescheduleLock || needsAssessmentSaving}
+                                disabled={!isNeedsAssessmentCurrentViewEditable || isNeedsAssessmentLocked || needsAttendanceRescheduleLock || needsAssessmentSaving || isNeedsAttendanceChoiceLocked}
                               />
                               <span>No</span>
                             </label>
@@ -6778,7 +6808,7 @@ function AgentLeadEngagement() {
 
                         {needsAssessmentForm.attendanceChoice === "YES" && (
                           <>
-                            {!isNeedsAssessmentLocked && !needsAttendanceRescheduleLock ? (
+                            {canEditNeedsAttendanceProof && !isNeedsAssessmentLocked && !needsAttendanceRescheduleLock ? (
                               <div className="le-formRow" style={{ marginTop: 8 }}>
                                 <label className="le-label">Proof of Attendance (JPG, JPEG, PNG) *</label>
                                 <input
@@ -6829,13 +6859,9 @@ function AgentLeadEngagement() {
                                   style={{ maxWidth: 260, width: "100%", borderRadius: 8, border: "1px solid #e5e7eb" }}
                                 />
                               </div>
-                            ) : (
-                              <p className="le-muted" style={{ marginTop: 8 }}>
-                                Upload proof of attendance first to proceed to Prospect&apos;s Basic Information.
-                              </p>
-                            )}
+                            ) : null}
 
-                            {isNeedsAssessmentCurrentViewEditable && !isNeedsAssessmentLocked && !needsAttendanceRescheduleLock ? (
+                            {canEditNeedsAttendanceProof && !isNeedsAssessmentLocked && !needsAttendanceRescheduleLock ? (
                               <div className="le-actions" style={{ marginTop: 10 }}>
                                 <button
                                   type="button"
@@ -7591,9 +7617,13 @@ function AgentLeadEngagement() {
                                   const isBooked = proposalMeetingForm.meetingDate
                                     ? isSlotBooked(proposalMeetingForm.meetingDate, t, proposalMeetingForm.meetingDurationMin, proposalMeetingSaved?.startAt)
                                     : false;
+                                  const initialSlotTime = proposalMeetingSaved?.startAt
+                                    ? `${String(new Date(proposalMeetingSaved.startAt).getHours()).padStart(2, "0")}:${String(new Date(proposalMeetingSaved.startAt).getMinutes()).padStart(2, "0")}`
+                                    : "";
+                                  const isInitialSetting = Boolean(proposalMeetingSaved?.startAt) && proposalMeetingForm.meetingDate === toDateInputValue(proposalMeetingSaved.startAt) && t === initialSlotTime;
                                   return (
-                                    <option key={`proposal-${t}`} value={t} disabled={isBooked}>
-                                      {isBooked ? `${formatTimeLabel(t)} (Unavailable)` : formatTimeLabel(t)}
+                                    <option key={`proposal-${t}`} value={t} disabled={isBooked || isInitialSetting}>
+                                      {isInitialSetting ? `${formatTimeLabel(t)} (INITIAL SETTING)` : isBooked ? `${formatTimeLabel(t)} (BOOKED)` : formatTimeLabel(t)}
                                     </option>
                                   );
                                 })}
