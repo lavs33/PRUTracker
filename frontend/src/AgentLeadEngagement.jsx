@@ -117,6 +117,8 @@ function AgentLeadEngagement() {
   const [rescheduleFromNeedsMode, setRescheduleFromNeedsMode] = useState(false);
   const [rescheduleOriginalMeetingAt, setRescheduleOriginalMeetingAt] = useState(null);
   const [needsAttendanceRescheduleLock, setNeedsAttendanceRescheduleLock] = useState(false);
+  const [needsAttendanceProofEditMode, setNeedsAttendanceProofEditMode] = useState(false);
+  const needsAttendanceProofInputRef = useRef(null);
 
   const [needsAssessmentLoading, setNeedsAssessmentLoading] = useState(false);
   const [needsAssessmentSaving, setNeedsAssessmentSaving] = useState(false);
@@ -281,6 +283,9 @@ function AgentLeadEngagement() {
   const [needsSectionOpen, setNeedsSectionOpen] = useState({
     basicInformation: true,
     needsPriorities: true,
+    productSelection: true,
+    optionalRiders: true,
+    productRidersNotes: true,
   });
   const [needsAssessmentForm, setNeedsAssessmentForm] = useState({
     attendanceChoice: "",
@@ -851,7 +856,7 @@ function AgentLeadEngagement() {
     try {
       setNeedsAssessmentError("");
 
-      if (!isNeedsAssessmentCurrentViewEditable || isNeedsAssessmentLocked) return;
+      if ((!isNeedsAssessmentCurrentViewEditable && !needsAttendanceProofEditMode) || isNeedsAssessmentLocked) return;
       if (needsAssessmentForm.attendanceChoice !== "YES") {
         setNeedsAssessmentError("Prospect attendance must be marked YES before saving.");
         return;
@@ -886,6 +891,7 @@ function AgentLeadEngagement() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to record attendance.");
 
+      setNeedsAttendanceProofEditMode(false);
       await refreshCurrentProgressView({ includeNeedsAssessment: true });
     } catch (err) {
       setNeedsAssessmentError(err?.message || "Failed to record attendance.");
@@ -1843,6 +1849,10 @@ function AgentLeadEngagement() {
 
   const shouldRefreshMeetingAvailability =
     showAddAttempt ||
+    ((showContactingPanel && isViewingCurrentStage && !isContactingReadOnly) &&
+      (contactingViewedActivityKey === "Schedule Meeting" || contactingCurrentActivityKey === "Schedule Meeting")) ||
+    rescheduleFromNeedsMode ||
+    contactingRescheduleMode ||
     (showNeedsAssessmentPanel && showProposalSchedulingSection && !proposalMeetingSaved) ||
     (showProposalPanel && proposalUiActivityKey === "Schedule Application Submission" && !applicationMeetingSaved);
 
@@ -2061,6 +2071,25 @@ function AgentLeadEngagement() {
 
   const isNeedsAssessmentCurrentViewEditable =
     isNeedsAssessmentEditableNow && needsAssessmentViewedActivityKey === needsActivityKeyRaw;
+  const isNeedsAttendanceChoiceLocked =
+    needsAssessmentViewedActivityKey === "Record Prospect Attendance" &&
+    needsActivityKeyRaw !== "Record Prospect Attendance";
+  const canEditNeedsAttendanceProof =
+    showNeedsAssessmentPanel &&
+    isViewingCurrentStage &&
+    stage === "Needs Assessment" &&
+    !isLeadClosed &&
+    !isLeadDropped &&
+    needsAssessmentViewedActivityKey === "Record Prospect Attendance" &&
+    needsAssessmentForm.attendanceChoice === "YES";
+  const canRequestNeedsAttendanceProofEdit =
+    showNeedsAssessmentPanel &&
+    isViewingCurrentStage &&
+    stage === "Needs Assessment" &&
+    isNeedsAttendanceChoiceLocked &&
+    ["Perform Needs Analysis", "Schedule Proposal Presentation"].includes(needsActivityKeyRaw) &&
+    needsAssessmentForm.attendanceChoice === "YES" &&
+    String(needsAssessmentForm.attendanceProofImageDataUrl || "").trim();
   const isNeedsScheduleEditable =
     isNeedsAssessmentCurrentViewEditable &&
     needsActivityKeyRaw === "Schedule Proposal Presentation" &&
@@ -2578,7 +2607,21 @@ function AgentLeadEngagement() {
         setMeetingFieldErrors({ meetingDurationMin: "Meeting duration must be 30, 60, 90, or 120 minutes." });
         return;
       }
-      if (isSlotBooked(meetingDate, meetingStartTime, meetingDurationMin)) {
+      const latestWindows = await fetchMeetingAvailability();
+      const proposedStart = combineDateAndTimeLocal(meetingDate, meetingStartTime);
+      const proposedEnd = proposedStart ? new Date(proposedStart.getTime() + meetingDurationMin * 60 * 1000) : null;
+      const hasRealtimeConflict = Boolean(proposedStart && proposedEnd) && (latestWindows || []).some((w) => {
+        const ws = w?.startAt ? new Date(w.startAt) : null;
+        const we = w?.endAt ? new Date(w.endAt) : null;
+        if (!ws || !we || Number.isNaN(ws.getTime()) || Number.isNaN(we.getTime())) return false;
+        if (rescheduleOriginalMeetingAt && ws.getTime() === new Date(rescheduleOriginalMeetingAt).getTime()) return false;
+        return ws < proposedEnd && we > proposedStart;
+      });
+      if (hasRealtimeConflict) {
+        setMeetingFieldErrors({ meetingStartTime: "Selected time is already booked." });
+        return;
+      }
+      if (isSlotBooked(meetingDate, meetingStartTime, meetingDurationMin, rescheduleOriginalMeetingAt)) {
         setMeetingFieldErrors({ meetingStartTime: "Selected time is already booked." });
         return;
       }
@@ -2673,7 +2716,12 @@ function AgentLeadEngagement() {
         setRescheduleOriginalMeetingAt(null);
       }
     } catch (err) {
-      setMeetingError(err?.message || "Cannot connect to server. Is backend running?");
+      const msg = err?.message || "Cannot connect to server. Is backend running?";
+      if (/conflicts with an existing meeting|already booked|MEETING_CONFLICT/i.test(msg)) {
+        setMeetingFieldErrors({ meetingStartTime: "Selected time is already booked." });
+      } else {
+        setMeetingError(msg);
+      }
     } finally {
       setSavingMeeting(false);
     }
@@ -5877,10 +5925,14 @@ function AgentLeadEngagement() {
                                 >
                                   <option value="">Select time</option>
                                   {contactingMeetingStartSlots.map((slot) => {
-                                    const booked = isSlotBooked(meetingForm.meetingDate, slot, meetingForm.meetingDurationMin);
+                                    const booked = isSlotBooked(meetingForm.meetingDate, slot, meetingForm.meetingDurationMin, rescheduleOriginalMeetingAt);
+                                    const initialSlotTime = rescheduleOriginalMeetingAt
+                                      ? `${String(new Date(rescheduleOriginalMeetingAt).getHours()).padStart(2, "0")}:${String(new Date(rescheduleOriginalMeetingAt).getMinutes()).padStart(2, "0")}`
+                                      : "";
+                                    const isInitialSetting = Boolean(rescheduleOriginalMeetingAt) && meetingForm.meetingDate === toDateInputValue(rescheduleOriginalMeetingAt) && slot === initialSlotTime;
                                     return (
-                                      <option key={slot} value={slot} disabled={booked}>
-                                        {formatTimeLabel(slot)}{booked ? " (Booked)" : ""}
+                                      <option key={slot} value={slot} disabled={booked || isInitialSetting}>
+                                        {formatTimeLabel(slot)}{isInitialSetting ? " (INITIAL SETTING)" : booked ? " (BOOKED)" : ""}
                                       </option>
                                     );
                                   })}
@@ -6546,9 +6598,13 @@ function AgentLeadEngagement() {
                                     const booked = applicationMeetingForm.meetingDate
                                       ? isSlotBooked(applicationMeetingForm.meetingDate, slot, applicationMeetingForm.meetingDurationMin, applicationMeetingSaved?.startAt)
                                       : false;
+                                    const initialSlotTime = applicationMeetingSaved?.startAt
+                                      ? `${String(new Date(applicationMeetingSaved.startAt).getHours()).padStart(2, "0")}:${String(new Date(applicationMeetingSaved.startAt).getMinutes()).padStart(2, "0")}`
+                                      : "";
+                                    const isInitialSetting = Boolean(applicationMeetingSaved?.startAt) && applicationMeetingForm.meetingDate === toDateInputValue(applicationMeetingSaved.startAt) && slot === initialSlotTime;
                                     return (
-                                      <option key={`app-time-${slot}`} value={slot} disabled={booked}>
-                                        {formatTimeLabel(slot)}{booked ? " (Booked)" : ""}
+                                      <option key={`app-time-${slot}`} value={slot} disabled={booked || isInitialSetting}>
+                                        {formatTimeLabel(slot)}{isInitialSetting ? " (INITIAL SETTING)" : booked ? " (BOOKED)" : ""}
                                       </option>
                                     );
                                   })}
@@ -6736,8 +6792,11 @@ function AgentLeadEngagement() {
                                 type="radio"
                                 name="prospect-attendance"
                                 checked={needsAssessmentForm.attendanceChoice === "YES"}
-                                onChange={() => setNeedsAssessmentForm((f) => ({ ...f, attendanceChoice: "YES" }))}
-                                disabled={!isNeedsAssessmentCurrentViewEditable || isNeedsAssessmentLocked || needsAttendanceRescheduleLock || needsAssessmentSaving}
+                                onChange={() => {
+                                  setNeedsAttendanceProofEditMode(false);
+                                  setNeedsAssessmentForm((f) => ({ ...f, attendanceChoice: "YES" }));
+                                }}
+                                disabled={!isNeedsAssessmentCurrentViewEditable || isNeedsAssessmentLocked || needsAttendanceRescheduleLock || needsAssessmentSaving || isNeedsAttendanceChoiceLocked}
                               />
                               <span>Yes</span>
                             </label>
@@ -6746,8 +6805,11 @@ function AgentLeadEngagement() {
                                 type="radio"
                                 name="prospect-attendance"
                                 checked={needsAssessmentForm.attendanceChoice === "NO"}
-                                onChange={() => setNeedsAssessmentForm((f) => ({ ...f, attendanceChoice: "NO", attendanceProofImageDataUrl: "", attendanceProofFileName: "" }))}
-                                disabled={!isNeedsAssessmentCurrentViewEditable || isNeedsAssessmentLocked || needsAttendanceRescheduleLock || needsAssessmentSaving}
+                                onChange={() => {
+                                  setNeedsAttendanceProofEditMode(false);
+                                  setNeedsAssessmentForm((f) => ({ ...f, attendanceChoice: "NO", attendanceProofImageDataUrl: "", attendanceProofFileName: "" }));
+                                }}
+                                disabled={!isNeedsAssessmentCurrentViewEditable || isNeedsAssessmentLocked || needsAttendanceRescheduleLock || needsAssessmentSaving || isNeedsAttendanceChoiceLocked}
                               />
                               <span>No</span>
                             </label>
@@ -6778,12 +6840,25 @@ function AgentLeadEngagement() {
 
                         {needsAssessmentForm.attendanceChoice === "YES" && (
                           <>
-                            {!isNeedsAssessmentLocked && !needsAttendanceRescheduleLock ? (
+                            {(canEditNeedsAttendanceProof || needsAttendanceProofEditMode || canRequestNeedsAttendanceProofEdit) && !isNeedsAssessmentLocked && !needsAttendanceRescheduleLock ? (
                               <div className="le-formRow" style={{ marginTop: 8 }}>
-                                <label className="le-label">Proof of Attendance (JPG, JPEG, PNG) *</label>
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%" }}>
+                                  <label className="le-label" style={{ margin: 0 }}>Proof of Attendance (JPG, JPEG, PNG) *</label>
+                                  {canRequestNeedsAttendanceProofEdit && !needsAttendanceProofEditMode ? (
+                                    <button
+                                      type="button"
+                                      className="le-btn secondary"
+                                      onClick={() => setNeedsAttendanceProofEditMode(true)}
+                                      disabled={needsAssessmentSaving}
+                                    >
+                                      Edit Proof
+                                    </button>
+                                  ) : null}
+                                </div>
                                 <input
+                                  ref={needsAttendanceProofInputRef}
                                   type="file"
-                                  className="le-input"
+                                  style={{ display: "none" }}
                                   accept=".jpg,.jpeg,.png,image/jpeg,image/png"
                                   onChange={(e) => {
                                     const file = e.target.files?.[0];
@@ -6810,11 +6885,20 @@ function AgentLeadEngagement() {
                                     };
                                     reader.readAsDataURL(file);
                                   }}
-                                  disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}
                                 />
-                                {needsAssessmentForm.attendanceProofFileName ? (
-                                  <p className="le-smallNote">Selected file: {needsAssessmentForm.attendanceProofFileName}</p>
-                                ) : null}
+                                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                                  <button
+                                    type="button"
+                                    className="le-btn secondary"
+                                    onClick={() => needsAttendanceProofInputRef.current?.click()}
+                                    disabled={needsAssessmentSaving || (canRequestNeedsAttendanceProofEdit && !needsAttendanceProofEditMode)}
+                                  >
+                                    Choose File
+                                  </button>
+                                  <span className="le-smallNote" style={{ margin: 0 }}>
+                                    {needsAssessmentForm.attendanceProofFileName ? needsAssessmentForm.attendanceProofFileName : "No file chosen"}
+                                  </span>
+                                </div>
                               </div>
                             ) : null}
                             {attendanceProofInlineError ? (
@@ -6829,13 +6913,9 @@ function AgentLeadEngagement() {
                                   style={{ maxWidth: 260, width: "100%", borderRadius: 8, border: "1px solid #e5e7eb" }}
                                 />
                               </div>
-                            ) : (
-                              <p className="le-muted" style={{ marginTop: 8 }}>
-                                Upload proof of attendance first to proceed to Prospect&apos;s Basic Information.
-                              </p>
-                            )}
+                            ) : null}
 
-                            {isNeedsAssessmentCurrentViewEditable && !isNeedsAssessmentLocked && !needsAttendanceRescheduleLock ? (
+                            {((canEditNeedsAttendanceProof && !canRequestNeedsAttendanceProofEdit) || needsAttendanceProofEditMode) && !isNeedsAssessmentLocked && !needsAttendanceRescheduleLock ? (
                               <div className="le-actions" style={{ marginTop: 10 }}>
                                 <button
                                   type="button"
@@ -6843,6 +6923,7 @@ function AgentLeadEngagement() {
                                   onClick={() => {
                                     setNeedsAssessmentError("");
                                     setNeedsAssessmentSavedAt("");
+                                    setNeedsAttendanceProofEditMode(false);
                                     fetchNeedsAssessment();
                                   }}
                                   disabled={needsAssessmentSaving}
@@ -7275,48 +7356,56 @@ function AgentLeadEngagement() {
                                   )}
                                 </>
                               )}
-                              <h5 className="le-attemptSectionHeader" style={{ marginTop: 14 }}>Product Selection *</h5>
-                              <p className="le-muted">Your financial priority: {needsPrioritiesDerived.priority || "—"}</p>
-                              <p className="le-muted" style={{ marginTop: 4 }}>{needsPrioritiesDerived.priority || "Selected"} Products Available:</p>
-                              {!needsPrioritiesDerived.priority ? (
-                                <p className="le-muted" style={{ marginTop: 8 }}>Select a financial priority first to view available products.</p>
-                              ) : availableProductsByPriority.length === 0 ? (
-                                <p className="le-muted" style={{ marginTop: 8 }}>No products found for this priority.</p>
-                              ) : (
-                                <div className="le-attemptList" style={{ marginTop: 8 }}>
-                                  {availableProductsByPriority.map((product) => {
-                                    const isSelected = String(needsAssessmentForm.needsPriorities?.productSelection?.selectedProductId || "") === String(product?._id || "");
-                                    return (
-                                      <div key={String(product?._id || product?.productName)} className="le-attemptItem">
-                                        <h6 className="le-attemptSectionHeader" style={{ marginTop: 0 }}>{product?.productName || "—"}</h6>
-                                        <p className="le-muted" style={{ marginTop: 4 }}>{product?.description || "No description available."}</p>
-                                        <div className="le-actions" style={{ marginTop: 8 }}>
-                                          <button
-                                            type="button"
-                                            className={`le-btn ${isSelected ? "primary" : "secondary"}`}
-                                            onClick={() => updateNeedsPriorities("productSelection", {
-                                              selectedProductId: String(product?._id || ""),
-                                              requestedFrequency: "Monthly",
-                                              requestedPremiumPayment: needsAssessmentForm.needsPriorities?.minPremium ?? "",
-                                            })}
-                                            disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}
-                                          >
-                                            {isSelected ? "Selected" : "Select"}
-                                          </button>
-                                        </div>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
+                            </>
+                          )}
+
+                          <div className="le-blockHeader withTopBorder">
+                                <h5 className="le-attemptSectionHeader" style={{ marginTop: 0 }}>Product Selection *</h5>
+                                <button type="button" className="le-btn secondary" onClick={() => setNeedsSectionOpen((s) => ({ ...s, productSelection: !s.productSelection }))}>
+                                  {needsSectionOpen.productSelection ? "▴" : "▾"}
+                                </button>
+                              </div>
+                              {needsSectionOpen.productSelection && (
+                                <>
+                                  <p className="le-muted">Your financial priority: {needsPrioritiesDerived.priority || "—"}</p>
+                                  <p className="le-muted" style={{ marginTop: 4 }}>{needsPrioritiesDerived.priority || "Selected"} Products Available:</p>
+                                  {!needsPrioritiesDerived.priority ? (
+                                    <p className="le-muted" style={{ marginTop: 8 }}>Select a financial priority first to view available products.</p>
+                                  ) : availableProductsByPriority.length === 0 ? (
+                                    <p className="le-muted" style={{ marginTop: 8 }}>No products found for this priority.</p>
+                                  ) : (
+                                    <div className="le-attemptList" style={{ marginTop: 8 }}>
+                                      {availableProductsByPriority.map((product) => {
+                                        const isSelected = String(needsAssessmentForm.needsPriorities?.productSelection?.selectedProductId || "") === String(product?._id || "");
+                                        return (
+                                          <div key={String(product?._id || product?.productName)} className="le-attemptItem">
+                                            <h6 className="le-attemptSectionHeader" style={{ marginTop: 0 }}>{product?.productName || "—"}</h6>
+                                            <p className="le-muted" style={{ marginTop: 4 }}>{product?.description || "No description available."}</p>
+                                            <div className="le-actions" style={{ marginTop: 8 }}>
+                                              <button type="button" className={`le-btn ${isSelected ? "primary" : "secondary"}`} onClick={() => updateNeedsPriorities("productSelection", { selectedProductId: String(product?._id || ""), requestedFrequency: "Monthly", requestedPremiumPayment: needsAssessmentForm.needsPriorities?.minPremium ?? "" })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}>
+                                                {isSelected ? "Selected" : "Select"}
+                                              </button>
+                                            </div>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                                  {renderNeedsAssessmentError("selectedProductId")}
+                                  <div className="le-formRow"><label className="le-label">Requested Frequency of Premium Payment *</label><select className="le-input" value={needsAssessmentForm.needsPriorities?.productSelection?.requestedFrequency || "Monthly"} onChange={(e) => { const v = e.target.value; updateNeedsPriorities("productSelection", { ...(needsAssessmentForm.needsPriorities?.productSelection || {}), requestedFrequency: v, requestedPremiumPayment: v === "Monthly" ? (needsAssessmentForm.needsPriorities?.minPremium ?? "") : "" }); }} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}><option value="Monthly">Monthly</option><option value="Quarterly">Quarterly</option><option value="Half-yearly">Half-yearly</option><option value="Yearly">Yearly</option></select></div>
+                                  {renderNeedsAssessmentError("requestedFrequency")}
+                                  <div className="le-formRow"><label className="le-label">Requested Premium Payment (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.productSelection?.requestedPremiumPayment ?? ""} onChange={(e) => updateNeedsPriorities("productSelection", { ...(needsAssessmentForm.needsPriorities?.productSelection || {}), requestedPremiumPayment: e.target.value })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
+                                  {renderNeedsAssessmentError("requestedPremiumPayment")}
+                                </>
                               )}
-                              {renderNeedsAssessmentError("selectedProductId")}
 
-                              <div className="le-formRow"><label className="le-label">Requested Frequency of Premium Payment *</label><select className="le-input" value={needsAssessmentForm.needsPriorities?.productSelection?.requestedFrequency || "Monthly"} onChange={(e) => { const v = e.target.value; updateNeedsPriorities("productSelection", { ...(needsAssessmentForm.needsPriorities?.productSelection || {}), requestedFrequency: v, requestedPremiumPayment: v === "Monthly" ? (needsAssessmentForm.needsPriorities?.minPremium ?? "") : "" }); }} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}><option value="Monthly">Monthly</option><option value="Quarterly">Quarterly</option><option value="Half-yearly">Half-yearly</option><option value="Yearly">Yearly</option></select></div>
-                              {renderNeedsAssessmentError("requestedFrequency")}
-                              <div className="le-formRow"><label className="le-label">Requested Premium Payment (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.productSelection?.requestedPremiumPayment ?? ""} onChange={(e) => updateNeedsPriorities("productSelection", { ...(needsAssessmentForm.needsPriorities?.productSelection || {}), requestedPremiumPayment: e.target.value })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
-                              {renderNeedsAssessmentError("requestedPremiumPayment")}
-
-                              <h5 className="le-attemptSectionHeader" style={{ marginTop: 14 }}>Optional Riders</h5>
+                              <div className="le-blockHeader withTopBorder">
+                                <h5 className="le-attemptSectionHeader" style={{ marginTop: 0 }}>Optional Riders</h5>
+                                <button type="button" className="le-btn secondary" onClick={() => setNeedsSectionOpen((s) => ({ ...s, optionalRiders: !s.optionalRiders }))}>
+                                  {needsSectionOpen.optionalRiders ? "▴" : "▾"}
+                                </button>
+                              </div>
+                              {needsSectionOpen.optionalRiders ? (
                               <div className="le-attemptList" style={{ marginTop: 8 }}>
                                 {OPTIONAL_RIDER_CATALOG.map((rider, idx) => {
                                   const saved = (needsAssessmentForm.needsPriorities?.optionalRiders || []).find((r) => String(r?.riderKey || "") === rider.riderKey);
@@ -7356,15 +7445,17 @@ function AgentLeadEngagement() {
                                   );
                                 })}
                               </div>
+                              ) : null}
 
-
-                              <h5 className="le-attemptSectionHeader" style={{ marginTop: 14 }}>Notes (Optional)</h5>
-                              <div className="le-formRow"><label className="le-label">Notes about selected product and optional riders</label><textarea className="le-input" rows={3} value={needsAssessmentForm.needsPriorities?.productRidersNotes || ""} onChange={(e) => updateNeedsPriorities("productRidersNotes", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
-
-                            </>
-                          )}
-
-
+                              <div className="le-blockHeader withTopBorder">
+                                <h5 className="le-attemptSectionHeader" style={{ marginTop: 0 }}>Notes (Optional)</h5>
+                                <button type="button" className="le-btn secondary" onClick={() => setNeedsSectionOpen((s) => ({ ...s, productRidersNotes: !s.productRidersNotes }))}>
+                                  {needsSectionOpen.productRidersNotes ? "▴" : "▾"}
+                                </button>
+                              </div>
+                              {needsSectionOpen.productRidersNotes ? (
+                                <div className="le-formRow"><label className="le-label">Notes about selected product and optional riders</label><textarea className="le-input" rows={3} value={needsAssessmentForm.needsPriorities?.productRidersNotes || ""} onChange={(e) => updateNeedsPriorities("productRidersNotes", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
+                              ) : null}
 
                           {isNeedsAssessmentEditableNow && !isNeedsAssessmentLocked && (
                             <div className="le-actions" style={{ marginTop: 14 }}>
@@ -7591,9 +7682,13 @@ function AgentLeadEngagement() {
                                   const isBooked = proposalMeetingForm.meetingDate
                                     ? isSlotBooked(proposalMeetingForm.meetingDate, t, proposalMeetingForm.meetingDurationMin, proposalMeetingSaved?.startAt)
                                     : false;
+                                  const initialSlotTime = proposalMeetingSaved?.startAt
+                                    ? `${String(new Date(proposalMeetingSaved.startAt).getHours()).padStart(2, "0")}:${String(new Date(proposalMeetingSaved.startAt).getMinutes()).padStart(2, "0")}`
+                                    : "";
+                                  const isInitialSetting = Boolean(proposalMeetingSaved?.startAt) && proposalMeetingForm.meetingDate === toDateInputValue(proposalMeetingSaved.startAt) && t === initialSlotTime;
                                   return (
-                                    <option key={`proposal-${t}`} value={t} disabled={isBooked}>
-                                      {isBooked ? `${formatTimeLabel(t)} (Unavailable)` : formatTimeLabel(t)}
+                                    <option key={`proposal-${t}`} value={t} disabled={isBooked || isInitialSetting}>
+                                      {isInitialSetting ? `${formatTimeLabel(t)} (INITIAL SETTING)` : isBooked ? `${formatTimeLabel(t)} (BOOKED)` : formatTimeLabel(t)}
                                     </option>
                                   );
                                 })}
