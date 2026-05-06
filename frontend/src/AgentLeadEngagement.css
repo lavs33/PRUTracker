@@ -343,12 +343,23 @@
   justify-content: space-between;
   align-items: center;
   gap: 10px;
+  padding-bottom: 8px;
+  border-bottom: 2px solid #da291c;
 }
 
 .le-blockHeader.withTopBorder {
   margin-top: 16px;
-  padding-top: 14px;
-  border-top: 1px solid #eef0f2;
+  padding-top: 8px;
+  border-top: 0;
+}
+
+.le-blockHeader .le-btn.secondary {
+  border-color: #da291c;
+}
+
+.le-blockHeader.noBorder {
+  border-bottom: 0;
+  padding-bottom: 0;
 }
 
 .le-blockTitle {
