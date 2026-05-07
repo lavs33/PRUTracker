@@ -62,6 +62,15 @@ const needsAssessmentSchema = new mongoose.Schema(
       enum: NEEDS_ASSESSMENT_ACTIVITY,
       default: "Record Prospect Attendance",
     },
+    followUpNeedsAssessmentRequired: {
+      type: String,
+      enum: ["", "YES", "NO"],
+      default: "",
+    },
+    followUpNeedsAssessmentDecidedAt: {
+      type: Date,
+      default: null,
+    },
 
     attendanceConfirmed: {
       type: Boolean,
