@@ -6175,36 +6175,6 @@ function AgentLeadEngagement() {
                                   <button
                                     type="button"
                                     className="le-btn secondary"
-                                    onClick={() => {
-                                      setRescheduleFromNeedsMode(true);
-                                      setContactingRescheduleMode(false);
-                                      setRescheduleOriginalMeetingAt(null);
-                                      setMeetingError("");
-                                      setMeetingFieldErrors({});
-                                      setMeetingForm({
-                                        meetingDate: lastAttempt?.meetingAt ? toDateInputValue(lastAttempt.meetingAt) : "",
-                                        meetingStartTime: lastAttempt?.meetingAt
-                                          ? `${String(new Date(lastAttempt.meetingAt).getHours()).padStart(2, "0")}:${String(new Date(lastAttempt.meetingAt).getMinutes()).padStart(2, "0")}`
-                                          : "",
-                                        meetingDurationMin: Number(lastAttempt?.meetingDurationMin || 120) || 120,
-                                        meetingMode: String(lastAttempt?.meetingMode || ""),
-                                        meetingPlatform: String(lastAttempt?.meetingPlatform || ""),
-                                        meetingPlatformOther: String(lastAttempt?.meetingPlatformOther || ""),
-                                        meetingLink: String(lastAttempt?.meetingLink || ""),
-                                        meetingInviteSent: Boolean(lastAttempt?.meetingInviteSent),
-                                        meetingPlace: String(lastAttempt?.meetingPlace || ""),
-                                      });
-                                    }}
-                                    disabled={savingMeeting}
-                                    style={{ marginRight: 8 }}
-                                  >
-                                    Add New Meeting
-                                  </button>
-                                ) : null}
-                                {needsAssessmentCurrentActivityKey === "Record Prospect Attendance" ? (
-                                  <button
-                                    type="button"
-                                    className="le-btn secondary"
                                     onClick={startRescheduleFromContacting}
                                     disabled={savingMeeting}
                                   >
