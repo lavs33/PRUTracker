@@ -5409,8 +5409,12 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
       .select("meetingType startAt endAt durationMin mode platform platformOther link inviteSent place status")
       .lean();
 
-    const latestMeeting = scheduledMeetings[0] || null;
-    const lastAttemptNo = attempts.length ? attempts[attempts.length - 1].attemptNo : null;
+    const sortedAttemptsDesc = [...attempts].sort((a, b) => Number(b?.attemptNo || 0) - Number(a?.attemptNo || 0));
+    const meetingByAttemptNo = new Map();
+    sortedAttemptsDesc.forEach((attemptDoc, idx) => {
+      if (!attemptDoc) return;
+      meetingByAttemptNo.set(Number(attemptDoc.attemptNo || 0), scheduledMeetings[idx] || null);
+    });
 
     /**
      * 4.5) Load engagement-related tasks for the sidebar (may be empty)
@@ -5554,7 +5558,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
       preferredChannel: a.preferredChannel || "",
       preferredChannelOther: a.preferredChannelOther || "",
       ...(function () {
-        const m = a.attemptNo === lastAttemptNo ? latestMeeting : null;
+        const m = meetingByAttemptNo.get(Number(a?.attemptNo || 0)) || null;
         return {
           meetingAt: m?.startAt || null,
           meetingEndAt: m?.endAt || null,
@@ -5617,6 +5621,19 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
 
         // Derived and validated current activity for tracker/badge
         currentActivityKey: derivedActivityKey, 
+
+        needsAssessmentMeetings: scheduledMeetings.map((m) => ({
+          meetingAt: m.startAt || null,
+          meetingEndAt: m.endAt || null,
+          meetingDurationMin: Number(m.durationMin || 0) || null,
+          meetingMode: m.mode || "",
+          meetingPlatform: m.platform || "",
+          meetingPlatformOther: m.platformOther || "",
+          meetingLink: m.link || "",
+          meetingInviteSent: Boolean(m.inviteSent),
+          meetingPlace: m.place || "",
+          meetingStatus: m.status || "",
+        })),
 
         // Always an array (empty if none)
         contactAttempts, 
@@ -6987,16 +7004,11 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
         if (!place) throw Object.assign(new Error("meetingPlace is required for face-to-face meeting."), { status: 400 });
       }
 
-      const attempt = await getLatestRespondedAttemptForEngagement(engagement._id, session);
-      if (!attempt) throw Object.assign(new Error("No responded contact attempt found."), { status: 409 });
+      const latestAttempt = await getLatestRespondedAttemptForEngagement(engagement._id, session);
+      if (!latestAttempt) throw Object.assign(new Error("No responded contact attempt found."), { status: 409 });
+      latestAttempt.outcomeActivity = "Schedule Meeting";
 
-      attempt.outcomeActivity = "Schedule Meeting";
-      await attempt.save({ session });
-
-      if (existingMeeting) {
-        if (allowRescheduleFromNeeds && new Date(existingMeeting.startAt).getTime() === dt.getTime()) {
-          throw Object.assign(new Error("Rescheduled meeting time cannot be the same as the previous meeting time."), { status: 400 });
-        }
+      if (existingMeeting && !allowRescheduleFromNeeds) {
         existingMeeting.startAt = dt;
         existingMeeting.endAt = endAt;
         existingMeeting.durationMin = durationMin;
@@ -7009,6 +7021,9 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
         existingMeeting.status = "Scheduled";
         await existingMeeting.save({ session });
       } else {
+        if (allowRescheduleFromNeeds && existingMeeting && new Date(existingMeeting.startAt).getTime() === dt.getTime()) {
+          throw Object.assign(new Error("Rescheduled meeting time cannot be the same as the previous meeting time."), { status: 400 });
+        }
         await ScheduledMeeting.create(
           [
             {
@@ -7029,6 +7044,8 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
           { session }
         );
       }
+
+      await latestAttempt.save({ session });
 
       if (!allowRescheduleFromNeeds) {
         const openContactTask = await Task.findOne({
@@ -7146,7 +7163,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
         engagement.stageStartedAt = now;
       } else {
         engagement.currentStage = "Needs Assessment";
-        engagement.currentActivityKey = "Record Prospect Attendance";
+        engagement.currentActivityKey = "Perform Needs Analysis";
       }
       await engagement.save({ session });
     });
@@ -7154,7 +7171,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
 
     return res.json({
       message: Boolean(rescheduleFromNeeds)
-        ? "Meeting rescheduled. Please record prospect attendance again."
+        ? "Meeting rescheduled. Continue with Perform Needs Analysis."
         : "Meeting scheduled. Contacting completed and Needs Assessment activated.",
     });
   } catch (err) {
