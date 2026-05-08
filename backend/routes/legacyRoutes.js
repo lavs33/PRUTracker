@@ -5409,8 +5409,12 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
       .select("meetingType startAt endAt durationMin mode platform platformOther link inviteSent place status")
       .lean();
 
-    const latestMeeting = scheduledMeetings[0] || null;
-    const lastAttemptNo = attempts.length ? attempts[attempts.length - 1].attemptNo : null;
+    const sortedAttemptsDesc = [...attempts].sort((a, b) => Number(b?.attemptNo || 0) - Number(a?.attemptNo || 0));
+    const meetingByAttemptNo = new Map();
+    sortedAttemptsDesc.forEach((attemptDoc, idx) => {
+      if (!attemptDoc) return;
+      meetingByAttemptNo.set(Number(attemptDoc.attemptNo || 0), scheduledMeetings[idx] || null);
+    });
 
     /**
      * 4.5) Load engagement-related tasks for the sidebar (may be empty)
@@ -5554,7 +5558,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
       preferredChannel: a.preferredChannel || "",
       preferredChannelOther: a.preferredChannelOther || "",
       ...(function () {
-        const m = a.attemptNo === lastAttemptNo ? latestMeeting : null;
+        const m = meetingByAttemptNo.get(Number(a?.attemptNo || 0)) || null;
         return {
           meetingAt: m?.startAt || null,
           meetingEndAt: m?.endAt || null,
@@ -7146,7 +7150,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
         engagement.stageStartedAt = now;
       } else {
         engagement.currentStage = "Needs Assessment";
-        engagement.currentActivityKey = "Record Prospect Attendance";
+        engagement.currentActivityKey = "Perform Needs Analysis";
       }
       await engagement.save({ session });
     });
@@ -7154,7 +7158,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
 
     return res.json({
       message: Boolean(rescheduleFromNeeds)
-        ? "Meeting rescheduled. Please record prospect attendance again."
+        ? "Meeting rescheduled. Continue with Perform Needs Analysis."
         : "Meeting scheduled. Contacting completed and Needs Assessment activated.",
     });
   } catch (err) {

@@ -1626,6 +1626,11 @@ function AgentLeadEngagement() {
     return list.sort((a, b) => Number(b.attemptNo || 0) - Number(a.attemptNo || 0));
   }, [engagement?.attempts, engagement?.contactAttempts]);
   const lastAttempt = attempts.length ? attempts[0] : null;
+  const scheduledMeetingAttempts = useMemo(() => {
+    return attempts
+      .filter((a) => Boolean(a?.meetingAt))
+      .sort((a, b) => new Date(b.meetingAt).getTime() - new Date(a.meetingAt).getTime());
+  }, [attempts]);
 
   // UI stage: if there are attempts but backend still says Not Started, show Contacting on UI
   const rawStage = engagement?.currentStage || "Not Started";
@@ -1714,6 +1719,7 @@ function AgentLeadEngagement() {
     Boolean(String(lastAttempt?.meetingPlace || "").trim()) ||
     Boolean(Number(lastAttempt?.meetingDurationMin || 0)) ||
     Boolean(lastAttempt?.meetingEndAt);
+  const hasAnySavedContactMeeting = scheduledMeetingAttempts.length > 0;
 
   const inferredContactingActivityKey = useMemo(() => {
     if (attempts.length === 0) return "Attempt Contact";
@@ -6156,52 +6162,30 @@ function AgentLeadEngagement() {
                                 </button>
                               </div>
                             </>
-                          ) : hasSavedContactMeeting ? (
+                          ) : hasAnySavedContactMeeting ? (
                             <>
-                              <div className="le-attemptMeta" style={{ marginTop: 8 }}>
-                                {lastAttempt?.meetingAt ? <div><span className="le-metaLabel">Meeting Date & Time</span><span className="le-metaValue">{formatDateTime(lastAttempt.meetingAt)}</span></div> : null}
-                                {Number(lastAttempt?.meetingDurationMin || 0) > 0 ? <div><span className="le-metaLabel">Meeting Duration</span><span className="le-metaValue">{lastAttempt.meetingDurationMin} mins</span></div> : null}
-                                {lastAttempt?.meetingEndAt ? <div><span className="le-metaLabel">Meeting Ends</span><span className="le-metaValue">{formatDateTime(lastAttempt.meetingEndAt)}</span></div> : null}
-                                {String(lastAttempt?.meetingMode || "").trim() ? <div><span className="le-metaLabel">Meeting Mode</span><span className="le-metaValue">{lastAttempt.meetingMode}</span></div> : null}
-                                {String(lastAttempt?.meetingPlatform || "").trim() ? <div><span className="le-metaLabel">Meeting Platform</span><span className="le-metaValue">{lastAttempt.meetingPlatform}</span></div> : null}
-                                {String(lastAttempt?.meetingPlatformOther || "").trim() ? <div><span className="le-metaLabel">Meeting Platform (Other)</span><span className="le-metaValue">{lastAttempt.meetingPlatformOther}</span></div> : null}
-                                {String(lastAttempt?.meetingLink || "").trim() ? <div><span className="le-metaLabel">Meeting Link</span><span className="le-metaValue">{lastAttempt.meetingLink}</span></div> : null}
-                                {String(lastAttempt?.meetingMode || "").trim() === "Online" ? <div><span className="le-metaLabel">Meeting Invite Sent</span><span className="le-metaValue">{lastAttempt?.meetingInviteSent ? "Yes" : "No"}</span></div> : null}
-                                {String(lastAttempt?.meetingPlace || "").trim() ? <div><span className="le-metaLabel">Meeting Place</span><span className="le-metaValue">{lastAttempt.meetingPlace}</span></div> : null}
-                                {String(lastAttempt?.meetingStatus || "").trim() ? <div><span className="le-metaLabel">Status</span><span className="le-metaValue">{lastAttempt.meetingStatus}</span></div> : null}
-                              </div>
+                              {scheduledMeetingAttempts.map((attempt, idx) => (
+                                <div key={String(attempt?.attemptId || idx)} className="le-attemptMeta" style={{ marginTop: 8 }}>
+                                  {scheduledMeetingAttempts.length > 1 ? (
+                                    <div>
+                                      <span className="le-metaLabel">Meeting Entry</span>
+                                      <span className="le-metaValue">{idx === 0 ? "Most Recent" : `Previous #${idx}`}</span>
+                                    </div>
+                                  ) : null}
+                                  {attempt?.meetingAt ? <div><span className="le-metaLabel">Meeting Date & Time</span><span className="le-metaValue">{formatDateTime(attempt.meetingAt)}</span></div> : null}
+                                  {Number(attempt?.meetingDurationMin || 0) > 0 ? <div><span className="le-metaLabel">Meeting Duration</span><span className="le-metaValue">{attempt.meetingDurationMin} mins</span></div> : null}
+                                  {attempt?.meetingEndAt ? <div><span className="le-metaLabel">Meeting Ends</span><span className="le-metaValue">{formatDateTime(attempt.meetingEndAt)}</span></div> : null}
+                                  {String(attempt?.meetingMode || "").trim() ? <div><span className="le-metaLabel">Meeting Mode</span><span className="le-metaValue">{attempt.meetingMode}</span></div> : null}
+                                  {String(attempt?.meetingPlatform || "").trim() ? <div><span className="le-metaLabel">Meeting Platform</span><span className="le-metaValue">{attempt.meetingPlatform}</span></div> : null}
+                                  {String(attempt?.meetingPlatformOther || "").trim() ? <div><span className="le-metaLabel">Meeting Platform (Other)</span><span className="le-metaValue">{attempt.meetingPlatformOther}</span></div> : null}
+                                  {String(attempt?.meetingLink || "").trim() ? <div><span className="le-metaLabel">Meeting Link</span><span className="le-metaValue">{attempt.meetingLink}</span></div> : null}
+                                  {String(attempt?.meetingMode || "").trim() === "Online" ? <div><span className="le-metaLabel">Meeting Invite Sent</span><span className="le-metaValue">{attempt?.meetingInviteSent ? "Yes" : "No"}</span></div> : null}
+                                  {String(attempt?.meetingPlace || "").trim() ? <div><span className="le-metaLabel">Meeting Place</span><span className="le-metaValue">{attempt.meetingPlace}</span></div> : null}
+                                  {String(attempt?.meetingStatus || "").trim() ? <div><span className="le-metaLabel">Status</span><span className="le-metaValue">{attempt.meetingStatus}</span></div> : null}
+                                </div>
+                              ))}
                               <div style={{ marginTop: 12 }}>
                                 {needsFollowUpDecisionSaved && needsFollowUpRequired === "YES" ? (
-                                  <button
-                                    type="button"
-                                    className="le-btn secondary"
-                                    onClick={() => {
-                                      setRescheduleFromNeedsMode(true);
-                                      setContactingRescheduleMode(false);
-                                      setRescheduleOriginalMeetingAt(null);
-                                      setMeetingError("");
-                                      setMeetingFieldErrors({});
-                                      setMeetingForm({
-                                        meetingDate: lastAttempt?.meetingAt ? toDateInputValue(lastAttempt.meetingAt) : "",
-                                        meetingStartTime: lastAttempt?.meetingAt
-                                          ? `${String(new Date(lastAttempt.meetingAt).getHours()).padStart(2, "0")}:${String(new Date(lastAttempt.meetingAt).getMinutes()).padStart(2, "0")}`
-                                          : "",
-                                        meetingDurationMin: Number(lastAttempt?.meetingDurationMin || 120) || 120,
-                                        meetingMode: String(lastAttempt?.meetingMode || ""),
-                                        meetingPlatform: String(lastAttempt?.meetingPlatform || ""),
-                                        meetingPlatformOther: String(lastAttempt?.meetingPlatformOther || ""),
-                                        meetingLink: String(lastAttempt?.meetingLink || ""),
-                                        meetingInviteSent: Boolean(lastAttempt?.meetingInviteSent),
-                                        meetingPlace: String(lastAttempt?.meetingPlace || ""),
-                                      });
-                                    }}
-                                    disabled={savingMeeting}
-                                    style={{ marginRight: 8 }}
-                                  >
-                                    Add New Meeting
-                                  </button>
-                                ) : null}
-                                {needsAssessmentCurrentActivityKey === "Record Prospect Attendance" ? (
                                   <button
                                     type="button"
                                     className="le-btn secondary"
@@ -7790,7 +7774,7 @@ function AgentLeadEngagement() {
                             {needsFollowUpDecisionSaved && needsFollowUpRequired === "YES" ? (
                               <p className="le-smallNote" style={{ marginTop: 8 }}>
                                 Further needs assessment is required.{" "}
-                                {needsAssessmentCurrentActivityKey !== "Record Prospect Attendance" ? (
+                                {!hasAnySavedContactMeeting ? (
                                   <button
                                     type="button"
                                     className="le-btn ghost"
