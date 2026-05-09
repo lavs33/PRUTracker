@@ -4,8 +4,8 @@
  * Represents a scheduled meeting attached to a LeadEngagement.
  *
  * Used for Contacting, Proposal, and Application stage calendar-style meeting
- * details. A unique (leadEngagementId, meetingType) pair ensures there is only
- * one active record per meeting category for the engagement.
+ * details. Multiple rows can exist for a given meeting category so history
+ * (e.g., needs-assessment follow-up reschedules) can be preserved.
  */
 const mongoose = require("mongoose");
 
@@ -101,7 +101,7 @@ const scheduledMeetingSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// One meeting record per engagement + meeting type combination.
-scheduledMeetingSchema.index({ leadEngagementId: 1, meetingType: 1 }, { unique: true });
+// Supports fast timeline queries per engagement + meeting type.
+scheduledMeetingSchema.index({ leadEngagementId: 1, meetingType: 1, startAt: -1 });
 
 module.exports = mongoose.model("ScheduledMeeting", scheduledMeetingSchema);
