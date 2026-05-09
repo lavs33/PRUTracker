@@ -6825,7 +6825,7 @@ function isMeetingSlotValidWindow(startAt, durationMin) {
  * requested agent/user so new schedules can be checked for overlap.
  */
 async function getAgentMeetingWindows(userObjectId, from, to, session) {
-  const matchStage = { status: { $ne: "Cancelled" } };
+  const matchStage = { status: "Scheduled" };
   if (from || to) {
     matchStage.startAt = {};
     if (from) matchStage.startAt.$gte = from;
@@ -6947,6 +6947,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
       meetingInviteSent,
       meetingPlace,
       rescheduleFromNeeds,
+      addNewNeedsAssessmentMeeting,
     } = req.body;
 
     if (!userId) return res.status(400).json({ message: "Missing userId." });
@@ -6971,13 +6972,16 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
       const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).session(session);
       if (!engagement) throw Object.assign(new Error("Engagement not found."), { status: 404 });
 
+      const allowedNeedsActivities = ["Record Prospect Attendance", "Perform Needs Analysis", "Schedule Proposal Presentation"];
       const allowRescheduleFromNeeds =
         Boolean(rescheduleFromNeeds) &&
         engagement.currentStage === "Needs Assessment" &&
-        ["Record Prospect Attendance", "Perform Needs Analysis", "Schedule Proposal Presentation"].includes(
-          String(engagement.currentActivityKey || "").trim()
-        );
-      if (engagement.currentActivityKey !== "Schedule Meeting" && !allowRescheduleFromNeeds) {
+        allowedNeedsActivities.includes(String(engagement.currentActivityKey || "").trim());
+      const allowAddNeedsAssessmentMeeting =
+        Boolean(addNewNeedsAssessmentMeeting) &&
+        engagement.currentStage === "Needs Assessment" &&
+        String(engagement.currentActivityKey || "").trim() === "Perform Needs Analysis";
+      if (engagement.currentActivityKey !== "Schedule Meeting" && !allowRescheduleFromNeeds && !allowAddNeedsAssessmentMeeting) {
         throw Object.assign(new Error("Schedule Meeting is not the current activity."), { status: 409 });
       }
 
@@ -7018,7 +7022,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
         .session(session);
 
       const windows = await getAgentMeetingWindows(userObjectId, null, null, session);
-      const conflictWindows = existingMeeting
+      const conflictWindows = existingMeeting && (allowAddNeedsAssessmentMeeting || !allowRescheduleFromNeeds)
         ? windows.filter((w) => String(w?.id || "") !== String(existingMeeting._id))
         : windows;
       if (hasMeetingConflict(dt, endAt, conflictWindows)) {
@@ -7062,7 +7066,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
       if (!latestAttempt) throw Object.assign(new Error("No responded contact attempt found."), { status: 409 });
       latestAttempt.outcomeActivity = "Schedule Meeting";
 
-      if (existingMeeting && !allowRescheduleFromNeeds) {
+      if (existingMeeting && !allowRescheduleFromNeeds && !allowAddNeedsAssessmentMeeting) {
         existingMeeting.startAt = dt;
         existingMeeting.endAt = endAt;
         existingMeeting.durationMin = durationMin;
@@ -7077,6 +7081,16 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
       } else {
         if (allowRescheduleFromNeeds && existingMeeting && new Date(existingMeeting.startAt).getTime() === dt.getTime()) {
           throw Object.assign(new Error("Rescheduled meeting time cannot be the same as the previous meeting time."), { status: 400 });
+        }
+        if (allowAddNeedsAssessmentMeeting && existingMeeting && new Date(existingMeeting.startAt).getTime() === dt.getTime()) {
+          throw Object.assign(new Error("New meeting time cannot be the same as the previous meeting time."), { status: 400 });
+        }
+        if (allowAddNeedsAssessmentMeeting) {
+          await ScheduledMeeting.updateMany(
+            { leadEngagementId: engagement._id, meetingType, status: "Scheduled" },
+            { $set: { status: "Completed" } },
+            { session }
+          );
         }
         await ScheduledMeeting.create(
           [
@@ -7119,7 +7133,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
         }
       }
 
-      const appointmentDedupeKey = allowRescheduleFromNeeds
+      const appointmentDedupeKey = allowRescheduleFromNeeds || allowAddNeedsAssessmentMeeting
         ? `APPOINTMENT:${engagement._id}:${dt.getTime()}`
         : `APPOINTMENT:${engagement._id}`;
       let appointmentTask = await Task.findOne({
@@ -7132,7 +7146,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
       const appointmentDueAt = new Date(endAt.getTime() + 15 * 60 * 1000);
       const prospectFullName = `${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName}`.trim();
 
-      if (allowRescheduleFromNeeds) {
+      if (allowRescheduleFromNeeds || allowAddNeedsAssessmentMeeting) {
         const priorOpenAppointments = await Task.find({
           assignedToUserId: userObjectId,
           prospectId: prospectObjectId,
@@ -7192,7 +7206,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
         });
       }
       appointmentTaskIdForNotif = appointmentTask?._id || null;
-      if (!allowRescheduleFromNeeds) {
+      if (!allowRescheduleFromNeeds && !allowAddNeedsAssessmentMeeting) {
         const now = new Date();
         engagement.currentStage = "Needs Assessment";
         engagement.currentActivityKey = "Record Prospect Attendance";
@@ -7224,7 +7238,9 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
     await ensureTaskMissedNotificationsForUser(userObjectId, { forceUnread: true, taskIds: [appointmentTaskIdForNotif] });
 
     return res.json({
-      message: Boolean(rescheduleFromNeeds)
+      message: Boolean(addNewNeedsAssessmentMeeting)
+        ? "New needs assessment meeting scheduled. Continue with Perform Needs Analysis."
+        : Boolean(rescheduleFromNeeds)
         ? "Meeting rescheduled. Continue with Perform Needs Analysis."
         : "Meeting scheduled. Contacting completed and Needs Assessment activated.",
     });
