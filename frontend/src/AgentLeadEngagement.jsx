@@ -1627,10 +1627,12 @@ function AgentLeadEngagement() {
   }, [engagement?.attempts, engagement?.contactAttempts]);
   const lastAttempt = attempts.length ? attempts[0] : null;
   const scheduledMeetingAttempts = useMemo(() => {
-    return attempts
-      .filter((a) => Boolean(a?.meetingAt))
-      .sort((a, b) => new Date(b.meetingAt).getTime() - new Date(a.meetingAt).getTime());
-  }, [attempts]);
+    const source = Array.isArray(engagement?.needsAssessmentMeetings)
+      ? engagement.needsAssessmentMeetings
+      : attempts.filter((a) => Boolean(a?.meetingAt));
+    return [...source].sort((a, b) => new Date(b?.meetingAt || 0).getTime() - new Date(a?.meetingAt || 0).getTime());
+  }, [engagement?.needsAssessmentMeetings, attempts]);
+  const latestScheduledMeeting = scheduledMeetingAttempts.length ? scheduledMeetingAttempts[0] : null;
 
   // UI stage: if there are attempts but backend still says Not Started, show Contacting on UI
   const rawStage = engagement?.currentStage || "Not Started";
@@ -2609,19 +2611,19 @@ function AgentLeadEngagement() {
     setMeetingFieldErrors({});
     setSelectedStageView("Contacting");
     setContactingViewedActivityKey("Schedule Meeting");
-    setRescheduleOriginalMeetingAt(lastAttempt?.meetingAt || null);
+    setRescheduleOriginalMeetingAt(latestScheduledMeeting?.meetingAt || null);
     setMeetingForm({
-      meetingDate: lastAttempt?.meetingAt ? toDateInputValue(lastAttempt.meetingAt) : "",
-      meetingStartTime: lastAttempt?.meetingAt
-        ? `${String(new Date(lastAttempt.meetingAt).getHours()).padStart(2, "0")}:${String(new Date(lastAttempt.meetingAt).getMinutes()).padStart(2, "0")}`
+      meetingDate: latestScheduledMeeting?.meetingAt ? toDateInputValue(latestScheduledMeeting.meetingAt) : "",
+      meetingStartTime: latestScheduledMeeting?.meetingAt
+        ? `${String(new Date(latestScheduledMeeting.meetingAt).getHours()).padStart(2, "0")}:${String(new Date(latestScheduledMeeting.meetingAt).getMinutes()).padStart(2, "0")}`
         : "",
-      meetingDurationMin: Number(lastAttempt?.meetingDurationMin || 120),
-      meetingMode: String(lastAttempt?.meetingMode || ""),
-      meetingPlatform: String(lastAttempt?.meetingPlatform || ""),
-      meetingPlatformOther: String(lastAttempt?.meetingPlatformOther || ""),
-      meetingLink: String(lastAttempt?.meetingLink || ""),
-      meetingInviteSent: Boolean(lastAttempt?.meetingInviteSent),
-      meetingPlace: String(lastAttempt?.meetingPlace || ""),
+      meetingDurationMin: Number(latestScheduledMeeting?.meetingDurationMin || 120),
+      meetingMode: String(latestScheduledMeeting?.meetingMode || ""),
+      meetingPlatform: String(latestScheduledMeeting?.meetingPlatform || ""),
+      meetingPlatformOther: String(latestScheduledMeeting?.meetingPlatformOther || ""),
+      meetingLink: String(latestScheduledMeeting?.meetingLink || ""),
+      meetingInviteSent: Boolean(latestScheduledMeeting?.meetingInviteSent),
+      meetingPlace: String(latestScheduledMeeting?.meetingPlace || ""),
     });
     setNeedsAttendanceRescheduleLock(true);
     setRescheduleFromNeedsMode(true);
@@ -2633,15 +2635,15 @@ function AgentLeadEngagement() {
     setMeetingForm({
       meetingDate: "",
       meetingStartTime: "",
-      meetingDurationMin: Number(lastAttempt?.meetingDurationMin || 120),
-      meetingMode: String(lastAttempt?.meetingMode || ""),
-      meetingPlatform: String(lastAttempt?.meetingPlatform || ""),
-      meetingPlatformOther: String(lastAttempt?.meetingPlatformOther || ""),
-      meetingLink: String(lastAttempt?.meetingLink || ""),
-      meetingInviteSent: Boolean(lastAttempt?.meetingInviteSent),
-      meetingPlace: String(lastAttempt?.meetingPlace || ""),
+      meetingDurationMin: Number(latestScheduledMeeting?.meetingDurationMin || 120),
+      meetingMode: String(latestScheduledMeeting?.meetingMode || ""),
+      meetingPlatform: String(latestScheduledMeeting?.meetingPlatform || ""),
+      meetingPlatformOther: String(latestScheduledMeeting?.meetingPlatformOther || ""),
+      meetingLink: String(latestScheduledMeeting?.meetingLink || ""),
+      meetingInviteSent: Boolean(latestScheduledMeeting?.meetingInviteSent),
+      meetingPlace: String(latestScheduledMeeting?.meetingPlace || ""),
     });
-    setRescheduleOriginalMeetingAt(lastAttempt?.meetingAt || null);
+    setRescheduleOriginalMeetingAt(latestScheduledMeeting?.meetingAt || null);
     setContactingRescheduleMode(true);
   };
 

@@ -55,6 +55,22 @@ function registerLegacyRoutes(app, deps) {
     syncTaskNotificationsForTasks,
     markTaskNotificationAsRead,
   } = deps;
+  let scheduledMeetingHistoryIndexEnsured = false;
+  async function ensureScheduledMeetingHistoryIndex() {
+    if (scheduledMeetingHistoryIndexEnsured) return;
+    try {
+      const collection = ScheduledMeeting.collection;
+      const uniqueIdxName = "leadEngagementId_1_meetingType_1";
+      const hasLegacyUniqueIndex = await collection.indexExists(uniqueIdxName);
+      if (hasLegacyUniqueIndex) {
+        await collection.dropIndex(uniqueIdxName);
+      }
+      scheduledMeetingHistoryIndexEnsured = true;
+    } catch (err) {
+      if (err?.codeName !== "IndexNotFound") throw err;
+      scheduledMeetingHistoryIndexEnsured = true;
+    }
+  }
 
 /* =========================================================
    ADMIN: ORGANIZATION MANAGEMENT
@@ -5430,7 +5446,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
     })
       // Sort soonest due first; for ties, newest created first
       .sort({ dueAt: 1, createdAt: -1 })
-      .select("_id type title description dueAt status completedAt wasDelayed createdAt")
+      .select("_id type title description dueAt status completedAt wasDelayed createdAt dedupeKey")
       .lean();
 
     const needsAssessment = await NeedsAssessment.findOne({ leadEngagementId: engagement._id })
@@ -5543,6 +5559,51 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
     }
 
     // Map attempts to frontend-friendly fields (stable key names)
+    const taskInferredNeedsMeetings = (tasks || [])
+      .filter((t) => String(t?.type || "").toUpperCase() === "APPOINTMENT")
+      .map((t) => {
+        const key = String(t?.dedupeKey || "");
+        const match = key.match(/^APPOINTMENT:[^:]+:(\d{10,})$/);
+        if (!match) return null;
+        const ts = Number(match[1]);
+        if (!Number.isFinite(ts)) return null;
+        return {
+          meetingAt: new Date(ts),
+          meetingEndAt: t?.dueAt ? new Date(new Date(t.dueAt).getTime() - 15 * 60 * 1000) : null,
+          meetingDurationMin: null,
+          meetingMode: "",
+          meetingPlatform: "",
+          meetingPlatformOther: "",
+          meetingLink: "",
+          meetingInviteSent: false,
+          meetingPlace: "",
+          meetingStatus: t?.status === "Done" ? "Completed" : "Scheduled",
+        };
+      })
+      .filter(Boolean);
+
+    const needsAssessmentMeetings = [
+      ...scheduledMeetings.map((m) => ({
+        meetingAt: m.startAt || null,
+        meetingEndAt: m.endAt || null,
+        meetingDurationMin: Number(m.durationMin || 0) || null,
+        meetingMode: m.mode || "",
+        meetingPlatform: m.platform || "",
+        meetingPlatformOther: m.platformOther || "",
+        meetingLink: m.link || "",
+        meetingInviteSent: Boolean(m.inviteSent),
+        meetingPlace: m.place || "",
+        meetingStatus: m.status || "",
+      })),
+      ...taskInferredNeedsMeetings,
+    ]
+      .filter((m) => Boolean(m?.meetingAt))
+      .sort((a, b) => new Date(b.meetingAt).getTime() - new Date(a.meetingAt).getTime())
+      .filter((m, idx, arr) => {
+        const t = new Date(m.meetingAt).getTime();
+        return arr.findIndex((x) => new Date(x.meetingAt).getTime() === t) === idx;
+      });
+
     const contactAttempts = attempts.map((a) => ({
       attemptId: String(a._id || ""),
       attemptNo: a.attemptNo,
@@ -5621,6 +5682,8 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
 
         // Derived and validated current activity for tracker/badge
         currentActivityKey: derivedActivityKey, 
+
+        needsAssessmentMeetings,
 
         // Always an array (empty if none)
         contactAttempts, 
@@ -6869,6 +6932,7 @@ app.get("/api/agents/:agentId/meeting-availability", async (req, res) => {
 app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req, res) => {
   const session = await mongoose.startSession();
   try {
+    await ensureScheduledMeetingHistoryIndex();
     const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
     const {
@@ -6948,7 +7012,10 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
       const existingMeeting = await ScheduledMeeting.findOne({
         leadEngagementId: engagement._id,
         meetingType,
-      }).session(session);
+        status: "Scheduled",
+      })
+        .sort({ startAt: -1, createdAt: -1 })
+        .session(session);
 
       const windows = await getAgentMeetingWindows(userObjectId, null, null, session);
       const conflictWindows = existingMeeting
@@ -6991,16 +7058,11 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
         if (!place) throw Object.assign(new Error("meetingPlace is required for face-to-face meeting."), { status: 400 });
       }
 
-      const attempt = await getLatestRespondedAttemptForEngagement(engagement._id, session);
-      if (!attempt) throw Object.assign(new Error("No responded contact attempt found."), { status: 409 });
+      const latestAttempt = await getLatestRespondedAttemptForEngagement(engagement._id, session);
+      if (!latestAttempt) throw Object.assign(new Error("No responded contact attempt found."), { status: 409 });
+      latestAttempt.outcomeActivity = "Schedule Meeting";
 
-      attempt.outcomeActivity = "Schedule Meeting";
-      await attempt.save({ session });
-
-      if (existingMeeting) {
-        if (allowRescheduleFromNeeds && new Date(existingMeeting.startAt).getTime() === dt.getTime()) {
-          throw Object.assign(new Error("Rescheduled meeting time cannot be the same as the previous meeting time."), { status: 400 });
-        }
+      if (existingMeeting && !allowRescheduleFromNeeds) {
         existingMeeting.startAt = dt;
         existingMeeting.endAt = endAt;
         existingMeeting.durationMin = durationMin;
@@ -7013,6 +7075,9 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
         existingMeeting.status = "Scheduled";
         await existingMeeting.save({ session });
       } else {
+        if (allowRescheduleFromNeeds && existingMeeting && new Date(existingMeeting.startAt).getTime() === dt.getTime()) {
+          throw Object.assign(new Error("Rescheduled meeting time cannot be the same as the previous meeting time."), { status: 400 });
+        }
         await ScheduledMeeting.create(
           [
             {
@@ -7033,6 +7098,8 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
           { session }
         );
       }
+
+      await latestAttempt.save({ session });
 
       if (!allowRescheduleFromNeeds) {
         const openContactTask = await Task.findOne({
