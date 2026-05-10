@@ -2890,7 +2890,9 @@ function AgentLeadEngagement() {
       }
     } catch (err) {
       const msg = err?.message || "Cannot connect to server. Is backend running?";
-      if (/conflicts with an existing meeting|already booked|MEETING_CONFLICT/i.test(msg)) {
+      if (/same as (the )?previous meeting time/i.test(msg)) {
+        setMeetingFieldErrors({ meetingStartTime: msg });
+      } else if (/conflicts with an existing meeting|already booked|MEETING_CONFLICT/i.test(msg)) {
         setMeetingFieldErrors({ meetingStartTime: "Selected time is already booked." });
       } else {
         setMeetingError(msg);
