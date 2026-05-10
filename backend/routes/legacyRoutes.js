@@ -1436,29 +1436,58 @@ async function createTaskAddedNotifications({
   leadCode,
   session,
   includeTaskAdded = true,
+  refreshTaskAdded = false,
 }) {
   const writes = [];
+  const taskAddedRefreshAt = new Date();
+  const taskAddedDedupeKey = `TASK_ADDED:${task._id}`;
 
   if (includeTaskAdded) {
     writes.push({
       updateOne: {
-        filter: {
-          assignedToUserId,
-          dedupeKey: `TASK_ADDED:${task._id}`,
-        },
-        update: {
-          $setOnInsert: {
-            assignedToUserId,
-            type: "TASK_ADDED",
-            title: "New task added",
-            message: `${task.title} was created for ${prospectFullName} (Lead ${leadCode || "—"}).`,
-            status: "Unread",
-            entityType: "Task",
-            entityId: task._id,
-            dedupeKey: `TASK_ADDED:${task._id}`,
-          },
-        },
-        upsert: true,
+        filter: refreshTaskAdded
+          ? {
+              assignedToUserId,
+              type: "TASK_ADDED",
+              entityType: "Task",
+              entityId: task._id,
+            }
+          : {
+              assignedToUserId,
+              dedupeKey: taskAddedDedupeKey,
+            },
+        update: refreshTaskAdded
+          ? {
+              $set: {
+                title: "New task added",
+                message: `${task.title} was updated for ${prospectFullName} (Lead ${leadCode || "—"}).`,
+                status: "Unread",
+                readAt: null,
+                entityType: "Task",
+                entityId: task._id,
+                updatedAt: taskAddedRefreshAt,
+              },
+              $setOnInsert: {
+                assignedToUserId,
+                type: "TASK_ADDED",
+                dedupeKey: taskAddedDedupeKey,
+              },
+            }
+          : {
+              $setOnInsert: {
+                assignedToUserId,
+                type: "TASK_ADDED",
+                title: "New task added",
+                message: `${task.title} was created for ${prospectFullName} (Lead ${leadCode || "—"}).`,
+                status: "Unread",
+                entityType: "Task",
+                entityId: task._id,
+                dedupeKey: taskAddedDedupeKey,
+              },
+            },
+        // Reschedules must only update the existing task-added notification row;
+        // new task-added notifications are reserved for newly created tasks.
+        upsert: !refreshTaskAdded,
       },
     });
   }
@@ -5421,8 +5450,8 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
       meetingType: "Needs Assessment",
       status: { $ne: "Cancelled" },
     })
-      .sort({ startAt: -1 })
-      .select("meetingType startAt endAt durationMin mode platform platformOther link inviteSent place status")
+      .sort({ createdAt: -1, startAt: -1 })
+      .select("meetingType startAt endAt durationMin mode platform platformOther link inviteSent place status createdAt")
       .lean();
 
     const sortedAttemptsDesc = [...attempts].sort((a, b) => Number(b?.attemptNo || 0) - Number(a?.attemptNo || 0));
@@ -5578,6 +5607,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
           meetingInviteSent: false,
           meetingPlace: "",
           meetingStatus: t?.status === "Done" ? "Completed" : "Scheduled",
+          meetingCreatedAt: t?.createdAt || null,
         };
       })
       .filter(Boolean);
@@ -5594,11 +5624,17 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
         meetingInviteSent: Boolean(m.inviteSent),
         meetingPlace: m.place || "",
         meetingStatus: m.status || "",
+        meetingCreatedAt: m.createdAt || null,
       })),
       ...taskInferredNeedsMeetings,
     ]
       .filter((m) => Boolean(m?.meetingAt))
-      .sort((a, b) => new Date(b.meetingAt).getTime() - new Date(a.meetingAt).getTime())
+      .sort((a, b) => {
+        const bCreated = new Date(b?.meetingCreatedAt || b?.meetingAt || 0).getTime();
+        const aCreated = new Date(a?.meetingCreatedAt || a?.meetingAt || 0).getTime();
+        if (Number.isFinite(bCreated) && Number.isFinite(aCreated) && bCreated !== aCreated) return bCreated - aCreated;
+        return new Date(b?.meetingAt || 0).getTime() - new Date(a?.meetingAt || 0).getTime();
+      })
       .filter((m, idx, arr) => {
         const t = new Date(m.meetingAt).getTime();
         return arr.findIndex((x) => new Date(x.meetingAt).getTime() === t) === idx;
@@ -6825,7 +6861,7 @@ function isMeetingSlotValidWindow(startAt, durationMin) {
  * requested agent/user so new schedules can be checked for overlap.
  */
 async function getAgentMeetingWindows(userObjectId, from, to, session) {
-  const matchStage = { status: { $ne: "Cancelled" } };
+  const matchStage = { status: "Scheduled" };
   if (from || to) {
     matchStage.startAt = {};
     if (from) matchStage.startAt.$gte = from;
@@ -6947,6 +6983,8 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
       meetingInviteSent,
       meetingPlace,
       rescheduleFromNeeds,
+      addNewNeedsAssessmentMeeting,
+      rescheduleFollowUpNeedsAssessmentMeeting,
     } = req.body;
 
     if (!userId) return res.status(400).json({ message: "Missing userId." });
@@ -6971,13 +7009,25 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
       const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).session(session);
       if (!engagement) throw Object.assign(new Error("Engagement not found."), { status: 404 });
 
+      const allowedNeedsActivities = ["Record Prospect Attendance", "Perform Needs Analysis", "Schedule Proposal Presentation"];
       const allowRescheduleFromNeeds =
         Boolean(rescheduleFromNeeds) &&
         engagement.currentStage === "Needs Assessment" &&
-        ["Record Prospect Attendance", "Perform Needs Analysis", "Schedule Proposal Presentation"].includes(
-          String(engagement.currentActivityKey || "").trim()
-        );
-      if (engagement.currentActivityKey !== "Schedule Meeting" && !allowRescheduleFromNeeds) {
+        allowedNeedsActivities.includes(String(engagement.currentActivityKey || "").trim());
+      const allowAddNeedsAssessmentMeeting =
+        Boolean(addNewNeedsAssessmentMeeting) &&
+        engagement.currentStage === "Needs Assessment" &&
+        String(engagement.currentActivityKey || "").trim() === "Perform Needs Analysis";
+      const allowRescheduleFollowUpNeedsAssessmentMeeting =
+        Boolean(rescheduleFollowUpNeedsAssessmentMeeting) &&
+        engagement.currentStage === "Needs Assessment" &&
+        String(engagement.currentActivityKey || "").trim() === "Perform Needs Analysis";
+      if (
+        engagement.currentActivityKey !== "Schedule Meeting" &&
+        !allowRescheduleFromNeeds &&
+        !allowAddNeedsAssessmentMeeting &&
+        !allowRescheduleFollowUpNeedsAssessmentMeeting
+      ) {
         throw Object.assign(new Error("Schedule Meeting is not the current activity."), { status: 409 });
       }
 
@@ -7014,8 +7064,10 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
         meetingType,
         status: "Scheduled",
       })
-        .sort({ startAt: -1, createdAt: -1 })
+        .sort({ createdAt: -1, startAt: -1 })
         .session(session);
+
+      const existingMeetingOriginalStartAt = existingMeeting?.startAt ? new Date(existingMeeting.startAt) : null;
 
       const windows = await getAgentMeetingWindows(userObjectId, null, null, session);
       const conflictWindows = existingMeeting
@@ -7062,7 +7114,25 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
       if (!latestAttempt) throw Object.assign(new Error("No responded contact attempt found."), { status: 409 });
       latestAttempt.outcomeActivity = "Schedule Meeting";
 
-      if (existingMeeting && !allowRescheduleFromNeeds) {
+      if (allowRescheduleFromNeeds || allowRescheduleFollowUpNeedsAssessmentMeeting) {
+        if (!existingMeeting) {
+          throw Object.assign(new Error("No scheduled needs assessment meeting found to reschedule."), { status: 409 });
+        }
+        if (existingMeetingOriginalStartAt && existingMeetingOriginalStartAt.getTime() === dt.getTime()) {
+          throw Object.assign(new Error("Rescheduled meeting time cannot be the same as the previous meeting time."), { status: 400 });
+        }
+        existingMeeting.startAt = dt;
+        existingMeeting.endAt = endAt;
+        existingMeeting.durationMin = durationMin;
+        existingMeeting.mode = mode;
+        existingMeeting.platform = mode === "Online" ? platform : undefined;
+        existingMeeting.platformOther = mode === "Online" && platform === "Other" ? platformOther : undefined;
+        existingMeeting.link = mode === "Online" ? link : undefined;
+        existingMeeting.inviteSent = Boolean(meetingInviteSent);
+        existingMeeting.place = mode === "Face-to-face" ? place : undefined;
+        existingMeeting.status = "Scheduled";
+        await existingMeeting.save({ session });
+      } else if (existingMeeting && !allowAddNeedsAssessmentMeeting) {
         existingMeeting.startAt = dt;
         existingMeeting.endAt = endAt;
         existingMeeting.durationMin = durationMin;
@@ -7075,8 +7145,15 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
         existingMeeting.status = "Scheduled";
         await existingMeeting.save({ session });
       } else {
-        if (allowRescheduleFromNeeds && existingMeeting && new Date(existingMeeting.startAt).getTime() === dt.getTime()) {
-          throw Object.assign(new Error("Rescheduled meeting time cannot be the same as the previous meeting time."), { status: 400 });
+        if (allowAddNeedsAssessmentMeeting && existingMeeting && new Date(existingMeeting.startAt).getTime() === dt.getTime()) {
+          throw Object.assign(new Error("New meeting time cannot be the same as the previous meeting time."), { status: 400 });
+        }
+        if (allowAddNeedsAssessmentMeeting) {
+          await ScheduledMeeting.updateMany(
+            { leadEngagementId: engagement._id, meetingType, status: "Scheduled" },
+            { $set: { status: "Completed" } },
+            { session }
+          );
         }
         await ScheduledMeeting.create(
           [
@@ -7101,7 +7178,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
 
       await latestAttempt.save({ session });
 
-      if (!allowRescheduleFromNeeds) {
+      if (!allowRescheduleFromNeeds && !allowAddNeedsAssessmentMeeting && !allowRescheduleFollowUpNeedsAssessmentMeeting) {
         const openContactTask = await Task.findOne({
           assignedToUserId: userObjectId,
           prospectId: prospectObjectId,
@@ -7119,20 +7196,43 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
         }
       }
 
-      const appointmentDedupeKey = allowRescheduleFromNeeds
+      const appointmentDedupeKey = allowRescheduleFromNeeds || allowAddNeedsAssessmentMeeting || allowRescheduleFollowUpNeedsAssessmentMeeting
         ? `APPOINTMENT:${engagement._id}:${dt.getTime()}`
         : `APPOINTMENT:${engagement._id}`;
+      const shouldUpdateExistingAppointmentTask = allowRescheduleFromNeeds || allowRescheduleFollowUpNeedsAssessmentMeeting;
+      const baseAppointmentDedupeKey = `APPOINTMENT:${engagement._id}`;
+      const previousAppointmentDedupeKey =
+        shouldUpdateExistingAppointmentTask && existingMeetingOriginalStartAt
+          ? `APPOINTMENT:${engagement._id}:${existingMeetingOriginalStartAt.getTime()}`
+          : appointmentDedupeKey;
+      const appointmentDedupeKeys = [...new Set([baseAppointmentDedupeKey, previousAppointmentDedupeKey, appointmentDedupeKey])];
       let appointmentTask = await Task.findOne({
         assignedToUserId: userObjectId,
-        dedupeKey: appointmentDedupeKey,
-      }).session(session);
+        ...(shouldUpdateExistingAppointmentTask
+          ? { dedupeKey: { $in: appointmentDedupeKeys } }
+          : { dedupeKey: appointmentDedupeKey }),
+      })
+        .sort({ dueAt: -1, createdAt: -1 })
+        .session(session);
+
+      if (shouldUpdateExistingAppointmentTask && !appointmentTask) {
+        appointmentTask = await Task.findOne({
+          assignedToUserId: userObjectId,
+          prospectId: prospectObjectId,
+          leadEngagementId: engagement._id,
+          type: "APPOINTMENT",
+          status: { $in: ["Open", "Overdue"] },
+        })
+          .sort({ dueAt: -1, createdAt: -1 })
+          .session(session);
+      }
 
       const appointmentTitle = `Meeting scheduled with ${prospect.firstName}`;
       const appointmentDescription = `Attend scheduled meeting with ${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName} (Lead ${lead.leadCode || "—"}). Meeting window: ${formatDateTimeInManila(dt)} to ${formatDateTimeInManila(endAt)} (Asia/Manila).`;
       const appointmentDueAt = new Date(endAt.getTime() + 15 * 60 * 1000);
       const prospectFullName = `${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName}`.trim();
 
-      if (allowRescheduleFromNeeds) {
+      if (allowAddNeedsAssessmentMeeting) {
         const priorOpenAppointments = await Task.find({
           assignedToUserId: userObjectId,
           prospectId: prospectObjectId,
@@ -7148,7 +7248,46 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
         }
       }
 
-      if (!appointmentTask) {
+      if (shouldUpdateExistingAppointmentTask) {
+        const appointmentTaskWasCreated = !appointmentTask;
+        if (appointmentTaskWasCreated) {
+          appointmentTask = await Task.create(
+            [
+              {
+                assignedToUserId: userObjectId,
+                prospectId: prospectObjectId,
+                leadEngagementId: engagement._id,
+                type: "APPOINTMENT",
+                title: appointmentTitle,
+                description: appointmentDescription,
+                dueAt: appointmentDueAt,
+                status: "Open",
+                dedupeKey: appointmentDedupeKey,
+              },
+            ],
+            { session }
+          ).then((docs) => docs[0]);
+        } else {
+          appointmentTask.title = appointmentTitle;
+          appointmentTask.description = appointmentDescription;
+          appointmentTask.dueAt = appointmentDueAt;
+          appointmentTask.status = "Open";
+          appointmentTask.completedAt = null;
+          appointmentTask.wasDelayed = false;
+          appointmentTask.dedupeKey = appointmentDedupeKey;
+          await appointmentTask.save({ session });
+        }
+
+        await createTaskAddedNotifications({
+          assignedToUserId: userObjectId,
+          task: appointmentTask,
+          prospectFullName,
+          leadCode: lead.leadCode,
+          session,
+          includeTaskAdded: !appointmentTaskWasCreated,
+          refreshTaskAdded: !appointmentTaskWasCreated,
+        });
+      } else if (!appointmentTask) {
         appointmentTask = await Task.create(
           [
             {
@@ -7188,11 +7327,11 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
           prospectFullName,
           leadCode: lead.leadCode,
           session,
-          includeTaskAdded: false,
+          refreshTaskAdded: true,
         });
       }
       appointmentTaskIdForNotif = appointmentTask?._id || null;
-      if (!allowRescheduleFromNeeds) {
+      if (!allowRescheduleFromNeeds && !allowAddNeedsAssessmentMeeting && !allowRescheduleFollowUpNeedsAssessmentMeeting) {
         const now = new Date();
         engagement.currentStage = "Needs Assessment";
         engagement.currentActivityKey = "Record Prospect Attendance";
@@ -7217,15 +7356,21 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
         engagement.stageStartedAt = now;
       } else {
         engagement.currentStage = "Needs Assessment";
-        engagement.currentActivityKey = "Perform Needs Analysis";
+        if (allowAddNeedsAssessmentMeeting) {
+          engagement.currentActivityKey = "Perform Needs Analysis";
+        }
       }
       await engagement.save({ session });
     });
     await ensureTaskMissedNotificationsForUser(userObjectId, { forceUnread: true, taskIds: [appointmentTaskIdForNotif] });
 
     return res.json({
-      message: Boolean(rescheduleFromNeeds)
-        ? "Meeting rescheduled. Continue with Perform Needs Analysis."
+      message: Boolean(rescheduleFollowUpNeedsAssessmentMeeting)
+        ? "Follow-up needs assessment meeting rescheduled. Continue with Perform Needs Analysis."
+        : Boolean(addNewNeedsAssessmentMeeting)
+        ? "New needs assessment meeting scheduled. Continue with Perform Needs Analysis."
+        : Boolean(rescheduleFromNeeds)
+        ? "Meeting rescheduled. Continue with the current Needs Assessment activity."
         : "Meeting scheduled. Contacting completed and Needs Assessment activated.",
     });
   } catch (err) {

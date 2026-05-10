@@ -115,6 +115,10 @@ function AgentLeadEngagement() {
   const [meetingFieldErrors, setMeetingFieldErrors] = useState({});
   const [contactingRescheduleMode, setContactingRescheduleMode] = useState(false);
   const [rescheduleFromNeedsMode, setRescheduleFromNeedsMode] = useState(false);
+  const [addNewNeedsMeetingMode, setAddNewNeedsMeetingMode] = useState(false);
+  const [addNewNeedsMeetingOriginalAt, setAddNewNeedsMeetingOriginalAt] = useState(null);
+  const [rescheduleFollowUpNeedsMeetingMode, setRescheduleFollowUpNeedsMeetingMode] = useState(false);
+  const [rescheduleFollowUpNeedsMeetingOriginalAt, setRescheduleFollowUpNeedsMeetingOriginalAt] = useState(null);
   const [rescheduleOriginalMeetingAt, setRescheduleOriginalMeetingAt] = useState(null);
   const [needsAttendanceRescheduleLock, setNeedsAttendanceRescheduleLock] = useState(false);
   const [needsAttendanceProofEditMode, setNeedsAttendanceProofEditMode] = useState(false);
@@ -680,6 +684,10 @@ function AgentLeadEngagement() {
     try {
       setNeedsAssessmentLoading(true);
       setNeedsAssessmentError("");
+      setAddNewNeedsMeetingMode(false);
+      setAddNewNeedsMeetingOriginalAt(null);
+      setRescheduleFollowUpNeedsMeetingMode(false);
+      setRescheduleFollowUpNeedsMeetingOriginalAt(null);
       const res = await fetch(
         `${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/needs-assessment?userId=${user.id}`
       );
@@ -1220,6 +1228,8 @@ function AgentLeadEngagement() {
       }
 
       setNeedsAssessmentSavedAt(new Date().toISOString());
+      setNeedsAssessmentOutcomeActivity("Perform Needs Analysis");
+      setNeedsAssessmentCurrentActivityKey("Perform Needs Analysis");
       setNeedsAnalysisEditMode(false);
     } catch (err) {
       setNeedsAssessmentError(err?.message || "Failed to save needs assessment.");
@@ -1487,6 +1497,49 @@ function AgentLeadEngagement() {
     }
   };
 
+  const applyMeetingServerFieldError = (message, setFieldErrors, { conflictMessage = "Selected time is already booked." } = {}) => {
+    const msg = String(message || "").trim();
+    if (!msg) return false;
+
+    if (/same as (the )?previous meeting time|conflicts with|already booked|MEETING_CONFLICT|MEETING_SLOT_CONFLICT|time slot/i.test(msg)) {
+      setFieldErrors({ meetingStartTime: /same as (the )?previous meeting time/i.test(msg) ? msg : conflictMessage });
+      return true;
+    }
+    if (/date must|at least tomorrow|meetingAt must|date\/time|meeting date\/time|valid date|Invalid meetingAt/i.test(msg)) {
+      setFieldErrors({ meetingDate: msg });
+      return true;
+    }
+    if (/duration|30\/60\/90\/120|30, 60, 90, 120/i.test(msg)) {
+      setFieldErrors({ meetingDurationMin: msg });
+      return true;
+    }
+    if (/platformOther/i.test(msg)) {
+      setFieldErrors({ meetingPlatformOther: msg });
+      return true;
+    }
+    if (/meetingPlatform|online platform|platform/i.test(msg)) {
+      setFieldErrors({ meetingPlatform: msg });
+      return true;
+    }
+    if (/meetingLink|http\/https|link/i.test(msg)) {
+      setFieldErrors({ meetingLink: msg });
+      return true;
+    }
+    if (/meetingInviteSent|invite/i.test(msg)) {
+      setFieldErrors({ meetingInviteSent: msg });
+      return true;
+    }
+    if (/meetingPlace|place/i.test(msg)) {
+      setFieldErrors({ meetingPlace: msg });
+      return true;
+    }
+    if (/meetingMode|mode/i.test(msg)) {
+      setFieldErrors({ meetingMode: msg });
+      return true;
+    }
+    return false;
+  };
+
   const availableDateOptions = useMemo(() => {
     const list = [];
     const start = new Date();
@@ -1630,9 +1683,18 @@ function AgentLeadEngagement() {
     const source = Array.isArray(engagement?.needsAssessmentMeetings)
       ? engagement.needsAssessmentMeetings
       : attempts.filter((a) => Boolean(a?.meetingAt));
-    return [...source].sort((a, b) => new Date(b?.meetingAt || 0).getTime() - new Date(a?.meetingAt || 0).getTime());
+    return [...source].sort((a, b) => {
+      const bCreated = new Date(b?.meetingCreatedAt || b?.createdAt || b?.attemptedAt || b?.meetingAt || 0).getTime();
+      const aCreated = new Date(a?.meetingCreatedAt || a?.createdAt || a?.attemptedAt || a?.meetingAt || 0).getTime();
+      if (Number.isFinite(bCreated) && Number.isFinite(aCreated) && bCreated !== aCreated) return bCreated - aCreated;
+      return new Date(b?.meetingAt || 0).getTime() - new Date(a?.meetingAt || 0).getTime();
+    });
   }, [engagement?.needsAssessmentMeetings, attempts]);
   const latestScheduledMeeting = scheduledMeetingAttempts.length ? scheduledMeetingAttempts[0] : null;
+  const hasAddedFollowUpNeedsMeeting =
+    needsFollowUpDecisionSaved && needsFollowUpRequired === "YES" && scheduledMeetingAttempts.length > 1;
+  const canRescheduleMissedNeedsAttendanceMeeting =
+    needsAssessmentForm.attendanceChoice === "NO" && !needsAttendanceRescheduleLock && !hasAddedFollowUpNeedsMeeting;
 
   // UI stage: if there are attempts but backend still says Not Started, show Contacting on UI
   const rawStage = engagement?.currentStage || "Not Started";
@@ -1910,6 +1972,8 @@ function AgentLeadEngagement() {
     ((showContactingPanel && isViewingCurrentStage && !isContactingReadOnly) &&
       (contactingViewedActivityKey === "Schedule Meeting" || contactingCurrentActivityKey === "Schedule Meeting")) ||
     rescheduleFromNeedsMode ||
+    addNewNeedsMeetingMode ||
+    rescheduleFollowUpNeedsMeetingMode ||
     contactingRescheduleMode ||
     (showNeedsAssessmentPanel && showProposalSchedulingSection && !proposalMeetingSaved) ||
     (showProposalPanel && proposalUiActivityKey === "Schedule Application Submission" && !applicationMeetingSaved);
@@ -2127,6 +2191,8 @@ function AgentLeadEngagement() {
   const isScheduleMeetingEditable =
     (isContactingCurrentViewEditable && contactingCurrentActivityKey === "Schedule Meeting") ||
     rescheduleFromNeedsMode ||
+    addNewNeedsMeetingMode ||
+    rescheduleFollowUpNeedsMeetingMode ||
     contactingRescheduleMode;
 
   const isNeedsAssessmentCurrentViewEditable =
@@ -2606,6 +2672,13 @@ function AgentLeadEngagement() {
     setConfirmNotInterestedModalOpen(true);
   };
 
+  const goToScheduleMeetingFromNeedsAttendanceNo = () => {
+    setMeetingError("");
+    setMeetingFieldErrors({});
+    setSelectedStageView("Contacting");
+    setContactingViewedActivityKey("Schedule Meeting");
+  };
+
   const startRescheduleFromNeeds = () => {
     setMeetingError("");
     setMeetingFieldErrors({});
@@ -2629,6 +2702,55 @@ function AgentLeadEngagement() {
     setRescheduleFromNeedsMode(true);
   };
 
+  const startAddNewNeedsAssessmentMeeting = () => {
+    setMeetingError("");
+    setMeetingFieldErrors({});
+    setSelectedStageView("Contacting");
+    setContactingViewedActivityKey("Schedule Meeting");
+    setRescheduleFollowUpNeedsMeetingMode(false);
+    setRescheduleFollowUpNeedsMeetingOriginalAt(null);
+    setAddNewNeedsMeetingOriginalAt(latestScheduledMeeting?.meetingAt || null);
+    setMeetingForm({
+      meetingDate: latestScheduledMeeting?.meetingAt ? toDateInputValue(latestScheduledMeeting.meetingAt) : "",
+      meetingStartTime: latestScheduledMeeting?.meetingAt
+        ? `${String(new Date(latestScheduledMeeting.meetingAt).getHours()).padStart(2, "0")}:${String(new Date(latestScheduledMeeting.meetingAt).getMinutes()).padStart(2, "0")}`
+        : "",
+      meetingDurationMin: Number(latestScheduledMeeting?.meetingDurationMin || 120),
+      meetingMode: String(latestScheduledMeeting?.meetingMode || ""),
+      meetingPlatform: String(latestScheduledMeeting?.meetingPlatform || ""),
+      meetingPlatformOther: String(latestScheduledMeeting?.meetingPlatformOther || ""),
+      meetingLink: String(latestScheduledMeeting?.meetingLink || ""),
+      meetingInviteSent: Boolean(latestScheduledMeeting?.meetingInviteSent),
+      meetingPlace: String(latestScheduledMeeting?.meetingPlace || ""),
+    });
+    setAddNewNeedsMeetingMode(true);
+  };
+
+  const startRescheduleFollowUpNeedsAssessmentMeeting = () => {
+    setMeetingError("");
+    setMeetingFieldErrors({});
+    setSelectedStageView("Contacting");
+    setContactingViewedActivityKey("Schedule Meeting");
+    setAddNewNeedsMeetingMode(false);
+    setAddNewNeedsMeetingOriginalAt(null);
+    setRescheduleFollowUpNeedsMeetingOriginalAt(latestScheduledMeeting?.meetingAt || null);
+    setMeetingForm({
+      meetingDate: latestScheduledMeeting?.meetingAt ? toDateInputValue(latestScheduledMeeting.meetingAt) : "",
+      meetingStartTime: latestScheduledMeeting?.meetingAt
+        ? `${String(new Date(latestScheduledMeeting.meetingAt).getHours()).padStart(2, "0")}:${String(new Date(latestScheduledMeeting.meetingAt).getMinutes()).padStart(2, "0")}`
+        : "",
+      meetingDurationMin: Number(latestScheduledMeeting?.meetingDurationMin || 120),
+      meetingMode: String(latestScheduledMeeting?.meetingMode || ""),
+      meetingPlatform: String(latestScheduledMeeting?.meetingPlatform || ""),
+      meetingPlatformOther: String(latestScheduledMeeting?.meetingPlatformOther || ""),
+      meetingLink: String(latestScheduledMeeting?.meetingLink || ""),
+      meetingInviteSent: Boolean(latestScheduledMeeting?.meetingInviteSent),
+      meetingPlace: String(latestScheduledMeeting?.meetingPlace || ""),
+    });
+    setRescheduleFollowUpNeedsMeetingMode(true);
+  };
+
+  // eslint-disable-next-line no-unused-vars
   const startRescheduleFromContacting = () => {
     setMeetingError("");
     setMeetingFieldErrors({});
@@ -2672,18 +2794,27 @@ function AgentLeadEngagement() {
       const latestWindows = await fetchMeetingAvailability();
       const proposedStart = combineDateAndTimeLocal(meetingDate, meetingStartTime);
       const proposedEnd = proposedStart ? new Date(proposedStart.getTime() + meetingDurationMin * 60 * 1000) : null;
+      const addNewOriginalTs = addNewNeedsMeetingOriginalAt ? new Date(addNewNeedsMeetingOriginalAt).getTime() : null;
+      const rescheduleFollowUpOriginalTs = rescheduleFollowUpNeedsMeetingOriginalAt ? new Date(rescheduleFollowUpNeedsMeetingOriginalAt).getTime() : null;
       const hasRealtimeConflict = Boolean(proposedStart && proposedEnd) && (latestWindows || []).some((w) => {
         const ws = w?.startAt ? new Date(w.startAt) : null;
         const we = w?.endAt ? new Date(w.endAt) : null;
         if (!ws || !we || Number.isNaN(ws.getTime()) || Number.isNaN(we.getTime())) return false;
         if (rescheduleOriginalMeetingAt && ws.getTime() === new Date(rescheduleOriginalMeetingAt).getTime()) return false;
+        if (addNewNeedsMeetingMode && addNewOriginalTs && ws.getTime() === addNewOriginalTs) return false;
+        if (rescheduleFollowUpNeedsMeetingMode && rescheduleFollowUpOriginalTs && ws.getTime() === rescheduleFollowUpOriginalTs) return false;
         return ws < proposedEnd && we > proposedStart;
       });
       if (hasRealtimeConflict) {
         setMeetingFieldErrors({ meetingStartTime: "Selected time is already booked." });
         return;
       }
-      if (isSlotBooked(meetingDate, meetingStartTime, meetingDurationMin, rescheduleOriginalMeetingAt)) {
+      const ignoredMeetingStartAt = rescheduleFollowUpNeedsMeetingMode
+        ? rescheduleFollowUpNeedsMeetingOriginalAt
+        : addNewNeedsMeetingMode
+        ? addNewNeedsMeetingOriginalAt
+        : rescheduleOriginalMeetingAt;
+      if (isSlotBooked(meetingDate, meetingStartTime, meetingDurationMin, ignoredMeetingStartAt)) {
         setMeetingFieldErrors({ meetingStartTime: "Selected time is already booked." });
         return;
       }
@@ -2723,6 +2854,24 @@ function AgentLeadEngagement() {
         return;
       }
 
+      if (addNewNeedsMeetingMode && addNewNeedsMeetingOriginalAt) {
+        const previousDt = new Date(addNewNeedsMeetingOriginalAt);
+        const nextDt = combineDateAndTimeLocal(meetingDate, meetingStartTime);
+        if (nextDt && previousDt.getTime() === nextDt.getTime()) {
+          setMeetingFieldErrors({ meetingStartTime: "New meeting time cannot be the same as previous meeting time." });
+          return;
+        }
+      }
+
+      if (rescheduleFollowUpNeedsMeetingMode && rescheduleFollowUpNeedsMeetingOriginalAt) {
+        const previousDt = new Date(rescheduleFollowUpNeedsMeetingOriginalAt);
+        const nextDt = combineDateAndTimeLocal(meetingDate, meetingStartTime);
+        if (nextDt && previousDt.getTime() === nextDt.getTime()) {
+          setMeetingFieldErrors({ meetingStartTime: "Rescheduled meeting time cannot be the same as previous meeting time." });
+          return;
+        }
+      }
+
       if (contactingRescheduleMode && rescheduleOriginalMeetingAt) {
         const previousDt = new Date(rescheduleOriginalMeetingAt);
         const nextDt = combineDateAndTimeLocal(meetingDate, meetingStartTime);
@@ -2753,6 +2902,8 @@ function AgentLeadEngagement() {
             meetingInviteSent: Boolean(meetingForm.meetingInviteSent),
             meetingPlace: meetingMode === "Face-to-face" ? String(meetingForm.meetingPlace || "").trim() : undefined,
             rescheduleFromNeeds: Boolean(rescheduleFromNeedsMode || contactingRescheduleMode),
+            addNewNeedsAssessmentMeeting: Boolean(addNewNeedsMeetingMode),
+            rescheduleFollowUpNeedsAssessmentMeeting: Boolean(rescheduleFollowUpNeedsMeetingMode),
           }),
         }
       );
@@ -2761,6 +2912,14 @@ function AgentLeadEngagement() {
       if (!res.ok) throw new Error(data?.message || "Failed to schedule meeting.");
 
       await refreshCurrentProgressView();
+      if (addNewNeedsMeetingMode) {
+        setAddNewNeedsMeetingMode(false);
+        setAddNewNeedsMeetingOriginalAt(null);
+      }
+      if (rescheduleFollowUpNeedsMeetingMode) {
+        setRescheduleFollowUpNeedsMeetingMode(false);
+        setRescheduleFollowUpNeedsMeetingOriginalAt(null);
+      }
       if (rescheduleFromNeedsMode) {
         setRescheduleFromNeedsMode(false);
         setRescheduleOriginalMeetingAt(null);
@@ -2779,9 +2938,7 @@ function AgentLeadEngagement() {
       }
     } catch (err) {
       const msg = err?.message || "Cannot connect to server. Is backend running?";
-      if (/conflicts with an existing meeting|already booked|MEETING_CONFLICT/i.test(msg)) {
-        setMeetingFieldErrors({ meetingStartTime: "Selected time is already booked." });
-      } else {
+      if (!applyMeetingServerFieldError(msg, setMeetingFieldErrors)) {
         setMeetingError(msg);
       }
     } finally {
@@ -2894,7 +3051,10 @@ function AgentLeadEngagement() {
 
       await refreshCurrentProgressView({ includeNeedsAssessment: true });
     } catch (err) {
-      setProposalMeetingError(err?.message || "Cannot connect to server. Is backend running?");
+      const msg = err?.message || "Cannot connect to server. Is backend running?";
+      if (!applyMeetingServerFieldError(msg, setProposalMeetingFieldErrors, { conflictMessage: "Selected start time conflicts with an existing meeting." })) {
+        setProposalMeetingError(msg);
+      }
     } finally {
       setSavingProposalMeeting(false);
     }
@@ -3870,7 +4030,10 @@ function AgentLeadEngagement() {
 
       await refreshCurrentProgressView();
     } catch (err) {
-      setApplicationMeetingError(err?.message || "Cannot connect to server. Is backend running?");
+      const msg = err?.message || "Cannot connect to server. Is backend running?";
+      if (!applyMeetingServerFieldError(msg, setApplicationMeetingFieldErrors, { conflictMessage: "Selected start time conflicts with an existing meeting." })) {
+        setApplicationMeetingError(msg);
+      }
     } finally {
       setSavingApplicationMeeting(false);
     }
@@ -5987,11 +6150,16 @@ function AgentLeadEngagement() {
                                 >
                                   <option value="">Select time</option>
                                   {contactingMeetingStartSlots.map((slot) => {
-                                    const booked = isSlotBooked(meetingForm.meetingDate, slot, meetingForm.meetingDurationMin, rescheduleOriginalMeetingAt);
-                                    const initialSlotTime = rescheduleOriginalMeetingAt
-                                      ? `${String(new Date(rescheduleOriginalMeetingAt).getHours()).padStart(2, "0")}:${String(new Date(rescheduleOriginalMeetingAt).getMinutes()).padStart(2, "0")}`
+                                    const ignoredMeetingStartAt = rescheduleFollowUpNeedsMeetingMode
+                                      ? rescheduleFollowUpNeedsMeetingOriginalAt
+                                      : addNewNeedsMeetingMode
+                                      ? addNewNeedsMeetingOriginalAt
+                                      : rescheduleOriginalMeetingAt;
+                                    const booked = isSlotBooked(meetingForm.meetingDate, slot, meetingForm.meetingDurationMin, ignoredMeetingStartAt);
+                                    const initialSlotTime = ignoredMeetingStartAt
+                                      ? `${String(new Date(ignoredMeetingStartAt).getHours()).padStart(2, "0")}:${String(new Date(ignoredMeetingStartAt).getMinutes()).padStart(2, "0")}`
                                       : "";
-                                    const isInitialSetting = Boolean(rescheduleOriginalMeetingAt) && meetingForm.meetingDate === toDateInputValue(rescheduleOriginalMeetingAt) && slot === initialSlotTime;
+                                    const isInitialSetting = Boolean(ignoredMeetingStartAt) && meetingForm.meetingDate === toDateInputValue(ignoredMeetingStartAt) && slot === initialSlotTime;
                                     return (
                                       <option key={slot} value={slot} disabled={booked || isInitialSetting}>
                                         {formatTimeLabel(slot)}{isInitialSetting ? " (INITIAL SETTING)" : booked ? " (BOOKED)" : ""}
@@ -6144,6 +6312,14 @@ function AgentLeadEngagement() {
                                       meetingInviteSent: false,
                                       meetingPlace: "",
                                     });
+                                    if (addNewNeedsMeetingMode) {
+                                      setAddNewNeedsMeetingMode(false);
+                                      setAddNewNeedsMeetingOriginalAt(null);
+                                    }
+                                    if (rescheduleFollowUpNeedsMeetingMode) {
+                                      setRescheduleFollowUpNeedsMeetingMode(false);
+                                      setRescheduleFollowUpNeedsMeetingOriginalAt(null);
+                                    }
                                     if (rescheduleFromNeedsMode) {
                                       setRescheduleFromNeedsMode(false);
                                       setRescheduleOriginalMeetingAt(null);
@@ -6167,37 +6343,66 @@ function AgentLeadEngagement() {
                           ) : hasAnySavedContactMeeting ? (
                             <>
                               {scheduledMeetingAttempts.map((attempt, idx) => (
-                                <div key={String(attempt?.attemptId || idx)} className="le-attemptMeta" style={{ marginTop: 8 }}>
+                                <div
+                                  key={String(attempt?.attemptId || attempt?.meetingAt || idx)}
+                                  className="le-attemptItem"
+                                  style={{ marginTop: idx === 0 ? 8 : 14, paddingTop: 12 }}
+                                >
                                   {scheduledMeetingAttempts.length > 1 ? (
-                                    <div>
-                                      <span className="le-metaLabel">Meeting Entry</span>
-                                      <span className="le-metaValue">{idx === 0 ? "Most Recent" : `Previous #${idx}`}</span>
+                                    <div className="le-attemptSectionHeader">
+                                      {idx === 0 ? "Most Recent Meeting" : `Previous Meeting #${idx}`}
                                     </div>
                                   ) : null}
-                                  {attempt?.meetingAt ? <div><span className="le-metaLabel">Meeting Date & Time</span><span className="le-metaValue">{formatDateTime(attempt.meetingAt)}</span></div> : null}
-                                  {Number(attempt?.meetingDurationMin || 0) > 0 ? <div><span className="le-metaLabel">Meeting Duration</span><span className="le-metaValue">{attempt.meetingDurationMin} mins</span></div> : null}
-                                  {attempt?.meetingEndAt ? <div><span className="le-metaLabel">Meeting Ends</span><span className="le-metaValue">{formatDateTime(attempt.meetingEndAt)}</span></div> : null}
-                                  {String(attempt?.meetingMode || "").trim() ? <div><span className="le-metaLabel">Meeting Mode</span><span className="le-metaValue">{attempt.meetingMode}</span></div> : null}
-                                  {String(attempt?.meetingPlatform || "").trim() ? <div><span className="le-metaLabel">Meeting Platform</span><span className="le-metaValue">{attempt.meetingPlatform}</span></div> : null}
-                                  {String(attempt?.meetingPlatformOther || "").trim() ? <div><span className="le-metaLabel">Meeting Platform (Other)</span><span className="le-metaValue">{attempt.meetingPlatformOther}</span></div> : null}
-                                  {String(attempt?.meetingLink || "").trim() ? <div><span className="le-metaLabel">Meeting Link</span><span className="le-metaValue">{attempt.meetingLink}</span></div> : null}
-                                  {String(attempt?.meetingMode || "").trim() === "Online" ? <div><span className="le-metaLabel">Meeting Invite Sent</span><span className="le-metaValue">{attempt?.meetingInviteSent ? "Yes" : "No"}</span></div> : null}
-                                  {String(attempt?.meetingPlace || "").trim() ? <div><span className="le-metaLabel">Meeting Place</span><span className="le-metaValue">{attempt.meetingPlace}</span></div> : null}
-                                  {String(attempt?.meetingStatus || "").trim() ? <div><span className="le-metaLabel">Status</span><span className="le-metaValue">{attempt.meetingStatus}</span></div> : null}
+                                  <div className="le-attemptMeta" style={{ marginTop: scheduledMeetingAttempts.length > 1 ? 8 : 0 }}>
+                                    {attempt?.meetingAt ? <div><span className="le-metaLabel">Meeting Date & Time</span><span className="le-metaValue">{formatDateTime(attempt.meetingAt)}</span></div> : null}
+                                    {Number(attempt?.meetingDurationMin || 0) > 0 ? <div><span className="le-metaLabel">Meeting Duration</span><span className="le-metaValue">{attempt.meetingDurationMin} mins</span></div> : null}
+                                    {attempt?.meetingEndAt ? <div><span className="le-metaLabel">Meeting Ends</span><span className="le-metaValue">{formatDateTime(attempt.meetingEndAt)}</span></div> : null}
+                                    {String(attempt?.meetingMode || "").trim() ? <div><span className="le-metaLabel">Meeting Mode</span><span className="le-metaValue">{attempt.meetingMode}</span></div> : null}
+                                    {String(attempt?.meetingPlatform || "").trim() ? <div><span className="le-metaLabel">Meeting Platform</span><span className="le-metaValue">{attempt.meetingPlatform}</span></div> : null}
+                                    {String(attempt?.meetingPlatformOther || "").trim() ? <div><span className="le-metaLabel">Meeting Platform (Other)</span><span className="le-metaValue">{attempt.meetingPlatformOther}</span></div> : null}
+                                    {String(attempt?.meetingLink || "").trim() ? <div><span className="le-metaLabel">Meeting Link</span><span className="le-metaValue">{attempt.meetingLink}</span></div> : null}
+                                    {String(attempt?.meetingMode || "").trim() === "Online" ? <div><span className="le-metaLabel">Meeting Invite Sent</span><span className="le-metaValue">{attempt?.meetingInviteSent ? "Yes" : "No"}</span></div> : null}
+                                    {String(attempt?.meetingPlace || "").trim() ? <div><span className="le-metaLabel">Meeting Place</span><span className="le-metaValue">{attempt.meetingPlace}</span></div> : null}
+                                    {String(attempt?.meetingStatus || "").trim() ? <div><span className="le-metaLabel">Status</span><span className="le-metaValue">{attempt.meetingStatus}</span></div> : null}
+                                  </div>
+                                  {hasAddedFollowUpNeedsMeeting && idx === 0 ? (
+                                    <div className="le-actions" style={{ marginTop: 12 }}>
+                                      <button
+                                        type="button"
+                                        className="le-btn secondary"
+                                        onClick={startRescheduleFollowUpNeedsAssessmentMeeting}
+                                        disabled={savingMeeting}
+                                      >
+                                        Reschedule Meeting
+                                      </button>
+                                    </div>
+                                  ) : null}
+                                  {canRescheduleMissedNeedsAttendanceMeeting && idx === 0 ? (
+                                    <div className="le-actions" style={{ marginTop: 12 }}>
+                                      <button
+                                        type="button"
+                                        className="le-btn secondary"
+                                        onClick={startRescheduleFromNeeds}
+                                        disabled={savingMeeting}
+                                      >
+                                        Reschedule Meeting
+                                      </button>
+                                    </div>
+                                  ) : null}
                                 </div>
                               ))}
-                              <div style={{ marginTop: 12 }}>
-                                {needsFollowUpDecisionSaved && needsFollowUpRequired === "YES" ? (
+                              {needsFollowUpDecisionSaved && needsFollowUpRequired === "YES" && !hasAddedFollowUpNeedsMeeting ? (
+                                <div style={{ marginTop: 12 }}>
                                   <button
                                     type="button"
                                     className="le-btn secondary"
-                                    onClick={startRescheduleFromContacting}
+                                    onClick={startAddNewNeedsAssessmentMeeting}
                                     disabled={savingMeeting}
                                   >
-                                    Reschedule Meeting
+                                    Add New Meeting
                                   </button>
-                                ) : null}
-                              </div>
+                                </div>
+                              ) : null}
                             </>
                           ) : (
                             <p className="le-muted" style={{ marginTop: 8 }}>
@@ -6900,7 +7105,7 @@ function AgentLeadEngagement() {
                               type="button"
                               className="le-btn ghost"
                               style={{ padding: 0, border: 0, background: "transparent", textDecoration: "underline" }}
-                              onClick={startRescheduleFromNeeds}
+                              onClick={goToScheduleMeetingFromNeedsAttendanceNo}
                               disabled={!isNeedsAssessmentCurrentViewEditable || isNeedsAssessmentLocked || needsAttendanceRescheduleLock || needsAssessmentSaving}
                             >
                               Go to Schedule Meeting
@@ -7706,7 +7911,7 @@ function AgentLeadEngagement() {
                         </div>
                       )}
 
-                      {showNeedsAssessmentPanel && isNeedsAnalysisViewed && isViewingCurrentStage && (
+                      {showNeedsAssessmentPanel && isNeedsAnalysisViewed && isViewingCurrentStage && !needsAnalysisEditMode && ["Perform Needs Analysis", "Schedule Proposal Presentation"].includes(String(needsAssessmentOutcomeActivity || "").trim()) && (
                           <div className="le-block" style={{ marginTop: 16 }}>
                             <div className="le-inlineActionRow">
                               <h4 className="le-blockTitle" style={{ fontSize: 16 }}>Schedule Further Needs Assessment Meet</h4>
@@ -7773,24 +7978,20 @@ function AgentLeadEngagement() {
                             </div>
                             ) : null}
                             {needsFollowUpDecisionError ? <p className="le-smallNote" style={{ marginTop: 8, color: "#DA291C" }}>{needsFollowUpDecisionError}</p> : null}
-                            {needsFollowUpDecisionSaved && needsFollowUpRequired === "YES" ? (
+                            {needsFollowUpDecisionSaved && needsFollowUpRequired === "YES" && !hasAddedFollowUpNeedsMeeting ? (
                               <p className="le-smallNote" style={{ marginTop: 8 }}>
-                                Further needs assessment is required.{" "}
-                                {!hasAnySavedContactMeeting ? (
-                                  <button
-                                    type="button"
-                                    className="le-btn ghost"
-                                    style={{ padding: 0, border: 0, background: "transparent", textDecoration: "underline" }}
-                                    onClick={() => {
-                                      setSelectedStageView("Contacting");
-                                      setContactingViewedActivityKey("Schedule Meeting");
-                                    }}
-                                  >
-                                    Go to Schedule Meeting
-                                  </button>
-                                ) : (
-                                  "Follow-up meeting has been scheduled."
-                                )}
+                                Further Needs Assessment can be Scheduled. {" "}
+                                <button
+                                  type="button"
+                                  className="le-btn ghost"
+                                  style={{ padding: 0, border: 0, background: "transparent", textDecoration: "underline" }}
+                                  onClick={() => {
+                                    setSelectedStageView("Contacting");
+                                    setContactingViewedActivityKey("Schedule Meeting");
+                                  }}
+                                >
+                                  Go to Schedule Meeting
+                                </button>
                               </p>
                             ) : null}
                           </div>
