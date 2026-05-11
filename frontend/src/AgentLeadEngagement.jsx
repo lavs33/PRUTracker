@@ -164,6 +164,9 @@ function AgentLeadEngagement() {
     chosenProductId: "",
     chosenProductName: "",
     chosenProductDescription: "",
+    chosenProductCategory: "",
+    chosenProductPaymentTermLabel: "",
+    chosenProductCoverageDurationLabel: "",
     proposalFileName: "",
     proposalFileMimeType: "",
     proposalFileDataUrl: "",
@@ -518,6 +521,9 @@ function AgentLeadEngagement() {
         chosenProductId: String(generate?.productId || chosen?._id || ""),
         chosenProductName: String(generate?.productName || chosen?.productName || ""),
         chosenProductDescription: String(generate?.productDescription || chosen?.description || ""),
+        chosenProductCategory: String(generate?.productCategory || chosen?.productCategory || ""),
+        chosenProductPaymentTermLabel: String(generate?.productPaymentTermLabel || chosen?.paymentTermLabel || ""),
+        chosenProductCoverageDurationLabel: String(generate?.productCoverageDurationLabel || chosen?.coverageDurationLabel || ""),
         proposalFileName: String(generate?.proposalFileName || ""),
         proposalFileMimeType: String(generate?.proposalFileMimeType || ""),
         proposalFileDataUrl: String(generate?.proposalFileDataUrl || ""),
@@ -3277,19 +3283,20 @@ function AgentLeadEngagement() {
       const fileDataUrl = String(proposalGenerateForm.proposalFileDataUrl || "").trim();
       const fileMimeType = String(proposalGenerateForm.proposalFileMimeType || "").trim();
 
-      if (!fileName || !fileDataUrl) {
-        setProposalGenerateFieldErrors({ proposalFile: "Proposal PDF is required." });
-        return;
-      }
+      const nextErrors = {};
+      if (!fileName || !fileDataUrl) nextErrors.proposalFile = "Proposal PDF is required.";
 
-      const validPdf = /\.pdf$/i.test(fileName) && (fileMimeType === "application/pdf" || /^data:application\/pdf;base64,/i.test(fileDataUrl));
-      if (!validPdf) {
-        setProposalGenerateFieldErrors({ proposalFile: "Proposal file must be a PDF." });
-        return;
-      }
+      const validPdf = fileName && fileDataUrl
+        ? /\.pdf$/i.test(fileName) && (fileMimeType === "application/pdf" || /^data:application\/pdf;base64,/i.test(fileDataUrl))
+        : false;
+      if (fileName && fileDataUrl && !validPdf) nextErrors.proposalFile = "Proposal file must be a PDF.";
 
       if (proposalGenerateForm.sentToProspectEmail !== true) {
-        setProposalGenerateFieldErrors({ sentToProspectEmail: `Please confirm this was sent to prospect via email (${prospect?.email || "no email"}).` });
+        nextErrors.sentToProspectEmail = `Please confirm this was sent to prospect via email (${prospect?.email || "no email"}).`;
+      }
+
+      if (Object.keys(nextErrors).length) {
+        setProposalGenerateFieldErrors(nextErrors);
         return;
       }
 
@@ -6610,12 +6617,6 @@ function AgentLeadEngagement() {
                       {showProposalPanel && isProposalGenerateViewed && (
                         <div className="le-block">
                           <h4 className="le-blockTitle">{proposalUiActivityKey === "Generate Proposal" ? "Generate Proposal" : "Saved Initial Quotation Proposal Details"}</h4>
-                          {proposalUiActivityKey === "Generate Proposal" ? (
-                            <p className="le-smallNote" style={{ marginBottom: 10 }}>
-                              Complete this first before proceeding to proposal presentation.
-                            </p>
-                          ) : null}
-
                           <div className="le-attemptMeta">
                             {String(proposalGenerateForm.chosenProductName || proposalGenerateForm.chosenProductId || "").trim() ? (
                               <div>
@@ -6629,20 +6630,33 @@ function AgentLeadEngagement() {
                               </div>
                             )}
                             <div>
+                              <span className="le-metaLabel">Product Category</span>
+                              <span className="le-metaValue">{String(proposalGenerateForm.chosenProductCategory || "").trim() || "No product category available."}</span>
+                            </div>
+                            <div>
                               <span className="le-metaLabel">Product Description</span>
                               <span className="le-metaValue">{String(proposalGenerateForm.chosenProductDescription || "").trim() || "No product description available."}</span>
                             </div>
                             <div>
-                              <span className="le-metaLabel">Proposal Generation Link</span>
-                              <span className="le-metaValue">
-                                <a href="https://pruone.prulifeuk.com.ph/web" target="_blank" rel="noreferrer">https://pruone.prulifeuk.com.ph/web</a>
-                              </span>
+                              <span className="le-metaLabel">Payment Term</span>
+                              <span className="le-metaValue">{String(proposalGenerateForm.chosenProductPaymentTermLabel || "").trim() || "No payment term details available."}</span>
+                            </div>
+                            <div>
+                              <span className="le-metaLabel">Coverage Duration</span>
+                              <span className="le-metaValue">{String(proposalGenerateForm.chosenProductCoverageDurationLabel || "").trim() || "No coverage duration details available."}</span>
                             </div>
                           </div>
 
                           {proposalUiActivityKey === "Generate Proposal" && isProposalEditableNow ? (
                             <>
                               <div className="le-formRow" style={{ marginTop: 12 }}>
+                                <label className="le-label">Proposal Generation Link</label>
+                                <p className="le-smallNote">
+                                  <a href="https://pruone.prulifeuk.com.ph/web" target="_blank" rel="noreferrer">https://pruone.prulifeuk.com.ph/web</a>
+                                </p>
+                              </div>
+
+                              <div className="le-formRow">
                                 <label className="le-label">Generated Proposal (PDF only) *</label>
                                 <input
                                   key={proposalFileInputKey}
@@ -6705,7 +6719,7 @@ function AgentLeadEngagement() {
                                   }}
                                   disabled={proposalGenerateSaving}
                                 >
-                                  Cancel
+                                  Clear
                                 </button>
                                 <button
                                   type="button"
@@ -7403,7 +7417,7 @@ function AgentLeadEngagement() {
                                   }}
                                   disabled={needsAssessmentSaving}
                                 >
-                                  Clear
+                                  Cancel
                                 </button>
                                 <button
                                   type="button"
