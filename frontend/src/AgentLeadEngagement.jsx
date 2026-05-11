@@ -115,6 +115,10 @@ function AgentLeadEngagement() {
   const [meetingFieldErrors, setMeetingFieldErrors] = useState({});
   const [contactingRescheduleMode, setContactingRescheduleMode] = useState(false);
   const [rescheduleFromNeedsMode, setRescheduleFromNeedsMode] = useState(false);
+  const [addNewNeedsMeetingMode, setAddNewNeedsMeetingMode] = useState(false);
+  const [addNewNeedsMeetingOriginalAt, setAddNewNeedsMeetingOriginalAt] = useState(null);
+  const [rescheduleFollowUpNeedsMeetingMode, setRescheduleFollowUpNeedsMeetingMode] = useState(false);
+  const [rescheduleFollowUpNeedsMeetingOriginalAt, setRescheduleFollowUpNeedsMeetingOriginalAt] = useState(null);
   const [rescheduleOriginalMeetingAt, setRescheduleOriginalMeetingAt] = useState(null);
   const [needsAttendanceRescheduleLock, setNeedsAttendanceRescheduleLock] = useState(false);
   const [needsAttendanceProofEditMode, setNeedsAttendanceProofEditMode] = useState(false);
@@ -127,8 +131,11 @@ function AgentLeadEngagement() {
   const [, setNeedsAssessmentSavedAt] = useState("");
   const [needsAnalysisEditMode, setNeedsAnalysisEditMode] = useState(true);
   const [needsFollowUpRequired, setNeedsFollowUpRequired] = useState("");
+  const [savedNeedsFollowUpRequired, setSavedNeedsFollowUpRequired] = useState("");
   const [needsFollowUpDecisionSaved, setNeedsFollowUpDecisionSaved] = useState(false);
+  const [needsFollowUpDecisionDecidedAt, setNeedsFollowUpDecisionDecidedAt] = useState(null);
   const [needsFollowUpDecisionEditMode, setNeedsFollowUpDecisionEditMode] = useState(false);
+  const [needsFollowUpDecisionDismissed, setNeedsFollowUpDecisionDismissed] = useState(false);
   const [needsFollowUpDecisionSaving, setNeedsFollowUpDecisionSaving] = useState(false);
   const [needsFollowUpDecisionError, setNeedsFollowUpDecisionError] = useState("");
   const [needsAssessmentCurrentActivityKey, setNeedsAssessmentCurrentActivityKey] = useState("Record Prospect Attendance");
@@ -149,6 +156,7 @@ function AgentLeadEngagement() {
   const [savingProposalMeeting, setSavingProposalMeeting] = useState(false);
   const [proposalMeetingError, setProposalMeetingError] = useState("");
   const [proposalMeetingFieldErrors, setProposalMeetingFieldErrors] = useState({});
+  const [proposalMeetingNeedsPrefillKey, setProposalMeetingNeedsPrefillKey] = useState("");
   const [proposalCurrentActivityKey, setProposalCurrentActivityKey] = useState("Generate Proposal");
   const [proposalViewedActivityKey, setProposalViewedActivityKey] = useState("");
   const [proposalGenerateForm, setProposalGenerateForm] = useState({
@@ -680,6 +688,10 @@ function AgentLeadEngagement() {
     try {
       setNeedsAssessmentLoading(true);
       setNeedsAssessmentError("");
+      setAddNewNeedsMeetingMode(false);
+      setAddNewNeedsMeetingOriginalAt(null);
+      setRescheduleFollowUpNeedsMeetingMode(false);
+      setRescheduleFollowUpNeedsMeetingOriginalAt(null);
       const res = await fetch(
         `${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/needs-assessment?userId=${user.id}`
       );
@@ -691,18 +703,32 @@ function AgentLeadEngagement() {
       const age = birthday ? computeAgeFromBirthday(birthday) : profile.age;
 
       const currentNAActivity = String(data?.needsAssessment?.currentActivityKey || "Record Prospect Attendance").trim();
-      const outcomeNAActivity = String(data?.needsAssessment?.outcomeActivity || "").trim();
+      const rawOutcomeNAActivity = String(data?.needsAssessment?.outcomeActivity || "").trim();
+      const savedNeedsPriorities = data?.needsAssessment?.needsPriorities || {};
+      const hasSavedNeedsAnalysisDetails = Boolean(
+        String(savedNeedsPriorities?.currentPriority || "").trim() ||
+        String(savedNeedsPriorities?.productSelection?.selectedProductId || "").trim()
+      );
+      const outcomeNAActivity = hasSavedNeedsAnalysisDetails && rawOutcomeNAActivity === "Record Prospect Attendance"
+        ? "Perform Needs Analysis"
+        : rawOutcomeNAActivity;
       const followUpRequired = String(data?.needsAssessment?.followUpNeedsAssessmentRequired || "").trim().toUpperCase();
       setNeedsAssessmentCurrentActivityKey(currentNAActivity);
       setNeedsAssessmentOutcomeActivity(outcomeNAActivity);
       setNeedsFollowUpRequired(["YES", "NO"].includes(followUpRequired) ? followUpRequired : "");
+      setSavedNeedsFollowUpRequired(["YES", "NO"].includes(followUpRequired) ? followUpRequired : "");
       setNeedsFollowUpDecisionSaved(["YES", "NO"].includes(followUpRequired));
+      setNeedsFollowUpDecisionDecidedAt(data?.needsAssessment?.followUpNeedsAssessmentDecidedAt || null);
       setNeedsFollowUpDecisionEditMode(!["YES", "NO"].includes(followUpRequired));
-      setNeedsAnalysisEditMode(!(String(data?.needsAssessment?.outcomeActivity || "").trim() === "Perform Needs Analysis"));
+      setNeedsFollowUpDecisionDismissed(false);
+      setNeedsAnalysisEditMode(!hasSavedNeedsAnalysisDetails);
       setAvailableProducts(Array.isArray(data?.products) ? data.products : []);
 
       const proposalMeeting = data?.proposalMeeting || null;
       setProposalMeetingSaved(proposalMeeting);
+      if (!proposalMeeting) {
+        setProposalMeetingNeedsPrefillKey("");
+      }
       setProposalMeetingForm({
         meetingDate: proposalMeeting?.startAt ? toDateInputValue(proposalMeeting.startAt) : "",
         meetingStartTime: proposalMeeting?.startAt
@@ -875,7 +901,7 @@ function AgentLeadEngagement() {
     try {
       setNeedsAssessmentError("");
 
-      if ((!isNeedsAssessmentCurrentViewEditable && !needsAttendanceProofEditMode) || isNeedsAssessmentLocked) return;
+      if (!needsAttendanceProofEditMode && (!canEditNeedsAttendanceProof || isNeedsAssessmentLocked)) return;
       if (needsAssessmentForm.attendanceChoice !== "YES") {
         setNeedsAssessmentError("Prospect attendance must be marked YES before saving.");
         return;
@@ -912,6 +938,9 @@ function AgentLeadEngagement() {
 
       setNeedsAttendanceProofEditMode(false);
       await refreshCurrentProgressView({ includeNeedsAssessment: true });
+      if (needsAttendanceProofEditMode) {
+        setNeedsAssessmentViewedActivityKey("Schedule Proposal Presentation");
+      }
     } catch (err) {
       setNeedsAssessmentError(err?.message || "Failed to record attendance.");
     } finally {
@@ -1112,6 +1141,7 @@ function AgentLeadEngagement() {
 
     try {
       setNeedsAssessmentSaving(true);
+      let savedNeedsAnalysisData = null;
 
       {
         const aRes = await fetch(`${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/needs-assessment/attendance?userId=${user.id}`, {
@@ -1217,9 +1247,13 @@ function AgentLeadEngagement() {
         });
         const nData = await nRes.json();
         if (!nRes.ok) throw new Error(nData?.message || "Failed to save needs analysis.");
+        savedNeedsAnalysisData = nData;
       }
 
+      const nextActivityKey = String(savedNeedsAnalysisData?.currentActivityKey || "Perform Needs Analysis").trim() || "Perform Needs Analysis";
       setNeedsAssessmentSavedAt(new Date().toISOString());
+      setNeedsAssessmentOutcomeActivity(nextActivityKey);
+      setNeedsAssessmentCurrentActivityKey(nextActivityKey);
       setNeedsAnalysisEditMode(false);
     } catch (err) {
       setNeedsAssessmentError(err?.message || "Failed to save needs assessment.");
@@ -1487,6 +1521,49 @@ function AgentLeadEngagement() {
     }
   };
 
+  const applyMeetingServerFieldError = (message, setFieldErrors, { conflictMessage = "Selected time is already booked." } = {}) => {
+    const msg = String(message || "").trim();
+    if (!msg) return false;
+
+    if (/same as (the )?previous meeting time|conflicts with|already booked|MEETING_CONFLICT|MEETING_SLOT_CONFLICT|time slot/i.test(msg)) {
+      setFieldErrors({ meetingStartTime: /same as (the )?previous meeting time/i.test(msg) ? msg : conflictMessage });
+      return true;
+    }
+    if (/date must|at least tomorrow|meetingAt must|date\/time|meeting date\/time|valid date|Invalid meetingAt/i.test(msg)) {
+      setFieldErrors({ meetingDate: msg });
+      return true;
+    }
+    if (/duration|30\/60\/90\/120|30, 60, 90, 120/i.test(msg)) {
+      setFieldErrors({ meetingDurationMin: msg });
+      return true;
+    }
+    if (/platformOther/i.test(msg)) {
+      setFieldErrors({ meetingPlatformOther: msg });
+      return true;
+    }
+    if (/meetingPlatform|online platform|platform/i.test(msg)) {
+      setFieldErrors({ meetingPlatform: msg });
+      return true;
+    }
+    if (/meetingLink|http\/https|link/i.test(msg)) {
+      setFieldErrors({ meetingLink: msg });
+      return true;
+    }
+    if (/meetingInviteSent|invite/i.test(msg)) {
+      setFieldErrors({ meetingInviteSent: msg });
+      return true;
+    }
+    if (/meetingPlace|place/i.test(msg)) {
+      setFieldErrors({ meetingPlace: msg });
+      return true;
+    }
+    if (/meetingMode|mode/i.test(msg)) {
+      setFieldErrors({ meetingMode: msg });
+      return true;
+    }
+    return false;
+  };
+
   const availableDateOptions = useMemo(() => {
     const list = [];
     const start = new Date();
@@ -1516,38 +1593,7 @@ function AgentLeadEngagement() {
     return slots;
   }, []);
 
-  const contactingMeetingStartSlots = useMemo(() => {
-    const allSlots = buildMeetingStartSlots(meetingForm.meetingDurationMin);
-    const selectedDate = String(meetingForm.meetingDate || "").trim();
-    if (!selectedDate) return allSlots.filter((slot) => Number(slot.split(":")[0]) < 19 || slot === "19:00");
 
-    const today = toLocalDateInputValue(new Date());
-    const maxStartMinutes = 19 * 60;
-    const baseSlots = allSlots.filter((slot) => {
-      const [hh, mm] = slot.split(":").map(Number);
-      return hh * 60 + mm <= maxStartMinutes;
-    });
-
-    if (selectedDate !== today) return baseSlots;
-
-    const now = new Date();
-    const nowMinutes = now.getHours() * 60 + now.getMinutes();
-    const nextHalfHour = Math.ceil(nowMinutes / 30) * 30;
-    const nowFiltered = baseSlots.filter((slot) => {
-      const [hh, mm] = slot.split(":").map(Number);
-      return hh * 60 + mm >= nextHalfHour;
-    });
-    if (!rescheduleFromNeedsMode) return nowFiltered;
-
-    const original = rescheduleOriginalMeetingAt ? new Date(rescheduleOriginalMeetingAt) : null;
-    if (!original || Number.isNaN(original.getTime())) return nowFiltered;
-    return nowFiltered.filter((slot) => {
-      const candidate = combineDateAndTimeLocal(selectedDate, slot);
-      return candidate && candidate.getTime() > original.getTime();
-    });
-  }, [buildMeetingStartSlots, meetingForm.meetingDate, meetingForm.meetingDurationMin, rescheduleFromNeedsMode, rescheduleOriginalMeetingAt]);
-  const proposalMeetingStartSlots = useMemo(() => buildMeetingStartSlots(proposalMeetingForm.meetingDurationMin), [buildMeetingStartSlots, proposalMeetingForm.meetingDurationMin]);
-  const applicationMeetingStartSlots = useMemo(() => buildMeetingStartSlots(applicationMeetingForm.meetingDurationMin), [buildMeetingStartSlots, applicationMeetingForm.meetingDurationMin]);
 
   const isSlotBooked = useCallback(
     (dateStr, timeStr, durationMin, ignoreStartAt = null) => {
@@ -1630,9 +1676,143 @@ function AgentLeadEngagement() {
     const source = Array.isArray(engagement?.needsAssessmentMeetings)
       ? engagement.needsAssessmentMeetings
       : attempts.filter((a) => Boolean(a?.meetingAt));
-    return [...source].sort((a, b) => new Date(b?.meetingAt || 0).getTime() - new Date(a?.meetingAt || 0).getTime());
+    return [...source].sort((a, b) => {
+      const bCreated = new Date(b?.meetingCreatedAt || b?.createdAt || b?.attemptedAt || b?.meetingAt || 0).getTime();
+      const aCreated = new Date(a?.meetingCreatedAt || a?.createdAt || a?.attemptedAt || a?.meetingAt || 0).getTime();
+      if (Number.isFinite(bCreated) && Number.isFinite(aCreated) && bCreated !== aCreated) return bCreated - aCreated;
+      return new Date(b?.meetingAt || 0).getTime() - new Date(a?.meetingAt || 0).getTime();
+    });
   }, [engagement?.needsAssessmentMeetings, attempts]);
   const latestScheduledMeeting = scheduledMeetingAttempts.length ? scheduledMeetingAttempts[0] : null;
+  const latestScheduledMeetingEndAt = useMemo(() => {
+    if (!latestScheduledMeeting?.meetingAt) return null;
+
+    const explicitEnd = latestScheduledMeeting?.meetingEndAt ? new Date(latestScheduledMeeting.meetingEndAt) : null;
+    if (explicitEnd && !Number.isNaN(explicitEnd.getTime())) return explicitEnd;
+
+    const start = new Date(latestScheduledMeeting.meetingAt);
+    if (Number.isNaN(start.getTime())) return null;
+
+    const durationMin = Number(latestScheduledMeeting?.meetingDurationMin || 120);
+    return new Date(start.getTime() + durationMin * 60 * 1000);
+  }, [latestScheduledMeeting]);
+  const addNewNeedsMeetingOriginalEndAt = addNewNeedsMeetingMode ? latestScheduledMeetingEndAt : null;
+
+  const isAfterCurrentNeedsMeetingEnd = useCallback(
+    (dateStr, timeStr) => {
+      if (!addNewNeedsMeetingMode || !addNewNeedsMeetingOriginalEndAt) return true;
+      const candidate = combineDateAndTimeLocal(dateStr, timeStr);
+      return Boolean(candidate && candidate.getTime() > addNewNeedsMeetingOriginalEndAt.getTime());
+    },
+    [addNewNeedsMeetingMode, addNewNeedsMeetingOriginalEndAt]
+  );
+
+  const contactingMeetingDateOptions = useMemo(() => {
+    if (!addNewNeedsMeetingMode || !latestScheduledMeeting?.meetingAt) return availableDateOptions;
+
+    const currentMeetingDate = toDateInputValue(latestScheduledMeeting.meetingAt);
+    if (!currentMeetingDate) return availableDateOptions;
+
+    return availableDateOptions.filter((option) => String(option?.value || "") >= currentMeetingDate);
+  }, [addNewNeedsMeetingMode, availableDateOptions, latestScheduledMeeting]);
+
+  const contactingMeetingStartSlots = useMemo(() => {
+    const allSlots = buildMeetingStartSlots(meetingForm.meetingDurationMin);
+    const selectedDate = String(meetingForm.meetingDate || "").trim();
+    if (!selectedDate) return allSlots.filter((slot) => Number(slot.split(":")[0]) < 19 || slot === "19:00");
+
+    const today = toLocalDateInputValue(new Date());
+    const maxStartMinutes = 19 * 60;
+    const baseSlots = allSlots.filter((slot) => {
+      const [hh, mm] = slot.split(":").map(Number);
+      return hh * 60 + mm <= maxStartMinutes;
+    });
+
+    const followUpFilteredSlots = addNewNeedsMeetingMode
+      ? baseSlots.filter((slot) => isAfterCurrentNeedsMeetingEnd(selectedDate, slot))
+      : baseSlots;
+
+    if (selectedDate !== today) return followUpFilteredSlots;
+
+    const now = new Date();
+    const nowMinutes = now.getHours() * 60 + now.getMinutes();
+    const nextHalfHour = Math.ceil(nowMinutes / 30) * 30;
+    const nowFiltered = followUpFilteredSlots.filter((slot) => {
+      const [hh, mm] = slot.split(":").map(Number);
+      return hh * 60 + mm >= nextHalfHour;
+    });
+    if (!rescheduleFromNeedsMode) return nowFiltered;
+
+    const original = rescheduleOriginalMeetingAt ? new Date(rescheduleOriginalMeetingAt) : null;
+    if (!original || Number.isNaN(original.getTime())) return nowFiltered;
+    return nowFiltered.filter((slot) => {
+      const candidate = combineDateAndTimeLocal(selectedDate, slot);
+      return candidate && candidate.getTime() > original.getTime();
+    });
+  }, [
+    addNewNeedsMeetingMode,
+    buildMeetingStartSlots,
+    isAfterCurrentNeedsMeetingEnd,
+    meetingForm.meetingDate,
+    meetingForm.meetingDurationMin,
+    rescheduleFromNeedsMode,
+    rescheduleOriginalMeetingAt,
+  ]);
+  const proposalMeetingStartSlots = useMemo(() => {
+    const allSlots = buildMeetingStartSlots(proposalMeetingForm.meetingDurationMin);
+    const selectedDate = String(proposalMeetingForm.meetingDate || "").trim();
+    if (!selectedDate || proposalMeetingSaved?.startAt) return allSlots;
+
+    const existingMeetingDate = toDateInputValue(latestScheduledMeeting?.meetingAt);
+    let filteredSlots = allSlots;
+    if (latestScheduledMeetingEndAt && selectedDate === existingMeetingDate) {
+      filteredSlots = filteredSlots.filter((slot) => {
+        const candidate = combineDateAndTimeLocal(selectedDate, slot);
+        return Boolean(candidate && candidate.getTime() > latestScheduledMeetingEndAt.getTime());
+      });
+    }
+
+    const today = toLocalDateInputValue(new Date());
+    if (selectedDate !== today) return filteredSlots;
+
+    const now = new Date();
+    const nowMinutes = now.getHours() * 60 + now.getMinutes();
+    const nextHalfHour = Math.ceil(nowMinutes / 30) * 30;
+    return filteredSlots.filter((slot) => {
+      const [hh, mm] = slot.split(":").map(Number);
+      return hh * 60 + mm >= nextHalfHour;
+    });
+  }, [
+    buildMeetingStartSlots,
+    latestScheduledMeeting,
+    latestScheduledMeetingEndAt,
+    proposalMeetingForm.meetingDate,
+    proposalMeetingForm.meetingDurationMin,
+    proposalMeetingSaved?.startAt,
+  ]);
+  const applicationMeetingStartSlots = useMemo(() => buildMeetingStartSlots(applicationMeetingForm.meetingDurationMin), [buildMeetingStartSlots, applicationMeetingForm.meetingDurationMin]);
+  const hasAddedFollowUpNeedsMeeting = useMemo(() => {
+    if (!needsFollowUpDecisionSaved || savedNeedsFollowUpRequired !== "YES") return false;
+
+    const decisionMs = new Date(needsFollowUpDecisionDecidedAt || 0).getTime();
+    if (Number.isFinite(decisionMs) && decisionMs > 0) {
+      return scheduledMeetingAttempts.some((meeting) => {
+        const createdMs = new Date(
+          meeting?.meetingCreatedAt || meeting?.createdAt || meeting?.attemptedAt || 0
+        ).getTime();
+        return Number.isFinite(createdMs) && createdMs > decisionMs;
+      });
+    }
+
+    return scheduledMeetingAttempts.length > 1;
+  }, [needsFollowUpDecisionDecidedAt, needsFollowUpDecisionSaved, savedNeedsFollowUpRequired, scheduledMeetingAttempts]);
+  const hasDeclinedFurtherNeedsAssessment =
+    needsFollowUpDecisionSaved && savedNeedsFollowUpRequired === "NO";
+  const canRescheduleMissedNeedsAttendanceMeeting =
+    needsAssessmentForm.attendanceChoice === "NO" &&
+    !needsAttendanceRescheduleLock &&
+    !hasAddedFollowUpNeedsMeeting &&
+    !hasDeclinedFurtherNeedsAssessment;
 
   // UI stage: if there are attempts but backend still says Not Started, show Contacting on UI
   const rawStage = engagement?.currentStage || "Not Started";
@@ -1910,6 +2090,8 @@ function AgentLeadEngagement() {
     ((showContactingPanel && isViewingCurrentStage && !isContactingReadOnly) &&
       (contactingViewedActivityKey === "Schedule Meeting" || contactingCurrentActivityKey === "Schedule Meeting")) ||
     rescheduleFromNeedsMode ||
+    addNewNeedsMeetingMode ||
+    rescheduleFollowUpNeedsMeetingMode ||
     contactingRescheduleMode ||
     (showNeedsAssessmentPanel && showProposalSchedulingSection && !proposalMeetingSaved) ||
     (showProposalPanel && proposalUiActivityKey === "Schedule Application Submission" && !applicationMeetingSaved);
@@ -2030,7 +2212,7 @@ function AgentLeadEngagement() {
         ? "Record Prospect Attendance"
         : !isNeedsAnalysisReady
         ? "Perform Needs Analysis"
-        : needsFollowUpDecisionSaved && String(needsFollowUpRequired || "").trim().toUpperCase() === "NO"
+        : needsFollowUpDecisionSaved && String(savedNeedsFollowUpRequired || "").trim().toUpperCase() === "NO"
         ? "Schedule Proposal Presentation"
         : "Perform Needs Analysis"
       : needsActivityKeyRaw;
@@ -2127,10 +2309,21 @@ function AgentLeadEngagement() {
   const isScheduleMeetingEditable =
     (isContactingCurrentViewEditable && contactingCurrentActivityKey === "Schedule Meeting") ||
     rescheduleFromNeedsMode ||
+    addNewNeedsMeetingMode ||
+    rescheduleFollowUpNeedsMeetingMode ||
     contactingRescheduleMode;
 
   const isNeedsAssessmentCurrentViewEditable =
-    isNeedsAssessmentEditableNow && needsAssessmentViewedActivityKey === needsActivityKeyRaw;
+    (isNeedsAssessmentEditableNow &&
+      (needsAssessmentViewedActivityKey === needsActivityKeyRaw ||
+        (needsAssessmentViewedActivityKey === "Perform Needs Analysis" &&
+          ["Perform Needs Analysis", "Schedule Proposal Presentation"].includes(needsActivityKeyRaw)))) ||
+    (showNeedsAssessmentPanel &&
+      isViewingPastStage &&
+      ["Proposal", "Application", "Policy Issuance"].includes(stage) &&
+      needsAssessmentViewedActivityKey === "Perform Needs Analysis" &&
+      !isLeadClosed &&
+      !isLeadDropped);
   const isNeedsAttendanceChoiceLocked =
     needsAssessmentViewedActivityKey === "Record Prospect Attendance" &&
     needsActivityKeyRaw !== "Record Prospect Attendance";
@@ -2156,6 +2349,49 @@ function AgentLeadEngagement() {
     needsAssessmentViewedActivityKey === "Schedule Proposal Presentation";
   const isNeedsAnalysisViewed = needsAssessmentViewedActivityKey === "Perform Needs Analysis";
   const isNeedsScheduleViewed = needsAssessmentViewedActivityKey === "Schedule Proposal Presentation";
+  const proposalMeetingMinimumDate = useMemo(() => {
+    const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    const fallback = toDateInputValue(tomorrow);
+    if (proposalMeetingSaved?.startAt || !latestScheduledMeeting?.meetingAt) return fallback;
+
+    const today = toDateInputValue(new Date());
+    const existingMeetingDate = toDateInputValue(latestScheduledMeeting.meetingAt);
+    if (!existingMeetingDate) return fallback;
+    return existingMeetingDate > today ? existingMeetingDate : today;
+  }, [latestScheduledMeeting, proposalMeetingSaved?.startAt]);
+  const proposalNeedsPrefillKey = latestScheduledMeeting?.meetingAt
+    ? String(latestScheduledMeeting?.attemptId || latestScheduledMeeting?.meetingCreatedAt || latestScheduledMeeting?.createdAt || latestScheduledMeeting.meetingAt)
+    : "";
+
+  useEffect(() => {
+    if (!showProposalSchedulingSection || !isNeedsScheduleViewed || proposalMeetingSaved || !latestScheduledMeeting || !proposalNeedsPrefillKey) {
+      if (proposalMeetingSaved || !showProposalSchedulingSection) setProposalMeetingNeedsPrefillKey("");
+      return;
+    }
+    if (proposalMeetingNeedsPrefillKey === proposalNeedsPrefillKey) return;
+
+    setProposalMeetingForm((current) => ({
+      ...current,
+      meetingDate: "",
+      meetingStartTime: "",
+      meetingDurationMin: Number(latestScheduledMeeting?.meetingDurationMin || current.meetingDurationMin || 120),
+      meetingMode: String(latestScheduledMeeting?.meetingMode || ""),
+      meetingPlatform: String(latestScheduledMeeting?.meetingPlatform || ""),
+      meetingPlatformOther: String(latestScheduledMeeting?.meetingPlatformOther || ""),
+      meetingLink: String(latestScheduledMeeting?.meetingLink || ""),
+      meetingInviteSent: Boolean(latestScheduledMeeting?.meetingInviteSent),
+      meetingPlace: String(latestScheduledMeeting?.meetingPlace || ""),
+    }));
+    setProposalMeetingFieldErrors({});
+    setProposalMeetingNeedsPrefillKey(proposalNeedsPrefillKey);
+  }, [
+    isNeedsScheduleViewed,
+    latestScheduledMeeting,
+    proposalMeetingNeedsPrefillKey,
+    proposalMeetingSaved,
+    proposalNeedsPrefillKey,
+    showProposalSchedulingSection,
+  ]);
 
   const isProposalGenerateViewed = proposalViewedActivityKey === "Generate Proposal";
   const isProposalAttendanceViewed = proposalViewedActivityKey === "Record Prospect Attendance";
@@ -2606,6 +2842,13 @@ function AgentLeadEngagement() {
     setConfirmNotInterestedModalOpen(true);
   };
 
+  const goToScheduleMeetingFromNeedsAttendanceNo = () => {
+    setMeetingError("");
+    setMeetingFieldErrors({});
+    setSelectedStageView("Contacting");
+    setContactingViewedActivityKey("Schedule Meeting");
+  };
+
   const startRescheduleFromNeeds = () => {
     setMeetingError("");
     setMeetingFieldErrors({});
@@ -2629,6 +2872,53 @@ function AgentLeadEngagement() {
     setRescheduleFromNeedsMode(true);
   };
 
+  const startAddNewNeedsAssessmentMeeting = () => {
+    setMeetingError("");
+    setMeetingFieldErrors({});
+    setSelectedStageView("Contacting");
+    setContactingViewedActivityKey("Schedule Meeting");
+    setRescheduleFollowUpNeedsMeetingMode(false);
+    setRescheduleFollowUpNeedsMeetingOriginalAt(null);
+    setAddNewNeedsMeetingOriginalAt(latestScheduledMeeting?.meetingAt || null);
+    setMeetingForm({
+      meetingDate: "",
+      meetingStartTime: "",
+      meetingDurationMin: Number(latestScheduledMeeting?.meetingDurationMin || 120),
+      meetingMode: String(latestScheduledMeeting?.meetingMode || ""),
+      meetingPlatform: "",
+      meetingPlatformOther: "",
+      meetingLink: "",
+      meetingInviteSent: false,
+      meetingPlace: String(latestScheduledMeeting?.meetingPlace || ""),
+    });
+    setAddNewNeedsMeetingMode(true);
+  };
+
+  const startRescheduleFollowUpNeedsAssessmentMeeting = () => {
+    setMeetingError("");
+    setMeetingFieldErrors({});
+    setSelectedStageView("Contacting");
+    setContactingViewedActivityKey("Schedule Meeting");
+    setAddNewNeedsMeetingMode(false);
+    setAddNewNeedsMeetingOriginalAt(null);
+    setRescheduleFollowUpNeedsMeetingOriginalAt(latestScheduledMeeting?.meetingAt || null);
+    setMeetingForm({
+      meetingDate: latestScheduledMeeting?.meetingAt ? toDateInputValue(latestScheduledMeeting.meetingAt) : "",
+      meetingStartTime: latestScheduledMeeting?.meetingAt
+        ? `${String(new Date(latestScheduledMeeting.meetingAt).getHours()).padStart(2, "0")}:${String(new Date(latestScheduledMeeting.meetingAt).getMinutes()).padStart(2, "0")}`
+        : "",
+      meetingDurationMin: Number(latestScheduledMeeting?.meetingDurationMin || 120),
+      meetingMode: String(latestScheduledMeeting?.meetingMode || ""),
+      meetingPlatform: String(latestScheduledMeeting?.meetingPlatform || ""),
+      meetingPlatformOther: String(latestScheduledMeeting?.meetingPlatformOther || ""),
+      meetingLink: String(latestScheduledMeeting?.meetingLink || ""),
+      meetingInviteSent: Boolean(latestScheduledMeeting?.meetingInviteSent),
+      meetingPlace: String(latestScheduledMeeting?.meetingPlace || ""),
+    });
+    setRescheduleFollowUpNeedsMeetingMode(true);
+  };
+
+  // eslint-disable-next-line no-unused-vars
   const startRescheduleFromContacting = () => {
     setMeetingError("");
     setMeetingFieldErrors({});
@@ -2672,18 +2962,23 @@ function AgentLeadEngagement() {
       const latestWindows = await fetchMeetingAvailability();
       const proposedStart = combineDateAndTimeLocal(meetingDate, meetingStartTime);
       const proposedEnd = proposedStart ? new Date(proposedStart.getTime() + meetingDurationMin * 60 * 1000) : null;
+      const rescheduleFollowUpOriginalTs = rescheduleFollowUpNeedsMeetingOriginalAt ? new Date(rescheduleFollowUpNeedsMeetingOriginalAt).getTime() : null;
       const hasRealtimeConflict = Boolean(proposedStart && proposedEnd) && (latestWindows || []).some((w) => {
         const ws = w?.startAt ? new Date(w.startAt) : null;
         const we = w?.endAt ? new Date(w.endAt) : null;
         if (!ws || !we || Number.isNaN(ws.getTime()) || Number.isNaN(we.getTime())) return false;
         if (rescheduleOriginalMeetingAt && ws.getTime() === new Date(rescheduleOriginalMeetingAt).getTime()) return false;
+        if (rescheduleFollowUpNeedsMeetingMode && rescheduleFollowUpOriginalTs && ws.getTime() === rescheduleFollowUpOriginalTs) return false;
         return ws < proposedEnd && we > proposedStart;
       });
       if (hasRealtimeConflict) {
         setMeetingFieldErrors({ meetingStartTime: "Selected time is already booked." });
         return;
       }
-      if (isSlotBooked(meetingDate, meetingStartTime, meetingDurationMin, rescheduleOriginalMeetingAt)) {
+      const ignoredMeetingStartAt = rescheduleFollowUpNeedsMeetingMode
+        ? rescheduleFollowUpNeedsMeetingOriginalAt
+        : rescheduleOriginalMeetingAt;
+      if (isSlotBooked(meetingDate, meetingStartTime, meetingDurationMin, ignoredMeetingStartAt)) {
         setMeetingFieldErrors({ meetingStartTime: "Selected time is already booked." });
         return;
       }
@@ -2723,6 +3018,24 @@ function AgentLeadEngagement() {
         return;
       }
 
+      if (addNewNeedsMeetingMode && addNewNeedsMeetingOriginalAt) {
+        const previousDt = new Date(addNewNeedsMeetingOriginalAt);
+        const nextDt = combineDateAndTimeLocal(meetingDate, meetingStartTime);
+        if (nextDt && previousDt.getTime() === nextDt.getTime()) {
+          setMeetingFieldErrors({ meetingStartTime: "New meeting time cannot be the same as previous meeting time." });
+          return;
+        }
+      }
+
+      if (rescheduleFollowUpNeedsMeetingMode && rescheduleFollowUpNeedsMeetingOriginalAt) {
+        const previousDt = new Date(rescheduleFollowUpNeedsMeetingOriginalAt);
+        const nextDt = combineDateAndTimeLocal(meetingDate, meetingStartTime);
+        if (nextDt && previousDt.getTime() === nextDt.getTime()) {
+          setMeetingFieldErrors({ meetingStartTime: "Rescheduled meeting time cannot be the same as previous meeting time." });
+          return;
+        }
+      }
+
       if (contactingRescheduleMode && rescheduleOriginalMeetingAt) {
         const previousDt = new Date(rescheduleOriginalMeetingAt);
         const nextDt = combineDateAndTimeLocal(meetingDate, meetingStartTime);
@@ -2753,6 +3066,8 @@ function AgentLeadEngagement() {
             meetingInviteSent: Boolean(meetingForm.meetingInviteSent),
             meetingPlace: meetingMode === "Face-to-face" ? String(meetingForm.meetingPlace || "").trim() : undefined,
             rescheduleFromNeeds: Boolean(rescheduleFromNeedsMode || contactingRescheduleMode),
+            addNewNeedsAssessmentMeeting: Boolean(addNewNeedsMeetingMode),
+            rescheduleFollowUpNeedsAssessmentMeeting: Boolean(rescheduleFollowUpNeedsMeetingMode),
           }),
         }
       );
@@ -2761,6 +3076,14 @@ function AgentLeadEngagement() {
       if (!res.ok) throw new Error(data?.message || "Failed to schedule meeting.");
 
       await refreshCurrentProgressView();
+      if (addNewNeedsMeetingMode) {
+        setAddNewNeedsMeetingMode(false);
+        setAddNewNeedsMeetingOriginalAt(null);
+      }
+      if (rescheduleFollowUpNeedsMeetingMode) {
+        setRescheduleFollowUpNeedsMeetingMode(false);
+        setRescheduleFollowUpNeedsMeetingOriginalAt(null);
+      }
       if (rescheduleFromNeedsMode) {
         setRescheduleFromNeedsMode(false);
         setRescheduleOriginalMeetingAt(null);
@@ -2779,9 +3102,7 @@ function AgentLeadEngagement() {
       }
     } catch (err) {
       const msg = err?.message || "Cannot connect to server. Is backend running?";
-      if (/conflicts with an existing meeting|already booked|MEETING_CONFLICT/i.test(msg)) {
-        setMeetingFieldErrors({ meetingStartTime: "Selected time is already booked." });
-      } else {
+      if (!applyMeetingServerFieldError(msg, setMeetingFieldErrors)) {
         setMeetingError(msg);
       }
     } finally {
@@ -2797,7 +3118,7 @@ function AgentLeadEngagement() {
 
       const meetingDate = String(proposalMeetingForm.meetingDate || "").trim();
       const meetingStartTime = String(proposalMeetingForm.meetingStartTime || "").trim();
-      const meetingDurationMin = Number(proposalMeetingForm.meetingDurationMin || 120);
+      const meetingDurationMin = Number(proposalMeetingForm.meetingDurationMin);
       const meetingMode = String(proposalMeetingForm.meetingMode || "").trim();
 
       if (!meetingDate) {
@@ -2815,6 +3136,23 @@ function AgentLeadEngagement() {
       const latestWindows = await fetchMeetingAvailability();
       const proposedStart = combineDateAndTimeLocal(meetingDate, meetingStartTime);
       const proposedEnd = proposedStart ? new Date(proposedStart.getTime() + meetingDurationMin * 60 * 1000) : null;
+      if (!proposalMeetingSaved?.startAt && latestScheduledMeeting?.meetingAt) {
+        if (proposalMeetingMinimumDate && meetingDate < proposalMeetingMinimumDate) {
+          setProposalMeetingFieldErrors({ meetingDate: `Meeting date must be on or after ${proposalMeetingMinimumDate}.` });
+          return;
+        }
+
+        const existingMeetingDate = toDateInputValue(latestScheduledMeeting.meetingAt);
+        if (
+          proposedStart &&
+          latestScheduledMeetingEndAt &&
+          meetingDate === existingMeetingDate &&
+          proposedStart.getTime() <= latestScheduledMeetingEndAt.getTime()
+        ) {
+          setProposalMeetingFieldErrors({ meetingStartTime: "Proposal presentation must start after the existing appointment ends." });
+          return;
+        }
+      }
       const hasRealtimeConflict = Boolean(proposedStart && proposedEnd) && (latestWindows || []).some((w) => {
         const ws = w?.startAt ? new Date(w.startAt) : null;
         const we = w?.endAt ? new Date(w.endAt) : null;
@@ -2894,7 +3232,10 @@ function AgentLeadEngagement() {
 
       await refreshCurrentProgressView({ includeNeedsAssessment: true });
     } catch (err) {
-      setProposalMeetingError(err?.message || "Cannot connect to server. Is backend running?");
+      const msg = err?.message || "Cannot connect to server. Is backend running?";
+      if (!applyMeetingServerFieldError(msg, setProposalMeetingFieldErrors, { conflictMessage: "Selected start time conflicts with an existing meeting." })) {
+        setProposalMeetingError(msg);
+      }
     } finally {
       setSavingProposalMeeting(false);
     }
@@ -3870,7 +4211,10 @@ function AgentLeadEngagement() {
 
       await refreshCurrentProgressView();
     } catch (err) {
-      setApplicationMeetingError(err?.message || "Cannot connect to server. Is backend running?");
+      const msg = err?.message || "Cannot connect to server. Is backend running?";
+      if (!applyMeetingServerFieldError(msg, setApplicationMeetingFieldErrors, { conflictMessage: "Selected start time conflicts with an existing meeting." })) {
+        setApplicationMeetingError(msg);
+      }
     } finally {
       setSavingApplicationMeeting(false);
     }
@@ -5927,7 +6271,32 @@ function AgentLeadEngagement() {
 
                       {showContactingPanel && !showAddAttempt && isScheduleMeetingViewed && (
                         <div className="le-block">
-                          <h4 className="le-blockTitle">Schedule Meeting</h4>
+                          <div className="le-inlineActionRow" style={{ alignItems: "center", gap: 12 }}>
+                            <h4 className="le-blockTitle" style={{ margin: 0 }}>
+                              {addNewNeedsMeetingMode
+                                ? "Add Further Needs Assessment Meeting"
+                                : rescheduleFollowUpNeedsMeetingMode || rescheduleFromNeedsMode || contactingRescheduleMode
+                                ? "Reschedule Meeting"
+                                : "Schedule Meeting"}
+                            </h4>
+                            {needsFollowUpDecisionSaved && savedNeedsFollowUpRequired === "YES" && !hasAddedFollowUpNeedsMeeting && !addNewNeedsMeetingMode ? (
+                              <button
+                                type="button"
+                                className="le-btn secondary"
+                                onClick={startAddNewNeedsAssessmentMeeting}
+                                disabled={savingMeeting}
+                                title="Create an additional follow-up Needs Assessment meeting. This does not reschedule the existing meeting."
+                              >
+                                Add Further Needs Assessment Meeting
+                              </button>
+                            ) : null}
+                          </div>
+
+                          {rescheduleFollowUpNeedsMeetingMode || rescheduleFromNeedsMode || contactingRescheduleMode ? (
+                            <p className="le-smallNote" style={{ marginTop: 8 }}>
+                              This updates the current meeting instead of adding another follow-up meeting.
+                            </p>
+                          ) : null}
 
                           {isScheduleMeetingEditable ? (
                             <>
@@ -5946,7 +6315,7 @@ function AgentLeadEngagement() {
                                   disabled={savingMeeting || loadingAvailability}
                                 >
                                   <option value="">Select date</option>
-                                  {availableDateOptions.map((d) => (
+                                  {contactingMeetingDateOptions.map((d) => (
                                     <option key={d.value} value={d.value}>{d.label}</option>
                                   ))}
                                 </select>
@@ -5987,11 +6356,14 @@ function AgentLeadEngagement() {
                                 >
                                   <option value="">Select time</option>
                                   {contactingMeetingStartSlots.map((slot) => {
-                                    const booked = isSlotBooked(meetingForm.meetingDate, slot, meetingForm.meetingDurationMin, rescheduleOriginalMeetingAt);
-                                    const initialSlotTime = rescheduleOriginalMeetingAt
-                                      ? `${String(new Date(rescheduleOriginalMeetingAt).getHours()).padStart(2, "0")}:${String(new Date(rescheduleOriginalMeetingAt).getMinutes()).padStart(2, "0")}`
+                                    const ignoredMeetingStartAt = rescheduleFollowUpNeedsMeetingMode
+                                      ? rescheduleFollowUpNeedsMeetingOriginalAt
+                                      : rescheduleOriginalMeetingAt;
+                                    const booked = isSlotBooked(meetingForm.meetingDate, slot, meetingForm.meetingDurationMin, ignoredMeetingStartAt);
+                                    const initialSlotTime = ignoredMeetingStartAt
+                                      ? `${String(new Date(ignoredMeetingStartAt).getHours()).padStart(2, "0")}:${String(new Date(ignoredMeetingStartAt).getMinutes()).padStart(2, "0")}`
                                       : "";
-                                    const isInitialSetting = Boolean(rescheduleOriginalMeetingAt) && meetingForm.meetingDate === toDateInputValue(rescheduleOriginalMeetingAt) && slot === initialSlotTime;
+                                    const isInitialSetting = Boolean(ignoredMeetingStartAt) && meetingForm.meetingDate === toDateInputValue(ignoredMeetingStartAt) && slot === initialSlotTime;
                                     return (
                                       <option key={slot} value={slot} disabled={booked || isInitialSetting}>
                                         {formatTimeLabel(slot)}{isInitialSetting ? " (INITIAL SETTING)" : booked ? " (BOOKED)" : ""}
@@ -6144,6 +6516,14 @@ function AgentLeadEngagement() {
                                       meetingInviteSent: false,
                                       meetingPlace: "",
                                     });
+                                    if (addNewNeedsMeetingMode) {
+                                      setAddNewNeedsMeetingMode(false);
+                                      setAddNewNeedsMeetingOriginalAt(null);
+                                    }
+                                    if (rescheduleFollowUpNeedsMeetingMode) {
+                                      setRescheduleFollowUpNeedsMeetingMode(false);
+                                      setRescheduleFollowUpNeedsMeetingOriginalAt(null);
+                                    }
                                     if (rescheduleFromNeedsMode) {
                                       setRescheduleFromNeedsMode(false);
                                       setRescheduleOriginalMeetingAt(null);
@@ -6167,37 +6547,54 @@ function AgentLeadEngagement() {
                           ) : hasAnySavedContactMeeting ? (
                             <>
                               {scheduledMeetingAttempts.map((attempt, idx) => (
-                                <div key={String(attempt?.attemptId || idx)} className="le-attemptMeta" style={{ marginTop: 8 }}>
+                                <div
+                                  key={String(attempt?.attemptId || attempt?.meetingAt || idx)}
+                                  className="le-attemptItem"
+                                  style={{ marginTop: idx === 0 ? 8 : 14, paddingTop: 12 }}
+                                >
                                   {scheduledMeetingAttempts.length > 1 ? (
-                                    <div>
-                                      <span className="le-metaLabel">Meeting Entry</span>
-                                      <span className="le-metaValue">{idx === 0 ? "Most Recent" : `Previous #${idx}`}</span>
+                                    <div className="le-attemptSectionHeader">
+                                      {idx === 0 ? "Most Recent Meeting" : `Previous Meeting #${scheduledMeetingAttempts.length - idx}`}
                                     </div>
                                   ) : null}
-                                  {attempt?.meetingAt ? <div><span className="le-metaLabel">Meeting Date & Time</span><span className="le-metaValue">{formatDateTime(attempt.meetingAt)}</span></div> : null}
-                                  {Number(attempt?.meetingDurationMin || 0) > 0 ? <div><span className="le-metaLabel">Meeting Duration</span><span className="le-metaValue">{attempt.meetingDurationMin} mins</span></div> : null}
-                                  {attempt?.meetingEndAt ? <div><span className="le-metaLabel">Meeting Ends</span><span className="le-metaValue">{formatDateTime(attempt.meetingEndAt)}</span></div> : null}
-                                  {String(attempt?.meetingMode || "").trim() ? <div><span className="le-metaLabel">Meeting Mode</span><span className="le-metaValue">{attempt.meetingMode}</span></div> : null}
-                                  {String(attempt?.meetingPlatform || "").trim() ? <div><span className="le-metaLabel">Meeting Platform</span><span className="le-metaValue">{attempt.meetingPlatform}</span></div> : null}
-                                  {String(attempt?.meetingPlatformOther || "").trim() ? <div><span className="le-metaLabel">Meeting Platform (Other)</span><span className="le-metaValue">{attempt.meetingPlatformOther}</span></div> : null}
-                                  {String(attempt?.meetingLink || "").trim() ? <div><span className="le-metaLabel">Meeting Link</span><span className="le-metaValue">{attempt.meetingLink}</span></div> : null}
-                                  {String(attempt?.meetingMode || "").trim() === "Online" ? <div><span className="le-metaLabel">Meeting Invite Sent</span><span className="le-metaValue">{attempt?.meetingInviteSent ? "Yes" : "No"}</span></div> : null}
-                                  {String(attempt?.meetingPlace || "").trim() ? <div><span className="le-metaLabel">Meeting Place</span><span className="le-metaValue">{attempt.meetingPlace}</span></div> : null}
-                                  {String(attempt?.meetingStatus || "").trim() ? <div><span className="le-metaLabel">Status</span><span className="le-metaValue">{attempt.meetingStatus}</span></div> : null}
+                                  <div className="le-attemptMeta" style={{ marginTop: scheduledMeetingAttempts.length > 1 ? 8 : 0 }}>
+                                    {attempt?.meetingAt ? <div><span className="le-metaLabel">Meeting Date & Time</span><span className="le-metaValue">{formatDateTime(attempt.meetingAt)}</span></div> : null}
+                                    {Number(attempt?.meetingDurationMin || 0) > 0 ? <div><span className="le-metaLabel">Meeting Duration</span><span className="le-metaValue">{attempt.meetingDurationMin} mins</span></div> : null}
+                                    {attempt?.meetingEndAt ? <div><span className="le-metaLabel">Meeting Ends</span><span className="le-metaValue">{formatDateTime(attempt.meetingEndAt)}</span></div> : null}
+                                    {String(attempt?.meetingMode || "").trim() ? <div><span className="le-metaLabel">Meeting Mode</span><span className="le-metaValue">{attempt.meetingMode}</span></div> : null}
+                                    {String(attempt?.meetingPlatform || "").trim() ? <div><span className="le-metaLabel">Meeting Platform</span><span className="le-metaValue">{attempt.meetingPlatform}</span></div> : null}
+                                    {String(attempt?.meetingPlatformOther || "").trim() ? <div><span className="le-metaLabel">Meeting Platform (Other)</span><span className="le-metaValue">{attempt.meetingPlatformOther}</span></div> : null}
+                                    {String(attempt?.meetingLink || "").trim() ? <div><span className="le-metaLabel">Meeting Link</span><span className="le-metaValue">{attempt.meetingLink}</span></div> : null}
+                                    {String(attempt?.meetingMode || "").trim() === "Online" ? <div><span className="le-metaLabel">Meeting Invite Sent</span><span className="le-metaValue">{attempt?.meetingInviteSent ? "Yes" : "No"}</span></div> : null}
+                                    {String(attempt?.meetingPlace || "").trim() ? <div><span className="le-metaLabel">Meeting Place</span><span className="le-metaValue">{attempt.meetingPlace}</span></div> : null}
+                                    {String(attempt?.meetingStatus || "").trim() ? <div><span className="le-metaLabel">Status</span><span className="le-metaValue">{attempt.meetingStatus}</span></div> : null}
+                                  </div>
+                                  {hasAddedFollowUpNeedsMeeting && idx === 0 ? (
+                                    <div className="le-actions" style={{ marginTop: 12 }}>
+                                      <button
+                                        type="button"
+                                        className="le-btn secondary"
+                                        onClick={startRescheduleFollowUpNeedsAssessmentMeeting}
+                                        disabled={savingMeeting}
+                                      >
+                                        Reschedule Meeting
+                                      </button>
+                                    </div>
+                                  ) : null}
+                                  {canRescheduleMissedNeedsAttendanceMeeting && idx === 0 ? (
+                                    <div className="le-actions" style={{ marginTop: 12 }}>
+                                      <button
+                                        type="button"
+                                        className="le-btn secondary"
+                                        onClick={startRescheduleFromNeeds}
+                                        disabled={savingMeeting}
+                                      >
+                                        Reschedule Meeting
+                                      </button>
+                                    </div>
+                                  ) : null}
                                 </div>
                               ))}
-                              <div style={{ marginTop: 12 }}>
-                                {needsFollowUpDecisionSaved && needsFollowUpRequired === "YES" ? (
-                                  <button
-                                    type="button"
-                                    className="le-btn secondary"
-                                    onClick={startRescheduleFromContacting}
-                                    disabled={savingMeeting}
-                                  >
-                                    Reschedule Meeting
-                                  </button>
-                                ) : null}
-                              </div>
                             </>
                           ) : (
                             <p className="le-muted" style={{ marginTop: 8 }}>
@@ -6900,7 +7297,7 @@ function AgentLeadEngagement() {
                               type="button"
                               className="le-btn ghost"
                               style={{ padding: 0, border: 0, background: "transparent", textDecoration: "underline" }}
-                              onClick={startRescheduleFromNeeds}
+                              onClick={goToScheduleMeetingFromNeedsAttendanceNo}
                               disabled={!isNeedsAssessmentCurrentViewEditable || isNeedsAssessmentLocked || needsAttendanceRescheduleLock || needsAssessmentSaving}
                             >
                               Go to Schedule Meeting
@@ -6910,7 +7307,7 @@ function AgentLeadEngagement() {
 
                         {needsAssessmentForm.attendanceChoice === "YES" && (
                           <>
-                            {(canEditNeedsAttendanceProof || needsAttendanceProofEditMode || canRequestNeedsAttendanceProofEdit) && !isNeedsAssessmentLocked && !needsAttendanceRescheduleLock ? (
+                            {(canEditNeedsAttendanceProof || needsAttendanceProofEditMode || canRequestNeedsAttendanceProofEdit) && !needsAttendanceRescheduleLock ? (
                               <div className="le-formRow" style={{ marginTop: 8 }}>
                                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%" }}>
                                   <label className="le-label" style={{ margin: 0 }}>Proof of Attendance (JPG, JPEG, PNG) *</label>
@@ -6985,7 +7382,7 @@ function AgentLeadEngagement() {
                               </div>
                             ) : null}
 
-                            {((canEditNeedsAttendanceProof && !canRequestNeedsAttendanceProofEdit) || needsAttendanceProofEditMode) && !isNeedsAssessmentLocked && !needsAttendanceRescheduleLock ? (
+                            {((canEditNeedsAttendanceProof && !canRequestNeedsAttendanceProofEdit && !isNeedsAssessmentLocked) || needsAttendanceProofEditMode) && !needsAttendanceRescheduleLock ? (
                               <div className="le-actions" style={{ marginTop: 10 }}>
                                 <button
                                   type="button"
@@ -7015,7 +7412,7 @@ function AgentLeadEngagement() {
                       </div>
                       ) : null}
 
-                      {isNeedsAnalysisViewed && needsAnalysisEditMode && needsAssessmentForm.attendanceChoice === "YES" && !isNeedsAssessmentLocked && String(needsAssessmentForm.attendanceProofImageDataUrl || "").trim() && (
+                      {isNeedsAnalysisViewed && needsAnalysisEditMode && needsAssessmentForm.attendanceChoice === "YES" && String(needsAssessmentForm.attendanceProofImageDataUrl || "").trim() && (
                         <div className="le-block">
                           <div className="le-blockHeader">
                             <h4 className="le-blockTitle">Prospect&apos;s Basic Information</h4>
@@ -7525,7 +7922,7 @@ function AgentLeadEngagement() {
                                 <div className="le-formRow"><label className="le-label">Notes about selected product and optional riders</label><textarea className="le-input" rows={3} value={needsAssessmentForm.needsPriorities?.productRidersNotes || ""} onChange={(e) => updateNeedsPriorities("productRidersNotes", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
                               ) : null}
 
-                          {isNeedsAssessmentEditableNow && !isNeedsAssessmentLocked && (
+                          {isNeedsAssessmentCurrentViewEditable && isNeedsAnalysisViewed && (
                             <div className="le-actions" style={{ marginTop: 14 }}>
                               <button
                                 type="button"
@@ -7558,7 +7955,7 @@ function AgentLeadEngagement() {
                           <div className="le-block le-savedNeedsBlock" style={{ marginTop: 16 }}>
                             <div className="le-inlineActionRow">
                               <h4 className="le-blockTitle">Saved Needs Assessment Details</h4>
-                              {isNeedsAssessmentEditableNow && !isNeedsAssessmentLocked ? (
+                              {isNeedsAssessmentCurrentViewEditable ? (
                                 <button
                                   type="button"
                                   className="le-btn secondary"
@@ -7706,97 +8103,146 @@ function AgentLeadEngagement() {
                         </div>
                       )}
 
-                      {showNeedsAssessmentPanel && isNeedsAnalysisViewed && isViewingCurrentStage && (
+                      {showNeedsAssessmentPanel && isNeedsAnalysisViewed && isViewingCurrentStage && !needsAnalysisEditMode && ["Perform Needs Analysis", "Schedule Proposal Presentation"].includes(String(needsAssessmentOutcomeActivity || "").trim()) && (
                           <div className="le-block" style={{ marginTop: 16 }}>
                             <div className="le-inlineActionRow">
                               <h4 className="le-blockTitle" style={{ fontSize: 16 }}>Schedule Further Needs Assessment Meet</h4>
                               {needsFollowUpDecisionSaved && !needsFollowUpDecisionEditMode ? (
-                                <button type="button" className="le-btn secondary" onClick={() => setNeedsFollowUpDecisionEditMode(true)}>
+                                <button
+                                  type="button"
+                                  className="le-btn secondary"
+                                  onClick={() => {
+                                    setNeedsFollowUpRequired(savedNeedsFollowUpRequired);
+                                    setNeedsFollowUpDecisionError("");
+                                    setNeedsFollowUpDecisionDismissed(false);
+                                    setNeedsFollowUpDecisionEditMode(true);
+                                  }}
+                                >
                                   Edit
+                                </button>
+                              ) : !needsFollowUpDecisionSaved && needsFollowUpDecisionDismissed ? (
+                                <button
+                                  type="button"
+                                  className="le-btn secondary"
+                                  onClick={() => {
+                                    setNeedsFollowUpRequired("");
+                                    setNeedsFollowUpDecisionError("");
+                                    setNeedsFollowUpDecisionDismissed(false);
+                                    setNeedsFollowUpDecisionEditMode(true);
+                                  }}
+                                >
+                                  Set Follow-up Decision
                                 </button>
                               ) : null}
                             </div>
-                            <div className="le-formRow">
-                              <label className="le-label">Requiring Further Needs Assessment? *</label>
-                              <select
-                                className="le-input"
-                                value={needsFollowUpRequired}
-                                onChange={(e) => {
-                                  setNeedsFollowUpRequired(e.target.value);
-                                  setNeedsFollowUpDecisionSaved(false);
-                                  setNeedsFollowUpDecisionEditMode(true);
-                                }}
-                                disabled={needsFollowUpDecisionSaved && !needsFollowUpDecisionEditMode}
-                              >
-                                <option value="">Select</option>
-                                <option value="YES">Yes</option>
-                                <option value="NO">No</option>
-                              </select>
-                            </div>
-                            {!needsFollowUpDecisionSaved || needsFollowUpDecisionEditMode ? (
-                            <div className="le-actions">
-                              <button
-                                type="button"
-                                className="le-btn primary"
-                                onClick={async () => {
-                                  try {
-                                    setNeedsFollowUpDecisionError("");
-                                    setNeedsFollowUpDecisionSaving(true);
-                                    const res = await fetch(
-                                      `${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/needs-assessment/follow-up-decision?userId=${user.id}`,
-                                      {
-                                        method: "POST",
-                                        headers: { "Content-Type": "application/json" },
-                                        body: JSON.stringify({ requiringFurtherNeedsAssessment: needsFollowUpRequired }),
-                                      }
-                                    );
-                                    const data = await res.json().catch(() => ({}));
-                                    if (!res.ok) throw new Error(data?.message || "Failed to save follow-up decision.");
-                                    setNeedsFollowUpDecisionSaved(true);
-                                    setNeedsFollowUpDecisionEditMode(false);
-                                    if (String(needsFollowUpRequired || "").toUpperCase() === "YES") {
-                                      setNeedsAssessmentCurrentActivityKey("Perform Needs Analysis");
-                                      setProposalMeetingSaved(null);
-                                    } else if (String(needsFollowUpRequired || "").toUpperCase() === "NO") {
-                                      setNeedsAssessmentCurrentActivityKey("Schedule Proposal Presentation");
-                                    }
-                                  } catch (err) {
-                                    setNeedsFollowUpDecisionError(err?.message || "Failed to save follow-up decision.");
-                                  } finally {
-                                    setNeedsFollowUpDecisionSaving(false);
-                                  }
-                                }}
-                                disabled={!needsFollowUpRequired || needsFollowUpDecisionSaving}
-                              >
-                                {needsFollowUpDecisionSaving ? "Saving..." : "Save Follow-up Decision"}
-                              </button>
-                            </div>
+                            {needsFollowUpDecisionSaved || !needsFollowUpDecisionDismissed || needsFollowUpDecisionEditMode ? (
+                              <>
+                                <div className="le-formRow">
+                                  <label className="le-label">Requiring Further Needs Assessment? *</label>
+                                  <select
+                                    className="le-input"
+                                    value={needsFollowUpRequired}
+                                    onChange={(e) => {
+                                      setNeedsFollowUpRequired(e.target.value);
+                                      setNeedsFollowUpDecisionDismissed(false);
+                                      setNeedsFollowUpDecisionEditMode(true);
+                                    }}
+                                    disabled={needsFollowUpDecisionSaved && !needsFollowUpDecisionEditMode}
+                                  >
+                                    <option value="">Select</option>
+                                    <option value="YES">Yes</option>
+                                    <option value="NO">No</option>
+                                  </select>
+                                </div>
+                                {!needsFollowUpDecisionSaved || needsFollowUpDecisionEditMode ? (
+                                  <div className="le-actions">
+                                    <button
+                                      type="button"
+                                      className="le-btn secondary"
+                                      onClick={() => {
+                                        setNeedsFollowUpRequired(needsFollowUpDecisionSaved ? savedNeedsFollowUpRequired : "");
+                                        setNeedsFollowUpDecisionEditMode(false);
+                                        setNeedsFollowUpDecisionDismissed(!needsFollowUpDecisionSaved);
+                                        setNeedsFollowUpDecisionError("");
+                                      }}
+                                      disabled={needsFollowUpDecisionSaving}
+                                    >
+                                      Cancel
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="le-btn primary"
+                                      onClick={async () => {
+                                        try {
+                                          setNeedsFollowUpDecisionError("");
+                                          setNeedsFollowUpDecisionSaving(true);
+                                          const res = await fetch(
+                                            `${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/needs-assessment/follow-up-decision?userId=${user.id}`,
+                                            {
+                                              method: "POST",
+                                              headers: { "Content-Type": "application/json" },
+                                              body: JSON.stringify({ requiringFurtherNeedsAssessment: needsFollowUpRequired }),
+                                            }
+                                          );
+                                          const data = await res.json().catch(() => ({}));
+                                          if (!res.ok) throw new Error(data?.message || "Failed to save follow-up decision.");
+                                          setNeedsFollowUpDecisionSaved(true);
+                                          setSavedNeedsFollowUpRequired(String(needsFollowUpRequired || "").toUpperCase());
+                                          setNeedsFollowUpDecisionDecidedAt(data?.followUpNeedsAssessmentDecidedAt || new Date().toISOString());
+                                          setNeedsFollowUpDecisionEditMode(false);
+                                          setNeedsFollowUpDecisionDismissed(false);
+                                          if (String(needsFollowUpRequired || "").toUpperCase() === "YES") {
+                                            setNeedsAssessmentCurrentActivityKey("Perform Needs Analysis");
+                                            setProposalMeetingSaved(null);
+                                          } else if (String(needsFollowUpRequired || "").toUpperCase() === "NO") {
+                                            setNeedsAssessmentCurrentActivityKey("Schedule Proposal Presentation");
+                                            setNeedsAssessmentOutcomeActivity("Schedule Proposal Presentation");
+                                            setNeedsAssessmentViewedActivityKey("Schedule Proposal Presentation");
+                                            setSelectedStageView("CURRENT");
+                                            setShowAddAttempt(false);
+                                            setAddNewNeedsMeetingMode(false);
+                                            setAddNewNeedsMeetingOriginalAt(null);
+                                            setRescheduleFollowUpNeedsMeetingMode(false);
+                                            setRescheduleFollowUpNeedsMeetingOriginalAt(null);
+                                            await fetchEngagement();
+                                            await fetchNeedsAssessment();
+                                            setNeedsAssessmentViewedActivityKey("Schedule Proposal Presentation");
+                                          }
+                                        } catch (err) {
+                                          setNeedsFollowUpDecisionError(err?.message || "Failed to save follow-up decision.");
+                                        } finally {
+                                          setNeedsFollowUpDecisionSaving(false);
+                                        }
+                                      }}
+                                      disabled={!needsFollowUpRequired || needsFollowUpDecisionSaving}
+                                    >
+                                      {needsFollowUpDecisionSaving ? "Saving..." : "Save Follow-up Decision"}
+                                    </button>
+                                  </div>
+                                ) : null}
+                              </>
                             ) : null}
                             {needsFollowUpDecisionError ? <p className="le-smallNote" style={{ marginTop: 8, color: "#DA291C" }}>{needsFollowUpDecisionError}</p> : null}
-                            {needsFollowUpDecisionSaved && needsFollowUpRequired === "YES" ? (
+                            {needsFollowUpDecisionSaved && !needsFollowUpDecisionEditMode && savedNeedsFollowUpRequired === "YES" && !hasAddedFollowUpNeedsMeeting ? (
                               <p className="le-smallNote" style={{ marginTop: 8 }}>
-                                Further needs assessment is required.{" "}
-                                {!hasAnySavedContactMeeting ? (
-                                  <button
-                                    type="button"
-                                    className="le-btn ghost"
-                                    style={{ padding: 0, border: 0, background: "transparent", textDecoration: "underline" }}
-                                    onClick={() => {
-                                      setSelectedStageView("Contacting");
-                                      setContactingViewedActivityKey("Schedule Meeting");
-                                    }}
-                                  >
-                                    Go to Schedule Meeting
-                                  </button>
-                                ) : (
-                                  "Follow-up meeting has been scheduled."
-                                )}
+                                Further Needs Assessment can be Scheduled. {" "}
+                                <button
+                                  type="button"
+                                  className="le-btn ghost"
+                                  style={{ padding: 0, border: 0, background: "transparent", textDecoration: "underline" }}
+                                  onClick={() => {
+                                    setSelectedStageView("Contacting");
+                                    setContactingViewedActivityKey("Schedule Meeting");
+                                  }}
+                                >
+                                  Go to Schedule Meeting
+                                </button>
                               </p>
                             ) : null}
                           </div>
                       )}
 
-                      {showProposalSchedulingSection && isNeedsScheduleViewed && needsFollowUpDecisionSaved && needsFollowUpRequired === "NO" && (
+                      {showProposalSchedulingSection && isNeedsScheduleViewed && needsFollowUpDecisionSaved && !needsFollowUpDecisionEditMode && savedNeedsFollowUpRequired === "NO" && (
                           <div className="le-block" style={{ marginTop: 16 }}>
                             {!proposalMeetingSaved ? <h4 className="le-blockTitle">Schedule Proposal Presentation</h4> : null}
                             {proposalMeetingSaved ? (
@@ -7825,7 +8271,7 @@ function AgentLeadEngagement() {
                                 type="date"
                                 className="le-input"
                                 value={proposalMeetingForm.meetingDate}
-                                min={toDateInputValue(new Date(Date.now() + 24 * 60 * 60 * 1000))}
+                                min={proposalMeetingMinimumDate}
                                 onChange={(e) => {
                                   const v = e.target.value;
                                   setProposalMeetingForm((f) => ({ ...f, meetingDate: v }));
@@ -7871,11 +8317,12 @@ function AgentLeadEngagement() {
                                 className="le-input"
                                 value={proposalMeetingForm.meetingDurationMin}
                                 onChange={(e) => {
-                                  setProposalMeetingForm((f) => ({ ...f, meetingDurationMin: Number(e.target.value) }));
+                                  setProposalMeetingForm((f) => ({ ...f, meetingDurationMin: e.target.value ? Number(e.target.value) : "" }));
                                   setProposalMeetingFieldErrors((prev) => ({ ...prev, meetingDurationMin: "", meetingStartTime: "" }));
                                 }}
                                 disabled={!isNeedsScheduleEditable || savingProposalMeeting}
                               >
+                                <option value="">Select Duration</option>
                                 <option value={30}>30 mins</option>
                                 <option value={60}>60 mins</option>
                                 <option value={90}>90 mins</option>
@@ -7999,11 +8446,22 @@ function AgentLeadEngagement() {
                                 onClick={() => {
                                   setProposalMeetingError("");
                                   setProposalMeetingFieldErrors({});
-                                  fetchNeedsAssessment();
+                                  setProposalMeetingForm({
+                                    meetingDate: "",
+                                    meetingStartTime: "",
+                                    meetingDurationMin: "",
+                                    meetingMode: "",
+                                    meetingPlatform: "",
+                                    meetingPlatformOther: "",
+                                    meetingLink: "",
+                                    meetingInviteSent: false,
+                                    meetingPlace: "",
+                                  });
+                                  setProposalMeetingNeedsPrefillKey(proposalNeedsPrefillKey);
                                 }}
                                 disabled={!isNeedsScheduleEditable || savingProposalMeeting}
                               >
-                                Cancel
+                                Clear
                               </button>
                               <button
                                 type="button"
