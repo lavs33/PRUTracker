@@ -5852,13 +5852,19 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
             ? {
                 _id: proposalDoc?.chosenProductId || selectedProduct?._id || null,
                 productName: selectedProduct?.productName || "",
+                productCategory: selectedProduct?.productCategory || "",
                 description: selectedProduct?.description || "",
+                paymentTermLabel: selectedProduct?.paymentTermLabel || "",
+                coverageDurationLabel: selectedProduct?.coverageDurationLabel || "",
               }
             : null,
           generateProposal: {
             productId: proposalDoc?.chosenProductId || selectedProduct?._id || null,
             productName: selectedProduct?.productName || "",
+            productCategory: selectedProduct?.productCategory || "",
             productDescription: selectedProduct?.description || "",
+            productPaymentTermLabel: selectedProduct?.paymentTermLabel || "",
+            productCoverageDurationLabel: selectedProduct?.coverageDurationLabel || "",
             proposalFileName: proposalSaved?.proposalFileName || "",
             proposalFileMimeType: proposalSaved?.proposalFileMimeType || "",
             proposalFileDataUrl: proposalSaved?.proposalFileDataUrl || "",

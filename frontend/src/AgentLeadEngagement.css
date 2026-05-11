@@ -486,6 +486,53 @@
   color: #373a36;
 }
 
+.le-proposalDetailsGrid {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.le-proposalDetailCard {
+  border: 1px solid #e9ecef;
+  border-radius: 12px;
+  background: #fbfcfd;
+  padding: 12px;
+  min-height: 86px;
+}
+
+.le-proposalDetailCardWide {
+  grid-column: span 2;
+}
+
+.le-proposalLinkRow {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid #e9ecef;
+  border-radius: 12px;
+  background: #fbfcfd;
+}
+
+@media (max-width: 1024px) {
+  .le-proposalDetailsGrid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .le-proposalDetailCardWide {
+    grid-column: span 2;
+  }
+}
+
+@media (max-width: 700px) {
+  .le-proposalDetailsGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .le-proposalDetailCardWide {
+    grid-column: span 1;
+  }
+}
+
 .le-muted {
   margin: 10px 0 0 0;
   font-size: 13px;
