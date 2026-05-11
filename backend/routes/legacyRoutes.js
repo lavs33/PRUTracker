@@ -7703,7 +7703,10 @@ app.put("/api/prospects/:prospectId/leads/:leadId/needs-assessment", async (req,
         new NeedsAssessment({ leadEngagementId: engagement._id });
 
       const currentNeedsActivity = String(engagement.currentActivityKey || "").trim();
-      if (!na.attendanceConfirmed || !["Perform Needs Analysis", "Schedule Proposal Presentation"].includes(currentNeedsActivity)) {
+      const engagementStage = String(engagement.currentStage || "").trim();
+      const canEditNeedsAnalysis = ["Proposal", "Application", "Policy Issuance"].includes(engagementStage) ||
+        ["Perform Needs Analysis", "Schedule Proposal Presentation"].includes(currentNeedsActivity);
+      if (!na.attendanceConfirmed || !canEditNeedsAnalysis) {
         throw Object.assign(new Error("Record attendance first and proceed to Perform Needs Analysis."), { status: 409 });
       }
 
@@ -8096,15 +8099,20 @@ app.put("/api/prospects/:prospectId/leads/:leadId/needs-assessment", async (req,
         relationship: String(d.relationship || ""),
       }));
       na.needsPriorities = prioritiesPayload;
-      na.outcomeActivity = "Perform Needs Analysis";
-      await na.save({ session });
 
       if (engagement.currentStage === "Needs Assessment") {
         const followUpDecision = String(na.followUpNeedsAssessmentRequired || "").trim().toUpperCase();
         needsAnalysisNextActivityKey = followUpDecision === "NO" ? "Schedule Proposal Presentation" : "Perform Needs Analysis";
+        na.outcomeActivity = needsAnalysisNextActivityKey;
         engagement.currentActivityKey = needsAnalysisNextActivityKey;
         await engagement.save({ session });
+      } else {
+        needsAnalysisNextActivityKey = "Schedule Proposal Presentation";
+        if (!String(na.outcomeActivity || "").trim()) {
+          na.outcomeActivity = "Perform Needs Analysis";
+        }
       }
+      await na.save({ session });
     });
 
     return res.json({
@@ -8173,10 +8181,36 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/schedule-pro
         throw Object.assign(new Error("meeting date/time is required and must be valid."), { status: 400 });
       }
 
-      const tomorrow = new Date();
-      tomorrow.setHours(0, 0, 0, 0);
+      const latestNeedsAssessmentMeeting = await ScheduledMeeting.findOne({
+        leadEngagementId: engagement._id,
+        meetingType: "Needs Assessment",
+      })
+        .sort({ createdAt: -1, startAt: -1 })
+        .session(session);
+
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const tomorrow = new Date(today);
       tomorrow.setDate(tomorrow.getDate() + 1);
-      if (dt < tomorrow) throw Object.assign(new Error("meetingAt must be at least tomorrow."), { status: 400 });
+      const existingMeetingDay = latestNeedsAssessmentMeeting?.startAt ? new Date(latestNeedsAssessmentMeeting.startAt) : null;
+      if (existingMeetingDay) existingMeetingDay.setHours(0, 0, 0, 0);
+      const minimumMeetingDay = existingMeetingDay
+        ? new Date(Math.max(today.getTime(), existingMeetingDay.getTime()))
+        : tomorrow;
+      if (dt < minimumMeetingDay) {
+        throw Object.assign(new Error("meetingAt must be on or after the existing appointment date."), { status: 400 });
+      }
+      if (dt.getTime() < Date.now()) {
+        throw Object.assign(new Error("meetingAt must not be in the past."), { status: 400 });
+      }
+      if (
+        latestNeedsAssessmentMeeting?.endAt &&
+        existingMeetingDay &&
+        dt.toDateString() === existingMeetingDay.toDateString() &&
+        dt.getTime() <= new Date(latestNeedsAssessmentMeeting.endAt).getTime()
+      ) {
+        throw Object.assign(new Error("Proposal presentation must start after the existing appointment ends."), { status: 400 });
+      }
 
       if (![30, 60, 90, 120].includes(durationMin)) {
         throw Object.assign(new Error("meetingDurationMin must be one of 30, 60, 90, 120."), { status: 400 });
@@ -8262,21 +8296,22 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/schedule-pro
 
       const now = new Date();
 
-      const needsAssessmentMeeting = await ScheduledMeeting.findOne({
-        leadEngagementId: engagement._id,
-        meetingType: "Needs Assessment",
-      }).session(session);
-      if (needsAssessmentMeeting && needsAssessmentMeeting.status !== "Completed") {
-        needsAssessmentMeeting.status = "Completed";
-        await needsAssessmentMeeting.save({ session });
-      }
+      await ScheduledMeeting.updateMany(
+        {
+          leadEngagementId: engagement._id,
+          meetingType: "Needs Assessment",
+          status: "Scheduled",
+        },
+        { $set: { status: "Completed" } },
+        { session }
+      );
 
       const openAppointmentTasks = await Task.find({
         assignedToUserId: userObjectId,
         prospectId: prospectObjectId,
         leadEngagementId: engagement._id,
         type: "APPOINTMENT",
-        status: "Open",
+        status: { $in: ["Open", "Overdue"] },
       }).session(session);
 
       for (const t of openAppointmentTasks) {
@@ -8325,6 +8360,9 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/schedule-pro
         presentationTask.title = presentationTitle;
         presentationTask.description = presentationDescription;
         presentationTask.dueAt = presentationDueAt;
+        presentationTask.status = "Open";
+        presentationTask.completedAt = null;
+        presentationTask.wasDelayed = false;
         await presentationTask.save({ session });
 
         const prospectFullName = `${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName}`.trim();
@@ -8416,19 +8454,23 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/follow-up-de
       const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).session(session);
       if (!engagement) throw Object.assign(new Error("Lead engagement not found."), { status: 404 });
 
+      if (engagement.currentStage !== "Needs Assessment") {
+        throw Object.assign(new Error("Follow-up needs assessment decision can only be edited during Needs Assessment."), { status: 409 });
+      }
+
       const needsAssessment = await NeedsAssessment.findOne({ leadEngagementId: engagement._id }).session(session);
       if (!needsAssessment) throw Object.assign(new Error("Needs assessment not found."), { status: 404 });
 
       const decidedAt = new Date();
+      const nextNeedsActivityKey = decision === "NO" ? "Schedule Proposal Presentation" : "Perform Needs Analysis";
       needsAssessment.followUpNeedsAssessmentRequired = decision;
       needsAssessment.followUpNeedsAssessmentDecidedAt = decidedAt;
+      needsAssessment.outcomeActivity = nextNeedsActivityKey;
       await needsAssessment.save({ session });
       followUpNeedsAssessmentDecidedAt = decidedAt;
 
-      if (engagement.currentStage === "Needs Assessment") {
-        engagement.currentActivityKey = decision === "NO" ? "Schedule Proposal Presentation" : "Perform Needs Analysis";
-        await engagement.save({ session });
-      }
+      engagement.currentActivityKey = nextNeedsActivityKey;
+      await engagement.save({ session });
     });
 
     return res.json({
