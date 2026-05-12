@@ -5500,19 +5500,19 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
 
     let selectedProduct = policyProductId && mongoose.isValidObjectId(policyProductId)
       ? await Product.findById(policyProductId)
-          .select("_id productName description paymentTermOptions paymentTermLabel coverageDurationRule coverageDurationLabel")
+          .select("_id productName productCategory description paymentTermOptions paymentTermLabel coverageDurationRule coverageDurationLabel")
           .lean()
       : null;
 
     if (!selectedProduct && proposalProductId && mongoose.isValidObjectId(proposalProductId)) {
       selectedProduct = await Product.findById(proposalProductId)
-        .select("_id productName description paymentTermOptions paymentTermLabel coverageDurationRule coverageDurationLabel")
+        .select("_id productName productCategory description paymentTermOptions paymentTermLabel coverageDurationRule coverageDurationLabel")
         .lean();
     }
 
     if (!selectedProduct && needsSelectedProductId && mongoose.isValidObjectId(needsSelectedProductId)) {
       selectedProduct = await Product.findById(needsSelectedProductId)
-        .select("_id productName description paymentTermOptions paymentTermLabel coverageDurationRule coverageDurationLabel")
+        .select("_id productName productCategory description paymentTermOptions paymentTermLabel coverageDurationRule coverageDurationLabel")
         .lean();
     }
 
@@ -5852,13 +5852,19 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
             ? {
                 _id: proposalDoc?.chosenProductId || selectedProduct?._id || null,
                 productName: selectedProduct?.productName || "",
+                productCategory: selectedProduct?.productCategory || "",
                 description: selectedProduct?.description || "",
+                paymentTermLabel: selectedProduct?.paymentTermLabel || "",
+                coverageDurationLabel: selectedProduct?.coverageDurationLabel || "",
               }
             : null,
           generateProposal: {
             productId: proposalDoc?.chosenProductId || selectedProduct?._id || null,
             productName: selectedProduct?.productName || "",
+            productCategory: selectedProduct?.productCategory || "",
             productDescription: selectedProduct?.description || "",
+            productPaymentTermLabel: selectedProduct?.paymentTermLabel || "",
+            productCoverageDurationLabel: selectedProduct?.coverageDurationLabel || "",
             proposalFileName: proposalSaved?.proposalFileName || "",
             proposalFileMimeType: proposalSaved?.proposalFileMimeType || "",
             proposalFileDataUrl: proposalSaved?.proposalFileDataUrl || "",
@@ -8528,9 +8534,16 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/generate", async (re
         .session(session)
         .lean();
 
+      const proposalActivityOrder = [
+        "Generate Proposal",
+        "Record Prospect Attendance",
+        "Present Proposal",
+        "Schedule Application Submission",
+      ];
       const activityKey = String(engagement.currentActivityKey || proposalDoc?.outcomeActivity || "Generate Proposal").trim() || "Generate Proposal";
-      if (activityKey !== "Generate Proposal") {
-        throw Object.assign(new Error("Generate Proposal is not the current activity."), { status: 409 });
+      const activityIndex = proposalActivityOrder.indexOf(activityKey);
+      if (activityIndex < 0) {
+        throw Object.assign(new Error("Current proposal activity is invalid."), { status: 409 });
       }
 
       const name = String(proposalFileName || "").trim();
@@ -8558,7 +8571,8 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/generate", async (re
         ? await Product.findById(selectedProductId).select("_id productName description paymentTermOptions paymentTermLabel coverageDurationRule coverageDurationLabel").session(session)
         : null;
 
-      engagement.currentActivityKey = "Record Prospect Attendance";
+      const nextActivity = proposalActivityOrder[Math.max(activityIndex, 1)] || "Record Prospect Attendance";
+      engagement.currentActivityKey = nextActivity;
       await engagement.save({ session });
 
       await Proposal.updateOne(
@@ -8566,7 +8580,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/generate", async (re
         {
           $setOnInsert: { leadEngagementId: engagement._id },
           $set: {
-            outcomeActivity: "Record Prospect Attendance",
+            outcomeActivity: nextActivity,
             chosenProductId: selectedProduct?._id || (mongoose.isValidObjectId(selectedProductId) ? new mongoose.Types.ObjectId(selectedProductId) : null),
             generateProposal: {
               proposalFileName: name,
@@ -8608,19 +8622,18 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/attendance", async (
       return res.status(400).json({ message: "Invalid id(s)." });
     }
 
-    if (attended !== true) {
-      return res.status(400).json({ message: "Prospect attendance must be marked attended." });
-    }
-
+    const normalizedAttended = attended === true;
     const proofDataUrl = String(attendanceProofImageDataUrl || "").trim();
     const proofFileName = String(attendanceProofFileName || "").trim();
-    if (!proofDataUrl) {
-      return res.status(400).json({ message: "Proof of attendance image is required and must be JPG, JPEG, or PNG." });
-    }
+    if (normalizedAttended) {
+      if (!proofDataUrl) {
+        return res.status(400).json({ message: "Proof of attendance image is required and must be JPG, JPEG, or PNG." });
+      }
 
-    const isImageDataUrl = /^data:image\/(?:jpeg|png);base64,/i.test(proofDataUrl);
-    if (!isImageDataUrl) {
-      return res.status(400).json({ message: "Proof of attendance file type must be JPG, JPEG, or PNG." });
+      const isImageDataUrl = /^data:image\/(?:jpeg|png);base64,/i.test(proofDataUrl);
+      if (!isImageDataUrl) {
+        return res.status(400).json({ message: "Proof of attendance file type must be JPG, JPEG, or PNG." });
+      }
     }
 
     const userObjectId = new mongoose.Types.ObjectId(userId);
@@ -8645,7 +8658,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/attendance", async (
         throw Object.assign(new Error("Record Prospect Attendance is not the current activity."), { status: 409 });
       }
 
-      engagement.currentActivityKey = "Present Proposal";
+      engagement.currentActivityKey = normalizedAttended ? "Present Proposal" : "Record Prospect Attendance";
       await engagement.save({ session });
 
       await Proposal.updateOne(
@@ -8653,12 +8666,12 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/attendance", async (
         {
           $setOnInsert: { leadEngagementId: engagement._id },
           $set: {
-            outcomeActivity: "Record Prospect Attendance",
+            outcomeActivity: normalizedAttended ? "Present Proposal" : "Record Prospect Attendance",
             recordProspectAttendance: {
-              attended: true,
-              attendedAt: new Date(),
-              attendanceProofImageDataUrl: proofDataUrl,
-              attendanceProofFileName: proofFileName,
+              attended: normalizedAttended,
+              attendedAt: normalizedAttended ? new Date() : null,
+              attendanceProofImageDataUrl: normalizedAttended ? proofDataUrl : "",
+              attendanceProofFileName: normalizedAttended ? proofFileName : "",
             },
           },
         },
@@ -8668,7 +8681,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/attendance", async (
 
     return res.json({
       message: "Prospect attendance recorded.",
-      currentActivityKey: "Present Proposal",
+      currentActivityKey: normalizedAttended ? "Present Proposal" : "Record Prospect Attendance",
     });
   } catch (err) {
     console.error("Record proposal attendance error:", err);

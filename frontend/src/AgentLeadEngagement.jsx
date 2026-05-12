@@ -164,6 +164,9 @@ function AgentLeadEngagement() {
     chosenProductId: "",
     chosenProductName: "",
     chosenProductDescription: "",
+    chosenProductCategory: "",
+    chosenProductPaymentTermLabel: "",
+    chosenProductCoverageDurationLabel: "",
     proposalFileName: "",
     proposalFileMimeType: "",
     proposalFileDataUrl: "",
@@ -180,6 +183,7 @@ function AgentLeadEngagement() {
   const [proposalGenerateError, setProposalGenerateError] = useState("");
   const [proposalGenerateFieldErrors, setProposalGenerateFieldErrors] = useState({});
   const [proposalFileInputKey, setProposalFileInputKey] = useState(0);
+  const [proposalGenerateEditMode, setProposalGenerateEditMode] = useState(false);
   const [proposalAttendanceForm, setProposalAttendanceForm] = useState({
     attendanceChoice: "",
     attendanceProofImageDataUrl: "",
@@ -518,6 +522,9 @@ function AgentLeadEngagement() {
         chosenProductId: String(generate?.productId || chosen?._id || ""),
         chosenProductName: String(generate?.productName || chosen?.productName || ""),
         chosenProductDescription: String(generate?.productDescription || chosen?.description || ""),
+        chosenProductCategory: String(generate?.productCategory || chosen?.productCategory || ""),
+        chosenProductPaymentTermLabel: String(generate?.productPaymentTermLabel || chosen?.paymentTermLabel || ""),
+        chosenProductCoverageDurationLabel: String(generate?.productCoverageDurationLabel || chosen?.coverageDurationLabel || ""),
         proposalFileName: String(generate?.proposalFileName || ""),
         proposalFileMimeType: String(generate?.proposalFileMimeType || ""),
         proposalFileDataUrl: String(generate?.proposalFileDataUrl || ""),
@@ -525,6 +532,7 @@ function AgentLeadEngagement() {
         sentToProspectAt: generate?.sentToProspectAt || "",
         uploadedAt: generate?.uploadedAt || generate?.generatedAt || "",
       });
+      setProposalGenerateEditMode(false);
       setProposalAttendanceForm({
         attendanceChoice: attendance?.attended ? "YES" : "",
         attendanceProofImageDataUrl: String(attendance?.attendanceProofImageDataUrl || ""),
@@ -1675,6 +1683,18 @@ function AgentLeadEngagement() {
     return list.sort((a, b) => Number(b.attemptNo || 0) - Number(a.attemptNo || 0));
   }, [engagement?.attempts, engagement?.contactAttempts]);
   const lastAttempt = attempts.length ? attempts[0] : null;
+  const proposalDeliveryConfirmationText = useMemo(() => {
+    const prospectEmail = String(prospect?.email || "").trim();
+    if (prospectEmail) return `prospect's email (${prospectEmail})`;
+
+    const preferredChannel = String(lastAttempt?.preferredChannel || "").trim();
+    const preferredChannelOther = String(lastAttempt?.preferredChannelOther || "").trim();
+    const channelLabel = preferredChannel === "Other" ? preferredChannelOther : preferredChannel;
+    if (channelLabel) return `prospect's preferred communication channel (${channelLabel})`;
+
+    return "prospect's preferred communication channel (no channel provided)";
+  }, [prospect?.email, lastAttempt?.preferredChannel, lastAttempt?.preferredChannelOther]);
+
   const scheduledMeetingAttempts = useMemo(() => {
     const source = Array.isArray(engagement?.needsAssessmentMeetings)
       ? engagement.needsAssessmentMeetings
@@ -2875,6 +2895,24 @@ function AgentLeadEngagement() {
     setRescheduleFromNeedsMode(true);
   };
 
+  const startRescheduleProposalPresentation = () => {
+    if (!proposalMeetingSaved?.startAt) return;
+    setProposalMeetingError("");
+    setProposalMeetingFieldErrors({});
+    setProposalMeetingForm({
+      meetingDate: "",
+      meetingStartTime: "",
+      meetingDurationMin: proposalMeetingSaved?.durationMin ?? 120,
+      meetingMode: String(proposalMeetingSaved?.mode || ""),
+      meetingPlatform: String(proposalMeetingSaved?.platform || ""),
+      meetingPlatformOther: String(proposalMeetingSaved?.platformOther || ""),
+      meetingLink: String(proposalMeetingSaved?.link || ""),
+      meetingInviteSent: Boolean(proposalMeetingSaved?.inviteSent),
+      meetingPlace: String(proposalMeetingSaved?.place || ""),
+    });
+    setProposalMeetingSaved(null);
+  };
+
   const startAddNewNeedsAssessmentMeeting = () => {
     setMeetingError("");
     setMeetingFieldErrors({});
@@ -3277,19 +3315,20 @@ function AgentLeadEngagement() {
       const fileDataUrl = String(proposalGenerateForm.proposalFileDataUrl || "").trim();
       const fileMimeType = String(proposalGenerateForm.proposalFileMimeType || "").trim();
 
-      if (!fileName || !fileDataUrl) {
-        setProposalGenerateFieldErrors({ proposalFile: "Proposal PDF is required." });
-        return;
-      }
+      const nextErrors = {};
+      if (!fileName || !fileDataUrl) nextErrors.proposalFile = "Proposal PDF is required.";
 
-      const validPdf = /\.pdf$/i.test(fileName) && (fileMimeType === "application/pdf" || /^data:application\/pdf;base64,/i.test(fileDataUrl));
-      if (!validPdf) {
-        setProposalGenerateFieldErrors({ proposalFile: "Proposal file must be a PDF." });
-        return;
-      }
+      const validPdf = fileName && fileDataUrl
+        ? /\.pdf$/i.test(fileName) && (fileMimeType === "application/pdf" || /^data:application\/pdf;base64,/i.test(fileDataUrl))
+        : false;
+      if (fileName && fileDataUrl && !validPdf) nextErrors.proposalFile = "Proposal file must be a PDF.";
 
       if (proposalGenerateForm.sentToProspectEmail !== true) {
-        setProposalGenerateFieldErrors({ sentToProspectEmail: `Please confirm this was sent to prospect via email (${prospect?.email || "no email"}).` });
+        nextErrors.sentToProspectEmail = `Please confirm this was sent to ${proposalDeliveryConfirmationText}.`;
+      }
+
+      if (Object.keys(nextErrors).length) {
+        setProposalGenerateFieldErrors(nextErrors);
         return;
       }
 
@@ -3310,6 +3349,7 @@ function AgentLeadEngagement() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to save generated proposal.");
 
+      setProposalGenerateEditMode(false);
       await refreshCurrentProgressView();
     } catch (err) {
       setProposalGenerateError(err?.message || "Failed to save generated proposal.");
@@ -3425,21 +3465,21 @@ function AgentLeadEngagement() {
     reader.readAsDataURL(file);
   };
 
-  const submitProposalAttendance = async () => {
+  const submitProposalAttendance = async (attendedOverride = null) => {
     try {
       setProposalAttendanceError("");
-      if (proposalAttendanceForm.attendanceChoice !== "YES") {
-        setProposalAttendanceError("Prospect attendance must be marked YES before saving.");
-        return;
-      }
+      const attendedChoice = attendedOverride === null
+        ? proposalAttendanceForm.attendanceChoice
+        : (attendedOverride ? "YES" : "NO");
+      const attended = attendedChoice === "YES";
 
       const proofDataUrl = String(proposalAttendanceForm.attendanceProofImageDataUrl || "").trim();
       const proofFileName = String(proposalAttendanceForm.attendanceProofFileName || "").trim();
-      if (!proofDataUrl) {
+      if (attended && !proofDataUrl) {
         setProposalAttendanceError("Please upload a proof of attendance image before proceeding.");
         return;
       }
-      if (!/^data:image\/(?:jpeg|png);base64,/i.test(proofDataUrl)) {
+      if (attended && !/^data:image\/(?:jpeg|png);base64,/i.test(proofDataUrl)) {
         setProposalAttendanceError("Proof of attendance must be a JPG, JPEG, or PNG image.");
         return;
       }
@@ -3449,20 +3489,29 @@ function AgentLeadEngagement() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          attended: true,
-          attendanceProofImageDataUrl: proofDataUrl,
-          attendanceProofFileName: proofFileName,
+          attended,
+          attendanceProofImageDataUrl: attended ? proofDataUrl : "",
+          attendanceProofFileName: attended ? proofFileName : "",
         }),
       });
 
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to save proposal attendance.");
+      if (!attended) {
+        setSelectedStageView("Needs Assessment");
+        setNeedsAssessmentViewedActivityKey("Schedule Proposal Presentation");
+      }
       await refreshCurrentProgressView();
     } catch (err) {
       setProposalAttendanceError(err?.message || "Failed to save proposal attendance.");
     } finally {
       setProposalAttendanceSaving(false);
     }
+  };
+
+  const goToScheduleProposalPresentationFromProposalAttendanceNo = async () => {
+    if (proposalAttendanceSaving) return;
+    await submitProposalAttendance(false);
   };
 
   const submitProposalPresentation = async () => {
@@ -4687,7 +4736,7 @@ function AgentLeadEngagement() {
                           : isLeadClosed || isLeadDropped
                           ? closedLeadSubactivityHelperText
                           : proposalViewedStepIndex < proposalCurrentStepIndex
-                          ? "Viewing a previously saved proposal subactivity in read-only mode. Click the current subactivity to resume editing."
+                          ? "Click the current subactivity to resume editing."
                           : "Click any unlocked subactivity to review saved details."
                       }
                       showCurrentStatus={showCurrentSubactivityStatus}
@@ -6609,41 +6658,59 @@ function AgentLeadEngagement() {
 
                       {showProposalPanel && isProposalGenerateViewed && (
                         <div className="le-block">
-                          <h4 className="le-blockTitle">{proposalUiActivityKey === "Generate Proposal" ? "Generate Proposal" : "Saved Initial Quotation Proposal Details"}</h4>
-                          {proposalUiActivityKey === "Generate Proposal" ? (
-                            <p className="le-smallNote" style={{ marginBottom: 10 }}>
-                              Complete this first before proceeding to proposal presentation.
-                            </p>
-                          ) : null}
-
-                          <div className="le-attemptMeta">
+                          <h4 className="le-blockTitle">
+                            {proposalGenerateEditMode
+                              ? "Edit Initial Quotation Proposal Details"
+                              : proposalUiActivityKey === "Generate Proposal"
+                                ? "Generate Proposal"
+                                : "Saved Initial Quotation Proposal Details"}
+                          </h4>
+                          <div className="le-proposalDetailsGrid">
                             {String(proposalGenerateForm.chosenProductName || proposalGenerateForm.chosenProductId || "").trim() ? (
-                              <div>
+                              <div className="le-proposalDetailCard">
                                 <span className="le-metaLabel">Chosen Product</span>
                                 <span className="le-metaValue">{proposalGenerateForm.chosenProductName || proposalGenerateForm.chosenProductId}</span>
                               </div>
                             ) : (
-                              <div>
+                              <div className="le-proposalDetailCard">
                                 <span className="le-metaLabel">Chosen Product</span>
                                 <span className="le-metaValue">No selected product found from Needs Assessment or Proposal data.</span>
                               </div>
                             )}
-                            <div>
+                            <div className="le-proposalDetailCard">
+                              <span className="le-metaLabel">Product Category</span>
+                              <span className="le-metaValue">{String(proposalGenerateForm.chosenProductCategory || "").trim() || "No product category available."}</span>
+                            </div>
+                            <div className="le-proposalDetailCard le-proposalDetailCardWide">
                               <span className="le-metaLabel">Product Description</span>
                               <span className="le-metaValue">{String(proposalGenerateForm.chosenProductDescription || "").trim() || "No product description available."}</span>
                             </div>
-                            <div>
-                              <span className="le-metaLabel">Proposal Generation Link</span>
-                              <span className="le-metaValue">
-                                <a href="https://pruone.prulifeuk.com.ph/web" target="_blank" rel="noreferrer">https://pruone.prulifeuk.com.ph/web</a>
-                              </span>
+                            <div className="le-proposalDetailCard">
+                              <span className="le-metaLabel">Payment Term</span>
+                              <span className="le-metaValue">{String(proposalGenerateForm.chosenProductPaymentTermLabel || "").trim() || "No payment term details available."}</span>
+                            </div>
+                            <div className="le-proposalDetailCard">
+                              <span className="le-metaLabel">Coverage Duration</span>
+                              <span className="le-metaValue">{String(proposalGenerateForm.chosenProductCoverageDurationLabel || "").trim() || "No coverage duration details available."}</span>
                             </div>
                           </div>
 
-                          {proposalUiActivityKey === "Generate Proposal" && isProposalEditableNow ? (
+                          {(proposalUiActivityKey === "Generate Proposal" || proposalGenerateEditMode) && isProposalEditableNow ? (
                             <>
-                              <div className="le-formRow" style={{ marginTop: 12 }}>
+                              <div className="le-formRow le-proposalLinkRow">
+                                <label className="le-label">Proposal Generation Link</label>
+                                <p className="le-smallNote">
+                                  <a href="https://pruone.prulifeuk.com.ph/web" target="_blank" rel="noreferrer">https://pruone.prulifeuk.com.ph/web</a>
+                                </p>
+                              </div>
+
+                              <div className="le-formRow">
                                 <label className="le-label">Generated Proposal (PDF only) *</label>
+                                {(proposalGenerateEditMode || proposalUiActivityKey !== "Generate Proposal") && String(proposalGenerateForm.proposalFileName || "").trim() ? (
+                                  <p className="le-smallNote" style={{ margin: 0 }}>
+                                    Current file: {proposalGenerateForm.proposalFileName}
+                                  </p>
+                                ) : null}
                                 <input
                                   key={proposalFileInputKey}
                                   type="file"
@@ -6652,6 +6719,11 @@ function AgentLeadEngagement() {
                                   onChange={(e) => onProposalPdfPicked(e.target.files?.[0] || null)}
                                   disabled={proposalGenerateSaving}
                                 />
+                                {(proposalGenerateEditMode || proposalUiActivityKey !== "Generate Proposal") ? (
+                                  <p className="le-smallNote" style={{ margin: 0 }}>
+                                    If no new file is chosen, the current saved PDF will be kept.
+                                  </p>
+                                ) : null}
                                 {proposalGenerateForm.proposalFileName ? (
                                   <p className="le-smallNote">Selected file: {proposalGenerateForm.proposalFileName}</p>
                                 ) : null}
@@ -6680,40 +6752,55 @@ function AgentLeadEngagement() {
                                     }}
                                     disabled={proposalGenerateSaving}
                                   />
-                                  <span>I confirm this proposal was sent to prospect's email ({prospect?.email || "no email provided"}). *</span>
+                                  <span>I confirm this proposal was sent to {proposalDeliveryConfirmationText}. *</span>
                                 </label>
                                 {proposalGenerateFieldErrors.sentToProspectEmail ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{proposalGenerateFieldErrors.sentToProspectEmail}</p> : null}
                               </div>
 
                               <div className="le-actions">
-                                <button
-                                  type="button"
-                                  className="le-btn secondary"
-                                  onClick={() => {
-                                    setProposalGenerateError("");
-                                    setProposalGenerateFieldErrors({});
-                                    setProposalGenerateForm((f) => ({
-                                      ...f,
-                                      proposalFileName: "",
-                                      proposalFileMimeType: "",
-                                      proposalFileDataUrl: "",
-                                      sentToProspectEmail: false,
-                                      sentToProspectAt: "",
-                                      uploadedAt: "",
-                                    }));
-                                    setProposalFileInputKey((k) => k + 1);
-                                  }}
-                                  disabled={proposalGenerateSaving}
-                                >
-                                  Cancel
-                                </button>
+                                {proposalGenerateEditMode ? (
+                                  <button
+                                    type="button"
+                                    className="le-btn secondary"
+                                    onClick={() => {
+                                      setProposalGenerateError("");
+                                      setProposalGenerateFieldErrors({});
+                                      setProposalGenerateEditMode(false);
+                                    }}
+                                    disabled={proposalGenerateSaving}
+                                  >
+                                    Cancel
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    className="le-btn secondary"
+                                    onClick={() => {
+                                      setProposalGenerateError("");
+                                      setProposalGenerateFieldErrors({});
+                                      setProposalGenerateForm((f) => ({
+                                        ...f,
+                                        proposalFileName: "",
+                                        proposalFileMimeType: "",
+                                        proposalFileDataUrl: "",
+                                        sentToProspectEmail: false,
+                                        sentToProspectAt: "",
+                                        uploadedAt: "",
+                                      }));
+                                      setProposalFileInputKey((k) => k + 1);
+                                    }}
+                                    disabled={proposalGenerateSaving}
+                                  >
+                                    Clear
+                                  </button>
+                                )}
                                 <button
                                   type="button"
                                   className="le-btn primary"
                                   onClick={submitGenerateProposal}
                                   disabled={proposalGenerateSaving || !String(proposalGenerateForm.chosenProductId || "").trim()}
                                 >
-                                  {proposalGenerateSaving ? "Saving..." : "Complete Proposal Generation"}
+                                  {proposalGenerateSaving ? "Saving..." : "Save Proposal Details"}
                                 </button>
                               </div>
 
@@ -6721,6 +6808,22 @@ function AgentLeadEngagement() {
                             </>
                           ) : (
                             <>
+                              {isProposalEditableNow && String(proposalGenerateForm.uploadedAt || proposalGenerateForm.proposalFileName || "").trim() ? (
+                                <div className="le-actions" style={{ marginTop: 14 }}>
+                                  <button
+                                    type="button"
+                                    className="le-btn secondary"
+                                    onClick={() => {
+                                      setProposalGenerateError("");
+                                      setProposalGenerateFieldErrors({});
+                                      setProposalGenerateEditMode(true);
+                                    }}
+                                    disabled={proposalGenerateSaving}
+                                  >
+                                    Edit Proposal Details
+                                  </button>
+                                </div>
+                              ) : null}
                               {String(proposalGenerateForm.proposalFileName || "").trim() ? (
                                 <div className="le-formRow" style={{ marginTop: 10 }}>
                                   <label className="le-label">Initial Quotation Proposal File</label>
@@ -6745,14 +6848,8 @@ function AgentLeadEngagement() {
                               ) : null}
                               <div className="le-formRow">
                                 <label className="le-label">Sent to Prospect Email</label>
-                                <p className="le-smallNote">{proposalGenerateForm.sentToProspectEmail ? `Yes (${prospect?.email || "no email provided"})` : "No"}</p>
+                                <p className="le-smallNote">{proposalGenerateForm.sentToProspectEmail ? `Yes (${proposalDeliveryConfirmationText})` : "No"}</p>
                               </div>
-                              {proposalGenerateForm.sentToProspectAt ? (
-                                <div className="le-formRow">
-                                  <label className="le-label">Sent At</label>
-                                  <p className="le-smallNote">{formatDateTime(proposalGenerateForm.sentToProspectAt)}</p>
-                                </div>
-                              ) : null}
                             </>
                           )}
                         </div>
@@ -6803,7 +6900,16 @@ function AgentLeadEngagement() {
 
                               {proposalAttendanceForm.attendanceChoice === "NO" ? (
                                 <p className="le-muted" style={{ marginTop: 8 }}>
-                                  Prospect attendance is required before proceeding to proposal presentation.
+                                  Proposal presentation can be rescheduled.{" "}
+                                  <button
+                                    type="button"
+                                    className="le-btn ghost"
+                                    style={{ padding: 0, border: 0, background: "transparent", textDecoration: "underline" }}
+                                    onClick={goToScheduleProposalPresentationFromProposalAttendanceNo}
+                                    disabled={proposalAttendanceSaving}
+                                  >
+                                    Go to Schedule Proposal Presentation
+                                  </button>
                                 </p>
                               ) : null}
 
@@ -6838,32 +6944,34 @@ function AgentLeadEngagement() {
 
                               {proposalAttendanceError ? <p className="le-smallNote" style={{ color: "#DA291C", marginTop: 8 }}>{proposalAttendanceError}</p> : null}
 
-                              <div className="le-actions">
-                                <button
-                                  type="button"
-                                  className="le-btn secondary"
-                                  onClick={() => {
-                                    setProposalAttendanceError("");
-                                    setProposalAttendanceForm({
-                                      attendanceChoice: "",
-                                      attendanceProofImageDataUrl: "",
-                                      attendanceProofFileName: "",
-                                      attendedAt: "",
-                                    });
-                                  }}
-                                  disabled={proposalAttendanceSaving}
-                                >
-                                  Cancel
-                                </button>
-                                <button
-                                  type="button"
-                                  className="le-btn primary"
-                                  onClick={submitProposalAttendance}
-                                  disabled={proposalAttendanceSaving}
-                                >
-                                  {proposalAttendanceSaving ? "Saving..." : "Save Prospect Attendance"}
-                                </button>
-                              </div>
+                              {proposalAttendanceForm.attendanceChoice === "YES" ? (
+                                <div className="le-actions">
+                                  <button
+                                    type="button"
+                                    className="le-btn secondary"
+                                    onClick={() => {
+                                      setProposalAttendanceError("");
+                                      setProposalAttendanceForm({
+                                        attendanceChoice: "",
+                                        attendanceProofImageDataUrl: "",
+                                        attendanceProofFileName: "",
+                                        attendedAt: "",
+                                      });
+                                    }}
+                                    disabled={proposalAttendanceSaving}
+                                  >
+                                    Clear
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="le-btn primary"
+                                    onClick={submitProposalAttendance}
+                                    disabled={proposalAttendanceSaving}
+                                  >
+                                    {proposalAttendanceSaving ? "Saving..." : "Save Prospect Attendance"}
+                                  </button>
+                                </div>
+                              ) : null}
                             </>
                           ) : (
                             <>
@@ -7399,7 +7507,12 @@ function AgentLeadEngagement() {
                                     setNeedsAssessmentError("");
                                     setNeedsAssessmentSavedAt("");
                                     setNeedsAttendanceProofEditMode(false);
-                                    fetchNeedsAssessment();
+                                    setNeedsAssessmentForm((prev) => ({
+                                      ...prev,
+                                      attendanceChoice: "",
+                                      attendanceProofImageDataUrl: "",
+                                      attendanceProofFileName: "",
+                                    }));
                                   }}
                                   disabled={needsAssessmentSaving}
                                 >
@@ -8279,6 +8392,18 @@ function AgentLeadEngagement() {
                                   {proposalMeetingSaved?.place ? <div><span className="le-metaLabel">Meeting Place</span><span className="le-metaValue">{proposalMeetingSaved.place}</span></div> : null}
                                   {proposalMeetingSaved?.status ? <div><span className="le-metaLabel">Status</span><span className="le-metaValue">{proposalMeetingSaved.status}</span></div> : null}
                                 </div>
+                                {isNeedsScheduleEditable ? (
+                                  <div className="le-actions" style={{ marginTop: 12 }}>
+                                    <button
+                                      type="button"
+                                      className="le-btn secondary"
+                                      onClick={startRescheduleProposalPresentation}
+                                      disabled={savingProposalMeeting}
+                                    >
+                                      Reschedule Meeting
+                                    </button>
+                                  </div>
+                                ) : null}
                               </div>
                             ) : null}
 
