@@ -5500,19 +5500,19 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
 
     let selectedProduct = policyProductId && mongoose.isValidObjectId(policyProductId)
       ? await Product.findById(policyProductId)
-          .select("_id productName description paymentTermOptions paymentTermLabel coverageDurationRule coverageDurationLabel")
+          .select("_id productName productCategory description paymentTermOptions paymentTermLabel coverageDurationRule coverageDurationLabel")
           .lean()
       : null;
 
     if (!selectedProduct && proposalProductId && mongoose.isValidObjectId(proposalProductId)) {
       selectedProduct = await Product.findById(proposalProductId)
-        .select("_id productName description paymentTermOptions paymentTermLabel coverageDurationRule coverageDurationLabel")
+        .select("_id productName productCategory description paymentTermOptions paymentTermLabel coverageDurationRule coverageDurationLabel")
         .lean();
     }
 
     if (!selectedProduct && needsSelectedProductId && mongoose.isValidObjectId(needsSelectedProductId)) {
       selectedProduct = await Product.findById(needsSelectedProductId)
-        .select("_id productName description paymentTermOptions paymentTermLabel coverageDurationRule coverageDurationLabel")
+        .select("_id productName productCategory description paymentTermOptions paymentTermLabel coverageDurationRule coverageDurationLabel")
         .lean();
     }
 
@@ -5852,13 +5852,19 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
             ? {
                 _id: proposalDoc?.chosenProductId || selectedProduct?._id || null,
                 productName: selectedProduct?.productName || "",
+                productCategory: selectedProduct?.productCategory || "",
                 description: selectedProduct?.description || "",
+                paymentTermLabel: selectedProduct?.paymentTermLabel || "",
+                coverageDurationLabel: selectedProduct?.coverageDurationLabel || "",
               }
             : null,
           generateProposal: {
             productId: proposalDoc?.chosenProductId || selectedProduct?._id || null,
             productName: selectedProduct?.productName || "",
+            productCategory: selectedProduct?.productCategory || "",
             productDescription: selectedProduct?.description || "",
+            productPaymentTermLabel: selectedProduct?.paymentTermLabel || "",
+            productCoverageDurationLabel: selectedProduct?.coverageDurationLabel || "",
             proposalFileName: proposalSaved?.proposalFileName || "",
             proposalFileMimeType: proposalSaved?.proposalFileMimeType || "",
             proposalFileDataUrl: proposalSaved?.proposalFileDataUrl || "",
@@ -8528,9 +8534,16 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/generate", async (re
         .session(session)
         .lean();
 
+      const proposalActivityOrder = [
+        "Generate Proposal",
+        "Record Prospect Attendance",
+        "Present Proposal",
+        "Schedule Application Submission",
+      ];
       const activityKey = String(engagement.currentActivityKey || proposalDoc?.outcomeActivity || "Generate Proposal").trim() || "Generate Proposal";
-      if (activityKey !== "Generate Proposal") {
-        throw Object.assign(new Error("Generate Proposal is not the current activity."), { status: 409 });
+      const activityIndex = proposalActivityOrder.indexOf(activityKey);
+      if (activityIndex < 0) {
+        throw Object.assign(new Error("Current proposal activity is invalid."), { status: 409 });
       }
 
       const name = String(proposalFileName || "").trim();
@@ -8558,7 +8571,8 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/generate", async (re
         ? await Product.findById(selectedProductId).select("_id productName description paymentTermOptions paymentTermLabel coverageDurationRule coverageDurationLabel").session(session)
         : null;
 
-      engagement.currentActivityKey = "Record Prospect Attendance";
+      const nextActivity = proposalActivityOrder[Math.max(activityIndex, 1)] || "Record Prospect Attendance";
+      engagement.currentActivityKey = nextActivity;
       await engagement.save({ session });
 
       await Proposal.updateOne(
@@ -8566,7 +8580,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/generate", async (re
         {
           $setOnInsert: { leadEngagementId: engagement._id },
           $set: {
-            outcomeActivity: "Record Prospect Attendance",
+            outcomeActivity: nextActivity,
             chosenProductId: selectedProduct?._id || (mongoose.isValidObjectId(selectedProductId) ? new mongoose.Types.ObjectId(selectedProductId) : null),
             generateProposal: {
               proposalFileName: name,
