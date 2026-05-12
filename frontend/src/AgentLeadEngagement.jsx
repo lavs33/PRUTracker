@@ -534,7 +534,7 @@ function AgentLeadEngagement() {
       });
       setProposalGenerateEditMode(false);
       setProposalAttendanceForm({
-        attendanceChoice: attendance?.attended ? "YES" : "",
+        attendanceChoice: String(attendance?.attendanceChoice || (attendance?.attended ? "YES" : "")),
         attendanceProofImageDataUrl: String(attendance?.attendanceProofImageDataUrl || ""),
         attendanceProofFileName: String(attendance?.attendanceProofFileName || ""),
         attendedAt: attendance?.attendedAt || "",
@@ -2366,9 +2366,13 @@ function AgentLeadEngagement() {
     ["Perform Needs Analysis", "Schedule Proposal Presentation"].includes(needsActivityKeyRaw) &&
     needsAssessmentForm.attendanceChoice === "YES" &&
     String(needsAssessmentForm.attendanceProofImageDataUrl || "").trim();
+  const isProposalAttendanceNoRescheduleMode =
+    showNeedsAssessmentPanel &&
+    String(engagement?.currentStage || "").trim() === "Proposal" &&
+    String(proposalCurrentActivityKey || "").trim() === "Record Prospect Attendance" &&
+    proposalAttendanceForm.attendanceChoice === "NO";
   const isNeedsScheduleEditable =
-    isNeedsAssessmentCurrentViewEditable &&
-    needsActivityKeyRaw === "Schedule Proposal Presentation" &&
+    ((isNeedsAssessmentCurrentViewEditable && needsActivityKeyRaw === "Schedule Proposal Presentation") || isProposalAttendanceNoRescheduleMode) &&
     needsAssessmentViewedActivityKey === "Schedule Proposal Presentation";
   const isNeedsAnalysisViewed = needsAssessmentViewedActivityKey === "Perform Needs Analysis";
   const isNeedsScheduleViewed = needsAssessmentViewedActivityKey === "Schedule Proposal Presentation";
@@ -3271,6 +3275,12 @@ function AgentLeadEngagement() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to schedule proposal presentation.");
 
+      setProposalAttendanceForm({
+        attendanceChoice: "",
+        attendanceProofImageDataUrl: "",
+        attendanceProofFileName: "",
+        attendedAt: "",
+      });
       await refreshCurrentProgressView({ includeNeedsAssessment: true });
     } catch (err) {
       const msg = err?.message || "Cannot connect to server. Is backend running?";
