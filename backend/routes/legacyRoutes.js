@@ -5873,6 +5873,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
             uploadedAt: proposalSaved?.uploadedAt || proposalSaved?.generatedAt || null,
           },
           recordProspectAttendance: {
+            attendanceChoice: proposalAttendance?.attendanceChoice || (proposalAttendance?.attended ? "YES" : ""),
             attended: Boolean(proposalAttendance?.attended),
             attendedAt: proposalAttendance?.attendedAt || null,
             attendanceProofImageDataUrl: proposalAttendance?.attendanceProofImageDataUrl || "",
@@ -8171,10 +8172,21 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/schedule-pro
       if (!engagement) throw Object.assign(new Error("Lead engagement not found."), { status: 404 });
 
       const na = await NeedsAssessment.findOne({ leadEngagementId: engagement._id }).session(session);
-      if (!na || engagement.currentActivityKey !== "Schedule Proposal Presentation") {
+      const proposalDocForReschedule = await Proposal.findOne({ leadEngagementId: engagement._id }).session(session);
+      const isProposalAttendanceReschedule =
+        engagement.currentStage === "Proposal" &&
+        engagement.currentActivityKey === "Record Prospect Attendance" &&
+        proposalDocForReschedule?.recordProspectAttendance?.attendanceChoice === "NO";
+      const isProposalPresentationRetry =
+        engagement.currentStage === "Proposal" &&
+        engagement.currentActivityKey === "Present Proposal" &&
+        String(proposalDocForReschedule?.presentProposal?.proposalAccepted || "").trim().toUpperCase() === "NO";
+      const isProposalStageReschedule = isProposalAttendanceReschedule || isProposalPresentationRetry;
+
+      if (!na || (!isProposalStageReschedule && engagement.currentActivityKey !== "Schedule Proposal Presentation")) {
         throw Object.assign(new Error("Complete attendance and needs analysis first."), { status: 409 });
       }
-      if (String(na.followUpNeedsAssessmentRequired || "").trim().toUpperCase() === "YES") {
+      if (!isProposalStageReschedule && String(na.followUpNeedsAssessmentRequired || "").trim().toUpperCase() === "YES") {
         throw Object.assign(new Error("Follow-up needs assessment is required before scheduling proposal presentation."), { status: 409 });
       }
 
@@ -8254,19 +8266,31 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/schedule-pro
       const endAt = new Date(dt.getTime() + durationMin * 60 * 1000);
 
       const windows = await getAgentMeetingWindows(userObjectId, null, null, session);
-      const conflict = hasMeetingConflict(dt, endAt, windows);
+      const meetingType = "Proposal Presentation";
+      const existingMeeting = await ScheduledMeeting.findOne({
+        leadEngagementId: engagement._id,
+        meetingType,
+      }).session(session);
+      if (isProposalStageReschedule && !existingMeeting) {
+        throw Object.assign(new Error("No existing proposal presentation meeting found to reschedule."), { status: 409 });
+      }
+      if (
+        existingMeeting?.startAt &&
+        !Number.isNaN(new Date(existingMeeting.startAt).getTime()) &&
+        dt.getTime() === new Date(existingMeeting.startAt).getTime()
+      ) {
+        throw Object.assign(new Error("Rescheduled meeting time cannot be the same as previous meeting time."), { status: 400 });
+      }
+      const conflictWindows = existingMeeting?._id
+        ? windows.filter((w) => String(w.id || "") !== String(existingMeeting._id))
+        : windows;
+      const conflict = hasMeetingConflict(dt, endAt, conflictWindows);
       if (conflict) {
         throw Object.assign(new Error("Selected meeting time conflicts with another scheduled meeting."), {
           status: 409,
           code: "MEETING_SLOT_CONFLICT",
         });
       }
-
-      const meetingType = "Proposal Presentation";
-      const existingMeeting = await ScheduledMeeting.findOne({
-        leadEngagementId: engagement._id,
-        meetingType,
-      }).session(session);
 
       if (existingMeeting) {
         existingMeeting.startAt = dt;
@@ -8336,6 +8360,10 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/schedule-pro
       const presentationDescription = `Conduct proposal presentation for ${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName} (Lead ${lead.leadCode || "—"}). Meeting window: ${formatDateTimeInManila(dt)} to ${formatDateTimeInManila(endAt)} (Asia/Manila).`;
       const presentationDueAt = new Date(endAt.getTime() + 15 * 60 * 1000);
 
+      if (isProposalStageReschedule && !presentationTask) {
+        throw Object.assign(new Error("No existing present proposal task found to reschedule."), { status: 409 });
+      }
+
       if (!presentationTask) {
         presentationTask = await Task.create(
           [
@@ -8362,7 +8390,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/schedule-pro
           leadCode: lead.leadCode,
           session,
         });
-      } else if (presentationTask.status !== "Done") {
+      } else {
         presentationTask.title = presentationTitle;
         presentationTask.description = presentationDescription;
         presentationTask.dueAt = presentationDueAt;
@@ -8378,47 +8406,80 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/schedule-pro
           prospectFullName,
           leadCode: lead.leadCode,
           session,
-          includeTaskAdded: false,
+          refreshTaskAdded: true,
         });
       }
       presentationTaskIdForNotif = presentationTask?._id || null;
       na.outcomeActivity = "Schedule Proposal Presentation";
       await na.save({ session });
 
-      engagement.currentStage = "Proposal";
-      engagement.currentActivityKey = "Generate Proposal";
-      engagement.stageCompletedAt = now;
-      engagement.stageHistory = Array.isArray(engagement.stageHistory) ? engagement.stageHistory : [];
+      if (isProposalStageReschedule) {
+        engagement.currentStage = "Proposal";
+        engagement.currentActivityKey = "Record Prospect Attendance";
+        await engagement.save({ session });
 
-      const openNeeds = [...engagement.stageHistory]
-        .reverse()
-        .find((h) => h?.stage === "Needs Assessment" && !h?.completedAt);
-      if (openNeeds) {
-        openNeeds.completedAt = now;
-        openNeeds.reason = "Proposal presentation meeting scheduled.";
+        await Proposal.updateOne(
+          { leadEngagementId: engagement._id },
+          {
+            $setOnInsert: { leadEngagementId: engagement._id },
+            $set: {
+              outcomeActivity: "Record Prospect Attendance",
+              recordProspectAttendance: {
+                attendanceChoice: "",
+                attended: false,
+                attendedAt: null,
+                attendanceProofImageDataUrl: "",
+                attendanceProofFileName: "",
+              },
+              ...(isProposalPresentationRetry
+                ? {
+                    presentProposal: {
+                      proposalAccepted: "",
+                      initialQuotationNotes: "",
+                      presentedAt: null,
+                    },
+                  }
+                : {}),
+            },
+          },
+          { upsert: true, session }
+        );
+      } else {
+        engagement.currentStage = "Proposal";
+        engagement.currentActivityKey = "Generate Proposal";
+        engagement.stageCompletedAt = now;
+        engagement.stageHistory = Array.isArray(engagement.stageHistory) ? engagement.stageHistory : [];
+
+        const openNeeds = [...engagement.stageHistory]
+          .reverse()
+          .find((h) => h?.stage === "Needs Assessment" && !h?.completedAt);
+        if (openNeeds) {
+          openNeeds.completedAt = now;
+          openNeeds.reason = "Proposal presentation meeting scheduled.";
+        }
+
+        engagement.stageHistory.push({
+          stage: "Proposal",
+          startedAt: now,
+          completedAt: null,
+          reason: "Moved from Needs Assessment after proposal presentation schedule.",
+        });
+        engagement.stageStartedAt = now;
+        await engagement.save({ session });
+
+        await Proposal.updateOne(
+          { leadEngagementId: engagement._id },
+          {
+            $setOnInsert: {
+              leadEngagementId: engagement._id,
+            },
+            $set: {
+              outcomeActivity: "Generate Proposal",
+            },
+          },
+          { upsert: true, session }
+        );
       }
-
-      engagement.stageHistory.push({
-        stage: "Proposal",
-        startedAt: now,
-        completedAt: null,
-        reason: "Moved from Needs Assessment after proposal presentation schedule.",
-      });
-      engagement.stageStartedAt = now;
-      await engagement.save({ session });
-
-      await Proposal.updateOne(
-        { leadEngagementId: engagement._id },
-        {
-          $setOnInsert: {
-            leadEngagementId: engagement._id,
-          },
-          $set: {
-            outcomeActivity: "Generate Proposal",
-          },
-        },
-        { upsert: true, session }
-      );
     });
     await ensureTaskMissedNotificationsForUser(userObjectId, { forceUnread: true, taskIds: [presentationTaskIdForNotif] });
 
@@ -8639,6 +8700,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/attendance", async (
     const userObjectId = new mongoose.Types.ObjectId(userId);
     const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
     const leadObjectId = new mongoose.Types.ObjectId(leadId);
+    let responseCurrentActivityKey = normalizedAttended ? "Present Proposal" : "Record Prospect Attendance";
 
     await session.withTransaction(async () => {
       const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).session(session);
@@ -8654,22 +8716,46 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/attendance", async (
         throw Object.assign(new Error("Lead is not in Proposal stage."), { status: 409 });
       }
 
-      if (engagement.currentActivityKey !== "Record Prospect Attendance") {
+      const existingProposalDoc = await Proposal.findOne({ leadEngagementId: engagement._id }).session(session);
+      const currentProposalActivity = String(engagement.currentActivityKey || "").trim();
+      const isAttendanceStep = currentProposalActivity === "Record Prospect Attendance";
+      const isFutureProofEdit =
+        normalizedAttended &&
+        ["Present Proposal", "Schedule Application Submission"].includes(currentProposalActivity) &&
+        (existingProposalDoc?.recordProspectAttendance?.attendanceChoice === "YES" || existingProposalDoc?.recordProspectAttendance?.attended === true);
+
+      if (!isAttendanceStep && !isFutureProofEdit) {
         throw Object.assign(new Error("Record Prospect Attendance is not the current activity."), { status: 409 });
       }
+      if (!normalizedAttended && !isAttendanceStep) {
+        throw Object.assign(new Error("Only proof of attendance can be edited from future proposal subactivities."), { status: 409 });
+      }
 
-      engagement.currentActivityKey = normalizedAttended ? "Present Proposal" : "Record Prospect Attendance";
+      const nextActivityKey = isFutureProofEdit
+        ? currentProposalActivity
+        : normalizedAttended
+        ? "Present Proposal"
+        : "Record Prospect Attendance";
+      responseCurrentActivityKey = nextActivityKey;
+      engagement.currentActivityKey = nextActivityKey;
       await engagement.save({ session });
+
+      const nextOutcomeActivity = isFutureProofEdit
+        ? String(existingProposalDoc?.outcomeActivity || currentProposalActivity || "Present Proposal").trim()
+        : normalizedAttended
+        ? "Present Proposal"
+        : "Record Prospect Attendance";
 
       await Proposal.updateOne(
         { leadEngagementId: engagement._id },
         {
           $setOnInsert: { leadEngagementId: engagement._id },
           $set: {
-            outcomeActivity: normalizedAttended ? "Present Proposal" : "Record Prospect Attendance",
+            outcomeActivity: nextOutcomeActivity,
             recordProspectAttendance: {
+              attendanceChoice: normalizedAttended ? "YES" : "NO",
               attended: normalizedAttended,
-              attendedAt: normalizedAttended ? new Date() : null,
+              attendedAt: normalizedAttended ? (existingProposalDoc?.recordProspectAttendance?.attendedAt || new Date()) : null,
               attendanceProofImageDataUrl: normalizedAttended ? proofDataUrl : "",
               attendanceProofFileName: normalizedAttended ? proofFileName : "",
             },
@@ -8681,7 +8767,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/attendance", async (
 
     return res.json({
       message: "Prospect attendance recorded.",
-      currentActivityKey: normalizedAttended ? "Present Proposal" : "Record Prospect Attendance",
+      currentActivityKey: responseCurrentActivityKey,
     });
   } catch (err) {
     console.error("Record proposal attendance error:", err);
@@ -10054,7 +10140,8 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/presentation", async
         throw Object.assign(new Error("Present Proposal is not the current activity."), { status: 409 });
       }
 
-      engagement.currentActivityKey = "Schedule Application Submission";
+      const nextProposalActivityKey = accepted === "YES" ? "Schedule Application Submission" : "Present Proposal";
+      engagement.currentActivityKey = nextProposalActivityKey;
       await engagement.save({ session });
 
       await Proposal.updateOne(
@@ -10062,10 +10149,10 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/presentation", async
         {
           $setOnInsert: { leadEngagementId: engagement._id },
           $set: {
-            outcomeActivity: "Present Proposal",
+            outcomeActivity: accepted === "YES" ? "Schedule Application Submission" : "Present Proposal",
             presentProposal: {
               proposalAccepted: accepted,
-              initialQuotationNotes: accepted === "YES" ? String(initialQuotationNotes || "").trim() : "",
+              initialQuotationNotes: String(initialQuotationNotes || "").trim(),
               presentedAt: new Date(),
             },
           },
@@ -10076,7 +10163,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/presentation", async
 
     return res.json({
       message: "Proposal presentation details saved.",
-      currentActivityKey: "Schedule Application Submission",
+      currentActivityKey: accepted === "YES" ? "Schedule Application Submission" : "Present Proposal",
     });
   } catch (err) {
     console.error("Save proposal presentation error:", err);
