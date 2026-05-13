@@ -123,6 +123,7 @@ function AgentLeadEngagement() {
   const [needsAttendanceRescheduleLock, setNeedsAttendanceRescheduleLock] = useState(false);
   const [needsAttendanceProofEditMode, setNeedsAttendanceProofEditMode] = useState(false);
   const needsAttendanceProofInputRef = useRef(null);
+  const proposalAttendanceProofInputRef = useRef(null);
 
   const [needsAssessmentLoading, setNeedsAssessmentLoading] = useState(false);
   const [needsAssessmentSaving, setNeedsAssessmentSaving] = useState(false);
@@ -154,6 +155,7 @@ function AgentLeadEngagement() {
     meetingPlace: "",
   });
   const [proposalMeetingSaved, setProposalMeetingSaved] = useState(null);
+  const [proposalMeetingRescheduleOriginal, setProposalMeetingRescheduleOriginal] = useState(null);
   const [savingProposalMeeting, setSavingProposalMeeting] = useState(false);
   const [proposalMeetingError, setProposalMeetingError] = useState("");
   const [proposalMeetingFieldErrors, setProposalMeetingFieldErrors] = useState({});
@@ -192,6 +194,7 @@ function AgentLeadEngagement() {
   });
   const [proposalAttendanceSaving, setProposalAttendanceSaving] = useState(false);
   const [proposalAttendanceError, setProposalAttendanceError] = useState("");
+  const [proposalAttendanceProofEditMode, setProposalAttendanceProofEditMode] = useState(false);
   const [proposalPresentationForm, setProposalPresentationForm] = useState({
     proposalAccepted: "",
     initialQuotationNotes: "",
@@ -199,6 +202,13 @@ function AgentLeadEngagement() {
   });
   const [proposalPresentationSaving, setProposalPresentationSaving] = useState(false);
   const [proposalPresentationError, setProposalPresentationError] = useState("");
+  const [proposalPresentationNotesSaved, setProposalPresentationNotesSaved] = useState(false);
+  const [proposalPresentationNotesEditMode, setProposalPresentationNotesEditMode] = useState(false);
+  const [proposalPresentationDecisionEditMode, setProposalPresentationDecisionEditMode] = useState(false);
+  const [proposalPresentationEditSnapshot, setProposalPresentationEditSnapshot] = useState({
+    proposalAccepted: "",
+    initialQuotationNotes: "",
+  });
   const [applicationMeetingForm, setApplicationMeetingForm] = useState({
     meetingDate: "",
     meetingStartTime: "",
@@ -534,15 +544,23 @@ function AgentLeadEngagement() {
       });
       setProposalGenerateEditMode(false);
       setProposalAttendanceForm({
-        attendanceChoice: attendance?.attended ? "YES" : "",
+        attendanceChoice: String(attendance?.attendanceChoice || (attendance?.attended ? "YES" : "")),
         attendanceProofImageDataUrl: String(attendance?.attendanceProofImageDataUrl || ""),
         attendanceProofFileName: String(attendance?.attendanceProofFileName || ""),
         attendedAt: attendance?.attendedAt || "",
       });
+      setProposalAttendanceProofEditMode(false);
       setProposalPresentationForm({
         proposalAccepted: String(presentation?.proposalAccepted || ""),
         initialQuotationNotes: String(presentation?.initialQuotationNotes || ""),
         presentedAt: presentation?.presentedAt || "",
+      });
+      setProposalPresentationNotesSaved(Boolean(String(presentation?.initialQuotationNotes || "").trim()));
+      setProposalPresentationNotesEditMode(false);
+      setProposalPresentationDecisionEditMode(false);
+      setProposalPresentationEditSnapshot({
+        proposalAccepted: String(presentation?.proposalAccepted || ""),
+        initialQuotationNotes: String(presentation?.initialQuotationNotes || ""),
       });
       setApplicationMeetingSaved(applicationSubmissionMeeting);
       setApplicationAttendanceForm({
@@ -736,6 +754,7 @@ function AgentLeadEngagement() {
 
       const proposalMeeting = data?.proposalMeeting || null;
       setProposalMeetingSaved(proposalMeeting);
+      setProposalMeetingRescheduleOriginal(null);
       if (!proposalMeeting) {
         setProposalMeetingNeedsPrefillKey("");
       }
@@ -1787,11 +1806,26 @@ function AgentLeadEngagement() {
     if (!selectedDate || proposalMeetingSaved?.startAt) return allSlots;
 
     const existingMeetingDate = toDateInputValue(latestScheduledMeeting?.meetingAt);
+    const originalProposalStart = proposalMeetingRescheduleOriginal?.startAt ? new Date(proposalMeetingRescheduleOriginal.startAt) : null;
+    const originalProposalEnd = proposalMeetingRescheduleOriginal?.endAt
+      ? new Date(proposalMeetingRescheduleOriginal.endAt)
+      : originalProposalStart && !Number.isNaN(originalProposalStart.getTime())
+      ? new Date(originalProposalStart.getTime() + Number(proposalMeetingRescheduleOriginal?.durationMin || 120) * 60 * 1000)
+      : null;
+    const originalProposalDate = originalProposalStart && !Number.isNaN(originalProposalStart.getTime())
+      ? toDateInputValue(originalProposalStart)
+      : "";
     let filteredSlots = allSlots;
     if (latestScheduledMeetingEndAt && selectedDate === existingMeetingDate) {
       filteredSlots = filteredSlots.filter((slot) => {
         const candidate = combineDateAndTimeLocal(selectedDate, slot);
         return Boolean(candidate && candidate.getTime() > latestScheduledMeetingEndAt.getTime());
+      });
+    }
+    if (originalProposalEnd && !Number.isNaN(originalProposalEnd.getTime()) && selectedDate === originalProposalDate) {
+      filteredSlots = filteredSlots.filter((slot) => {
+        const candidate = combineDateAndTimeLocal(selectedDate, slot);
+        return Boolean(candidate && candidate.getTime() > originalProposalEnd.getTime());
       });
     }
 
@@ -1811,6 +1845,7 @@ function AgentLeadEngagement() {
     latestScheduledMeetingEndAt,
     proposalMeetingForm.meetingDate,
     proposalMeetingForm.meetingDurationMin,
+    proposalMeetingRescheduleOriginal,
     proposalMeetingSaved?.startAt,
   ]);
   const applicationMeetingStartSlots = useMemo(() => buildMeetingStartSlots(applicationMeetingForm.meetingDurationMin), [buildMeetingStartSlots, applicationMeetingForm.meetingDurationMin]);
@@ -1864,6 +1899,8 @@ function AgentLeadEngagement() {
   const isViewingFutureStage = viewedStageIndex >= 0 && viewedStageIndex > safeIndex;
   const futureStageSubactivityHelperText =
     "This stage is still ahead in the lead journey. Its subactivities stay gray until the progression reaches them.";
+  const previouslySavedSubactivityHelperText =
+    "Viewing a previously saved subactivity. Click the current subactivity to resume editing.";
 
   const isNeedsAssessmentEditableNow =
     showNeedsAssessmentPanel &&
@@ -2006,7 +2043,35 @@ function AgentLeadEngagement() {
   const isProposalPresentationEditable =
     proposalUiActivityKey === "Present Proposal" &&
     isProposalEditableNow &&
+    String(proposalPresentationForm.proposalAccepted || "").trim().toUpperCase() !== "NO" &&
     !proposalPresentationForm.presentedAt;
+  const canEditSavedProposalPresentation =
+    proposalUiActivityKey === "Present Proposal" &&
+    isProposalEditableNow;
+  const canEditProposalAttendanceChoice =
+    proposalUiActivityKey === "Record Prospect Attendance" &&
+    isProposalEditableNow;
+  const canEditProposalAttendanceProof =
+    showProposalPanel &&
+    isViewingCurrentStage &&
+    stage === "Proposal" &&
+    !isLeadClosed &&
+    !isLeadDropped &&
+    proposalViewedActivityKey === "Record Prospect Attendance" &&
+    proposalUiActivityKey === "Record Prospect Attendance" &&
+    proposalAttendanceForm.attendanceChoice === "YES";
+  const canRequestProposalAttendanceProofEdit =
+    !proposalAttendanceProofEditMode &&
+    showProposalPanel &&
+    isViewingCurrentStage &&
+    stage === "Proposal" &&
+    !isLeadClosed &&
+    !isLeadDropped &&
+    proposalViewedActivityKey === "Record Prospect Attendance" &&
+    ["Present Proposal", "Schedule Application Submission"].includes(proposalUiActivityKey) &&
+    proposalAttendanceForm.attendanceChoice === "YES" &&
+    String(proposalAttendanceForm.attendanceProofImageDataUrl || "").trim();
+  const isProposalAttendanceProofEditable = canEditProposalAttendanceProof || proposalAttendanceProofEditMode;
 
   const applicationUiActivityKey = useMemo(() => {
     const fallback = "Record Prospect Attendance";
@@ -2366,28 +2431,46 @@ function AgentLeadEngagement() {
     ["Perform Needs Analysis", "Schedule Proposal Presentation"].includes(needsActivityKeyRaw) &&
     needsAssessmentForm.attendanceChoice === "YES" &&
     String(needsAssessmentForm.attendanceProofImageDataUrl || "").trim();
+  const isProposalAttendanceNoRescheduleMode =
+    showNeedsAssessmentPanel &&
+    String(engagement?.currentStage || "").trim() === "Proposal" &&
+    String(proposalCurrentActivityKey || "").trim() === "Record Prospect Attendance" &&
+    proposalAttendanceForm.attendanceChoice === "NO";
+  const isProposalPresentationNoRescheduleMode =
+    showNeedsAssessmentPanel &&
+    String(engagement?.currentStage || "").trim() === "Proposal" &&
+    String(proposalCurrentActivityKey || "").trim() === "Present Proposal" &&
+    proposalPresentationForm.proposalAccepted === "NO";
+  const isProposalPendingPresentationRescheduleMode =
+    showNeedsAssessmentPanel &&
+    String(engagement?.currentStage || "").trim() === "Proposal" &&
+    String(proposalCurrentActivityKey || "").trim() === "Record Prospect Attendance" &&
+    !["YES", "NO"].includes(String(proposalAttendanceForm.attendanceChoice || "").trim().toUpperCase());
   const isNeedsScheduleEditable =
-    isNeedsAssessmentCurrentViewEditable &&
-    needsActivityKeyRaw === "Schedule Proposal Presentation" &&
+    ((isNeedsAssessmentCurrentViewEditable && needsActivityKeyRaw === "Schedule Proposal Presentation") || isProposalAttendanceNoRescheduleMode || isProposalPresentationNoRescheduleMode || isProposalPendingPresentationRescheduleMode) &&
     needsAssessmentViewedActivityKey === "Schedule Proposal Presentation";
   const isNeedsAnalysisViewed = needsAssessmentViewedActivityKey === "Perform Needs Analysis";
   const isNeedsScheduleViewed = needsAssessmentViewedActivityKey === "Schedule Proposal Presentation";
   const proposalMeetingMinimumDate = useMemo(() => {
     const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
     const fallback = toDateInputValue(tomorrow);
+    const today = toDateInputValue(new Date());
+    if (proposalMeetingRescheduleOriginal?.startAt) {
+      const originalProposalDate = toDateInputValue(proposalMeetingRescheduleOriginal.startAt);
+      return originalProposalDate && originalProposalDate > today ? originalProposalDate : today;
+    }
     if (proposalMeetingSaved?.startAt || !latestScheduledMeeting?.meetingAt) return fallback;
 
-    const today = toDateInputValue(new Date());
     const existingMeetingDate = toDateInputValue(latestScheduledMeeting.meetingAt);
     if (!existingMeetingDate) return fallback;
     return existingMeetingDate > today ? existingMeetingDate : today;
-  }, [latestScheduledMeeting, proposalMeetingSaved?.startAt]);
+  }, [latestScheduledMeeting, proposalMeetingRescheduleOriginal?.startAt, proposalMeetingSaved?.startAt]);
   const proposalNeedsPrefillKey = latestScheduledMeeting?.meetingAt
     ? String(latestScheduledMeeting?.attemptId || latestScheduledMeeting?.meetingCreatedAt || latestScheduledMeeting?.createdAt || latestScheduledMeeting.meetingAt)
     : "";
 
   useEffect(() => {
-    if (!showProposalSchedulingSection || !isNeedsScheduleViewed || proposalMeetingSaved || !latestScheduledMeeting || !proposalNeedsPrefillKey) {
+    if (!showProposalSchedulingSection || !isNeedsScheduleViewed || proposalMeetingSaved || proposalMeetingRescheduleOriginal || !latestScheduledMeeting || !proposalNeedsPrefillKey) {
       if (proposalMeetingSaved || !showProposalSchedulingSection) setProposalMeetingNeedsPrefillKey("");
       return;
     }
@@ -2411,6 +2494,7 @@ function AgentLeadEngagement() {
     isNeedsScheduleViewed,
     latestScheduledMeeting,
     proposalMeetingNeedsPrefillKey,
+    proposalMeetingRescheduleOriginal,
     proposalMeetingSaved,
     proposalNeedsPrefillKey,
     showProposalSchedulingSection,
@@ -2897,20 +2981,44 @@ function AgentLeadEngagement() {
 
   const startRescheduleProposalPresentation = () => {
     if (!proposalMeetingSaved?.startAt) return;
+    const originalMeeting = proposalMeetingSaved;
     setProposalMeetingError("");
     setProposalMeetingFieldErrors({});
+    setProposalMeetingRescheduleOriginal(originalMeeting);
     setProposalMeetingForm({
       meetingDate: "",
       meetingStartTime: "",
-      meetingDurationMin: proposalMeetingSaved?.durationMin ?? 120,
-      meetingMode: String(proposalMeetingSaved?.mode || ""),
-      meetingPlatform: String(proposalMeetingSaved?.platform || ""),
-      meetingPlatformOther: String(proposalMeetingSaved?.platformOther || ""),
-      meetingLink: String(proposalMeetingSaved?.link || ""),
-      meetingInviteSent: Boolean(proposalMeetingSaved?.inviteSent),
-      meetingPlace: String(proposalMeetingSaved?.place || ""),
+      meetingDurationMin: originalMeeting?.durationMin ?? 120,
+      meetingMode: String(originalMeeting?.mode || ""),
+      meetingPlatform: String(originalMeeting?.platform || ""),
+      meetingPlatformOther: String(originalMeeting?.platformOther || ""),
+      meetingLink: String(originalMeeting?.link || ""),
+      meetingInviteSent: Boolean(originalMeeting?.inviteSent),
+      meetingPlace: String(originalMeeting?.place || ""),
     });
     setProposalMeetingSaved(null);
+  };
+
+  const cancelRescheduleProposalPresentation = () => {
+    if (!proposalMeetingRescheduleOriginal) return;
+    const originalMeeting = proposalMeetingRescheduleOriginal;
+    setProposalMeetingError("");
+    setProposalMeetingFieldErrors({});
+    setProposalMeetingForm({
+      meetingDate: originalMeeting?.startAt ? toDateInputValue(originalMeeting.startAt) : "",
+      meetingStartTime: originalMeeting?.startAt
+        ? `${String(new Date(originalMeeting.startAt).getHours()).padStart(2, "0")}:${String(new Date(originalMeeting.startAt).getMinutes()).padStart(2, "0")}`
+        : "",
+      meetingDurationMin: originalMeeting?.durationMin ?? 120,
+      meetingMode: String(originalMeeting?.mode || ""),
+      meetingPlatform: String(originalMeeting?.platform || ""),
+      meetingPlatformOther: String(originalMeeting?.platformOther || ""),
+      meetingLink: String(originalMeeting?.link || ""),
+      meetingInviteSent: Boolean(originalMeeting?.inviteSent),
+      meetingPlace: String(originalMeeting?.place || ""),
+    });
+    setProposalMeetingSaved(originalMeeting);
+    setProposalMeetingRescheduleOriginal(null);
   };
 
   const startAddNewNeedsAssessmentMeeting = () => {
@@ -3177,6 +3285,18 @@ function AgentLeadEngagement() {
       const latestWindows = await fetchMeetingAvailability();
       const proposedStart = combineDateAndTimeLocal(meetingDate, meetingStartTime);
       const proposedEnd = proposedStart ? new Date(proposedStart.getTime() + meetingDurationMin * 60 * 1000) : null;
+      const proposalRescheduleOriginalStartAt = proposalMeetingRescheduleOriginal?.startAt
+        ? new Date(proposalMeetingRescheduleOriginal.startAt)
+        : null;
+      if (
+        proposedStart &&
+        proposalRescheduleOriginalStartAt &&
+        !Number.isNaN(proposalRescheduleOriginalStartAt.getTime()) &&
+        proposedStart.getTime() === proposalRescheduleOriginalStartAt.getTime()
+      ) {
+        setProposalMeetingFieldErrors({ meetingStartTime: "Rescheduled meeting time cannot be the same as previous meeting time." });
+        return;
+      }
       if (!proposalMeetingSaved?.startAt && latestScheduledMeeting?.meetingAt) {
         if (proposalMeetingMinimumDate && meetingDate < proposalMeetingMinimumDate) {
           setProposalMeetingFieldErrors({ meetingDate: `Meeting date must be on or after ${proposalMeetingMinimumDate}.` });
@@ -3198,14 +3318,15 @@ function AgentLeadEngagement() {
         const ws = w?.startAt ? new Date(w.startAt) : null;
         const we = w?.endAt ? new Date(w.endAt) : null;
         if (!ws || !we || Number.isNaN(ws.getTime()) || Number.isNaN(we.getTime())) return false;
-        if (proposalMeetingSaved?.startAt && ws.getTime() === new Date(proposalMeetingSaved.startAt).getTime()) return false;
+        const ignoredProposalMeetingStartAt = isProposalPresentationNoRescheduleMode ? "" : (proposalMeetingSaved?.startAt || proposalMeetingRescheduleOriginal?.startAt);
+        if (ignoredProposalMeetingStartAt && ws.getTime() === new Date(ignoredProposalMeetingStartAt).getTime()) return false;
         return ws < proposedEnd && we > proposedStart;
       });
       if (hasRealtimeConflict) {
         setProposalMeetingFieldErrors({ meetingStartTime: "Selected start time conflicts with an existing meeting." });
         return;
       }
-      if (isSlotBooked(meetingDate, meetingStartTime, meetingDurationMin, proposalMeetingSaved?.startAt)) {
+      if (isSlotBooked(meetingDate, meetingStartTime, meetingDurationMin, isProposalPresentationNoRescheduleMode ? null : (proposalMeetingSaved?.startAt || proposalMeetingRescheduleOriginal?.startAt))) {
         setProposalMeetingFieldErrors({ meetingStartTime: "Selected start time conflicts with an existing meeting." });
         return;
       }
@@ -3271,6 +3392,13 @@ function AgentLeadEngagement() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to schedule proposal presentation.");
 
+      setProposalMeetingRescheduleOriginal(null);
+      setProposalAttendanceForm({
+        attendanceChoice: "",
+        attendanceProofImageDataUrl: "",
+        attendanceProofFileName: "",
+        attendedAt: "",
+      });
       await refreshCurrentProgressView({ includeNeedsAssessment: true });
     } catch (err) {
       const msg = err?.message || "Cannot connect to server. Is backend running?";
@@ -3497,9 +3625,13 @@ function AgentLeadEngagement() {
 
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to save proposal attendance.");
+      setProposalAttendanceProofEditMode(false);
       if (!attended) {
+        await fetchNeedsAssessment();
+        await fetchEngagement();
         setSelectedStageView("Needs Assessment");
         setNeedsAssessmentViewedActivityKey("Schedule Proposal Presentation");
+        return;
       }
       await refreshCurrentProgressView();
     } catch (err) {
@@ -3514,12 +3646,61 @@ function AgentLeadEngagement() {
     await submitProposalAttendance(false);
   };
 
+  const goToScheduleProposalPresentationFromProposalNo = async () => {
+    if (proposalPresentationSaving) return;
+    await fetchNeedsAssessment();
+    setSelectedStageView("Needs Assessment");
+    setNeedsAssessmentViewedActivityKey("Schedule Proposal Presentation");
+  };
+
+  const submitProposalPresentationNotes = async () => {
+    try {
+      setProposalPresentationError("");
+      const notes = String(proposalPresentationForm.initialQuotationNotes || "").trim();
+      if (!notes) {
+        setProposalPresentationError("Notes on Quotation Proposal is required.");
+        return;
+      }
+
+      const savedDecision = String(proposalPresentationForm.proposalAccepted || "").trim().toUpperCase();
+      const payload = { initialQuotationNotes: notes };
+      if (["YES", "NO"].includes(savedDecision)) payload.proposalAccepted = savedDecision;
+
+      setProposalPresentationSaving(true);
+      const res = await fetch(`${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/proposal/presentation?userId=${user.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.message || "Failed to save quotation proposal notes.");
+      setProposalPresentationNotesSaved(true);
+      setProposalPresentationNotesEditMode(false);
+      setProposalPresentationEditSnapshot((prev) => ({
+        ...prev,
+        proposalAccepted: ["YES", "NO"].includes(savedDecision) ? savedDecision : prev.proposalAccepted,
+        initialQuotationNotes: notes,
+      }));
+      await fetchEngagement();
+    } catch (err) {
+      setProposalPresentationError(err?.message || "Failed to save quotation proposal notes.");
+    } finally {
+      setProposalPresentationSaving(false);
+    }
+  };
+
   const submitProposalPresentation = async () => {
     try {
       setProposalPresentationError("");
       const accepted = String(proposalPresentationForm.proposalAccepted || "").trim().toUpperCase();
-      if (!["YES", "NO"].includes(accepted)) {
-        setProposalPresentationError("Please select if proposal is accepted (Yes/No).");
+      const requiresFurther = accepted === "NO" ? "YES" : accepted === "YES" ? "NO" : "";
+      const notes = String(proposalPresentationForm.initialQuotationNotes || "").trim();
+      if (!notes) {
+        setProposalPresentationError("Notes on Quotation Proposal is required.");
+        return;
+      }
+      if (!["YES", "NO"].includes(requiresFurther)) {
+        setProposalPresentationError("Please select if further proposal presentation meet is required (Yes/No).");
         return;
       }
 
@@ -3529,11 +3710,26 @@ function AgentLeadEngagement() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           proposalAccepted: accepted,
-          initialQuotationNotes: accepted === "YES" ? proposalPresentationForm.initialQuotationNotes : "",
+          initialQuotationNotes: notes,
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to save proposal presentation details.");
+      setProposalPresentationForm((f) => ({
+        ...f,
+        proposalAccepted: accepted,
+        presentedAt: data?.presentedAt || f.presentedAt,
+      }));
+      setProposalPresentationDecisionEditMode(false);
+      setProposalPresentationEditSnapshot({
+        proposalAccepted: accepted,
+        initialQuotationNotes: notes,
+      });
+      if (accepted === "NO") {
+        setProposalCurrentActivityKey(data?.currentActivityKey || "Present Proposal");
+        setProposalViewedActivityKey("Present Proposal");
+        return;
+      }
       await refreshCurrentProgressView();
     } catch (err) {
       setProposalPresentationError(err?.message || "Failed to save proposal presentation details.");
@@ -4663,7 +4859,7 @@ function AgentLeadEngagement() {
                         isLeadClosed || isLeadDropped
                           ? closedLeadSubactivityHelperText
                           : contactingViewedStepIndex < contactingCurrentStepIndex
-                          ? "Viewing a previously saved subactivity. Click the current subactivity to resume editing."
+                          ? previouslySavedSubactivityHelperText
                           : "Click any unlocked subactivity to review saved details."
                       }
                       showCurrentStatus={showCurrentSubactivityStatus}
@@ -4705,7 +4901,7 @@ function AgentLeadEngagement() {
                           : isLeadClosed || isLeadDropped
                           ? closedLeadSubactivityHelperText
                           : needsViewedStepIndex < needsCurrentStepIndex
-                          ? "Viewing a previously saved subactivity. Click the current subactivity to resume editing."
+                          ? previouslySavedSubactivityHelperText
                           : "Click any unlocked subactivity to review saved details."
                       }
                       showCurrentStatus={showCurrentSubactivityStatus}
@@ -4736,7 +4932,7 @@ function AgentLeadEngagement() {
                           : isLeadClosed || isLeadDropped
                           ? closedLeadSubactivityHelperText
                           : proposalViewedStepIndex < proposalCurrentStepIndex
-                          ? "Click the current subactivity to resume editing."
+                          ? previouslySavedSubactivityHelperText
                           : "Click any unlocked subactivity to review saved details."
                       }
                       showCurrentStatus={showCurrentSubactivityStatus}
@@ -4767,7 +4963,7 @@ function AgentLeadEngagement() {
                           : isLeadClosed || isLeadDropped
                           ? closedLeadSubactivityHelperText
                           : applicationViewedStepIndex < applicationCurrentStepIndex
-                          ? "Viewing a previously saved application subactivity in read-only mode. Click the current subactivity to resume editing."
+                          ? previouslySavedSubactivityHelperText
                           : "Click any unlocked subactivity to review saved details."
                       }
                       showCurrentStatus={showCurrentSubactivityStatus}
@@ -4798,7 +4994,7 @@ function AgentLeadEngagement() {
                           : isLeadClosed || isLeadDropped
                           ? closedLeadSubactivityHelperText
                           : policyViewedStepIndex < policyCurrentStepIndex
-                          ? "Viewing a previously saved policy issuance subactivity in read-only mode. Click the current subactivity to resume editing."
+                          ? previouslySavedSubactivityHelperText
                           : "Click any unlocked subactivity to review saved details."
                       }
                       showCurrentStatus={showCurrentSubactivityStatus}
@@ -4823,10 +5019,10 @@ function AgentLeadEngagement() {
 
                       <div className="le-block">
                         <div className="le-formRow">
-                          <label className="le-label">Initial Quotation Proposal Preview:</label>
+                          <label className="le-label">Quotation Proposal Preview:</label>
                           {proposalGenerateForm.proposalFileDataUrl ? (
                             <iframe
-                              title="Initial Quotation Proposal Preview"
+                              title="Quotation Proposal Preview"
                               src={proposalGenerateForm.proposalFileDataUrl}
                               style={{ width: "100%", minHeight: 320, border: "1px solid #e5e7eb", borderRadius: 10 }}
                             />
@@ -6660,10 +6856,10 @@ function AgentLeadEngagement() {
                         <div className="le-block">
                           <h4 className="le-blockTitle">
                             {proposalGenerateEditMode
-                              ? "Edit Initial Quotation Proposal Details"
+                              ? "Edit Quotation Proposal Details"
                               : proposalUiActivityKey === "Generate Proposal"
                                 ? "Generate Proposal"
-                                : "Saved Initial Quotation Proposal Details"}
+                                : "Saved Quotation Proposal Details"}
                           </h4>
                           <div className="le-proposalDetailsGrid">
                             {String(proposalGenerateForm.chosenProductName || proposalGenerateForm.chosenProductId || "").trim() ? (
@@ -6826,7 +7022,7 @@ function AgentLeadEngagement() {
                               ) : null}
                               {String(proposalGenerateForm.proposalFileName || "").trim() ? (
                                 <div className="le-formRow" style={{ marginTop: 10 }}>
-                                  <label className="le-label">Initial Quotation Proposal File</label>
+                                  <label className="le-label">Quotation Proposal File</label>
                                   <p className="le-smallNote">{proposalGenerateForm.proposalFileName}</p>
                                 </div>
                               ) : null}
@@ -6859,129 +7055,106 @@ function AgentLeadEngagement() {
                         <div className="le-block">
                           <h4 className="le-blockTitle">Prospect Attendance</h4>
 
-                          {proposalUiActivityKey === "Record Prospect Attendance" && isProposalEditableNow ? (
+                          <div className="le-formRow" style={{ alignItems: "center" }}>
+                            <label className="le-label">Prospect Attended? *</label>
+                            <div className="le-checkboxGrid">
+                              <label className="le-check">
+                                <input
+                                  type="radio"
+                                  name="proposal-prospect-attendance"
+                                  checked={proposalAttendanceForm.attendanceChoice === "YES"}
+                                  onChange={() => {
+                                    setProposalAttendanceError("");
+                                    setProposalAttendanceForm((f) => ({ ...f, attendanceChoice: "YES" }));
+                                  }}
+                                  disabled={!canEditProposalAttendanceChoice || proposalAttendanceSaving || proposalAttendanceProofEditMode}
+                                />
+                                <span>Yes</span>
+                              </label>
+                              <label className="le-check">
+                                <input
+                                  type="radio"
+                                  name="proposal-prospect-attendance"
+                                  checked={proposalAttendanceForm.attendanceChoice === "NO"}
+                                  onChange={() => {
+                                    setProposalAttendanceError("");
+                                    setProposalAttendanceForm((f) => ({
+                                      ...f,
+                                      attendanceChoice: "NO",
+                                      attendanceProofImageDataUrl: "",
+                                      attendanceProofFileName: "",
+                                    }));
+                                  }}
+                                  disabled={!canEditProposalAttendanceChoice || proposalAttendanceSaving || proposalAttendanceProofEditMode}
+                                />
+                                <span>No</span>
+                              </label>
+                            </div>
+                          </div>
+
+                          {proposalAttendanceForm.attendanceChoice === "NO" && canEditProposalAttendanceChoice ? (
+                            <p className="le-muted" style={{ marginTop: 8 }}>
+                              Proposal presentation can be rescheduled.{" "}
+                              <button
+                                type="button"
+                                className="le-btn ghost"
+                                style={{ padding: 0, border: 0, background: "transparent", textDecoration: "underline" }}
+                                onClick={goToScheduleProposalPresentationFromProposalAttendanceNo}
+                                disabled={proposalAttendanceSaving}
+                              >
+                                Go to Schedule Proposal Presentation
+                              </button>
+                            </p>
+                          ) : null}
+
+                          {proposalAttendanceForm.attendanceChoice === "YES" ? (
                             <>
-                              <div className="le-formRow" style={{ alignItems: "center" }}>
-                                <label className="le-label">Prospect Attended? *</label>
-                                <div className="le-checkboxGrid">
-                                  <label className="le-check">
-                                    <input
-                                      type="radio"
-                                      name="proposal-prospect-attendance"
-                                      checked={proposalAttendanceForm.attendanceChoice === "YES"}
-                                      onChange={() => {
-                                        setProposalAttendanceError("");
-                                        setProposalAttendanceForm((f) => ({ ...f, attendanceChoice: "YES" }));
-                                      }}
-                                      disabled={proposalAttendanceSaving}
-                                    />
-                                    <span>Yes</span>
-                                  </label>
-                                  <label className="le-check">
-                                    <input
-                                      type="radio"
-                                      name="proposal-prospect-attendance"
-                                      checked={proposalAttendanceForm.attendanceChoice === "NO"}
-                                      onChange={() => {
-                                        setProposalAttendanceError("");
-                                        setProposalAttendanceForm((f) => ({
-                                          ...f,
-                                          attendanceChoice: "NO",
-                                          attendanceProofImageDataUrl: "",
-                                          attendanceProofFileName: "",
-                                        }));
-                                      }}
-                                      disabled={proposalAttendanceSaving}
-                                    />
-                                    <span>No</span>
-                                  </label>
-                                </div>
-                              </div>
-
-                              {proposalAttendanceForm.attendanceChoice === "NO" ? (
-                                <p className="le-muted" style={{ marginTop: 8 }}>
-                                  Proposal presentation can be rescheduled.{" "}
-                                  <button
-                                    type="button"
-                                    className="le-btn ghost"
-                                    style={{ padding: 0, border: 0, background: "transparent", textDecoration: "underline" }}
-                                    onClick={goToScheduleProposalPresentationFromProposalAttendanceNo}
-                                    disabled={proposalAttendanceSaving}
-                                  >
-                                    Go to Schedule Proposal Presentation
-                                  </button>
-                                </p>
-                              ) : null}
-
-                              {proposalAttendanceForm.attendanceChoice === "YES" ? (
-                                <>
-                                  <div className="le-formRow" style={{ marginTop: 8 }}>
-                                    <label className="le-label">Proof of Attendance (JPG, JPEG, PNG) *</label>
-                                    <input
-                                      type="file"
-                                      className="le-input"
-                                      accept=".jpg,.jpeg,.png,image/jpeg,image/png"
-                                      onChange={(e) => onProposalAttendanceProofPicked(e.target.files?.[0] || null)}
-                                      disabled={proposalAttendanceSaving}
-                                    />
-                                    {proposalAttendanceForm.attendanceProofFileName ? (
-                                      <p className="le-smallNote">Selected file: {proposalAttendanceForm.attendanceProofFileName}</p>
+                              {(canEditProposalAttendanceProof || proposalAttendanceProofEditMode || canRequestProposalAttendanceProofEdit) ? (
+                                <div className="le-formRow" style={{ marginTop: 8 }}>
+                                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%" }}>
+                                    <label className="le-label" style={{ margin: 0 }}>Proof of Attendance (JPG, JPEG, PNG) *</label>
+                                    {canRequestProposalAttendanceProofEdit && !proposalAttendanceProofEditMode ? (
+                                      <button
+                                        type="button"
+                                        className="le-btn secondary"
+                                        onClick={() => setProposalAttendanceProofEditMode(true)}
+                                        disabled={proposalAttendanceSaving}
+                                      >
+                                        Edit Proof
+                                      </button>
                                     ) : null}
                                   </div>
-
-                                  {String(proposalAttendanceForm.attendanceProofImageDataUrl || "").trim() ? (
-                                    <div className="le-formRow">
-                                      <label className="le-label">Preview</label>
-                                      <img
-                                        src={proposalAttendanceForm.attendanceProofImageDataUrl}
-                                        alt="Proposal attendance proof preview"
-                                        style={{ maxWidth: 260, width: "100%", borderRadius: 8, border: "1px solid #e5e7eb" }}
-                                      />
-                                    </div>
-                                  ) : null}
-                                </>
-                              ) : null}
-
-                              {proposalAttendanceError ? <p className="le-smallNote" style={{ color: "#DA291C", marginTop: 8 }}>{proposalAttendanceError}</p> : null}
-
-                              {proposalAttendanceForm.attendanceChoice === "YES" ? (
-                                <div className="le-actions">
-                                  <button
-                                    type="button"
-                                    className="le-btn secondary"
-                                    onClick={() => {
-                                      setProposalAttendanceError("");
-                                      setProposalAttendanceForm({
-                                        attendanceChoice: "",
-                                        attendanceProofImageDataUrl: "",
-                                        attendanceProofFileName: "",
-                                        attendedAt: "",
-                                      });
-                                    }}
-                                    disabled={proposalAttendanceSaving}
-                                  >
-                                    Clear
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="le-btn primary"
-                                    onClick={submitProposalAttendance}
-                                    disabled={proposalAttendanceSaving}
-                                  >
-                                    {proposalAttendanceSaving ? "Saving..." : "Save Prospect Attendance"}
-                                  </button>
+                                  <input
+                                    ref={proposalAttendanceProofInputRef}
+                                    type="file"
+                                    style={{ display: "none" }}
+                                    accept=".jpg,.jpeg,.png,image/jpeg,image/png"
+                                    onChange={(e) => onProposalAttendanceProofPicked(e.target.files?.[0] || null)}
+                                  />
+                                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                                    <button
+                                      type="button"
+                                      className="le-btn secondary"
+                                      onClick={() => proposalAttendanceProofInputRef.current?.click()}
+                                      disabled={proposalAttendanceSaving || !isProposalAttendanceProofEditable}
+                                    >
+                                      Choose File
+                                    </button>
+                                    <span className="le-smallNote" style={{ margin: 0 }}>
+                                      {proposalAttendanceForm.attendanceProofFileName ? proposalAttendanceForm.attendanceProofFileName : "No file chosen"}
+                                    </span>
+                                  </div>
                                 </div>
                               ) : null}
-                            </>
-                          ) : (
-                            <>
-                              <div className="le-formRow" style={{ marginTop: 4 }}>
-                                <label className="le-label">Prospect Attended?</label>
-                                <p className="le-smallNote">{proposalAttendanceForm.attendanceChoice === "YES" ? "Yes" : proposalAttendanceForm.attendanceChoice === "NO" ? "No" : "—"}</p>
-                              </div>
+
                               {String(proposalAttendanceForm.attendanceProofImageDataUrl || "").trim() ? (
-                                <div className="le-formRow">
+                                <div className="le-formRow" style={{ marginTop: 8 }}>
                                   <label className="le-label">Preview</label>
+                                  {String(proposalAttendanceForm.attendanceProofFileName || "").trim() ? (
+                                    <p className="le-smallNote" style={{ marginTop: 0, marginBottom: 8 }}>
+                                      File Name: {proposalAttendanceForm.attendanceProofFileName}
+                                    </p>
+                                  ) : null}
                                   <img
                                     src={proposalAttendanceForm.attendanceProofImageDataUrl}
                                     alt="Proposal attendance proof preview"
@@ -6990,7 +7163,43 @@ function AgentLeadEngagement() {
                                 </div>
                               ) : null}
                             </>
-                          )}
+                          ) : null}
+
+                          {proposalAttendanceError ? <p className="le-smallNote" style={{ color: "#DA291C", marginTop: 8 }}>{proposalAttendanceError}</p> : null}
+
+                          {proposalAttendanceForm.attendanceChoice === "YES" && (canEditProposalAttendanceProof || proposalAttendanceProofEditMode) ? (
+                            <div className="le-actions" style={{ marginTop: 10 }}>
+                              <button
+                                type="button"
+                                className="le-btn secondary"
+                                onClick={async () => {
+                                  setProposalAttendanceError("");
+                                  if (proposalAttendanceProofEditMode) {
+                                    setProposalAttendanceProofEditMode(false);
+                                    await fetchEngagement();
+                                    return;
+                                  }
+                                  setProposalAttendanceForm({
+                                    attendanceChoice: "",
+                                    attendanceProofImageDataUrl: "",
+                                    attendanceProofFileName: "",
+                                    attendedAt: "",
+                                  });
+                                }}
+                                disabled={proposalAttendanceSaving}
+                              >
+                                {proposalAttendanceProofEditMode ? "Cancel" : "Clear"}
+                              </button>
+                              <button
+                                type="button"
+                                className="le-btn primary"
+                                onClick={submitProposalAttendance}
+                                disabled={proposalAttendanceSaving}
+                              >
+                                {proposalAttendanceSaving ? "Saving..." : "Save"}
+                              </button>
+                            </div>
+                          ) : null}
                         </div>
                       ) : null}
 
@@ -7000,93 +7209,347 @@ function AgentLeadEngagement() {
 
                           {isProposalPresentationEditable ? (
                             <>
-                              <div className="le-formRow" style={{ alignItems: "center" }}>
-                                <label className="le-label">Proposal Accepted? *</label>
-                                <div className="le-checkboxGrid">
-                                  <label className="le-check">
-                                    <input
-                                      type="radio"
-                                      name="proposal-accepted"
-                                      checked={proposalPresentationForm.proposalAccepted === "YES"}
-                                      onChange={() => {
+                              {!proposalPresentationNotesSaved ? (
+                                <>
+                                  <div className="le-formRow">
+                                    <label className="le-label">Notes on Quotation Proposal *</label>
+                                    <textarea
+                                      className="le-input"
+                                      value={proposalPresentationForm.initialQuotationNotes}
+                                      onChange={(e) => setProposalPresentationForm((f) => ({ ...f, initialQuotationNotes: e.target.value }))}
+                                      disabled={proposalPresentationSaving}
+                                      rows={4}
+                                    />
+                                  </div>
+
+                                  {proposalPresentationError ? <p className="le-smallNote" style={{ color: "#DA291C", marginTop: 8 }}>{proposalPresentationError}</p> : null}
+
+                                  <div className="le-actions">
+                                    <button
+                                      type="button"
+                                      className="le-btn secondary"
+                                      onClick={() => {
                                         setProposalPresentationError("");
-                                        setProposalPresentationForm((f) => ({ ...f, proposalAccepted: "YES" }));
+                                        setProposalPresentationNotesSaved(false);
+                                        setProposalPresentationForm((f) => ({
+                                          ...f,
+                                          initialQuotationNotes: "",
+                                        }));
                                       }}
                                       disabled={proposalPresentationSaving}
-                                    />
-                                    <span>Yes</span>
-                                  </label>
-                                  <label className="le-check">
-                                    <input
-                                      type="radio"
-                                      name="proposal-accepted"
-                                      checked={proposalPresentationForm.proposalAccepted === "NO"}
-                                      onChange={() => {
-                                        setProposalPresentationError("");
-                                        setProposalPresentationForm((f) => ({ ...f, proposalAccepted: "NO", initialQuotationNotes: "" }));
-                                      }}
+                                    >
+                                      Clear
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="le-btn primary"
+                                      onClick={submitProposalPresentationNotes}
                                       disabled={proposalPresentationSaving}
-                                    />
-                                    <span>No</span>
-                                  </label>
-                                </div>
-                              </div>
+                                    >
+                                      {proposalPresentationSaving ? "Saving..." : "Save Notes"}
+                                    </button>
+                                  </div>
+                                </>
+                              ) : (
+                                <>
+                                  <div className="le-formRow">
+                                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+                                      <label className="le-label" style={{ marginBottom: 0 }}>Notes on Quotation Proposal</label>
+                                      {!proposalPresentationNotesEditMode && canEditSavedProposalPresentation ? (
+                                        <button
+                                          type="button"
+                                          className="le-btn secondary le-inlineEditBtn"
+                                          onClick={() => {
+                                            setProposalPresentationError("");
+                                            setProposalPresentationEditSnapshot({
+                                              proposalAccepted: proposalPresentationForm.proposalAccepted,
+                                              initialQuotationNotes: proposalPresentationForm.initialQuotationNotes,
+                                            });
+                                            setProposalPresentationNotesEditMode(true);
+                                          }}
+                                          disabled={proposalPresentationSaving}
+                                        >
+                                          <FaEdit style={{ marginRight: 6 }} /> Edit Notes
+                                        </button>
+                                      ) : null}
+                                    </div>
+                                    {proposalPresentationNotesEditMode ? (
+                                      <>
+                                        <textarea
+                                          className="le-input"
+                                          value={proposalPresentationForm.initialQuotationNotes}
+                                          onChange={(e) => setProposalPresentationForm((f) => ({ ...f, initialQuotationNotes: e.target.value }))}
+                                          disabled={proposalPresentationSaving}
+                                          rows={4}
+                                          style={{ marginTop: 8 }}
+                                        />
+                                        <div className="le-actions" style={{ marginTop: 8 }}>
+                                          <button
+                                            type="button"
+                                            className="le-btn secondary"
+                                            onClick={() => {
+                                              setProposalPresentationError("");
+                                              setProposalPresentationForm((f) => ({
+                                                ...f,
+                                                initialQuotationNotes: proposalPresentationEditSnapshot.initialQuotationNotes,
+                                              }));
+                                              setProposalPresentationNotesEditMode(false);
+                                            }}
+                                            disabled={proposalPresentationSaving}
+                                          >
+                                            Cancel
+                                          </button>
+                                          <button
+                                            type="button"
+                                            className="le-btn primary"
+                                            onClick={submitProposalPresentationNotes}
+                                            disabled={proposalPresentationSaving}
+                                          >
+                                            {proposalPresentationSaving ? "Saving..." : "Save Notes"}
+                                          </button>
+                                        </div>
+                                      </>
+                                    ) : (
+                                      <p className="le-smallNote" style={{ whiteSpace: "pre-wrap" }}>{proposalPresentationForm.initialQuotationNotes}</p>
+                                    )}
+                                  </div>
 
-                              {proposalPresentationForm.proposalAccepted === "YES" ? (
-                                <div className="le-formRow">
-                                  <label className="le-label">Initial Quotation Proposal Notes (optional)</label>
-                                  <textarea
-                                    className="le-input"
-                                    value={proposalPresentationForm.initialQuotationNotes}
-                                    onChange={(e) => setProposalPresentationForm((f) => ({ ...f, initialQuotationNotes: e.target.value }))}
-                                    disabled={proposalPresentationSaving}
-                                    rows={4}
-                                  />
-                                </div>
-                              ) : null}
+                                  <div className="le-formRow">
+                                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+                                      <label className="le-label" style={{ marginBottom: 0 }}>Requiring Further Proposal Presentation Meet? *</label>
+                                      {!proposalPresentationDecisionEditMode && ["YES", "NO"].includes(String(proposalPresentationForm.proposalAccepted || "").trim().toUpperCase()) && canEditSavedProposalPresentation ? (
+                                        <button
+                                          type="button"
+                                          className="le-btn secondary le-inlineEditBtn"
+                                          onClick={() => {
+                                            setProposalPresentationError("");
+                                            setProposalPresentationEditSnapshot({
+                                              proposalAccepted: proposalPresentationForm.proposalAccepted,
+                                              initialQuotationNotes: proposalPresentationForm.initialQuotationNotes,
+                                            });
+                                            setProposalPresentationDecisionEditMode(true);
+                                          }}
+                                          disabled={proposalPresentationSaving}
+                                        >
+                                          <FaEdit style={{ marginRight: 6 }} /> Edit
+                                        </button>
+                                      ) : null}
+                                    </div>
+                                    {proposalPresentationDecisionEditMode || !["YES", "NO"].includes(String(proposalPresentationForm.proposalAccepted || "").trim().toUpperCase()) ? (
+                                      <>
+                                        <select
+                                          className="le-input"
+                                          value={proposalPresentationForm.proposalAccepted === "NO" ? "YES" : proposalPresentationForm.proposalAccepted === "YES" ? "NO" : ""}
+                                          onChange={(e) => {
+                                            const requiresFurther = e.target.value;
+                                            setProposalPresentationError("");
+                                            setProposalPresentationForm((f) => ({
+                                              ...f,
+                                              proposalAccepted: requiresFurther === "YES" ? "NO" : requiresFurther === "NO" ? "YES" : "",
+                                            }));
+                                          }}
+                                          disabled={proposalPresentationSaving}
+                                          style={{ marginTop: 8 }}
+                                        >
+                                          <option value="">Select</option>
+                                          <option value="YES">Yes</option>
+                                          <option value="NO">No</option>
+                                        </select>
+                                        <div className="le-actions" style={{ marginTop: 8 }}>
+                                          <button
+                                            type="button"
+                                            className="le-btn secondary"
+                                            onClick={() => {
+                                              setProposalPresentationError("");
+                                              if (proposalPresentationDecisionEditMode) {
+                                                setProposalPresentationForm((f) => ({
+                                                  ...f,
+                                                  proposalAccepted: proposalPresentationEditSnapshot.proposalAccepted,
+                                                }));
+                                                setProposalPresentationDecisionEditMode(false);
+                                                return;
+                                              }
+                                              setProposalPresentationForm((f) => ({
+                                                ...f,
+                                                proposalAccepted: "",
+                                              }));
+                                            }}
+                                            disabled={proposalPresentationSaving}
+                                          >
+                                            {proposalPresentationDecisionEditMode ? "Cancel" : "Clear"}
+                                          </button>
+                                          <button
+                                            type="button"
+                                            className="le-btn primary"
+                                            onClick={submitProposalPresentation}
+                                            disabled={proposalPresentationSaving}
+                                          >
+                                            {proposalPresentationSaving ? "Saving..." : "Save"}
+                                          </button>
+                                        </div>
+                                      </>
+                                    ) : (
+                                      <p className="le-smallNote">{proposalPresentationForm.proposalAccepted === "NO" ? "Yes" : "No"}</p>
+                                    )}
+                                  </div>
 
-                              {proposalPresentationError ? <p className="le-smallNote" style={{ color: "#DA291C", marginTop: 8 }}>{proposalPresentationError}</p> : null}
-
-                              <div className="le-actions">
-                                <button
-                                  type="button"
-                                  className="le-btn secondary"
-                                  onClick={() => {
-                                    setProposalPresentationError("");
-                                    setProposalPresentationForm({
-                                      proposalAccepted: "",
-                                      initialQuotationNotes: "",
-                                      presentedAt: "",
-                                    });
-                                  }}
-                                  disabled={proposalPresentationSaving}
-                                >
-                                  Cancel
-                                </button>
-                                <button
-                                  type="button"
-                                  className="le-btn primary"
-                                  onClick={submitProposalPresentation}
-                                  disabled={proposalPresentationSaving}
-                                >
-                                  {proposalPresentationSaving ? "Saving..." : "Save Proposal Presentation Notes"}
-                                </button>
-                              </div>
+                                  {proposalPresentationError ? <p className="le-smallNote" style={{ color: "#DA291C", marginTop: 8 }}>{proposalPresentationError}</p> : null}
+                                </>
+                              )}
                             </>
                           ) : (
-                            <div className="le-attemptMeta" style={{ marginTop: 8 }}>
-                              <div>
-                                <span className="le-metaLabel">Proposal Accepted</span>
-                                <span className="le-metaValue">{proposalPresentationForm.proposalAccepted === "YES" ? "Yes" : proposalPresentationForm.proposalAccepted === "NO" ? "No" : "—"}</span>
-                              </div>
+                            <div className="le-presentationSummary">
                               {String(proposalPresentationForm.initialQuotationNotes || "").trim() ? (
-                                <div>
-                                  <span className="le-metaLabel">Initial Quotation Proposal Notes</span>
-                                  <span className="le-metaValue">{proposalPresentationForm.initialQuotationNotes}</span>
+                                <div className="le-presentationSummaryField le-presentationSummaryField--notes">
+                                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+                                    <span className="le-metaLabel">Notes on Quotation Proposal</span>
+                                    {!proposalPresentationNotesEditMode && canEditSavedProposalPresentation ? (
+                                      <button
+                                        type="button"
+                                        className="le-btn secondary le-inlineEditBtn"
+                                        onClick={() => {
+                                          setProposalPresentationError("");
+                                          setProposalPresentationEditSnapshot({
+                                            proposalAccepted: proposalPresentationForm.proposalAccepted,
+                                            initialQuotationNotes: proposalPresentationForm.initialQuotationNotes,
+                                          });
+                                          setProposalPresentationNotesEditMode(true);
+                                        }}
+                                        disabled={proposalPresentationSaving}
+                                      >
+                                        <FaEdit style={{ marginRight: 6 }} /> Edit Notes
+                                      </button>
+                                    ) : null}
+                                  </div>
+                                  {proposalPresentationNotesEditMode ? (
+                                    <>
+                                      <textarea
+                                        className="le-input"
+                                        value={proposalPresentationForm.initialQuotationNotes}
+                                        onChange={(e) => setProposalPresentationForm((f) => ({ ...f, initialQuotationNotes: e.target.value }))}
+                                        disabled={proposalPresentationSaving}
+                                        rows={4}
+                                        style={{ marginTop: 8 }}
+                                      />
+                                      <div className="le-actions" style={{ marginTop: 8 }}>
+                                        <button
+                                          type="button"
+                                          className="le-btn secondary"
+                                          onClick={() => {
+                                            setProposalPresentationError("");
+                                            setProposalPresentationForm((f) => ({
+                                              ...f,
+                                              initialQuotationNotes: proposalPresentationEditSnapshot.initialQuotationNotes,
+                                            }));
+                                            setProposalPresentationNotesEditMode(false);
+                                          }}
+                                          disabled={proposalPresentationSaving}
+                                        >
+                                          Cancel
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className="le-btn primary"
+                                          onClick={submitProposalPresentationNotes}
+                                          disabled={proposalPresentationSaving}
+                                        >
+                                          {proposalPresentationSaving ? "Saving..." : "Save Notes"}
+                                        </button>
+                                      </div>
+                                    </>
+                                  ) : (
+                                    <span className="le-metaValue">{proposalPresentationForm.initialQuotationNotes}</span>
+                                  )}
                                 </div>
                               ) : null}
+                              <div className="le-presentationSummaryField le-presentationSummaryField--decision">
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+                                  <span className="le-metaLabel">Requiring Further Proposal Presentation Meet?</span>
+                                  {!proposalPresentationDecisionEditMode && canEditSavedProposalPresentation ? (
+                                    <button
+                                      type="button"
+                                      className="le-btn secondary le-inlineEditBtn"
+                                      onClick={() => {
+                                        setProposalPresentationError("");
+                                        setProposalPresentationEditSnapshot({
+                                          proposalAccepted: proposalPresentationForm.proposalAccepted,
+                                          initialQuotationNotes: proposalPresentationForm.initialQuotationNotes,
+                                        });
+                                        setProposalPresentationDecisionEditMode(true);
+                                      }}
+                                      disabled={proposalPresentationSaving}
+                                    >
+                                      <FaEdit style={{ marginRight: 6 }} /> Edit
+                                    </button>
+                                  ) : null}
+                                </div>
+                                {proposalPresentationDecisionEditMode ? (
+                                  <>
+                                    <select
+                                      className="le-input"
+                                      value={proposalPresentationForm.proposalAccepted === "NO" ? "YES" : proposalPresentationForm.proposalAccepted === "YES" ? "NO" : ""}
+                                      onChange={(e) => {
+                                        const requiresFurther = e.target.value;
+                                        setProposalPresentationError("");
+                                        setProposalPresentationForm((f) => ({
+                                          ...f,
+                                          proposalAccepted: requiresFurther === "YES" ? "NO" : requiresFurther === "NO" ? "YES" : "",
+                                        }));
+                                      }}
+                                      disabled={proposalPresentationSaving}
+                                      style={{ marginTop: 8 }}
+                                    >
+                                      <option value="">Select</option>
+                                      <option value="YES">Yes</option>
+                                      <option value="NO">No</option>
+                                    </select>
+                                    <div className="le-actions" style={{ marginTop: 8 }}>
+                                      <button
+                                        type="button"
+                                        className="le-btn secondary"
+                                        onClick={() => {
+                                          setProposalPresentationError("");
+                                          setProposalPresentationForm((f) => ({
+                                            ...f,
+                                            proposalAccepted: proposalPresentationEditSnapshot.proposalAccepted,
+                                          }));
+                                          setProposalPresentationDecisionEditMode(false);
+                                        }}
+                                        disabled={proposalPresentationSaving}
+                                      >
+                                        Cancel
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="le-btn primary"
+                                        onClick={submitProposalPresentation}
+                                        disabled={proposalPresentationSaving}
+                                      >
+                                        {proposalPresentationSaving ? "Saving..." : "Save"}
+                                      </button>
+                                    </div>
+                                  </>
+                                ) : (
+                                  <span className="le-metaValue">{proposalPresentationForm.proposalAccepted === "NO" ? "Yes" : proposalPresentationForm.proposalAccepted === "YES" ? "No" : "—"}</span>
+                                )}
+                              </div>
+                              {proposalPresentationError ? <p className="le-smallNote" style={{ color: "#DA291C", marginTop: 8 }}>{proposalPresentationError}</p> : null}
+                              {proposalPresentationForm.proposalAccepted === "NO" ? (
+                                <p className="le-muted le-presentationFurtherPrompt">
+                                  Further proposal presentation can be added from Schedule Proposal Presentation.{" "}
+                                  <button
+                                    type="button"
+                                    className="le-btn ghost"
+                                    style={{ padding: 0, border: 0, background: "transparent", textDecoration: "underline" }}
+                                    onClick={goToScheduleProposalPresentationFromProposalNo}
+                                    disabled={proposalPresentationSaving}
+                                  >
+                                    Open Schedule Proposal Presentation
+                                  </button>
+                                </p>
+                              ) : null}
                               {proposalPresentationForm.presentedAt ? (
-                                <div>
+                                <div className="le-presentationSummaryField">
                                   <span className="le-metaLabel">Presented At</span>
                                   <span className="le-metaValue">{formatDateTime(proposalPresentationForm.presentedAt)}</span>
                                 </div>
@@ -8400,7 +8863,7 @@ function AgentLeadEngagement() {
                                       onClick={startRescheduleProposalPresentation}
                                       disabled={savingProposalMeeting}
                                     >
-                                      Reschedule Meeting
+                                      {isProposalPresentationNoRescheduleMode ? "Add Further Proposal Presentation Meet" : "Reschedule Meeting"}
                                     </button>
                                   </div>
                                 ) : null}
@@ -8439,13 +8902,14 @@ function AgentLeadEngagement() {
                               >
                                 <option value="">Select Time</option>
                                 {proposalMeetingStartSlots.map((t) => {
+                                  const initialProposalMeetingStartAt = proposalMeetingSaved?.startAt || proposalMeetingRescheduleOriginal?.startAt || "";
                                   const isBooked = proposalMeetingForm.meetingDate
-                                    ? isSlotBooked(proposalMeetingForm.meetingDate, t, proposalMeetingForm.meetingDurationMin, proposalMeetingSaved?.startAt)
+                                    ? isSlotBooked(proposalMeetingForm.meetingDate, t, proposalMeetingForm.meetingDurationMin, isProposalPresentationNoRescheduleMode ? null : initialProposalMeetingStartAt)
                                     : false;
-                                  const initialSlotTime = proposalMeetingSaved?.startAt
-                                    ? `${String(new Date(proposalMeetingSaved.startAt).getHours()).padStart(2, "0")}:${String(new Date(proposalMeetingSaved.startAt).getMinutes()).padStart(2, "0")}`
+                                  const initialSlotTime = initialProposalMeetingStartAt
+                                    ? `${String(new Date(initialProposalMeetingStartAt).getHours()).padStart(2, "0")}:${String(new Date(initialProposalMeetingStartAt).getMinutes()).padStart(2, "0")}`
                                     : "";
-                                  const isInitialSetting = Boolean(proposalMeetingSaved?.startAt) && proposalMeetingForm.meetingDate === toDateInputValue(proposalMeetingSaved.startAt) && t === initialSlotTime;
+                                  const isInitialSetting = Boolean(initialProposalMeetingStartAt) && proposalMeetingForm.meetingDate === toDateInputValue(initialProposalMeetingStartAt) && t === initialSlotTime;
                                   return (
                                     <option key={`proposal-${t}`} value={t} disabled={isBooked || isInitialSetting}>
                                       {isInitialSetting ? `${formatTimeLabel(t)} (INITIAL SETTING)` : isBooked ? `${formatTimeLabel(t)} (BOOKED)` : formatTimeLabel(t)}
@@ -8588,6 +9052,10 @@ function AgentLeadEngagement() {
                                 type="button"
                                 className="le-btn secondary"
                                 onClick={() => {
+                                  if (proposalMeetingRescheduleOriginal) {
+                                    cancelRescheduleProposalPresentation();
+                                    return;
+                                  }
                                   setProposalMeetingError("");
                                   setProposalMeetingFieldErrors({});
                                   setProposalMeetingForm({
@@ -8605,7 +9073,7 @@ function AgentLeadEngagement() {
                                 }}
                                 disabled={!isNeedsScheduleEditable || savingProposalMeeting}
                               >
-                                Clear
+                                {proposalMeetingRescheduleOriginal ? "Cancel" : "Clear"}
                               </button>
                               <button
                                 type="button"
