@@ -123,6 +123,7 @@ function AgentLeadEngagement() {
   const [needsAttendanceRescheduleLock, setNeedsAttendanceRescheduleLock] = useState(false);
   const [needsAttendanceProofEditMode, setNeedsAttendanceProofEditMode] = useState(false);
   const needsAttendanceProofInputRef = useRef(null);
+  const proposalAttendanceProofInputRef = useRef(null);
 
   const [needsAssessmentLoading, setNeedsAssessmentLoading] = useState(false);
   const [needsAssessmentSaving, setNeedsAssessmentSaving] = useState(false);
@@ -154,6 +155,7 @@ function AgentLeadEngagement() {
     meetingPlace: "",
   });
   const [proposalMeetingSaved, setProposalMeetingSaved] = useState(null);
+  const [proposalMeetingRescheduleOriginal, setProposalMeetingRescheduleOriginal] = useState(null);
   const [savingProposalMeeting, setSavingProposalMeeting] = useState(false);
   const [proposalMeetingError, setProposalMeetingError] = useState("");
   const [proposalMeetingFieldErrors, setProposalMeetingFieldErrors] = useState({});
@@ -192,6 +194,7 @@ function AgentLeadEngagement() {
   });
   const [proposalAttendanceSaving, setProposalAttendanceSaving] = useState(false);
   const [proposalAttendanceError, setProposalAttendanceError] = useState("");
+  const [proposalAttendanceProofEditMode, setProposalAttendanceProofEditMode] = useState(false);
   const [proposalPresentationForm, setProposalPresentationForm] = useState({
     proposalAccepted: "",
     initialQuotationNotes: "",
@@ -534,11 +537,12 @@ function AgentLeadEngagement() {
       });
       setProposalGenerateEditMode(false);
       setProposalAttendanceForm({
-        attendanceChoice: attendance?.attended ? "YES" : "",
+        attendanceChoice: String(attendance?.attendanceChoice || (attendance?.attended ? "YES" : "")),
         attendanceProofImageDataUrl: String(attendance?.attendanceProofImageDataUrl || ""),
         attendanceProofFileName: String(attendance?.attendanceProofFileName || ""),
         attendedAt: attendance?.attendedAt || "",
       });
+      setProposalAttendanceProofEditMode(false);
       setProposalPresentationForm({
         proposalAccepted: String(presentation?.proposalAccepted || ""),
         initialQuotationNotes: String(presentation?.initialQuotationNotes || ""),
@@ -736,6 +740,7 @@ function AgentLeadEngagement() {
 
       const proposalMeeting = data?.proposalMeeting || null;
       setProposalMeetingSaved(proposalMeeting);
+      setProposalMeetingRescheduleOriginal(null);
       if (!proposalMeeting) {
         setProposalMeetingNeedsPrefillKey("");
       }
@@ -1864,6 +1869,8 @@ function AgentLeadEngagement() {
   const isViewingFutureStage = viewedStageIndex >= 0 && viewedStageIndex > safeIndex;
   const futureStageSubactivityHelperText =
     "This stage is still ahead in the lead journey. Its subactivities stay gray until the progression reaches them.";
+  const previouslySavedSubactivityHelperText =
+    "Viewing a previously saved subactivity. Click the current subactivity to resume editing.";
 
   const isNeedsAssessmentEditableNow =
     showNeedsAssessmentPanel &&
@@ -2007,6 +2014,30 @@ function AgentLeadEngagement() {
     proposalUiActivityKey === "Present Proposal" &&
     isProposalEditableNow &&
     !proposalPresentationForm.presentedAt;
+  const canEditProposalAttendanceChoice =
+    proposalUiActivityKey === "Record Prospect Attendance" &&
+    isProposalEditableNow;
+  const canEditProposalAttendanceProof =
+    showProposalPanel &&
+    isViewingCurrentStage &&
+    stage === "Proposal" &&
+    !isLeadClosed &&
+    !isLeadDropped &&
+    proposalViewedActivityKey === "Record Prospect Attendance" &&
+    proposalUiActivityKey === "Record Prospect Attendance" &&
+    proposalAttendanceForm.attendanceChoice === "YES";
+  const canRequestProposalAttendanceProofEdit =
+    !proposalAttendanceProofEditMode &&
+    showProposalPanel &&
+    isViewingCurrentStage &&
+    stage === "Proposal" &&
+    !isLeadClosed &&
+    !isLeadDropped &&
+    proposalViewedActivityKey === "Record Prospect Attendance" &&
+    ["Present Proposal", "Schedule Application Submission"].includes(proposalUiActivityKey) &&
+    proposalAttendanceForm.attendanceChoice === "YES" &&
+    String(proposalAttendanceForm.attendanceProofImageDataUrl || "").trim();
+  const isProposalAttendanceProofEditable = canEditProposalAttendanceProof || proposalAttendanceProofEditMode;
 
   const applicationUiActivityKey = useMemo(() => {
     const fallback = "Record Prospect Attendance";
@@ -2366,9 +2397,13 @@ function AgentLeadEngagement() {
     ["Perform Needs Analysis", "Schedule Proposal Presentation"].includes(needsActivityKeyRaw) &&
     needsAssessmentForm.attendanceChoice === "YES" &&
     String(needsAssessmentForm.attendanceProofImageDataUrl || "").trim();
+  const isProposalAttendanceNoRescheduleMode =
+    showNeedsAssessmentPanel &&
+    String(engagement?.currentStage || "").trim() === "Proposal" &&
+    String(proposalCurrentActivityKey || "").trim() === "Record Prospect Attendance" &&
+    proposalAttendanceForm.attendanceChoice === "NO";
   const isNeedsScheduleEditable =
-    isNeedsAssessmentCurrentViewEditable &&
-    needsActivityKeyRaw === "Schedule Proposal Presentation" &&
+    ((isNeedsAssessmentCurrentViewEditable && needsActivityKeyRaw === "Schedule Proposal Presentation") || isProposalAttendanceNoRescheduleMode) &&
     needsAssessmentViewedActivityKey === "Schedule Proposal Presentation";
   const isNeedsAnalysisViewed = needsAssessmentViewedActivityKey === "Perform Needs Analysis";
   const isNeedsScheduleViewed = needsAssessmentViewedActivityKey === "Schedule Proposal Presentation";
@@ -2387,7 +2422,7 @@ function AgentLeadEngagement() {
     : "";
 
   useEffect(() => {
-    if (!showProposalSchedulingSection || !isNeedsScheduleViewed || proposalMeetingSaved || !latestScheduledMeeting || !proposalNeedsPrefillKey) {
+    if (!showProposalSchedulingSection || !isNeedsScheduleViewed || proposalMeetingSaved || proposalMeetingRescheduleOriginal || !latestScheduledMeeting || !proposalNeedsPrefillKey) {
       if (proposalMeetingSaved || !showProposalSchedulingSection) setProposalMeetingNeedsPrefillKey("");
       return;
     }
@@ -2411,6 +2446,7 @@ function AgentLeadEngagement() {
     isNeedsScheduleViewed,
     latestScheduledMeeting,
     proposalMeetingNeedsPrefillKey,
+    proposalMeetingRescheduleOriginal,
     proposalMeetingSaved,
     proposalNeedsPrefillKey,
     showProposalSchedulingSection,
@@ -2897,20 +2933,44 @@ function AgentLeadEngagement() {
 
   const startRescheduleProposalPresentation = () => {
     if (!proposalMeetingSaved?.startAt) return;
+    const originalMeeting = proposalMeetingSaved;
     setProposalMeetingError("");
     setProposalMeetingFieldErrors({});
+    setProposalMeetingRescheduleOriginal(originalMeeting);
     setProposalMeetingForm({
       meetingDate: "",
       meetingStartTime: "",
-      meetingDurationMin: proposalMeetingSaved?.durationMin ?? 120,
-      meetingMode: String(proposalMeetingSaved?.mode || ""),
-      meetingPlatform: String(proposalMeetingSaved?.platform || ""),
-      meetingPlatformOther: String(proposalMeetingSaved?.platformOther || ""),
-      meetingLink: String(proposalMeetingSaved?.link || ""),
-      meetingInviteSent: Boolean(proposalMeetingSaved?.inviteSent),
-      meetingPlace: String(proposalMeetingSaved?.place || ""),
+      meetingDurationMin: originalMeeting?.durationMin ?? 120,
+      meetingMode: String(originalMeeting?.mode || ""),
+      meetingPlatform: String(originalMeeting?.platform || ""),
+      meetingPlatformOther: String(originalMeeting?.platformOther || ""),
+      meetingLink: String(originalMeeting?.link || ""),
+      meetingInviteSent: Boolean(originalMeeting?.inviteSent),
+      meetingPlace: String(originalMeeting?.place || ""),
     });
     setProposalMeetingSaved(null);
+  };
+
+  const cancelRescheduleProposalPresentation = () => {
+    if (!proposalMeetingRescheduleOriginal) return;
+    const originalMeeting = proposalMeetingRescheduleOriginal;
+    setProposalMeetingError("");
+    setProposalMeetingFieldErrors({});
+    setProposalMeetingForm({
+      meetingDate: originalMeeting?.startAt ? toDateInputValue(originalMeeting.startAt) : "",
+      meetingStartTime: originalMeeting?.startAt
+        ? `${String(new Date(originalMeeting.startAt).getHours()).padStart(2, "0")}:${String(new Date(originalMeeting.startAt).getMinutes()).padStart(2, "0")}`
+        : "",
+      meetingDurationMin: originalMeeting?.durationMin ?? 120,
+      meetingMode: String(originalMeeting?.mode || ""),
+      meetingPlatform: String(originalMeeting?.platform || ""),
+      meetingPlatformOther: String(originalMeeting?.platformOther || ""),
+      meetingLink: String(originalMeeting?.link || ""),
+      meetingInviteSent: Boolean(originalMeeting?.inviteSent),
+      meetingPlace: String(originalMeeting?.place || ""),
+    });
+    setProposalMeetingSaved(originalMeeting);
+    setProposalMeetingRescheduleOriginal(null);
   };
 
   const startAddNewNeedsAssessmentMeeting = () => {
@@ -3177,6 +3237,18 @@ function AgentLeadEngagement() {
       const latestWindows = await fetchMeetingAvailability();
       const proposedStart = combineDateAndTimeLocal(meetingDate, meetingStartTime);
       const proposedEnd = proposedStart ? new Date(proposedStart.getTime() + meetingDurationMin * 60 * 1000) : null;
+      const proposalRescheduleOriginalStartAt = proposalMeetingRescheduleOriginal?.startAt
+        ? new Date(proposalMeetingRescheduleOriginal.startAt)
+        : null;
+      if (
+        proposedStart &&
+        proposalRescheduleOriginalStartAt &&
+        !Number.isNaN(proposalRescheduleOriginalStartAt.getTime()) &&
+        proposedStart.getTime() === proposalRescheduleOriginalStartAt.getTime()
+      ) {
+        setProposalMeetingFieldErrors({ meetingStartTime: "Rescheduled meeting time cannot be the same as previous meeting time." });
+        return;
+      }
       if (!proposalMeetingSaved?.startAt && latestScheduledMeeting?.meetingAt) {
         if (proposalMeetingMinimumDate && meetingDate < proposalMeetingMinimumDate) {
           setProposalMeetingFieldErrors({ meetingDate: `Meeting date must be on or after ${proposalMeetingMinimumDate}.` });
@@ -3198,14 +3270,15 @@ function AgentLeadEngagement() {
         const ws = w?.startAt ? new Date(w.startAt) : null;
         const we = w?.endAt ? new Date(w.endAt) : null;
         if (!ws || !we || Number.isNaN(ws.getTime()) || Number.isNaN(we.getTime())) return false;
-        if (proposalMeetingSaved?.startAt && ws.getTime() === new Date(proposalMeetingSaved.startAt).getTime()) return false;
+        const ignoredProposalMeetingStartAt = proposalMeetingSaved?.startAt || proposalMeetingRescheduleOriginal?.startAt;
+        if (ignoredProposalMeetingStartAt && ws.getTime() === new Date(ignoredProposalMeetingStartAt).getTime()) return false;
         return ws < proposedEnd && we > proposedStart;
       });
       if (hasRealtimeConflict) {
         setProposalMeetingFieldErrors({ meetingStartTime: "Selected start time conflicts with an existing meeting." });
         return;
       }
-      if (isSlotBooked(meetingDate, meetingStartTime, meetingDurationMin, proposalMeetingSaved?.startAt)) {
+      if (isSlotBooked(meetingDate, meetingStartTime, meetingDurationMin, proposalMeetingSaved?.startAt || proposalMeetingRescheduleOriginal?.startAt)) {
         setProposalMeetingFieldErrors({ meetingStartTime: "Selected start time conflicts with an existing meeting." });
         return;
       }
@@ -3271,6 +3344,13 @@ function AgentLeadEngagement() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to schedule proposal presentation.");
 
+      setProposalMeetingRescheduleOriginal(null);
+      setProposalAttendanceForm({
+        attendanceChoice: "",
+        attendanceProofImageDataUrl: "",
+        attendanceProofFileName: "",
+        attendedAt: "",
+      });
       await refreshCurrentProgressView({ includeNeedsAssessment: true });
     } catch (err) {
       const msg = err?.message || "Cannot connect to server. Is backend running?";
@@ -3497,9 +3577,13 @@ function AgentLeadEngagement() {
 
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to save proposal attendance.");
+      setProposalAttendanceProofEditMode(false);
       if (!attended) {
+        await fetchNeedsAssessment();
+        await fetchEngagement();
         setSelectedStageView("Needs Assessment");
         setNeedsAssessmentViewedActivityKey("Schedule Proposal Presentation");
+        return;
       }
       await refreshCurrentProgressView();
     } catch (err) {
@@ -4663,7 +4747,7 @@ function AgentLeadEngagement() {
                         isLeadClosed || isLeadDropped
                           ? closedLeadSubactivityHelperText
                           : contactingViewedStepIndex < contactingCurrentStepIndex
-                          ? "Viewing a previously saved subactivity. Click the current subactivity to resume editing."
+                          ? previouslySavedSubactivityHelperText
                           : "Click any unlocked subactivity to review saved details."
                       }
                       showCurrentStatus={showCurrentSubactivityStatus}
@@ -4705,7 +4789,7 @@ function AgentLeadEngagement() {
                           : isLeadClosed || isLeadDropped
                           ? closedLeadSubactivityHelperText
                           : needsViewedStepIndex < needsCurrentStepIndex
-                          ? "Viewing a previously saved subactivity. Click the current subactivity to resume editing."
+                          ? previouslySavedSubactivityHelperText
                           : "Click any unlocked subactivity to review saved details."
                       }
                       showCurrentStatus={showCurrentSubactivityStatus}
@@ -4736,7 +4820,7 @@ function AgentLeadEngagement() {
                           : isLeadClosed || isLeadDropped
                           ? closedLeadSubactivityHelperText
                           : proposalViewedStepIndex < proposalCurrentStepIndex
-                          ? "Click the current subactivity to resume editing."
+                          ? previouslySavedSubactivityHelperText
                           : "Click any unlocked subactivity to review saved details."
                       }
                       showCurrentStatus={showCurrentSubactivityStatus}
@@ -4767,7 +4851,7 @@ function AgentLeadEngagement() {
                           : isLeadClosed || isLeadDropped
                           ? closedLeadSubactivityHelperText
                           : applicationViewedStepIndex < applicationCurrentStepIndex
-                          ? "Viewing a previously saved application subactivity in read-only mode. Click the current subactivity to resume editing."
+                          ? previouslySavedSubactivityHelperText
                           : "Click any unlocked subactivity to review saved details."
                       }
                       showCurrentStatus={showCurrentSubactivityStatus}
@@ -4798,7 +4882,7 @@ function AgentLeadEngagement() {
                           : isLeadClosed || isLeadDropped
                           ? closedLeadSubactivityHelperText
                           : policyViewedStepIndex < policyCurrentStepIndex
-                          ? "Viewing a previously saved policy issuance subactivity in read-only mode. Click the current subactivity to resume editing."
+                          ? previouslySavedSubactivityHelperText
                           : "Click any unlocked subactivity to review saved details."
                       }
                       showCurrentStatus={showCurrentSubactivityStatus}
@@ -6859,129 +6943,106 @@ function AgentLeadEngagement() {
                         <div className="le-block">
                           <h4 className="le-blockTitle">Prospect Attendance</h4>
 
-                          {proposalUiActivityKey === "Record Prospect Attendance" && isProposalEditableNow ? (
+                          <div className="le-formRow" style={{ alignItems: "center" }}>
+                            <label className="le-label">Prospect Attended? *</label>
+                            <div className="le-checkboxGrid">
+                              <label className="le-check">
+                                <input
+                                  type="radio"
+                                  name="proposal-prospect-attendance"
+                                  checked={proposalAttendanceForm.attendanceChoice === "YES"}
+                                  onChange={() => {
+                                    setProposalAttendanceError("");
+                                    setProposalAttendanceForm((f) => ({ ...f, attendanceChoice: "YES" }));
+                                  }}
+                                  disabled={!canEditProposalAttendanceChoice || proposalAttendanceSaving || proposalAttendanceProofEditMode}
+                                />
+                                <span>Yes</span>
+                              </label>
+                              <label className="le-check">
+                                <input
+                                  type="radio"
+                                  name="proposal-prospect-attendance"
+                                  checked={proposalAttendanceForm.attendanceChoice === "NO"}
+                                  onChange={() => {
+                                    setProposalAttendanceError("");
+                                    setProposalAttendanceForm((f) => ({
+                                      ...f,
+                                      attendanceChoice: "NO",
+                                      attendanceProofImageDataUrl: "",
+                                      attendanceProofFileName: "",
+                                    }));
+                                  }}
+                                  disabled={!canEditProposalAttendanceChoice || proposalAttendanceSaving || proposalAttendanceProofEditMode}
+                                />
+                                <span>No</span>
+                              </label>
+                            </div>
+                          </div>
+
+                          {proposalAttendanceForm.attendanceChoice === "NO" && canEditProposalAttendanceChoice ? (
+                            <p className="le-muted" style={{ marginTop: 8 }}>
+                              Proposal presentation can be rescheduled.{" "}
+                              <button
+                                type="button"
+                                className="le-btn ghost"
+                                style={{ padding: 0, border: 0, background: "transparent", textDecoration: "underline" }}
+                                onClick={goToScheduleProposalPresentationFromProposalAttendanceNo}
+                                disabled={proposalAttendanceSaving}
+                              >
+                                Go to Schedule Proposal Presentation
+                              </button>
+                            </p>
+                          ) : null}
+
+                          {proposalAttendanceForm.attendanceChoice === "YES" ? (
                             <>
-                              <div className="le-formRow" style={{ alignItems: "center" }}>
-                                <label className="le-label">Prospect Attended? *</label>
-                                <div className="le-checkboxGrid">
-                                  <label className="le-check">
-                                    <input
-                                      type="radio"
-                                      name="proposal-prospect-attendance"
-                                      checked={proposalAttendanceForm.attendanceChoice === "YES"}
-                                      onChange={() => {
-                                        setProposalAttendanceError("");
-                                        setProposalAttendanceForm((f) => ({ ...f, attendanceChoice: "YES" }));
-                                      }}
-                                      disabled={proposalAttendanceSaving}
-                                    />
-                                    <span>Yes</span>
-                                  </label>
-                                  <label className="le-check">
-                                    <input
-                                      type="radio"
-                                      name="proposal-prospect-attendance"
-                                      checked={proposalAttendanceForm.attendanceChoice === "NO"}
-                                      onChange={() => {
-                                        setProposalAttendanceError("");
-                                        setProposalAttendanceForm((f) => ({
-                                          ...f,
-                                          attendanceChoice: "NO",
-                                          attendanceProofImageDataUrl: "",
-                                          attendanceProofFileName: "",
-                                        }));
-                                      }}
-                                      disabled={proposalAttendanceSaving}
-                                    />
-                                    <span>No</span>
-                                  </label>
-                                </div>
-                              </div>
-
-                              {proposalAttendanceForm.attendanceChoice === "NO" ? (
-                                <p className="le-muted" style={{ marginTop: 8 }}>
-                                  Proposal presentation can be rescheduled.{" "}
-                                  <button
-                                    type="button"
-                                    className="le-btn ghost"
-                                    style={{ padding: 0, border: 0, background: "transparent", textDecoration: "underline" }}
-                                    onClick={goToScheduleProposalPresentationFromProposalAttendanceNo}
-                                    disabled={proposalAttendanceSaving}
-                                  >
-                                    Go to Schedule Proposal Presentation
-                                  </button>
-                                </p>
-                              ) : null}
-
-                              {proposalAttendanceForm.attendanceChoice === "YES" ? (
-                                <>
-                                  <div className="le-formRow" style={{ marginTop: 8 }}>
-                                    <label className="le-label">Proof of Attendance (JPG, JPEG, PNG) *</label>
-                                    <input
-                                      type="file"
-                                      className="le-input"
-                                      accept=".jpg,.jpeg,.png,image/jpeg,image/png"
-                                      onChange={(e) => onProposalAttendanceProofPicked(e.target.files?.[0] || null)}
-                                      disabled={proposalAttendanceSaving}
-                                    />
-                                    {proposalAttendanceForm.attendanceProofFileName ? (
-                                      <p className="le-smallNote">Selected file: {proposalAttendanceForm.attendanceProofFileName}</p>
+                              {(canEditProposalAttendanceProof || proposalAttendanceProofEditMode || canRequestProposalAttendanceProofEdit) ? (
+                                <div className="le-formRow" style={{ marginTop: 8 }}>
+                                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%" }}>
+                                    <label className="le-label" style={{ margin: 0 }}>Proof of Attendance (JPG, JPEG, PNG) *</label>
+                                    {canRequestProposalAttendanceProofEdit && !proposalAttendanceProofEditMode ? (
+                                      <button
+                                        type="button"
+                                        className="le-btn secondary"
+                                        onClick={() => setProposalAttendanceProofEditMode(true)}
+                                        disabled={proposalAttendanceSaving}
+                                      >
+                                        Edit Proof
+                                      </button>
                                     ) : null}
                                   </div>
-
-                                  {String(proposalAttendanceForm.attendanceProofImageDataUrl || "").trim() ? (
-                                    <div className="le-formRow">
-                                      <label className="le-label">Preview</label>
-                                      <img
-                                        src={proposalAttendanceForm.attendanceProofImageDataUrl}
-                                        alt="Proposal attendance proof preview"
-                                        style={{ maxWidth: 260, width: "100%", borderRadius: 8, border: "1px solid #e5e7eb" }}
-                                      />
-                                    </div>
-                                  ) : null}
-                                </>
-                              ) : null}
-
-                              {proposalAttendanceError ? <p className="le-smallNote" style={{ color: "#DA291C", marginTop: 8 }}>{proposalAttendanceError}</p> : null}
-
-                              {proposalAttendanceForm.attendanceChoice === "YES" ? (
-                                <div className="le-actions">
-                                  <button
-                                    type="button"
-                                    className="le-btn secondary"
-                                    onClick={() => {
-                                      setProposalAttendanceError("");
-                                      setProposalAttendanceForm({
-                                        attendanceChoice: "",
-                                        attendanceProofImageDataUrl: "",
-                                        attendanceProofFileName: "",
-                                        attendedAt: "",
-                                      });
-                                    }}
-                                    disabled={proposalAttendanceSaving}
-                                  >
-                                    Clear
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="le-btn primary"
-                                    onClick={submitProposalAttendance}
-                                    disabled={proposalAttendanceSaving}
-                                  >
-                                    {proposalAttendanceSaving ? "Saving..." : "Save Prospect Attendance"}
-                                  </button>
+                                  <input
+                                    ref={proposalAttendanceProofInputRef}
+                                    type="file"
+                                    style={{ display: "none" }}
+                                    accept=".jpg,.jpeg,.png,image/jpeg,image/png"
+                                    onChange={(e) => onProposalAttendanceProofPicked(e.target.files?.[0] || null)}
+                                  />
+                                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                                    <button
+                                      type="button"
+                                      className="le-btn secondary"
+                                      onClick={() => proposalAttendanceProofInputRef.current?.click()}
+                                      disabled={proposalAttendanceSaving || !isProposalAttendanceProofEditable}
+                                    >
+                                      Choose File
+                                    </button>
+                                    <span className="le-smallNote" style={{ margin: 0 }}>
+                                      {proposalAttendanceForm.attendanceProofFileName ? proposalAttendanceForm.attendanceProofFileName : "No file chosen"}
+                                    </span>
+                                  </div>
                                 </div>
                               ) : null}
-                            </>
-                          ) : (
-                            <>
-                              <div className="le-formRow" style={{ marginTop: 4 }}>
-                                <label className="le-label">Prospect Attended?</label>
-                                <p className="le-smallNote">{proposalAttendanceForm.attendanceChoice === "YES" ? "Yes" : proposalAttendanceForm.attendanceChoice === "NO" ? "No" : "—"}</p>
-                              </div>
+
                               {String(proposalAttendanceForm.attendanceProofImageDataUrl || "").trim() ? (
-                                <div className="le-formRow">
+                                <div className="le-formRow" style={{ marginTop: 8 }}>
                                   <label className="le-label">Preview</label>
+                                  {String(proposalAttendanceForm.attendanceProofFileName || "").trim() ? (
+                                    <p className="le-smallNote" style={{ marginTop: 0, marginBottom: 8 }}>
+                                      File Name: {proposalAttendanceForm.attendanceProofFileName}
+                                    </p>
+                                  ) : null}
                                   <img
                                     src={proposalAttendanceForm.attendanceProofImageDataUrl}
                                     alt="Proposal attendance proof preview"
@@ -6990,7 +7051,43 @@ function AgentLeadEngagement() {
                                 </div>
                               ) : null}
                             </>
-                          )}
+                          ) : null}
+
+                          {proposalAttendanceError ? <p className="le-smallNote" style={{ color: "#DA291C", marginTop: 8 }}>{proposalAttendanceError}</p> : null}
+
+                          {proposalAttendanceForm.attendanceChoice === "YES" && (canEditProposalAttendanceProof || proposalAttendanceProofEditMode) ? (
+                            <div className="le-actions" style={{ marginTop: 10 }}>
+                              <button
+                                type="button"
+                                className="le-btn secondary"
+                                onClick={async () => {
+                                  setProposalAttendanceError("");
+                                  if (proposalAttendanceProofEditMode) {
+                                    setProposalAttendanceProofEditMode(false);
+                                    await fetchEngagement();
+                                    return;
+                                  }
+                                  setProposalAttendanceForm({
+                                    attendanceChoice: "",
+                                    attendanceProofImageDataUrl: "",
+                                    attendanceProofFileName: "",
+                                    attendedAt: "",
+                                  });
+                                }}
+                                disabled={proposalAttendanceSaving}
+                              >
+                                {proposalAttendanceProofEditMode ? "Cancel" : "Clear"}
+                              </button>
+                              <button
+                                type="button"
+                                className="le-btn primary"
+                                onClick={submitProposalAttendance}
+                                disabled={proposalAttendanceSaving}
+                              >
+                                {proposalAttendanceSaving ? "Saving..." : "Save"}
+                              </button>
+                            </div>
+                          ) : null}
                         </div>
                       ) : null}
 
@@ -8439,13 +8536,14 @@ function AgentLeadEngagement() {
                               >
                                 <option value="">Select Time</option>
                                 {proposalMeetingStartSlots.map((t) => {
+                                  const initialProposalMeetingStartAt = proposalMeetingSaved?.startAt || proposalMeetingRescheduleOriginal?.startAt || "";
                                   const isBooked = proposalMeetingForm.meetingDate
-                                    ? isSlotBooked(proposalMeetingForm.meetingDate, t, proposalMeetingForm.meetingDurationMin, proposalMeetingSaved?.startAt)
+                                    ? isSlotBooked(proposalMeetingForm.meetingDate, t, proposalMeetingForm.meetingDurationMin, initialProposalMeetingStartAt)
                                     : false;
-                                  const initialSlotTime = proposalMeetingSaved?.startAt
-                                    ? `${String(new Date(proposalMeetingSaved.startAt).getHours()).padStart(2, "0")}:${String(new Date(proposalMeetingSaved.startAt).getMinutes()).padStart(2, "0")}`
+                                  const initialSlotTime = initialProposalMeetingStartAt
+                                    ? `${String(new Date(initialProposalMeetingStartAt).getHours()).padStart(2, "0")}:${String(new Date(initialProposalMeetingStartAt).getMinutes()).padStart(2, "0")}`
                                     : "";
-                                  const isInitialSetting = Boolean(proposalMeetingSaved?.startAt) && proposalMeetingForm.meetingDate === toDateInputValue(proposalMeetingSaved.startAt) && t === initialSlotTime;
+                                  const isInitialSetting = Boolean(initialProposalMeetingStartAt) && proposalMeetingForm.meetingDate === toDateInputValue(initialProposalMeetingStartAt) && t === initialSlotTime;
                                   return (
                                     <option key={`proposal-${t}`} value={t} disabled={isBooked || isInitialSetting}>
                                       {isInitialSetting ? `${formatTimeLabel(t)} (INITIAL SETTING)` : isBooked ? `${formatTimeLabel(t)} (BOOKED)` : formatTimeLabel(t)}
@@ -8588,6 +8686,10 @@ function AgentLeadEngagement() {
                                 type="button"
                                 className="le-btn secondary"
                                 onClick={() => {
+                                  if (proposalMeetingRescheduleOriginal) {
+                                    cancelRescheduleProposalPresentation();
+                                    return;
+                                  }
                                   setProposalMeetingError("");
                                   setProposalMeetingFieldErrors({});
                                   setProposalMeetingForm({
@@ -8605,7 +8707,7 @@ function AgentLeadEngagement() {
                                 }}
                                 disabled={!isNeedsScheduleEditable || savingProposalMeeting}
                               >
-                                Clear
+                                {proposalMeetingRescheduleOriginal ? "Cancel" : "Clear"}
                               </button>
                               <button
                                 type="button"
