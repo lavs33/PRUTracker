@@ -491,6 +491,42 @@
   color: #373a36;
 }
 
+
+
+.le-presentationSummary {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 18px;
+}
+
+.le-presentationSummaryField {
+  min-width: 0;
+}
+
+.le-presentationSummaryField .le-metaLabel {
+  margin-bottom: 6px;
+}
+
+.le-presentationSummaryField .le-metaValue {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.le-presentationFurtherPrompt {
+  margin: 0;
+  max-width: none;
+  line-height: 1.45;
+  white-space: nowrap;
+}
+
+.le-presentationFurtherPrompt .le-btn.ghost {
+  display: inline;
+  margin-left: 4px;
+  vertical-align: baseline;
+}
+
+
 .le-proposalDetailsGrid {
   margin-top: 8px;
   display: grid;
