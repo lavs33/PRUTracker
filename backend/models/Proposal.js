@@ -52,6 +52,11 @@ const proposalSchema = new mongoose.Schema(
 
     /** Attendance proof for the proposal presentation session. */
     recordProspectAttendance: {
+      attendanceChoice: {
+        type: String,
+        enum: ["", "YES", "NO"],
+        default: "",
+      },
       attended: {
         type: Boolean,
         default: false,
