@@ -8305,6 +8305,29 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/schedule-pro
       ) {
         throw Object.assign(new Error("Further proposal presentation must start after the existing proposal presentation ends."), { status: 400 });
       }
+      if (isProposalPresentationRetry && latestProposalPresentationMeetingForRetry?.startAt) {
+        const openProposalMeetingStart = new Date(latestProposalPresentationMeetingForRetry.startAt);
+        if (!Number.isNaN(openProposalMeetingStart.getTime())) {
+          const openProposalMeetingDate = new Date(openProposalMeetingStart);
+          openProposalMeetingDate.setHours(0, 0, 0, 0);
+          const proposedMeetingDate = new Date(dt);
+          proposedMeetingDate.setHours(0, 0, 0, 0);
+          if (proposedMeetingDate.getTime() !== openProposalMeetingDate.getTime()) {
+            throw Object.assign(new Error("Further proposal presentation meeting date must match the existing open proposal presentation meeting date."), { status: 400 });
+          }
+        }
+      }
+      if (isProposalPresentationRetry && latestProposalPresentationMeetingForRetry?.endAt) {
+        const openProposalMeetingEnd = new Date(latestProposalPresentationMeetingForRetry.endAt);
+        if (!Number.isNaN(openProposalMeetingEnd.getTime())) {
+          const endMinutes = openProposalMeetingEnd.getHours() * 60 + openProposalMeetingEnd.getMinutes();
+          const earliestAllowedStartMinutes = Math.ceil(endMinutes / 30) * 30;
+          const proposedStartMinutes = dt.getHours() * 60 + dt.getMinutes();
+          if (proposedStartMinutes < earliestAllowedStartMinutes) {
+            throw Object.assign(new Error("Further proposal presentation meeting must start at or after the next 30-minute slot after the existing open proposal presentation meeting ends."), { status: 400 });
+          }
+        }
+      }
       if (
         latestCompletedProposalPresentationMeeting?.endAt &&
         dt.getTime() <= new Date(latestCompletedProposalPresentationMeeting.endAt).getTime()
