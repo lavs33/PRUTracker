@@ -2516,12 +2516,16 @@ function AgentLeadEngagement() {
     String(engagement?.currentStage || "").trim() === "Proposal" &&
     String(proposalCurrentActivityKey || "").trim() === "Record Prospect Attendance" &&
     proposalAttendanceForm.attendanceChoice === "NO";
+  const latestProposalMeeting = useMemo(() => {
+    if (proposalMeetingHistory.length) return proposalMeetingHistory[0];
+    return proposalMeetingSaved || null;
+  }, [proposalMeetingHistory, proposalMeetingSaved]);
   const hasIncompleteLatestProposalMeeting =
-    Boolean(proposalMeetingSaved?.startAt) &&
-    String(proposalMeetingSaved?.status || "").trim() !== "Completed";
+    Boolean(latestProposalMeeting?.startAt) &&
+    String(latestProposalMeeting?.status || "").trim() !== "Completed";
   const canScheduleFurtherProposalPresentation =
     proposalPresentationForm.proposalAccepted === "NO" &&
-    !hasIncompleteLatestProposalMeeting;
+    !latestProposalMeeting?.startAt;
   const isProposalPresentationNoRescheduleMode =
     showNeedsAssessmentPanel &&
     String(engagement?.currentStage || "").trim() === "Proposal" &&
