@@ -8469,6 +8469,12 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/schedule-pro
             dedupeKey: presentationDedupeKey,
             ...(isUpdatingExistingProposalMeeting ? { status: { $in: ["Open", "Overdue"] } } : {}),
           }).session(session);
+      let existingPresentationTaskWithDedupe = isProposalPresentationRetry
+        ? null
+        : await Task.findOne({
+            assignedToUserId: userObjectId,
+            dedupeKey: presentationDedupeKey,
+          }).session(session);
       let duplicatePresentationTasksToClose = [];
       if (!isProposalPresentationRetry && (isUpdatingExistingProposalMeeting || isProposalStageReschedule)) {
         const openPresentationTasks = await Task.find({
@@ -8482,6 +8488,10 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/schedule-pro
           .session(session);
 
         if (!presentationTask) {
+          presentationTask = openPresentationTasks.find((task) => String(task?.dedupeKey || "") === presentationDedupeKey) || null;
+        }
+
+        if (!presentationTask && !isUpdatingExistingProposalMeeting && !existingPresentationTaskWithDedupe) {
           presentationTask = openPresentationTasks[0] || null;
         }
 
@@ -8495,7 +8505,28 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/schedule-pro
       const presentationDueAt = new Date(endAt.getTime() + 15 * 60 * 1000);
 
       if ((isProposalStageReschedule || isUpdatingExistingProposalMeeting) && !isProposalPresentationRetry && !presentationTask) {
-        throw Object.assign(new Error("No existing present proposal task found to reschedule."), { status: 409 });
+        if (existingPresentationTaskWithDedupe && !["Open", "Overdue"].includes(String(existingPresentationTaskWithDedupe.status || ""))) {
+          const fallbackOpenPresentationTask = await Task.findOne({
+            assignedToUserId: userObjectId,
+            prospectId: prospectObjectId,
+            leadEngagementId: engagement._id,
+            type: "PRESENTATION",
+            status: { $in: ["Open", "Overdue"] },
+          })
+            .sort({ createdAt: 1, dueAt: 1 })
+            .session(session);
+
+          if (fallbackOpenPresentationTask) {
+            existingPresentationTaskWithDedupe.dedupeKey = `${presentationDedupeKey}:ARCHIVED:${existingPresentationTaskWithDedupe._id}`;
+            await existingPresentationTaskWithDedupe.save({ session });
+            presentationTask = fallbackOpenPresentationTask;
+            existingPresentationTaskWithDedupe = null;
+          } else {
+            throw Object.assign(new Error("No open present proposal task found to reschedule."), { status: 409 });
+          }
+        } else {
+          throw Object.assign(new Error("No existing present proposal task found to reschedule."), { status: 409 });
+        }
       }
 
       const prospectFullName = `${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName}`.trim();
