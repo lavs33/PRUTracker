@@ -2126,7 +2126,7 @@ function AgentLeadEngagement() {
     String(proposalPresentationForm.proposalAccepted || "").trim().toUpperCase() !== "NO" &&
     !proposalPresentationForm.presentedAt;
   const canEditSavedProposalPresentation =
-    proposalUiActivityKey === "Present Proposal" &&
+    ["Present Proposal", "Schedule Application Submission"].includes(proposalUiActivityKey) &&
     isProposalEditableNow;
   const canEditProposalAttendanceChoice =
     proposalUiActivityKey === "Record Prospect Attendance" &&
@@ -2516,12 +2516,29 @@ function AgentLeadEngagement() {
     String(engagement?.currentStage || "").trim() === "Proposal" &&
     String(proposalCurrentActivityKey || "").trim() === "Record Prospect Attendance" &&
     proposalAttendanceForm.attendanceChoice === "NO";
+  const latestProposalMeeting = useMemo(() => {
+    if (proposalMeetingHistory.length) return proposalMeetingHistory[0];
+    return proposalMeetingSaved || null;
+  }, [proposalMeetingHistory, proposalMeetingSaved]);
+  const hasScheduledFurtherMeetingAfterDecision = useMemo(() => {
+    const accepted = String(proposalPresentationForm.proposalAccepted || "").trim().toUpperCase();
+    if (accepted !== "NO") return false;
+
+    const decisionAtMs = new Date(proposalPresentationForm.presentedAt || 0).getTime();
+    if (!Number.isFinite(decisionAtMs) || decisionAtMs <= 0) return false;
+
+    const latestMeetingScheduledAtMs = new Date(
+      latestProposalMeeting?.createdAt || latestProposalMeeting?.startAt || 0
+    ).getTime();
+
+    return Number.isFinite(latestMeetingScheduledAtMs) && latestMeetingScheduledAtMs >= decisionAtMs;
+  }, [latestProposalMeeting?.createdAt, latestProposalMeeting?.startAt, proposalPresentationForm.presentedAt, proposalPresentationForm.proposalAccepted]);
   const hasIncompleteLatestProposalMeeting =
-    Boolean(proposalMeetingSaved?.startAt) &&
-    String(proposalMeetingSaved?.status || "").trim() !== "Completed";
+    Boolean(latestProposalMeeting?.startAt) &&
+    String(latestProposalMeeting?.status || "").trim() !== "Completed";
   const canScheduleFurtherProposalPresentation =
     proposalPresentationForm.proposalAccepted === "NO" &&
-    !hasIncompleteLatestProposalMeeting;
+    !hasScheduledFurtherMeetingAfterDecision;
   const isProposalPresentationNoRescheduleMode =
     showNeedsAssessmentPanel &&
     String(engagement?.currentStage || "").trim() === "Proposal" &&
