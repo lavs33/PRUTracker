@@ -1854,6 +1854,21 @@ function AgentLeadEngagement() {
 
     return completedMeetingEnds[0] || null;
   }, [proposalMeetingHistory]);
+  const addFurtherProposalMeetingDate = useMemo(() => {
+    if (proposalMeetingScheduleMode !== "ADD_FURTHER") return "";
+    return proposalMeetingRescheduleOriginal?.startAt ? toDateInputValue(proposalMeetingRescheduleOriginal.startAt) : "";
+  }, [proposalMeetingRescheduleOriginal?.startAt, proposalMeetingScheduleMode]);
+  const addFurtherProposalEarliestStartMinutes = useMemo(() => {
+    if (proposalMeetingScheduleMode !== "ADD_FURTHER") return null;
+    const originalStart = proposalMeetingRescheduleOriginal?.startAt ? new Date(proposalMeetingRescheduleOriginal.startAt) : null;
+    if (!originalStart || Number.isNaN(originalStart.getTime())) return null;
+    const originalEnd = proposalMeetingRescheduleOriginal?.endAt
+      ? new Date(proposalMeetingRescheduleOriginal.endAt)
+      : new Date(originalStart.getTime() + Number(proposalMeetingRescheduleOriginal?.durationMin || 120) * 60 * 1000);
+    if (Number.isNaN(originalEnd.getTime())) return null;
+    const totalMinutes = originalEnd.getHours() * 60 + originalEnd.getMinutes();
+    return Math.ceil(totalMinutes / 30) * 30;
+  }, [proposalMeetingRescheduleOriginal?.startAt, proposalMeetingRescheduleOriginal?.endAt, proposalMeetingRescheduleOriginal?.durationMin, proposalMeetingScheduleMode]);
 
   const proposalMeetingStartSlots = useMemo(() => {
     const allSlots = buildMeetingStartSlots(proposalMeetingForm.meetingDurationMin);
@@ -1911,6 +1926,17 @@ function AgentLeadEngagement() {
         return hh * 60 + mm >= nextHalfHour;
       });
     }
+    if (
+      proposalMeetingScheduleMode === "ADD_FURTHER" &&
+      addFurtherProposalMeetingDate &&
+      selectedDate === addFurtherProposalMeetingDate &&
+      Number.isFinite(addFurtherProposalEarliestStartMinutes)
+    ) {
+      filteredSlots = filteredSlots.filter((slot) => {
+        const [hh, mm] = slot.split(":").map(Number);
+        return hh * 60 + mm >= addFurtherProposalEarliestStartMinutes;
+      });
+    }
 
     return selectedDate === originalProposalDate
       ? ensureSlotOption(filteredSlots, originalProposalSlot)
@@ -1927,6 +1953,8 @@ function AgentLeadEngagement() {
     proposalMeetingRescheduleOriginal,
     proposalMeetingScheduleMode,
     proposalMeetingSaved?.startAt,
+    addFurtherProposalMeetingDate,
+    addFurtherProposalEarliestStartMinutes,
   ]);
   const applicationMeetingStartSlots = useMemo(() => buildMeetingStartSlots(applicationMeetingForm.meetingDurationMin), [buildMeetingStartSlots, applicationMeetingForm.meetingDurationMin]);
   const hasAddedFollowUpNeedsMeeting = useMemo(() => {
@@ -2126,7 +2154,7 @@ function AgentLeadEngagement() {
     String(proposalPresentationForm.proposalAccepted || "").trim().toUpperCase() !== "NO" &&
     !proposalPresentationForm.presentedAt;
   const canEditSavedProposalPresentation =
-    proposalUiActivityKey === "Present Proposal" &&
+    ["Present Proposal", "Schedule Application Submission"].includes(proposalUiActivityKey) &&
     isProposalEditableNow;
   const canEditProposalAttendanceChoice =
     proposalUiActivityKey === "Record Prospect Attendance" &&
@@ -2516,12 +2544,29 @@ function AgentLeadEngagement() {
     String(engagement?.currentStage || "").trim() === "Proposal" &&
     String(proposalCurrentActivityKey || "").trim() === "Record Prospect Attendance" &&
     proposalAttendanceForm.attendanceChoice === "NO";
+  const latestProposalMeeting = useMemo(() => {
+    if (proposalMeetingHistory.length) return proposalMeetingHistory[0];
+    return proposalMeetingSaved || null;
+  }, [proposalMeetingHistory, proposalMeetingSaved]);
+  const hasScheduledFurtherMeetingAfterDecision = useMemo(() => {
+    const accepted = String(proposalPresentationForm.proposalAccepted || "").trim().toUpperCase();
+    if (accepted !== "NO") return false;
+
+    const decisionAtMs = new Date(proposalPresentationForm.presentedAt || 0).getTime();
+    if (!Number.isFinite(decisionAtMs) || decisionAtMs <= 0) return false;
+
+    const latestMeetingScheduledAtMs = new Date(
+      latestProposalMeeting?.createdAt || latestProposalMeeting?.startAt || 0
+    ).getTime();
+
+    return Number.isFinite(latestMeetingScheduledAtMs) && latestMeetingScheduledAtMs >= decisionAtMs;
+  }, [latestProposalMeeting?.createdAt, latestProposalMeeting?.startAt, proposalPresentationForm.presentedAt, proposalPresentationForm.proposalAccepted]);
   const hasIncompleteLatestProposalMeeting =
-    Boolean(proposalMeetingSaved?.startAt) &&
-    String(proposalMeetingSaved?.status || "").trim() !== "Completed";
+    Boolean(latestProposalMeeting?.startAt) &&
+    String(latestProposalMeeting?.status || "").trim() !== "Completed";
   const canScheduleFurtherProposalPresentation =
     proposalPresentationForm.proposalAccepted === "NO" &&
-    !hasIncompleteLatestProposalMeeting;
+    !hasScheduledFurtherMeetingAfterDecision;
   const isProposalPresentationNoRescheduleMode =
     showNeedsAssessmentPanel &&
     String(engagement?.currentStage || "").trim() === "Proposal" &&
@@ -3073,15 +3118,36 @@ function AgentLeadEngagement() {
     setRescheduleFromNeedsMode(true);
   };
 
+  const startAddFurtherProposalPresentation = () => {
+    if (!proposalMeetingSaved?.startAt) return;
+    const originalMeeting = proposalMeetingSaved;
+    setProposalMeetingError("");
+    setProposalMeetingFieldErrors({});
+    setProposalMeetingRescheduleOriginal(originalMeeting);
+    setProposalMeetingScheduleMode("ADD_FURTHER");
+    setProposalMeetingForm({
+      meetingDate: "",
+      meetingStartTime: "",
+      meetingDurationMin: originalMeeting?.durationMin ?? 120,
+      meetingMode: String(originalMeeting?.mode || ""),
+      meetingPlatform: String(originalMeeting?.platform || ""),
+      meetingPlatformOther: String(originalMeeting?.platformOther || ""),
+      meetingLink: String(originalMeeting?.link || ""),
+      meetingInviteSent: Boolean(originalMeeting?.inviteSent),
+      meetingPlace: String(originalMeeting?.place || ""),
+    });
+    setProposalMeetingSaved(null);
+  };
+
   const startRescheduleProposalPresentation = () => {
     if (!proposalMeetingSaved?.startAt) return;
     const originalMeeting = proposalMeetingSaved;
     setProposalMeetingError("");
     setProposalMeetingFieldErrors({});
     setProposalMeetingRescheduleOriginal(originalMeeting);
-    setProposalMeetingScheduleMode(isProposalPresentationMeetingRescheduleMode ? "RESCHEDULE_EXISTING" : "ADD_FURTHER");
+    setProposalMeetingScheduleMode("RESCHEDULE_EXISTING");
     setProposalMeetingForm({
-      meetingDate: isProposalPresentationMeetingRescheduleMode ? toLocalDateInputValue(new Date()) : "",
+      meetingDate: toLocalDateInputValue(new Date()),
       meetingStartTime: "",
       meetingDurationMin: originalMeeting?.durationMin ?? 120,
       meetingMode: String(originalMeeting?.mode || ""),
@@ -3374,6 +3440,10 @@ function AgentLeadEngagement() {
         setProposalMeetingFieldErrors({ meetingStartTime: "Start time is required." });
         return;
       }
+      if (proposalMeetingScheduleMode === "ADD_FURTHER" && addFurtherProposalMeetingDate && meetingDate !== addFurtherProposalMeetingDate) {
+        setProposalMeetingFieldErrors({ meetingDate: `Meeting date must be ${addFurtherProposalMeetingDate} when adding a further proposal presentation meeting.` });
+        return;
+      }
       if (![30, 60, 90, 120].includes(meetingDurationMin)) {
         setProposalMeetingFieldErrors({ meetingDurationMin: "Duration must be 30, 60, 90, or 120 minutes." });
         return;
@@ -3391,6 +3461,13 @@ function AgentLeadEngagement() {
       if (proposedStart && latestCompletedProposalMeetingEndAt && proposedStart.getTime() <= latestCompletedProposalMeetingEndAt.getTime()) {
         setProposalMeetingFieldErrors({ meetingStartTime: "Proposal presentation must start after the last completed proposal presentation meeting ends." });
         return;
+      }
+      if (proposalMeetingScheduleMode === "ADD_FURTHER" && Number.isFinite(addFurtherProposalEarliestStartMinutes)) {
+        const [startHour, startMinute] = meetingStartTime.split(":").map(Number);
+        if (startHour * 60 + startMinute < addFurtherProposalEarliestStartMinutes) {
+          setProposalMeetingFieldErrors({ meetingStartTime: "Further proposal presentation meeting must start after the current open meeting ends." });
+          return;
+        }
       }
       const proposalRescheduleOriginalStartAt = proposalMeetingRescheduleOriginal?.startAt
         ? new Date(proposalMeetingRescheduleOriginal.startAt)
@@ -7649,7 +7726,7 @@ function AgentLeadEngagement() {
                                 )}
                               </div>
                               {proposalPresentationError ? <p className="le-smallNote" style={{ color: "#DA291C", marginTop: 8 }}>{proposalPresentationError}</p> : null}
-                              {!proposalPresentationDecisionEditMode && proposalPresentationFurtherPromptSaved && !hasIncompleteLatestProposalMeeting ? (
+                              {!proposalPresentationDecisionEditMode && proposalPresentationFurtherPromptSaved && canScheduleFurtherProposalPresentation ? (
                                 <p className="le-muted le-presentationFurtherPrompt">
                                   Further Proposal Presentation can be scheduled.{" "}
                                   <button
@@ -8954,7 +9031,7 @@ function AgentLeadEngagement() {
                                 <button
                                   type="button"
                                   className="le-btn secondary"
-                                  onClick={startRescheduleProposalPresentation}
+                                  onClick={startAddFurtherProposalPresentation}
                                   disabled={savingProposalMeeting}
                                 >
                                   Add Further Proposal Presentation Meet
@@ -9006,7 +9083,8 @@ function AgentLeadEngagement() {
                                 type="date"
                                 className="le-input"
                                 value={proposalMeetingForm.meetingDate}
-                                min={proposalMeetingMinimumDate}
+                                min={proposalMeetingScheduleMode === "ADD_FURTHER" && addFurtherProposalMeetingDate ? addFurtherProposalMeetingDate : proposalMeetingMinimumDate}
+                                max={proposalMeetingScheduleMode === "ADD_FURTHER" && addFurtherProposalMeetingDate ? addFurtherProposalMeetingDate : undefined}
                                 onChange={(e) => {
                                   const v = e.target.value;
                                   setProposalMeetingForm((f) => ({ ...f, meetingDate: v }));
