@@ -2126,7 +2126,7 @@ function AgentLeadEngagement() {
     String(proposalPresentationForm.proposalAccepted || "").trim().toUpperCase() !== "NO" &&
     !proposalPresentationForm.presentedAt;
   const canEditSavedProposalPresentation =
-    proposalUiActivityKey === "Present Proposal" &&
+    ["Present Proposal", "Schedule Application Submission"].includes(proposalUiActivityKey) &&
     isProposalEditableNow;
   const canEditProposalAttendanceChoice =
     proposalUiActivityKey === "Record Prospect Attendance" &&
@@ -2532,6 +2532,14 @@ function AgentLeadEngagement() {
     String(engagement?.currentStage || "").trim() === "Proposal" &&
     String(proposalCurrentActivityKey || "").trim() === "Present Proposal" &&
     hasIncompleteLatestProposalMeeting;
+  const shouldUseFurtherProposalAddMode =
+    showNeedsAssessmentPanel &&
+    String(engagement?.currentStage || "").trim() === "Proposal" &&
+    String(proposalCurrentActivityKey || "").trim() === "Present Proposal" &&
+    proposalPresentationForm.proposalAccepted === "NO";
+  const hasPendingFurtherProposalMeetingSchedule =
+    shouldUseFurtherProposalAddMode &&
+    !hasIncompleteLatestProposalMeeting;
   const isProposalPendingPresentationRescheduleMode =
     showNeedsAssessmentPanel &&
     String(engagement?.currentStage || "").trim() === "Proposal" &&
@@ -3079,9 +3087,10 @@ function AgentLeadEngagement() {
     setProposalMeetingError("");
     setProposalMeetingFieldErrors({});
     setProposalMeetingRescheduleOriginal(originalMeeting);
-    setProposalMeetingScheduleMode(isProposalPresentationMeetingRescheduleMode ? "RESCHEDULE_EXISTING" : "ADD_FURTHER");
+    const useFurtherAddMode = hasPendingFurtherProposalMeetingSchedule;
+    setProposalMeetingScheduleMode(useFurtherAddMode ? "ADD_FURTHER" : (isProposalPresentationMeetingRescheduleMode ? "RESCHEDULE_EXISTING" : "ADD_FURTHER"));
     setProposalMeetingForm({
-      meetingDate: isProposalPresentationMeetingRescheduleMode ? toLocalDateInputValue(new Date()) : "",
+      meetingDate: (!useFurtherAddMode && isProposalPresentationMeetingRescheduleMode) ? toLocalDateInputValue(new Date()) : "",
       meetingStartTime: "",
       meetingDurationMin: originalMeeting?.durationMin ?? 120,
       meetingMode: String(originalMeeting?.mode || ""),
@@ -7649,7 +7658,7 @@ function AgentLeadEngagement() {
                                 )}
                               </div>
                               {proposalPresentationError ? <p className="le-smallNote" style={{ color: "#DA291C", marginTop: 8 }}>{proposalPresentationError}</p> : null}
-                              {!proposalPresentationDecisionEditMode && proposalPresentationFurtherPromptSaved && !hasIncompleteLatestProposalMeeting ? (
+                              {!proposalPresentationDecisionEditMode && proposalPresentationFurtherPromptSaved && hasPendingFurtherProposalMeetingSchedule ? (
                                 <p className="le-muted le-presentationFurtherPrompt">
                                   Further Proposal Presentation can be scheduled.{" "}
                                   <button
@@ -8949,7 +8958,7 @@ function AgentLeadEngagement() {
                       {showProposalSchedulingSection && isNeedsScheduleViewed && needsFollowUpDecisionSaved && !needsFollowUpDecisionEditMode && savedNeedsFollowUpRequired === "NO" && (
                           <div className="le-block" style={{ marginTop: 16 }}>
                             {!proposalMeetingSaved ? <h4 className="le-blockTitle">Schedule Proposal Presentation</h4> : null}
-                            {proposalMeetingSaved && isNeedsScheduleEditable && isProposalPresentationNoRescheduleMode ? (
+                            {proposalMeetingSaved && isNeedsScheduleEditable && hasPendingFurtherProposalMeetingSchedule ? (
                               <div className="le-actions" style={{ marginTop: 0, marginBottom: 12 }}>
                                 <button
                                   type="button"
@@ -8980,7 +8989,7 @@ function AgentLeadEngagement() {
                                         {meeting?.place ? <div><span className="le-metaLabel">Meeting Place</span><span className="le-metaValue">{meeting.place}</span></div> : null}
                                         {meeting?.status ? <div><span className="le-metaLabel">Status</span><span className="le-metaValue">{meeting.status}</span></div> : null}
                                       </div>
-                                      {idx === 0 && isNeedsScheduleEditable && !isProposalPresentationNoRescheduleMode && String(meeting?.status || "").trim() !== "Completed" ? (
+                                      {idx === 0 && isNeedsScheduleEditable && !hasPendingFurtherProposalMeetingSchedule && String(meeting?.status || "").trim() !== "Completed" ? (
                                         <div className="le-actions" style={{ marginTop: 12 }}>
                                           <button
                                             type="button"
