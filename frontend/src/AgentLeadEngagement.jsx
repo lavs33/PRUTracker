@@ -227,6 +227,7 @@ function AgentLeadEngagement() {
   const [savingApplicationMeeting, setSavingApplicationMeeting] = useState(false);
   const [applicationMeetingError, setApplicationMeetingError] = useState("");
   const [applicationMeetingFieldErrors, setApplicationMeetingFieldErrors] = useState({});
+  const [applicationMeetingPrefillKey, setApplicationMeetingPrefillKey] = useState("");
   const [applicationAttendanceForm, setApplicationAttendanceForm] = useState({
     attendanceChoice: "",
     attendanceProofImageDataUrl: "",
@@ -690,6 +691,7 @@ function AgentLeadEngagement() {
         meetingInviteSent: Boolean(applicationSubmissionMeeting?.inviteSent),
         meetingPlace: String(applicationSubmissionMeeting?.place || ""),
       });
+      setApplicationMeetingPrefillKey("");
     },
     [API_BASE, prospectId, leadId, user?.id]
   );
@@ -1854,6 +1856,21 @@ function AgentLeadEngagement() {
 
     return completedMeetingEnds[0] || null;
   }, [proposalMeetingHistory]);
+  const addFurtherProposalMeetingDate = useMemo(() => {
+    if (proposalMeetingScheduleMode !== "ADD_FURTHER") return "";
+    return proposalMeetingRescheduleOriginal?.startAt ? toDateInputValue(proposalMeetingRescheduleOriginal.startAt) : "";
+  }, [proposalMeetingRescheduleOriginal?.startAt, proposalMeetingScheduleMode]);
+  const addFurtherProposalEarliestStartMinutes = useMemo(() => {
+    if (proposalMeetingScheduleMode !== "ADD_FURTHER") return null;
+    const originalStart = proposalMeetingRescheduleOriginal?.startAt ? new Date(proposalMeetingRescheduleOriginal.startAt) : null;
+    if (!originalStart || Number.isNaN(originalStart.getTime())) return null;
+    const originalEnd = proposalMeetingRescheduleOriginal?.endAt
+      ? new Date(proposalMeetingRescheduleOriginal.endAt)
+      : new Date(originalStart.getTime() + Number(proposalMeetingRescheduleOriginal?.durationMin || 120) * 60 * 1000);
+    if (Number.isNaN(originalEnd.getTime())) return null;
+    const totalMinutes = originalEnd.getHours() * 60 + originalEnd.getMinutes();
+    return Math.ceil(totalMinutes / 30) * 30;
+  }, [proposalMeetingRescheduleOriginal?.startAt, proposalMeetingRescheduleOriginal?.endAt, proposalMeetingRescheduleOriginal?.durationMin, proposalMeetingScheduleMode]);
 
   const proposalMeetingStartSlots = useMemo(() => {
     const allSlots = buildMeetingStartSlots(proposalMeetingForm.meetingDurationMin);
@@ -1911,6 +1928,17 @@ function AgentLeadEngagement() {
         return hh * 60 + mm >= nextHalfHour;
       });
     }
+    if (
+      proposalMeetingScheduleMode === "ADD_FURTHER" &&
+      addFurtherProposalMeetingDate &&
+      selectedDate === addFurtherProposalMeetingDate &&
+      Number.isFinite(addFurtherProposalEarliestStartMinutes)
+    ) {
+      filteredSlots = filteredSlots.filter((slot) => {
+        const [hh, mm] = slot.split(":").map(Number);
+        return hh * 60 + mm >= addFurtherProposalEarliestStartMinutes;
+      });
+    }
 
     return selectedDate === originalProposalDate
       ? ensureSlotOption(filteredSlots, originalProposalSlot)
@@ -1927,6 +1955,8 @@ function AgentLeadEngagement() {
     proposalMeetingRescheduleOriginal,
     proposalMeetingScheduleMode,
     proposalMeetingSaved?.startAt,
+    addFurtherProposalMeetingDate,
+    addFurtherProposalEarliestStartMinutes,
   ]);
   const applicationMeetingStartSlots = useMemo(() => buildMeetingStartSlots(applicationMeetingForm.meetingDurationMin), [buildMeetingStartSlots, applicationMeetingForm.meetingDurationMin]);
   const hasAddedFollowUpNeedsMeeting = useMemo(() => {
@@ -2126,7 +2156,7 @@ function AgentLeadEngagement() {
     String(proposalPresentationForm.proposalAccepted || "").trim().toUpperCase() !== "NO" &&
     !proposalPresentationForm.presentedAt;
   const canEditSavedProposalPresentation =
-    proposalUiActivityKey === "Present Proposal" &&
+    ["Present Proposal", "Schedule Application Submission"].includes(proposalUiActivityKey) &&
     isProposalEditableNow;
   const canEditProposalAttendanceChoice =
     proposalUiActivityKey === "Record Prospect Attendance" &&
@@ -2482,16 +2512,10 @@ function AgentLeadEngagement() {
     contactingRescheduleMode;
 
   const isNeedsAssessmentCurrentViewEditable =
-    (isNeedsAssessmentEditableNow &&
-      (needsAssessmentViewedActivityKey === needsActivityKeyRaw ||
-        (needsAssessmentViewedActivityKey === "Perform Needs Analysis" &&
-          ["Perform Needs Analysis", "Schedule Proposal Presentation"].includes(needsActivityKeyRaw)))) ||
-    (showNeedsAssessmentPanel &&
-      isViewingPastStage &&
-      ["Proposal", "Application", "Policy Issuance"].includes(stage) &&
-      needsAssessmentViewedActivityKey === "Perform Needs Analysis" &&
-      !isLeadClosed &&
-      !isLeadDropped);
+    isNeedsAssessmentEditableNow &&
+    (needsAssessmentViewedActivityKey === needsActivityKeyRaw ||
+      (needsAssessmentViewedActivityKey === "Perform Needs Analysis" &&
+        ["Perform Needs Analysis", "Schedule Proposal Presentation"].includes(needsActivityKeyRaw)));
   const isNeedsAttendanceChoiceLocked =
     needsAssessmentViewedActivityKey === "Record Prospect Attendance" &&
     needsActivityKeyRaw !== "Record Prospect Attendance";
@@ -2516,12 +2540,68 @@ function AgentLeadEngagement() {
     String(engagement?.currentStage || "").trim() === "Proposal" &&
     String(proposalCurrentActivityKey || "").trim() === "Record Prospect Attendance" &&
     proposalAttendanceForm.attendanceChoice === "NO";
+  const latestProposalMeeting = useMemo(() => {
+    if (proposalMeetingHistory.length) return proposalMeetingHistory[0];
+    return proposalMeetingSaved || null;
+  }, [proposalMeetingHistory, proposalMeetingSaved]);
+  const latestOpenOrOverdueProposalMeeting = useMemo(() => {
+    const list = proposalMeetingHistory.length ? proposalMeetingHistory : (proposalMeetingSaved ? [proposalMeetingSaved] : []);
+    return list.find((meeting) => ["Scheduled", "Open", "Overdue"].includes(String(meeting?.status || "").trim())) || null;
+  }, [proposalMeetingHistory, proposalMeetingSaved]);
+  const hasScheduledFurtherMeetingAfterDecision = useMemo(() => {
+    const accepted = String(proposalPresentationForm.proposalAccepted || "").trim().toUpperCase();
+    if (accepted !== "NO") return false;
+
+    const decisionAtMs = new Date(proposalPresentationForm.presentedAt || 0).getTime();
+    if (!Number.isFinite(decisionAtMs) || decisionAtMs <= 0) return false;
+
+    const latestMeetingScheduledAtMs = new Date(
+      latestProposalMeeting?.createdAt || latestProposalMeeting?.startAt || 0
+    ).getTime();
+
+    return Number.isFinite(latestMeetingScheduledAtMs) && latestMeetingScheduledAtMs >= decisionAtMs;
+  }, [latestProposalMeeting?.createdAt, latestProposalMeeting?.startAt, proposalPresentationForm.presentedAt, proposalPresentationForm.proposalAccepted]);
   const hasIncompleteLatestProposalMeeting =
-    Boolean(proposalMeetingSaved?.startAt) &&
-    String(proposalMeetingSaved?.status || "").trim() !== "Completed";
+    Boolean(latestProposalMeeting?.startAt) &&
+    String(latestProposalMeeting?.status || "").trim() !== "Completed";
   const canScheduleFurtherProposalPresentation =
     proposalPresentationForm.proposalAccepted === "NO" &&
-    !hasIncompleteLatestProposalMeeting;
+    !hasScheduledFurtherMeetingAfterDecision;
+  const applicationMeetingMinimumDateFromProposal = useMemo(() => {
+    const today = toLocalDateInputValue(new Date());
+    if (!latestOpenOrOverdueProposalMeeting?.startAt) return today;
+    const openProposalDate = toDateInputValue(latestOpenOrOverdueProposalMeeting.startAt);
+    return openProposalDate && openProposalDate > today ? openProposalDate : today;
+  }, [latestOpenOrOverdueProposalMeeting?.startAt]);
+  const applicationMeetingDateOptions = useMemo(() => {
+    return (availableDateOptions || []).filter((d) => String(d?.value || "") >= applicationMeetingMinimumDateFromProposal);
+  }, [availableDateOptions, applicationMeetingMinimumDateFromProposal]);
+  const applicationMeetingStartSlotsFiltered = useMemo(() => {
+    const selectedDate = String(applicationMeetingForm.meetingDate || "").trim();
+    if (!selectedDate) return applicationMeetingStartSlots;
+
+    let minMinutes = null;
+    if (latestOpenOrOverdueProposalMeeting?.startAt) {
+      const proposalStart = new Date(latestOpenOrOverdueProposalMeeting.startAt);
+      const proposalEnd = latestOpenOrOverdueProposalMeeting?.endAt
+        ? new Date(latestOpenOrOverdueProposalMeeting.endAt)
+        : new Date(proposalStart.getTime() + Number(latestOpenOrOverdueProposalMeeting?.durationMin || 120) * 60 * 1000);
+      const proposalDate = toDateInputValue(proposalStart);
+      if (selectedDate === proposalDate && !Number.isNaN(proposalEnd.getTime())) {
+        const endMinutes = proposalEnd.getHours() * 60 + proposalEnd.getMinutes();
+        minMinutes = Math.ceil(endMinutes / 30) * 30;
+      }
+    }
+    const today = toLocalDateInputValue(new Date());
+    if (selectedDate === today) {
+      minMinutes = Math.max(minMinutes ?? 0, getNextHalfHourSlotAfterNow());
+    }
+    if (!Number.isFinite(minMinutes)) return applicationMeetingStartSlots;
+    return applicationMeetingStartSlots.filter((slot) => {
+      const [hh, mm] = slot.split(":").map(Number);
+      return hh * 60 + mm >= minMinutes;
+    });
+  }, [applicationMeetingForm.meetingDate, applicationMeetingStartSlots, getNextHalfHourSlotAfterNow, latestOpenOrOverdueProposalMeeting?.durationMin, latestOpenOrOverdueProposalMeeting?.endAt, latestOpenOrOverdueProposalMeeting?.startAt]);
   const isProposalPresentationNoRescheduleMode =
     showNeedsAssessmentPanel &&
     String(engagement?.currentStage || "").trim() === "Proposal" &&
@@ -2562,6 +2642,9 @@ function AgentLeadEngagement() {
   const proposalNeedsPrefillKey = latestScheduledMeeting?.meetingAt
     ? String(latestScheduledMeeting?.attemptId || latestScheduledMeeting?.meetingCreatedAt || latestScheduledMeeting?.createdAt || latestScheduledMeeting.meetingAt)
     : "";
+  const applicationMeetingSourcePrefillKey = latestProposalMeeting?.startAt
+    ? String(latestProposalMeeting?.id || latestProposalMeeting?.createdAt || latestProposalMeeting?.startAt)
+    : "";
 
   useEffect(() => {
     if (!showProposalSchedulingSection || !isNeedsScheduleViewed || proposalMeetingSaved || proposalMeetingRescheduleOriginal || !latestScheduledMeeting || !proposalNeedsPrefillKey) {
@@ -2592,6 +2675,73 @@ function AgentLeadEngagement() {
     proposalMeetingSaved,
     proposalNeedsPrefillKey,
     showProposalSchedulingSection,
+  ]);
+
+  useEffect(() => {
+    const isApplicationScheduleViewActive =
+      showProposalPanel &&
+      proposalViewedActivityKey === "Schedule Application Submission";
+    const shouldPrefillApplicationSchedule =
+      isApplicationScheduleViewActive &&
+      !applicationMeetingSaved &&
+      Boolean(latestProposalMeeting?.startAt) &&
+      Boolean(applicationMeetingSourcePrefillKey);
+    if (!shouldPrefillApplicationSchedule) {
+      if (applicationMeetingSaved || !isApplicationScheduleViewActive) {
+        setApplicationMeetingPrefillKey("");
+      }
+      return;
+    }
+    const hasAnyApplicationMeetingInput = Boolean(
+      String(applicationMeetingForm.meetingDate || "").trim() ||
+      String(applicationMeetingForm.meetingStartTime || "").trim() ||
+      String(applicationMeetingForm.meetingMode || "").trim() ||
+      String(applicationMeetingForm.meetingPlatform || "").trim() ||
+      String(applicationMeetingForm.meetingPlatformOther || "").trim() ||
+      String(applicationMeetingForm.meetingLink || "").trim() ||
+      String(applicationMeetingForm.meetingPlace || "").trim()
+    );
+    if (applicationMeetingPrefillKey === applicationMeetingSourcePrefillKey && hasAnyApplicationMeetingInput) return;
+
+    const sourceMeetingDate = toDateInputValue(latestProposalMeeting.startAt);
+    const prefillMeetingDate =
+      sourceMeetingDate && sourceMeetingDate >= applicationMeetingMinimumDateFromProposal
+        ? sourceMeetingDate
+        : applicationMeetingMinimumDateFromProposal;
+
+    setApplicationMeetingForm((current) => ({
+      ...current,
+      meetingDate: prefillMeetingDate || "",
+      meetingStartTime: "",
+      meetingDurationMin: Number(latestProposalMeeting?.durationMin || current.meetingDurationMin || 120),
+      meetingMode: String(latestProposalMeeting?.mode || current.meetingMode || ""),
+      meetingPlatform: String(latestProposalMeeting?.platform || current.meetingPlatform || ""),
+      meetingPlatformOther: String(latestProposalMeeting?.platformOther || current.meetingPlatformOther || ""),
+      meetingLink: String(latestProposalMeeting?.link || current.meetingLink || ""),
+      meetingInviteSent:
+        typeof latestProposalMeeting?.inviteSent === "boolean"
+          ? latestProposalMeeting.inviteSent
+          : Boolean(current.meetingInviteSent),
+      meetingPlace: String(latestProposalMeeting?.place || current.meetingPlace || ""),
+    }));
+    setApplicationMeetingFieldErrors({});
+    setApplicationMeetingPrefillKey(applicationMeetingSourcePrefillKey);
+  }, [
+    applicationMeetingMinimumDateFromProposal,
+    applicationMeetingForm.meetingDate,
+    applicationMeetingForm.meetingLink,
+    applicationMeetingForm.meetingMode,
+    applicationMeetingForm.meetingPlace,
+    applicationMeetingForm.meetingPlatform,
+    applicationMeetingForm.meetingPlatformOther,
+    applicationMeetingForm.meetingStartTime,
+    applicationMeetingPrefillKey,
+    applicationMeetingSaved,
+    applicationMeetingSourcePrefillKey,
+    latestProposalMeeting,
+    proposalViewedActivityKey,
+    proposalUiActivityKey,
+    showProposalPanel,
   ]);
 
   const isProposalGenerateViewed = proposalViewedActivityKey === "Generate Proposal";
@@ -3073,15 +3223,36 @@ function AgentLeadEngagement() {
     setRescheduleFromNeedsMode(true);
   };
 
+  const startAddFurtherProposalPresentation = () => {
+    if (!proposalMeetingSaved?.startAt) return;
+    const originalMeeting = proposalMeetingSaved;
+    setProposalMeetingError("");
+    setProposalMeetingFieldErrors({});
+    setProposalMeetingRescheduleOriginal(originalMeeting);
+    setProposalMeetingScheduleMode("ADD_FURTHER");
+    setProposalMeetingForm({
+      meetingDate: "",
+      meetingStartTime: "",
+      meetingDurationMin: originalMeeting?.durationMin ?? 120,
+      meetingMode: String(originalMeeting?.mode || ""),
+      meetingPlatform: String(originalMeeting?.platform || ""),
+      meetingPlatformOther: String(originalMeeting?.platformOther || ""),
+      meetingLink: String(originalMeeting?.link || ""),
+      meetingInviteSent: Boolean(originalMeeting?.inviteSent),
+      meetingPlace: String(originalMeeting?.place || ""),
+    });
+    setProposalMeetingSaved(null);
+  };
+
   const startRescheduleProposalPresentation = () => {
     if (!proposalMeetingSaved?.startAt) return;
     const originalMeeting = proposalMeetingSaved;
     setProposalMeetingError("");
     setProposalMeetingFieldErrors({});
     setProposalMeetingRescheduleOriginal(originalMeeting);
-    setProposalMeetingScheduleMode(isProposalPresentationMeetingRescheduleMode ? "RESCHEDULE_EXISTING" : "ADD_FURTHER");
+    setProposalMeetingScheduleMode("RESCHEDULE_EXISTING");
     setProposalMeetingForm({
-      meetingDate: isProposalPresentationMeetingRescheduleMode ? toLocalDateInputValue(new Date()) : "",
+      meetingDate: toLocalDateInputValue(new Date()),
       meetingStartTime: "",
       meetingDurationMin: originalMeeting?.durationMin ?? 120,
       meetingMode: String(originalMeeting?.mode || ""),
@@ -3374,6 +3545,10 @@ function AgentLeadEngagement() {
         setProposalMeetingFieldErrors({ meetingStartTime: "Start time is required." });
         return;
       }
+      if (proposalMeetingScheduleMode === "ADD_FURTHER" && addFurtherProposalMeetingDate && meetingDate !== addFurtherProposalMeetingDate) {
+        setProposalMeetingFieldErrors({ meetingDate: `Meeting date must be ${addFurtherProposalMeetingDate} when adding a further proposal presentation meeting.` });
+        return;
+      }
       if (![30, 60, 90, 120].includes(meetingDurationMin)) {
         setProposalMeetingFieldErrors({ meetingDurationMin: "Duration must be 30, 60, 90, or 120 minutes." });
         return;
@@ -3391,6 +3566,13 @@ function AgentLeadEngagement() {
       if (proposedStart && latestCompletedProposalMeetingEndAt && proposedStart.getTime() <= latestCompletedProposalMeetingEndAt.getTime()) {
         setProposalMeetingFieldErrors({ meetingStartTime: "Proposal presentation must start after the last completed proposal presentation meeting ends." });
         return;
+      }
+      if (proposalMeetingScheduleMode === "ADD_FURTHER" && Number.isFinite(addFurtherProposalEarliestStartMinutes)) {
+        const [startHour, startMinute] = meetingStartTime.split(":").map(Number);
+        if (startHour * 60 + startMinute < addFurtherProposalEarliestStartMinutes) {
+          setProposalMeetingFieldErrors({ meetingStartTime: "Further proposal presentation meeting must start after the current open meeting ends." });
+          return;
+        }
       }
       const proposalRescheduleOriginalStartAt = proposalMeetingRescheduleOriginal?.startAt
         ? new Date(proposalMeetingRescheduleOriginal.startAt)
@@ -4478,16 +4660,13 @@ function AgentLeadEngagement() {
       const meetingDurationMin = Number(applicationMeetingForm.meetingDurationMin || 120);
       const meetingMode = String(applicationMeetingForm.meetingMode || "").trim();
 
-      if (!meetingDate) {
-        setApplicationMeetingFieldErrors({ meetingDate: "Meeting date is required." });
-        return;
-      }
-      if (!meetingStartTime) {
-        setApplicationMeetingFieldErrors({ meetingStartTime: "Start time is required." });
-        return;
-      }
-      if (![30, 60, 90, 120].includes(meetingDurationMin)) {
-        setApplicationMeetingFieldErrors({ meetingDurationMin: "Duration must be 30, 60, 90, or 120 minutes." });
+      const fieldErrors = {};
+      if (!meetingDate) fieldErrors.meetingDate = "Meeting date is required.";
+      if (!meetingStartTime) fieldErrors.meetingStartTime = "Start time is required.";
+      if (![30, 60, 90, 120].includes(meetingDurationMin)) fieldErrors.meetingDurationMin = "Duration must be 30, 60, 90, or 120 minutes.";
+      if (!["Online", "Face-to-face"].includes(meetingMode)) fieldErrors.meetingMode = "Please select meeting mode.";
+      if (Object.keys(fieldErrors).length) {
+        setApplicationMeetingFieldErrors(fieldErrors);
         return;
       }
 
@@ -4510,38 +4689,19 @@ function AgentLeadEngagement() {
         return;
       }
 
-      if (!["Online", "Face-to-face"].includes(meetingMode)) {
-        setApplicationMeetingFieldErrors({ meetingMode: "Please select meeting mode." });
-        return;
-      }
-
       if (meetingMode === "Online") {
         const platform = String(applicationMeetingForm.meetingPlatform || "").trim();
-        if (!["Zoom", "Google Meet", "Other"].includes(platform)) {
-          setApplicationMeetingFieldErrors({ meetingPlatform: "Please select online platform." });
-          return;
-        }
-        if (platform === "Other" && !String(applicationMeetingForm.meetingPlatformOther || "").trim()) {
-          setApplicationMeetingFieldErrors({ meetingPlatformOther: "Please specify other platform." });
-          return;
-        }
+        if (!["Zoom", "Google Meet", "Other"].includes(platform)) fieldErrors.meetingPlatform = "Please select online platform.";
+        if (platform === "Other" && !String(applicationMeetingForm.meetingPlatformOther || "").trim()) fieldErrors.meetingPlatformOther = "Please specify other platform.";
         const link = String(applicationMeetingForm.meetingLink || "").trim();
-        if (!link) {
-          setApplicationMeetingFieldErrors({ meetingLink: "Meeting link is required for online meetings." });
-          return;
-        }
-        if (!isValidHttpUrl(link)) {
-          setApplicationMeetingFieldErrors({ meetingLink: "Meeting link must be a valid http/https URL." });
-          return;
-        }
-        if (applicationMeetingForm.meetingInviteSent !== true) {
-          setApplicationMeetingFieldErrors({ meetingInviteSent: "Please confirm invite link has been sent." });
-          return;
-        }
+        if (!link) fieldErrors.meetingLink = "Meeting link is required for online meetings.";
+        else if (!isValidHttpUrl(link)) fieldErrors.meetingLink = "Meeting link must be a valid http/https URL.";
+        if (applicationMeetingForm.meetingInviteSent !== true) fieldErrors.meetingInviteSent = "Please confirm invite link has been sent.";
       }
 
-      if (meetingMode === "Face-to-face" && !String(applicationMeetingForm.meetingPlace || "").trim()) {
-        setApplicationMeetingFieldErrors({ meetingPlace: "Meeting place is required for face-to-face meetings." });
+      if (meetingMode === "Face-to-face" && !String(applicationMeetingForm.meetingPlace || "").trim()) fieldErrors.meetingPlace = "Meeting place is required for face-to-face meetings.";
+      if (Object.keys(fieldErrors).length) {
+        setApplicationMeetingFieldErrors(fieldErrors);
         return;
       }
 
@@ -5271,7 +5431,7 @@ function AgentLeadEngagement() {
                                   }}
                                   disabled={applicationAttendanceSaving}
                                 >
-                                  Cancel
+                                  Clear
                                 </button>
                                 <button
                                   type="button"
@@ -7649,7 +7809,7 @@ function AgentLeadEngagement() {
                                 )}
                               </div>
                               {proposalPresentationError ? <p className="le-smallNote" style={{ color: "#DA291C", marginTop: 8 }}>{proposalPresentationError}</p> : null}
-                              {!proposalPresentationDecisionEditMode && proposalPresentationFurtherPromptSaved && !hasIncompleteLatestProposalMeeting ? (
+                              {!proposalPresentationDecisionEditMode && proposalPresentationFurtherPromptSaved && canScheduleFurtherProposalPresentation ? (
                                 <p className="le-muted le-presentationFurtherPrompt">
                                   Further Proposal Presentation can be scheduled.{" "}
                                   <button
@@ -7705,11 +7865,42 @@ function AgentLeadEngagement() {
                                   disabled={savingApplicationMeeting || loadingAvailability}
                                 >
                                   <option value="">Select date</option>
-                                  {availableDateOptions.map((d) => (
+                                  {applicationMeetingDateOptions.map((d) => (
                                     <option key={`app-date-${d.value}`} value={d.value}>{d.label}</option>
                                   ))}
                                 </select>
                                 {applicationMeetingFieldErrors.meetingDate ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{applicationMeetingFieldErrors.meetingDate}</p> : null}
+                              </div>
+
+                              <div className="le-formRow">
+                                <label className="le-label">Start Time *</label>
+                                <select
+                                  className="le-input"
+                                  value={applicationMeetingForm.meetingStartTime}
+                                  onChange={(e) => {
+                                    const v = e.target.value;
+                                    setApplicationMeetingForm((f) => ({ ...f, meetingStartTime: v }));
+                                    setApplicationMeetingFieldErrors((prev) => ({ ...prev, meetingStartTime: "" }));
+                                  }}
+                                  disabled={savingApplicationMeeting || !applicationMeetingForm.meetingDate}
+                                >
+                                  <option value="">Select time</option>
+                                  {applicationMeetingStartSlotsFiltered.map((slot) => {
+                                    const booked = applicationMeetingForm.meetingDate
+                                      ? isSlotBooked(applicationMeetingForm.meetingDate, slot, applicationMeetingForm.meetingDurationMin, applicationMeetingSaved?.startAt)
+                                      : false;
+                                    const initialSlotTime = applicationMeetingSaved?.startAt
+                                      ? `${String(new Date(applicationMeetingSaved.startAt).getHours()).padStart(2, "0")}:${String(new Date(applicationMeetingSaved.startAt).getMinutes()).padStart(2, "0")}`
+                                      : "";
+                                    const isInitialSetting = Boolean(applicationMeetingSaved?.startAt) && applicationMeetingForm.meetingDate === toDateInputValue(applicationMeetingSaved.startAt) && slot === initialSlotTime;
+                                    return (
+                                      <option key={`app-time-${slot}`} value={slot} disabled={booked || isInitialSetting}>
+                                        {formatTimeLabel(slot)}{isInitialSetting ? " (INITIAL SETTING)" : booked ? " (BOOKED)" : ""}
+                                      </option>
+                                    );
+                                  })}
+                                </select>
+                                {applicationMeetingFieldErrors.meetingStartTime ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{applicationMeetingFieldErrors.meetingStartTime}</p> : null}
                               </div>
 
                               <div className="le-formRow">
@@ -7731,36 +7922,6 @@ function AgentLeadEngagement() {
                                 {applicationMeetingFieldErrors.meetingDurationMin ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{applicationMeetingFieldErrors.meetingDurationMin}</p> : null}
                               </div>
 
-                              <div className="le-formRow">
-                                <label className="le-label">Start Time *</label>
-                                <select
-                                  className="le-input"
-                                  value={applicationMeetingForm.meetingStartTime}
-                                  onChange={(e) => {
-                                    const v = e.target.value;
-                                    setApplicationMeetingForm((f) => ({ ...f, meetingStartTime: v }));
-                                    setApplicationMeetingFieldErrors((prev) => ({ ...prev, meetingStartTime: "" }));
-                                  }}
-                                  disabled={savingApplicationMeeting || !applicationMeetingForm.meetingDate}
-                                >
-                                  <option value="">Select time</option>
-                                  {applicationMeetingStartSlots.map((slot) => {
-                                    const booked = applicationMeetingForm.meetingDate
-                                      ? isSlotBooked(applicationMeetingForm.meetingDate, slot, applicationMeetingForm.meetingDurationMin, applicationMeetingSaved?.startAt)
-                                      : false;
-                                    const initialSlotTime = applicationMeetingSaved?.startAt
-                                      ? `${String(new Date(applicationMeetingSaved.startAt).getHours()).padStart(2, "0")}:${String(new Date(applicationMeetingSaved.startAt).getMinutes()).padStart(2, "0")}`
-                                      : "";
-                                    const isInitialSetting = Boolean(applicationMeetingSaved?.startAt) && applicationMeetingForm.meetingDate === toDateInputValue(applicationMeetingSaved.startAt) && slot === initialSlotTime;
-                                    return (
-                                      <option key={`app-time-${slot}`} value={slot} disabled={booked || isInitialSetting}>
-                                        {formatTimeLabel(slot)}{isInitialSetting ? " (INITIAL SETTING)" : booked ? " (BOOKED)" : ""}
-                                      </option>
-                                    );
-                                  })}
-                                </select>
-                                {applicationMeetingFieldErrors.meetingStartTime ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{applicationMeetingFieldErrors.meetingStartTime}</p> : null}
-                              </div>
 
                               <div className="le-formRow">
                                 <label className="le-label">Meeting Mode *</label>
@@ -8954,7 +9115,7 @@ function AgentLeadEngagement() {
                                 <button
                                   type="button"
                                   className="le-btn secondary"
-                                  onClick={startRescheduleProposalPresentation}
+                                  onClick={startAddFurtherProposalPresentation}
                                   disabled={savingProposalMeeting}
                                 >
                                   Add Further Proposal Presentation Meet
@@ -9006,7 +9167,8 @@ function AgentLeadEngagement() {
                                 type="date"
                                 className="le-input"
                                 value={proposalMeetingForm.meetingDate}
-                                min={proposalMeetingMinimumDate}
+                                min={proposalMeetingScheduleMode === "ADD_FURTHER" && addFurtherProposalMeetingDate ? addFurtherProposalMeetingDate : proposalMeetingMinimumDate}
+                                max={proposalMeetingScheduleMode === "ADD_FURTHER" && addFurtherProposalMeetingDate ? addFurtherProposalMeetingDate : undefined}
                                 onChange={(e) => {
                                   const v = e.target.value;
                                   setProposalMeetingForm((f) => ({ ...f, meetingDate: v }));
