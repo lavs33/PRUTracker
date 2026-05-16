@@ -8305,6 +8305,29 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/schedule-pro
       ) {
         throw Object.assign(new Error("Further proposal presentation must start after the existing proposal presentation ends."), { status: 400 });
       }
+      if (isProposalPresentationRetry && latestProposalPresentationMeetingForRetry?.startAt) {
+        const openProposalMeetingStart = new Date(latestProposalPresentationMeetingForRetry.startAt);
+        if (!Number.isNaN(openProposalMeetingStart.getTime())) {
+          const openProposalMeetingDate = new Date(openProposalMeetingStart);
+          openProposalMeetingDate.setHours(0, 0, 0, 0);
+          const proposedMeetingDate = new Date(dt);
+          proposedMeetingDate.setHours(0, 0, 0, 0);
+          if (proposedMeetingDate.getTime() !== openProposalMeetingDate.getTime()) {
+            throw Object.assign(new Error("Further proposal presentation meeting date must match the existing open proposal presentation meeting date."), { status: 400 });
+          }
+        }
+      }
+      if (isProposalPresentationRetry && latestProposalPresentationMeetingForRetry?.endAt) {
+        const openProposalMeetingEnd = new Date(latestProposalPresentationMeetingForRetry.endAt);
+        if (!Number.isNaN(openProposalMeetingEnd.getTime())) {
+          const endMinutes = openProposalMeetingEnd.getHours() * 60 + openProposalMeetingEnd.getMinutes();
+          const earliestAllowedStartMinutes = Math.ceil(endMinutes / 30) * 30;
+          const proposedStartMinutes = dt.getHours() * 60 + dt.getMinutes();
+          if (proposedStartMinutes < earliestAllowedStartMinutes) {
+            throw Object.assign(new Error("Further proposal presentation meeting must start at or after the next 30-minute slot after the existing open proposal presentation meeting ends."), { status: 400 });
+          }
+        }
+      }
       if (
         latestCompletedProposalPresentationMeeting?.endAt &&
         dt.getTime() <= new Date(latestCompletedProposalPresentationMeeting.endAt).getTime()
@@ -8469,6 +8492,14 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/schedule-pro
             dedupeKey: presentationDedupeKey,
             ...(isUpdatingExistingProposalMeeting ? { status: { $in: ["Open", "Overdue"] } } : {}),
           }).session(session);
+      let donePresentationTaskWithSameDedupe = null;
+      if (!isProposalPresentationRetry && !presentationTask) {
+        donePresentationTaskWithSameDedupe = await Task.findOne({
+          assignedToUserId: userObjectId,
+          dedupeKey: presentationDedupeKey,
+          status: "Done",
+        }).session(session);
+      }
       let duplicatePresentationTasksToClose = [];
       if (!isProposalPresentationRetry && (isUpdatingExistingProposalMeeting || isProposalStageReschedule)) {
         const openPresentationTasks = await Task.find({
@@ -8538,6 +8569,13 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/schedule-pro
           session,
         });
       } else if (isUpdatingExistingProposalMeeting) {
+        if (
+          donePresentationTaskWithSameDedupe?._id &&
+          String(donePresentationTaskWithSameDedupe._id) !== String(presentationTask?._id || "")
+        ) {
+          donePresentationTaskWithSameDedupe.dedupeKey = `ARCHIVED_PRESENTATION:${engagement._id}:${donePresentationTaskWithSameDedupe._id}`;
+          await donePresentationTaskWithSameDedupe.save({ session });
+        }
         presentationTask.title = presentationTitle;
         presentationTask.description = presentationDescription;
         presentationTask.dueAt = presentationDueAt;
@@ -10170,21 +10208,22 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/schedule-application
 
       const now = new Date();
 
-      const proposalPresentationMeeting = await ScheduledMeeting.findOne({
-        leadEngagementId: engagement._id,
-        meetingType: "Proposal Presentation",
-      }).session(session);
-      if (proposalPresentationMeeting && proposalPresentationMeeting.status !== "Completed") {
-        proposalPresentationMeeting.status = "Completed";
-        await proposalPresentationMeeting.save({ session });
-      }
+      await ScheduledMeeting.updateMany(
+        {
+          leadEngagementId: engagement._id,
+          meetingType: "Proposal Presentation",
+          status: { $in: ["Scheduled", "Open", "Overdue"] },
+        },
+        { $set: { status: "Completed" } },
+        { session }
+      );
 
       const openPresentationTasks = await Task.find({
         assignedToUserId: userObjectId,
         prospectId: prospectObjectId,
         leadEngagementId: engagement._id,
         type: "PRESENTATION",
-        status: "Open",
+        status: { $in: ["Open", "Overdue"] },
       }).session(session);
 
       for (const t of openPresentationTasks) {
@@ -10330,8 +10369,8 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/presentation", async
         throw Object.assign(new Error("Lead is not in Proposal stage."), { status: 409 });
       }
 
-      if (engagement.currentActivityKey !== "Present Proposal") {
-        throw Object.assign(new Error("Present Proposal is not the current activity."), { status: 409 });
+      if (!["Present Proposal", "Schedule Application Submission"].includes(String(engagement.currentActivityKey || "").trim())) {
+        throw Object.assign(new Error("Present Proposal decision can only be edited while in Proposal subactivities."), { status: 409 });
       }
 
       const nextProposalActivityKey = hasDecision && accepted === "YES" ? "Schedule Application Submission" : "Present Proposal";
