@@ -215,7 +215,7 @@ function AgentLeadEngagement() {
   const [applicationMeetingForm, setApplicationMeetingForm] = useState({
     meetingDate: "",
     meetingStartTime: "",
-    meetingDurationMin: 120,
+    meetingDurationMin: "",
     meetingMode: "",
     meetingPlatform: "",
     meetingPlatformOther: "",
@@ -2692,17 +2692,6 @@ function AgentLeadEngagement() {
       }
       return;
     }
-    const hasAnyApplicationMeetingInput = Boolean(
-      String(applicationMeetingForm.meetingDate || "").trim() ||
-      String(applicationMeetingForm.meetingStartTime || "").trim() ||
-      String(applicationMeetingForm.meetingMode || "").trim() ||
-      String(applicationMeetingForm.meetingPlatform || "").trim() ||
-      String(applicationMeetingForm.meetingPlatformOther || "").trim() ||
-      String(applicationMeetingForm.meetingLink || "").trim() ||
-      String(applicationMeetingForm.meetingPlace || "").trim()
-    );
-    if (applicationMeetingPrefillKey === applicationMeetingSourcePrefillKey && hasAnyApplicationMeetingInput) return;
-
     const sourceMeetingDate = toDateInputValue(latestProposalMeeting.startAt);
     const prefillMeetingDate =
       sourceMeetingDate && sourceMeetingDate >= applicationMeetingMinimumDateFromProposal
@@ -2711,9 +2700,11 @@ function AgentLeadEngagement() {
 
     setApplicationMeetingForm((current) => ({
       ...current,
-      meetingDate: prefillMeetingDate || "",
-      meetingStartTime: "",
-      meetingDurationMin: Number(latestProposalMeeting?.durationMin || current.meetingDurationMin || 120),
+      meetingDate: String(current.meetingDate || "").trim() || prefillMeetingDate || "",
+      meetingDurationMin:
+        String(current.meetingDurationMin || "").trim() !== ""
+          ? current.meetingDurationMin
+          : Number(latestProposalMeeting?.durationMin || 120),
       meetingMode: String(latestProposalMeeting?.mode || current.meetingMode || ""),
       meetingPlatform: String(latestProposalMeeting?.platform || current.meetingPlatform || ""),
       meetingPlatformOther: String(latestProposalMeeting?.platformOther || current.meetingPlatformOther || ""),
@@ -2729,6 +2720,7 @@ function AgentLeadEngagement() {
   }, [
     applicationMeetingMinimumDateFromProposal,
     applicationMeetingForm.meetingDate,
+    applicationMeetingForm.meetingDurationMin,
     applicationMeetingForm.meetingLink,
     applicationMeetingForm.meetingMode,
     applicationMeetingForm.meetingPlace,
@@ -7909,11 +7901,13 @@ function AgentLeadEngagement() {
                                   className="le-input"
                                   value={applicationMeetingForm.meetingDurationMin}
                                   onChange={(e) => {
-                                    setApplicationMeetingForm((f) => ({ ...f, meetingDurationMin: Number(e.target.value || 120), meetingStartTime: "" }));
+                                    const nextDuration = e.target.value ? Number(e.target.value) : "";
+                                    setApplicationMeetingForm((f) => ({ ...f, meetingDurationMin: nextDuration, meetingStartTime: "" }));
                                     setApplicationMeetingFieldErrors((prev) => ({ ...prev, meetingDurationMin: "", meetingStartTime: "" }));
                                   }}
                                   disabled={savingApplicationMeeting}
                                 >
+                                  <option value="">Select duration</option>
                                   <option value={30}>30 mins</option>
                                   <option value={60}>60 mins</option>
                                   <option value={90}>90 mins</option>
@@ -8042,35 +8036,22 @@ function AgentLeadEngagement() {
                                   onClick={() => {
                                     setApplicationMeetingError("");
                                     setApplicationMeetingFieldErrors({});
-                                    if (applicationMeetingSaved?.startAt) {
-                                      setApplicationMeetingForm({
-                                        meetingDate: toDateInputValue(applicationMeetingSaved.startAt),
-                                        meetingStartTime: `${String(new Date(applicationMeetingSaved.startAt).getHours()).padStart(2, "0")}:${String(new Date(applicationMeetingSaved.startAt).getMinutes()).padStart(2, "0")}`,
-                                        meetingDurationMin: applicationMeetingSaved.durationMin ?? 120,
-                                        meetingMode: String(applicationMeetingSaved.mode || ""),
-                                        meetingPlatform: String(applicationMeetingSaved.platform || ""),
-                                        meetingPlatformOther: String(applicationMeetingSaved.platformOther || ""),
-                                        meetingLink: String(applicationMeetingSaved.link || ""),
-                                        meetingInviteSent: Boolean(applicationMeetingSaved.inviteSent),
-                                        meetingPlace: String(applicationMeetingSaved.place || ""),
-                                      });
-                                    } else {
-                                      setApplicationMeetingForm({
-                                        meetingDate: "",
-                                        meetingStartTime: "",
-                                        meetingDurationMin: 120,
-                                        meetingMode: "",
-                                        meetingPlatform: "",
-                                        meetingPlatformOther: "",
-                                        meetingLink: "",
-                                        meetingInviteSent: false,
-                                        meetingPlace: "",
-                                      });
-                                    }
+                                    setApplicationMeetingForm({
+                                      meetingDate: "",
+                                      meetingStartTime: "",
+                                      meetingDurationMin: "",
+                                      meetingMode: "",
+                                      meetingPlatform: "",
+                                      meetingPlatformOther: "",
+                                      meetingLink: "",
+                                      meetingInviteSent: false,
+                                      meetingPlace: "",
+                                    });
+                                    setApplicationMeetingPrefillKey(applicationMeetingSourcePrefillKey || "manual-clear");
                                   }}
                                   disabled={savingApplicationMeeting}
                                 >
-                                  Cancel
+                                  Clear
                                 </button>
                                 <button
                                   type="button"
