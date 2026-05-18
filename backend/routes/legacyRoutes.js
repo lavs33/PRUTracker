@@ -8813,8 +8813,8 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/generate", async (re
       const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).session(session);
       if (!engagement) throw Object.assign(new Error("Lead engagement not found."), { status: 404 });
 
-      if (engagement.currentStage !== "Proposal") {
-        throw Object.assign(new Error("Lead is not in Proposal stage."), { status: 409 });
+      if (!["Proposal", "Application"].includes(String(engagement.currentStage || "").trim())) {
+        throw Object.assign(new Error("Lead is not in Proposal/Application stage."), { status: 409 });
       }
 
       const proposalDoc = await Proposal.findOne({ leadEngagementId: engagement._id })
@@ -10106,7 +10106,11 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/schedule-application
         throw Object.assign(new Error("Lead is not in Proposal stage."), { status: 409 });
       }
 
-      if (engagement.currentActivityKey !== "Schedule Application Submission") {
+      const stageNow = String(engagement.currentStage || "").trim();
+      const activityNow = String(engagement.currentActivityKey || "").trim();
+      const canScheduleFromProposal = stageNow === "Proposal" && activityNow === "Schedule Application Submission";
+      const canRescheduleWithinApplication = stageNow === "Application";
+      if (!canScheduleFromProposal && !canRescheduleWithinApplication) {
         throw Object.assign(new Error("Schedule Application Submission is not the current activity."), { status: 409 });
       }
 
@@ -10119,10 +10123,15 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/schedule-application
         throw Object.assign(new Error("meeting date/time is required and must be valid."), { status: 400 });
       }
 
-      const tomorrow = new Date();
-      tomorrow.setHours(0, 0, 0, 0);
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      if (dt < tomorrow) throw Object.assign(new Error("meetingAt must be at least tomorrow."), { status: 400 });
+      const nowLocal = new Date();
+      const todayStart = new Date(nowLocal);
+      todayStart.setHours(0, 0, 0, 0);
+      if (dt < todayStart) {
+        throw Object.assign(new Error("meetingAt must be today or a future date."), { status: 400 });
+      }
+      if (dt <= nowLocal) {
+        throw Object.assign(new Error("meetingAt must be in the future."), { status: 400 });
+      }
 
       if (![30, 60, 90, 120].includes(durationMin)) {
         throw Object.assign(new Error("meetingDurationMin must be one of 30, 60, 90, 120."), { status: 400 });
