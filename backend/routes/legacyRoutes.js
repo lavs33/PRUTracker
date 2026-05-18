@@ -10119,10 +10119,15 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/schedule-application
         throw Object.assign(new Error("meeting date/time is required and must be valid."), { status: 400 });
       }
 
-      const tomorrow = new Date();
-      tomorrow.setHours(0, 0, 0, 0);
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      if (dt < tomorrow) throw Object.assign(new Error("meetingAt must be at least tomorrow."), { status: 400 });
+      const nowLocal = new Date();
+      const todayStart = new Date(nowLocal);
+      todayStart.setHours(0, 0, 0, 0);
+      if (dt < todayStart) {
+        throw Object.assign(new Error("meetingAt must be today or a future date."), { status: 400 });
+      }
+      if (dt <= nowLocal) {
+        throw Object.assign(new Error("meetingAt must be in the future."), { status: 400 });
+      }
 
       if (![30, 60, 90, 120].includes(durationMin)) {
         throw Object.assign(new Error("meetingDurationMin must be one of 30, 60, 90, 120."), { status: 400 });
