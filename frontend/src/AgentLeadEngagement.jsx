@@ -219,6 +219,7 @@ function AgentLeadEngagement() {
     meetingPlace: "",
   });
   const [applicationMeetingSaved, setApplicationMeetingSaved] = useState(null);
+  const [applicationMeetingRescheduleOriginal, setApplicationMeetingRescheduleOriginal] = useState(null);
   const [savingApplicationMeeting, setSavingApplicationMeeting] = useState(false);
   const [applicationMeetingError, setApplicationMeetingError] = useState("");
   const [applicationMeetingFieldErrors, setApplicationMeetingFieldErrors] = useState({});
@@ -563,6 +564,7 @@ function AgentLeadEngagement() {
         initialQuotationNotes: String(presentation?.initialQuotationNotes || ""),
       });
       setApplicationMeetingSaved(applicationSubmissionMeeting);
+      setApplicationMeetingRescheduleOriginal(null);
       setApplicationAttendanceForm({
         attendanceChoice: appAttendance?.attended ? "YES" : "",
         attendanceProofImageDataUrl: String(appAttendance?.attendanceProofImageDataUrl || ""),
@@ -2481,7 +2483,8 @@ function AgentLeadEngagement() {
   const proposalCurrentStepIndex = getStepIndex(PROPOSAL_STEPS_UI, proposalUiActivityKey);
   const proposalViewedStepIndex = getStepIndex(PROPOSAL_STEPS_UI, proposalViewedActivityKey || proposalUiActivityKey);
   const applicationCurrentStepIndex = getStepIndex(APPLICATION_STEPS_UI, applicationUiActivityKey);
-  const applicationViewedStepIndex = getStepIndex(APPLICATION_STEPS_UI, applicationViewedActivityKey || applicationUiActivityKey);
+  const applicationActiveViewedActivityKey = applicationViewedActivityKey || applicationUiActivityKey;
+  const applicationViewedStepIndex = getStepIndex(APPLICATION_STEPS_UI, applicationActiveViewedActivityKey);
   const policyCurrentStepIndex = getStepIndex(POLICY_ISSUANCE_STEPS_UI, policyIssuanceUiActivityKey);
   const policyViewedStepIndex = getStepIndex(POLICY_ISSUANCE_STEPS_UI, policyViewedActivityKey || policyIssuanceUiActivityKey);
 
@@ -2736,9 +2739,9 @@ function AgentLeadEngagement() {
   const isProposalAttendanceViewed = proposalViewedActivityKey === "Record Prospect Attendance";
   const isProposalPresentationViewed = proposalViewedActivityKey === "Present Proposal";
   const isProposalScheduleApplicationViewed = proposalViewedActivityKey === "Schedule Application Submission";
-  const isApplicationAttendanceViewed = applicationViewedActivityKey === "Record Prospect Attendance";
-  const isApplicationPremiumViewed = applicationViewedActivityKey === "Record Premium Payment Transfer";
-  const isApplicationSubmissionViewed = applicationViewedActivityKey === "Record Application Submission";
+  const isApplicationAttendanceViewed = applicationActiveViewedActivityKey === "Record Prospect Attendance";
+  const isApplicationPremiumViewed = applicationActiveViewedActivityKey === "Record Premium Payment Transfer";
+  const isApplicationSubmissionViewed = applicationActiveViewedActivityKey === "Record Application Submission";
   const isPolicyStatusViewed = policyViewedActivityKey === "Record Policy Application Status";
   const isPolicyInitialEorViewed = policyViewedActivityKey === "Upload Initial Premium eOR";
   const isPolicySummaryViewed = policyViewedActivityKey === "Upload Policy Summary";
@@ -4052,6 +4055,7 @@ function AgentLeadEngagement() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to save application attendance.");
       await refreshCurrentProgressView();
+      setApplicationViewedActivityKey(data?.currentActivityKey || "Record Premium Payment Transfer");
     } catch (err) {
       setApplicationAttendanceError(err?.message || "Failed to save application attendance.");
     } finally {
@@ -4115,6 +4119,7 @@ function AgentLeadEngagement() {
       if (!res.ok) throw new Error(data?.message || "Failed to save premium payment transfer.");
 
       await refreshCurrentProgressView();
+      setApplicationViewedActivityKey(data?.currentActivityKey || "Record Application Submission");
     } catch (err) {
       const msg = String(err?.message || "Failed to save premium payment transfer.");
       if (msg.includes("Total annual premium")) {
@@ -4665,14 +4670,15 @@ function AgentLeadEngagement() {
         const ws = w?.startAt ? new Date(w.startAt) : null;
         const we = w?.endAt ? new Date(w.endAt) : null;
         if (!ws || !we || Number.isNaN(ws.getTime()) || Number.isNaN(we.getTime())) return false;
-        if (applicationMeetingSaved?.startAt && ws.getTime() === new Date(applicationMeetingSaved.startAt).getTime()) return false;
+        const ignoredApplicationStartAt = applicationMeetingSaved?.startAt || applicationMeetingRescheduleOriginal?.startAt;
+        if (ignoredApplicationStartAt && ws.getTime() === new Date(ignoredApplicationStartAt).getTime()) return false;
         return ws < proposedEnd && we > proposedStart;
       });
       if (hasRealtimeConflict) {
         setApplicationMeetingFieldErrors({ meetingStartTime: "Selected start time conflicts with an existing meeting." });
         return;
       }
-      if (isSlotBooked(meetingDate, meetingStartTime, meetingDurationMin, applicationMeetingSaved?.startAt)) {
+      if (isSlotBooked(meetingDate, meetingStartTime, meetingDurationMin, applicationMeetingSaved?.startAt || applicationMeetingRescheduleOriginal?.startAt, applicationMeetingSaved?.id || applicationMeetingRescheduleOriginal?.id)) {
         setApplicationMeetingFieldErrors({ meetingStartTime: "Selected start time conflicts with an existing meeting." });
         return;
       }
@@ -7878,6 +7884,7 @@ function AgentLeadEngagement() {
                                         meetingInviteSent: Boolean(applicationMeetingSaved?.inviteSent),
                                         meetingPlace: String(applicationMeetingSaved?.place || ""),
                                       });
+                                      setApplicationMeetingRescheduleOriginal(applicationMeetingSaved);
                                       setApplicationMeetingSaved(null);
                                     }}
                                     disabled={savingApplicationMeeting}
@@ -7925,13 +7932,22 @@ function AgentLeadEngagement() {
                                 >
                                   <option value="">Select time</option>
                                   {applicationMeetingStartSlotsFiltered.map((slot) => {
+                                    const initialApplicationMeeting = applicationMeetingSaved || applicationMeetingRescheduleOriginal || null;
+                                    const initialApplicationMeetingStartAt = initialApplicationMeeting?.startAt || "";
+                                    const initialApplicationMeetingId = initialApplicationMeeting?.id || "";
                                     const booked = applicationMeetingForm.meetingDate
-                                      ? isSlotBooked(applicationMeetingForm.meetingDate, slot, applicationMeetingForm.meetingDurationMin, applicationMeetingSaved?.startAt)
+                                      ? isSlotBooked(
+                                          applicationMeetingForm.meetingDate,
+                                          slot,
+                                          applicationMeetingForm.meetingDurationMin,
+                                          initialApplicationMeetingStartAt,
+                                          initialApplicationMeetingId
+                                        )
                                       : false;
-                                    const initialSlotTime = applicationMeetingSaved?.startAt
-                                      ? `${String(new Date(applicationMeetingSaved.startAt).getHours()).padStart(2, "0")}:${String(new Date(applicationMeetingSaved.startAt).getMinutes()).padStart(2, "0")}`
+                                    const initialSlotTime = initialApplicationMeetingStartAt
+                                      ? `${String(new Date(initialApplicationMeetingStartAt).getHours()).padStart(2, "0")}:${String(new Date(initialApplicationMeetingStartAt).getMinutes()).padStart(2, "0")}`
                                       : "";
-                                    const isInitialSetting = Boolean(applicationMeetingSaved?.startAt) && applicationMeetingForm.meetingDate === toDateInputValue(applicationMeetingSaved.startAt) && slot === initialSlotTime;
+                                    const isInitialSetting = Boolean(initialApplicationMeetingStartAt) && applicationMeetingForm.meetingDate === toDateInputValue(initialApplicationMeetingStartAt) && slot === initialSlotTime;
                                     return (
                                       <option key={`app-time-${slot}`} value={slot} disabled={booked || isInitialSetting}>
                                         {formatTimeLabel(slot)}{isInitialSetting ? " (INITIAL SETTING)" : booked ? " (BOOKED)" : ""}

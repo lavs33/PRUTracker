@@ -10175,7 +10175,17 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/schedule-application
       const endAt = new Date(dt.getTime() + durationMin * 60 * 1000);
 
       const windows = await getAgentMeetingWindows(userObjectId, null, null, session);
-      const conflict = hasMeetingConflict(dt, endAt, windows);
+      if (
+        existingMeeting?.startAt &&
+        !Number.isNaN(new Date(existingMeeting.startAt).getTime()) &&
+        dt.getTime() === new Date(existingMeeting.startAt).getTime()
+      ) {
+        throw Object.assign(new Error("Rescheduled application submission meeting time cannot be the same as previous meeting time."), { status: 400 });
+      }
+      const conflictWindows = existingMeeting?._id
+        ? windows.filter((w) => String(w.id || "") !== String(existingMeeting._id))
+        : windows;
+      const conflict = hasMeetingConflict(dt, endAt, conflictWindows);
       if (conflict) {
         throw Object.assign(new Error("Selected meeting time conflicts with another scheduled meeting."), {
           status: 409,
