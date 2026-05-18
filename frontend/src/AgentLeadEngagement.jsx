@@ -178,11 +178,6 @@ function AgentLeadEngagement() {
     sentToProspectAt: "",
     uploadedAt: "",
   });
-  const [applicationChosenProduct, setApplicationChosenProduct] = useState({
-    id: "",
-    productName: "",
-    description: "",
-  });
   const [proposalGenerateSaving, setProposalGenerateSaving] = useState(false);
   const [proposalGenerateError, setProposalGenerateError] = useState("");
   const [proposalGenerateFieldErrors, setProposalGenerateFieldErrors] = useState({});
@@ -215,7 +210,7 @@ function AgentLeadEngagement() {
   const [applicationMeetingForm, setApplicationMeetingForm] = useState({
     meetingDate: "",
     meetingStartTime: "",
-    meetingDurationMin: 120,
+    meetingDurationMin: "",
     meetingMode: "",
     meetingPlatform: "",
     meetingPlatformOther: "",
@@ -236,6 +231,7 @@ function AgentLeadEngagement() {
   });
   const [applicationAttendanceError, setApplicationAttendanceError] = useState("");
   const [applicationAttendanceSaving, setApplicationAttendanceSaving] = useState(false);
+  const [applicationAttendanceProofEditMode, setApplicationAttendanceProofEditMode] = useState(false);
   const [applicationPremiumPaymentForm, setApplicationPremiumPaymentForm] = useState({
     totalAnnualPremiumPhp: "",
     totalFrequencyPremiumPhp: "",
@@ -528,7 +524,6 @@ function AgentLeadEngagement() {
       const appPremiumPayment = applicationStage?.recordPremiumPaymentTransfer || {};
       const appNeedsSelection = applicationStage?.needsAssessmentProductSelection || {};
       const appSubmission = applicationStage?.recordApplicationSubmission || {};
-      const appChosenProduct = applicationStage?.chosenProduct || null;
       const policyStage = data?.engagement?.policy || {};
       const chosen = proposal?.chosenProduct || null;
       setProposalCurrentActivityKey(String(proposal?.currentActivityKey || "Generate Proposal").trim() || "Generate Proposal");
@@ -574,6 +569,7 @@ function AgentLeadEngagement() {
         attendanceProofFileName: String(appAttendance?.attendanceProofFileName || ""),
         attendedAt: appAttendance?.attendedAt || "",
       });
+      setApplicationAttendanceProofEditMode(false);
       setApplicationAttendanceError("");
       setApplicationPremiumPaymentForm({
         totalAnnualPremiumPhp:
@@ -594,11 +590,6 @@ function AgentLeadEngagement() {
       setApplicationPremiumPaymentFieldErrors({});
       setApplicationNeedsPaymentSelection({
         requestedFrequency: String(appNeedsSelection?.requestedFrequency || ""),
-      });
-      setApplicationChosenProduct({
-        id: String(appChosenProduct?._id || applicationStage?.chosenProductId || ""),
-        productName: String(appChosenProduct?.productName || ""),
-        description: String(appChosenProduct?.description || ""),
       });
       setApplicationSubmissionForm({
         pruOneTransactionId: String(appSubmission?.pruOneTransactionId || ""),
@@ -683,7 +674,7 @@ function AgentLeadEngagement() {
         meetingStartTime: applicationSubmissionMeeting?.startAt
           ? `${String(new Date(applicationSubmissionMeeting.startAt).getHours()).padStart(2, "0")}:${String(new Date(applicationSubmissionMeeting.startAt).getMinutes()).padStart(2, "0")}`
           : "",
-        meetingDurationMin: applicationSubmissionMeeting?.durationMin ?? 120,
+        meetingDurationMin: applicationSubmissionMeeting?.durationMin ?? "",
         meetingMode: String(applicationSubmissionMeeting?.mode || ""),
         meetingPlatform: String(applicationSubmissionMeeting?.platform || ""),
         meetingPlatformOther: String(applicationSubmissionMeeting?.platformOther || ""),
@@ -922,7 +913,7 @@ function AgentLeadEngagement() {
     const currentStage = String(engagement?.currentStage || "");
     const shouldLoad =
       selectedStageView === "Needs Assessment" ||
-      (selectedStageView === "CURRENT" && currentStage === "Needs Assessment");
+      (selectedStageView === "CURRENT" && ["Needs Assessment", "Proposal", "Application", "Policy Issuance"].includes(currentStage));
     if (!shouldLoad) return;
     fetchNeedsAssessment();
   }, [selectedStageView, engagement?.currentStage, fetchNeedsAssessment]);
@@ -2680,29 +2671,29 @@ function AgentLeadEngagement() {
   useEffect(() => {
     const isApplicationScheduleViewActive =
       showProposalPanel &&
-      proposalViewedActivityKey === "Schedule Application Submission";
+      (proposalViewedActivityKey === "Schedule Application Submission" ||
+        proposalUiActivityKey === "Schedule Application Submission");
     const shouldPrefillApplicationSchedule =
       isApplicationScheduleViewActive &&
       !applicationMeetingSaved &&
       Boolean(latestProposalMeeting?.startAt) &&
       Boolean(applicationMeetingSourcePrefillKey);
-    if (!shouldPrefillApplicationSchedule) {
+    const manualClearPrefillKey = applicationMeetingSourcePrefillKey
+      ? `manual-clear:${applicationMeetingSourcePrefillKey}`
+      : "manual-clear";
+    const alreadyPrefilledForCurrentSource =
+      Boolean(applicationMeetingSourcePrefillKey) &&
+      applicationMeetingPrefillKey === applicationMeetingSourcePrefillKey;
+    const wasManuallyClearedForCurrentSource =
+      applicationMeetingPrefillKey === manualClearPrefillKey ||
+      (!applicationMeetingSourcePrefillKey && applicationMeetingPrefillKey === "manual-clear");
+
+    if (!shouldPrefillApplicationSchedule || wasManuallyClearedForCurrentSource || alreadyPrefilledForCurrentSource) {
       if (applicationMeetingSaved || !isApplicationScheduleViewActive) {
         setApplicationMeetingPrefillKey("");
       }
       return;
     }
-    const hasAnyApplicationMeetingInput = Boolean(
-      String(applicationMeetingForm.meetingDate || "").trim() ||
-      String(applicationMeetingForm.meetingStartTime || "").trim() ||
-      String(applicationMeetingForm.meetingMode || "").trim() ||
-      String(applicationMeetingForm.meetingPlatform || "").trim() ||
-      String(applicationMeetingForm.meetingPlatformOther || "").trim() ||
-      String(applicationMeetingForm.meetingLink || "").trim() ||
-      String(applicationMeetingForm.meetingPlace || "").trim()
-    );
-    if (applicationMeetingPrefillKey === applicationMeetingSourcePrefillKey && hasAnyApplicationMeetingInput) return;
-
     const sourceMeetingDate = toDateInputValue(latestProposalMeeting.startAt);
     const prefillMeetingDate =
       sourceMeetingDate && sourceMeetingDate >= applicationMeetingMinimumDateFromProposal
@@ -2711,30 +2702,27 @@ function AgentLeadEngagement() {
 
     setApplicationMeetingForm((current) => ({
       ...current,
-      meetingDate: prefillMeetingDate || "",
-      meetingStartTime: "",
-      meetingDurationMin: Number(latestProposalMeeting?.durationMin || current.meetingDurationMin || 120),
-      meetingMode: String(latestProposalMeeting?.mode || current.meetingMode || ""),
-      meetingPlatform: String(latestProposalMeeting?.platform || current.meetingPlatform || ""),
-      meetingPlatformOther: String(latestProposalMeeting?.platformOther || current.meetingPlatformOther || ""),
-      meetingLink: String(latestProposalMeeting?.link || current.meetingLink || ""),
+      meetingDate: String(current.meetingDate || "").trim() || prefillMeetingDate || "",
+      meetingDurationMin:
+        String(current.meetingDurationMin || "").trim() !== ""
+          ? current.meetingDurationMin
+          : Number(latestProposalMeeting?.durationMin || 120),
+      meetingMode: String(current.meetingMode || latestProposalMeeting?.mode || ""),
+      meetingPlatform: String(current.meetingPlatform || latestProposalMeeting?.platform || ""),
+      meetingPlatformOther: String(current.meetingPlatformOther || latestProposalMeeting?.platformOther || ""),
+      meetingLink: String(current.meetingLink || latestProposalMeeting?.link || ""),
       meetingInviteSent:
-        typeof latestProposalMeeting?.inviteSent === "boolean"
+        typeof current.meetingInviteSent === "boolean"
+          ? current.meetingInviteSent
+          : typeof latestProposalMeeting?.inviteSent === "boolean"
           ? latestProposalMeeting.inviteSent
-          : Boolean(current.meetingInviteSent),
-      meetingPlace: String(latestProposalMeeting?.place || current.meetingPlace || ""),
+          : false,
+      meetingPlace: String(current.meetingPlace || latestProposalMeeting?.place || ""),
     }));
     setApplicationMeetingFieldErrors({});
     setApplicationMeetingPrefillKey(applicationMeetingSourcePrefillKey);
   }, [
     applicationMeetingMinimumDateFromProposal,
-    applicationMeetingForm.meetingDate,
-    applicationMeetingForm.meetingLink,
-    applicationMeetingForm.meetingMode,
-    applicationMeetingForm.meetingPlace,
-    applicationMeetingForm.meetingPlatform,
-    applicationMeetingForm.meetingPlatformOther,
-    applicationMeetingForm.meetingStartTime,
     applicationMeetingPrefillKey,
     applicationMeetingSaved,
     applicationMeetingSourcePrefillKey,
@@ -4039,7 +4027,7 @@ function AgentLeadEngagement() {
     try {
       setApplicationAttendanceError("");
       if (applicationAttendanceForm.attendanceChoice !== "YES") {
-        setApplicationAttendanceError("Prospect attendance is required before proceeding to application submission.");
+        setApplicationAttendanceError("Application submission can be rescheduled.");
         return;
       }
 
@@ -4733,6 +4721,13 @@ function AgentLeadEngagement() {
       if (!res.ok) throw new Error(data?.message || "Failed to schedule application submission.");
 
       await refreshCurrentProgressView();
+      setApplicationAttendanceForm({
+        attendanceChoice: "",
+        attendanceProofImageDataUrl: "",
+        attendanceProofFileName: "",
+        attendedAt: "",
+      });
+      setApplicationAttendanceProofEditMode(false);
     } catch (err) {
       const msg = err?.message || "Cannot connect to server. Is backend running?";
       if (!applyMeetingServerFieldError(msg, setApplicationMeetingFieldErrors, { conflictMessage: "Selected start time conflicts with an existing meeting." })) {
@@ -5279,41 +5274,6 @@ function AgentLeadEngagement() {
 
                   {showApplicationPanel && (
                     <>
-                      <div className="le-block">
-                        <div className="le-attemptMeta">
-                          <div>
-                            <span className="le-metaLabel">Chosen Product</span>
-                            <span className="le-metaValue">{applicationChosenProduct.productName || applicationChosenProduct.id || "—"}</span>
-                          </div>
-                          <div>
-                            <span className="le-metaLabel">Product Description</span>
-                            <span className="le-metaValue">{applicationChosenProduct.description || "No product description available."}</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="le-block">
-                        <div className="le-formRow">
-                          <label className="le-label">Quotation Proposal Preview:</label>
-                          {proposalGenerateForm.proposalFileDataUrl ? (
-                            <iframe
-                              title="Quotation Proposal Preview"
-                              src={proposalGenerateForm.proposalFileDataUrl}
-                              style={{ width: "100%", minHeight: 320, border: "1px solid #e5e7eb", borderRadius: 10 }}
-                            />
-                          ) : (
-                            <p className="le-smallNote">No proposal preview available.</p>
-                          )}
-                        </div>
-
-                        <div className="le-formRow" style={{ marginTop: 8 }}>
-                          <label className="le-label">Application Submission link:</label>
-                          <p className="le-smallNote">
-                            <a href="https://pruone.prulifeuk.com.ph/web" target="_blank" rel="noreferrer">https://pruone.prulifeuk.com.ph/web</a>
-                          </p>
-                        </div>
-                      </div>
-
                       {isApplicationAttendanceViewed && (
                         <div className="le-block">
                           <h4 className="le-blockTitle">Prospect Attendance</h4>
@@ -5369,7 +5329,7 @@ function AgentLeadEngagement() {
                                           attendanceProofImageDataUrl: "",
                                           attendanceProofFileName: "",
                                         }));
-                                        setApplicationAttendanceError("Prospect attendance is required before proceeding to application submission.");
+                                        setApplicationAttendanceError("Application submission can be rescheduled.");
                                       }}
                                     />
                                     <span>No</span>
@@ -5377,14 +5337,33 @@ function AgentLeadEngagement() {
                                 </div>
                               </div>
 
-                              {applicationAttendanceError === "Prospect attendance is required before proceeding to application submission." ? (
-                                <p className="le-smallNote" style={{ color: "#DA291C", marginTop: 6 }}>
-                                  {applicationAttendanceError}
+                              {applicationAttendanceForm.attendanceChoice === "NO" ? (
+                                <p className="le-muted" style={{ marginTop: 8 }}>
+                                  Application submission can be rescheduled.{" "}
+                                  <button
+                                    type="button"
+                                    className="le-btn ghost"
+                                    style={{ padding: 0, border: 0, background: "transparent", textDecoration: "underline" }}
+                                    onClick={() => {
+                                      setSelectedStageView("Proposal");
+                                      setProposalViewedActivityKey("Schedule Application Submission");
+                                    }}
+                                  >
+                                    Go to Schedule Application Submission
+                                  </button>
                                 </p>
                               ) : null}
 
                               {applicationAttendanceForm.attendanceChoice === "YES" ? (
                                 <>
+                                  {!isApplicationAttendanceViewed && String(applicationAttendanceForm.attendanceProofImageDataUrl || "").trim() ? (
+                                    <div className="le-actions" style={{ marginTop: 8 }}>
+                                      <button type="button" className="le-btn secondary" onClick={() => setApplicationAttendanceProofEditMode((v) => !v)}>
+                                        {applicationAttendanceProofEditMode ? "Cancel" : "Edit Proof"}
+                                      </button>
+                                    </div>
+                                  ) : null}
+
                                   <div className="le-formRow">
                                     <label className="le-label">Proof of Attendance (JPG, JPEG, PNG) *</label>
                                     <input
@@ -5392,7 +5371,11 @@ function AgentLeadEngagement() {
                                       className="le-input"
                                       accept="image/jpeg,image/png,.jpg,.jpeg,.png"
                                       onChange={(e) => onApplicationAttendanceProofPicked(e.target.files?.[0] || null)}
-                                      disabled={applicationAttendanceSaving || applicationAttendanceForm.attendanceChoice !== "YES"}
+                                      disabled={
+                                        applicationAttendanceSaving ||
+                                        applicationAttendanceForm.attendanceChoice !== "YES" ||
+                                        (!isApplicationAttendanceViewed && !applicationAttendanceProofEditMode)
+                                      }
                                     />
                                     {applicationAttendanceForm.attendanceProofFileName ? (
                                       <p className="le-smallNote">Selected file: {applicationAttendanceForm.attendanceProofFileName}</p>
@@ -5410,7 +5393,7 @@ function AgentLeadEngagement() {
                                     </div>
                                   ) : null}
 
-                                  {applicationAttendanceError && applicationAttendanceError !== "Prospect attendance is required before proceeding to application submission." ? (
+                                  {applicationAttendanceError && applicationAttendanceError !== "Application submission can be rescheduled." ? (
                                     <p className="le-smallNote" style={{ color: "#DA291C", marginTop: 8 }}>{applicationAttendanceError}</p>
                                   ) : null}
                                 </>
@@ -5444,6 +5427,35 @@ function AgentLeadEngagement() {
                               </div>
                             </>
                           )}
+                        </div>
+                      )}
+
+                      {isApplicationPremiumViewed && (
+                        <div className="le-block">
+                          <div className="le-formRow">
+                            <label className="le-label">Quotation Proposal File</label>
+                            <p className="le-smallNote">{proposalGenerateForm.proposalFileName || "No proposal file available."}</p>
+                          </div>
+
+                          <div className="le-formRow" style={{ marginTop: 10 }}>
+                            <label className="le-label">PDF Preview</label>
+                            {proposalGenerateForm.proposalFileDataUrl ? (
+                              <iframe
+                                title="Quotation Proposal Preview"
+                                src={proposalGenerateForm.proposalFileDataUrl}
+                                style={{ width: "100%", minHeight: 320, border: "1px solid #e5e7eb", borderRadius: 10 }}
+                              />
+                            ) : (
+                              <p className="le-smallNote">No proposal preview available.</p>
+                            )}
+                          </div>
+
+                          <div className="le-formRow" style={{ marginTop: 20 }}>
+                            <label className="le-label">Application Submission link:</label>
+                            <p className="le-smallNote">
+                              <a href="https://pruone.prulifeuk.com.ph/web" target="_blank" rel="noreferrer">https://pruone.prulifeuk.com.ph/web</a>
+                            </p>
+                          </div>
                         </div>
                       )}
 
@@ -7847,6 +7859,33 @@ function AgentLeadEngagement() {
                                 {applicationMeetingSaved?.place ? <div><span className="le-metaLabel">Meeting Place</span><span className="le-metaValue">{applicationMeetingSaved.place}</span></div> : null}
                                 {applicationMeetingSaved?.status ? <div><span className="le-metaLabel">Status</span><span className="le-metaValue">{applicationMeetingSaved.status}</span></div> : null}
                               </div>
+                              {applicationAttendanceForm.attendanceChoice === "NO" ? (
+                                <div className="le-actions" style={{ marginTop: 12 }}>
+                                  <button
+                                    type="button"
+                                    className="le-btn secondary"
+                                    onClick={() => {
+                                      setApplicationMeetingError("");
+                                      setApplicationMeetingFieldErrors({});
+                                      setApplicationMeetingForm({
+                                        meetingDate: "",
+                                        meetingStartTime: "",
+                                        meetingDurationMin: applicationMeetingSaved?.durationMin ?? "",
+                                        meetingMode: String(applicationMeetingSaved?.mode || ""),
+                                        meetingPlatform: String(applicationMeetingSaved?.platform || ""),
+                                        meetingPlatformOther: String(applicationMeetingSaved?.platformOther || ""),
+                                        meetingLink: String(applicationMeetingSaved?.link || ""),
+                                        meetingInviteSent: Boolean(applicationMeetingSaved?.inviteSent),
+                                        meetingPlace: String(applicationMeetingSaved?.place || ""),
+                                      });
+                                      setApplicationMeetingSaved(null);
+                                    }}
+                                    disabled={savingApplicationMeeting}
+                                  >
+                                    Reschedule Meeting
+                                  </button>
+                                </div>
+                              ) : null}
                             </div>
                           ) : null}
 
@@ -7909,11 +7948,13 @@ function AgentLeadEngagement() {
                                   className="le-input"
                                   value={applicationMeetingForm.meetingDurationMin}
                                   onChange={(e) => {
-                                    setApplicationMeetingForm((f) => ({ ...f, meetingDurationMin: Number(e.target.value || 120), meetingStartTime: "" }));
+                                    const nextDuration = e.target.value ? Number(e.target.value) : "";
+                                    setApplicationMeetingForm((f) => ({ ...f, meetingDurationMin: nextDuration, meetingStartTime: "" }));
                                     setApplicationMeetingFieldErrors((prev) => ({ ...prev, meetingDurationMin: "", meetingStartTime: "" }));
                                   }}
                                   disabled={savingApplicationMeeting}
                                 >
+                                  <option value="">Select duration</option>
                                   <option value={30}>30 mins</option>
                                   <option value={60}>60 mins</option>
                                   <option value={90}>90 mins</option>
@@ -8042,35 +8083,26 @@ function AgentLeadEngagement() {
                                   onClick={() => {
                                     setApplicationMeetingError("");
                                     setApplicationMeetingFieldErrors({});
-                                    if (applicationMeetingSaved?.startAt) {
-                                      setApplicationMeetingForm({
-                                        meetingDate: toDateInputValue(applicationMeetingSaved.startAt),
-                                        meetingStartTime: `${String(new Date(applicationMeetingSaved.startAt).getHours()).padStart(2, "0")}:${String(new Date(applicationMeetingSaved.startAt).getMinutes()).padStart(2, "0")}`,
-                                        meetingDurationMin: applicationMeetingSaved.durationMin ?? 120,
-                                        meetingMode: String(applicationMeetingSaved.mode || ""),
-                                        meetingPlatform: String(applicationMeetingSaved.platform || ""),
-                                        meetingPlatformOther: String(applicationMeetingSaved.platformOther || ""),
-                                        meetingLink: String(applicationMeetingSaved.link || ""),
-                                        meetingInviteSent: Boolean(applicationMeetingSaved.inviteSent),
-                                        meetingPlace: String(applicationMeetingSaved.place || ""),
-                                      });
-                                    } else {
-                                      setApplicationMeetingForm({
-                                        meetingDate: "",
-                                        meetingStartTime: "",
-                                        meetingDurationMin: 120,
-                                        meetingMode: "",
-                                        meetingPlatform: "",
-                                        meetingPlatformOther: "",
-                                        meetingLink: "",
-                                        meetingInviteSent: false,
-                                        meetingPlace: "",
-                                      });
-                                    }
+                                    setApplicationMeetingForm({
+                                      meetingDate: "",
+                                      meetingStartTime: "",
+                                      meetingDurationMin: "",
+                                      meetingMode: "",
+                                      meetingPlatform: "",
+                                      meetingPlatformOther: "",
+                                      meetingLink: "",
+                                      meetingInviteSent: false,
+                                      meetingPlace: "",
+                                    });
+                                    setApplicationMeetingPrefillKey(
+                                      applicationMeetingSourcePrefillKey
+                                        ? `manual-clear:${applicationMeetingSourcePrefillKey}`
+                                        : "manual-clear"
+                                    );
                                   }}
                                   disabled={savingApplicationMeeting}
                                 >
-                                  Cancel
+                                  Clear
                                 </button>
                                 <button
                                   type="button"
