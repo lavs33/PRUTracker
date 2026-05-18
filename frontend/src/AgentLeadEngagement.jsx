@@ -219,6 +219,7 @@ function AgentLeadEngagement() {
     meetingPlace: "",
   });
   const [applicationMeetingSaved, setApplicationMeetingSaved] = useState(null);
+  const [applicationMeetingRescheduleOriginal, setApplicationMeetingRescheduleOriginal] = useState(null);
   const [savingApplicationMeeting, setSavingApplicationMeeting] = useState(false);
   const [applicationMeetingError, setApplicationMeetingError] = useState("");
   const [applicationMeetingFieldErrors, setApplicationMeetingFieldErrors] = useState({});
@@ -563,6 +564,7 @@ function AgentLeadEngagement() {
         initialQuotationNotes: String(presentation?.initialQuotationNotes || ""),
       });
       setApplicationMeetingSaved(applicationSubmissionMeeting);
+      setApplicationMeetingRescheduleOriginal(null);
       setApplicationAttendanceForm({
         attendanceChoice: appAttendance?.attended ? "YES" : "",
         attendanceProofImageDataUrl: String(appAttendance?.attendanceProofImageDataUrl || ""),
@@ -4665,14 +4667,15 @@ function AgentLeadEngagement() {
         const ws = w?.startAt ? new Date(w.startAt) : null;
         const we = w?.endAt ? new Date(w.endAt) : null;
         if (!ws || !we || Number.isNaN(ws.getTime()) || Number.isNaN(we.getTime())) return false;
-        if (applicationMeetingSaved?.startAt && ws.getTime() === new Date(applicationMeetingSaved.startAt).getTime()) return false;
+        const ignoredApplicationStartAt = applicationMeetingSaved?.startAt || applicationMeetingRescheduleOriginal?.startAt;
+        if (ignoredApplicationStartAt && ws.getTime() === new Date(ignoredApplicationStartAt).getTime()) return false;
         return ws < proposedEnd && we > proposedStart;
       });
       if (hasRealtimeConflict) {
         setApplicationMeetingFieldErrors({ meetingStartTime: "Selected start time conflicts with an existing meeting." });
         return;
       }
-      if (isSlotBooked(meetingDate, meetingStartTime, meetingDurationMin, applicationMeetingSaved?.startAt)) {
+      if (isSlotBooked(meetingDate, meetingStartTime, meetingDurationMin, applicationMeetingSaved?.startAt || applicationMeetingRescheduleOriginal?.startAt, applicationMeetingSaved?.id || applicationMeetingRescheduleOriginal?.id)) {
         setApplicationMeetingFieldErrors({ meetingStartTime: "Selected start time conflicts with an existing meeting." });
         return;
       }
@@ -7878,6 +7881,7 @@ function AgentLeadEngagement() {
                                         meetingInviteSent: Boolean(applicationMeetingSaved?.inviteSent),
                                         meetingPlace: String(applicationMeetingSaved?.place || ""),
                                       });
+                                      setApplicationMeetingRescheduleOriginal(applicationMeetingSaved);
                                       setApplicationMeetingSaved(null);
                                     }}
                                     disabled={savingApplicationMeeting}
@@ -7925,13 +7929,22 @@ function AgentLeadEngagement() {
                                 >
                                   <option value="">Select time</option>
                                   {applicationMeetingStartSlotsFiltered.map((slot) => {
+                                    const initialApplicationMeeting = applicationMeetingSaved || applicationMeetingRescheduleOriginal || null;
+                                    const initialApplicationMeetingStartAt = initialApplicationMeeting?.startAt || "";
+                                    const initialApplicationMeetingId = initialApplicationMeeting?.id || "";
                                     const booked = applicationMeetingForm.meetingDate
-                                      ? isSlotBooked(applicationMeetingForm.meetingDate, slot, applicationMeetingForm.meetingDurationMin, applicationMeetingSaved?.startAt)
+                                      ? isSlotBooked(
+                                          applicationMeetingForm.meetingDate,
+                                          slot,
+                                          applicationMeetingForm.meetingDurationMin,
+                                          initialApplicationMeetingStartAt,
+                                          initialApplicationMeetingId
+                                        )
                                       : false;
-                                    const initialSlotTime = applicationMeetingSaved?.startAt
-                                      ? `${String(new Date(applicationMeetingSaved.startAt).getHours()).padStart(2, "0")}:${String(new Date(applicationMeetingSaved.startAt).getMinutes()).padStart(2, "0")}`
+                                    const initialSlotTime = initialApplicationMeetingStartAt
+                                      ? `${String(new Date(initialApplicationMeetingStartAt).getHours()).padStart(2, "0")}:${String(new Date(initialApplicationMeetingStartAt).getMinutes()).padStart(2, "0")}`
                                       : "";
-                                    const isInitialSetting = Boolean(applicationMeetingSaved?.startAt) && applicationMeetingForm.meetingDate === toDateInputValue(applicationMeetingSaved.startAt) && slot === initialSlotTime;
+                                    const isInitialSetting = Boolean(initialApplicationMeetingStartAt) && applicationMeetingForm.meetingDate === toDateInputValue(initialApplicationMeetingStartAt) && slot === initialSlotTime;
                                     return (
                                       <option key={`app-time-${slot}`} value={slot} disabled={booked || isInitialSetting}>
                                         {formatTimeLabel(slot)}{isInitialSetting ? " (INITIAL SETTING)" : booked ? " (BOOKED)" : ""}
