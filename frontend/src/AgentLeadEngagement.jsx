@@ -384,6 +384,7 @@ function AgentLeadEngagement() {
   });
 
   const [selectedStageView, setSelectedStageView] = useState("CURRENT");
+  const [historyStageView, setHistoryStageView] = useState("");
   const [availableProducts, setAvailableProducts] = useState([]);
 
   const [bookedWindows, setBookedWindows] = useState([]);
@@ -1989,15 +1990,17 @@ function AgentLeadEngagement() {
   // - CURRENT: follow backend current stage
   // - explicit stage click: inspect selected stage
   const viewStage = selectedStageView === "CURRENT" ? stage : selectedStageView;
-  const isViewingCurrentStage = viewStage === stage;
+  const isHistoryView = Boolean(historyStageView);
+  const effectiveViewStage = isHistoryView ? historyStageView : viewStage;
+  const isViewingCurrentStage = !isHistoryView && effectiveViewStage === stage;
 
   // Contacting panel is shown only when viewing Contacting stage
-  const showContactingPanel = viewStage === "Contacting";
-  const showNeedsAssessmentPanel = viewStage === "Needs Assessment";
-  const showProposalPanel = viewStage === "Proposal";
-  const showApplicationPanel = viewStage === "Application";
-  const showPolicyIssuancePanel = viewStage === "Policy Issuance";
-  const viewedStageIndex = viewStage === "Not Started" ? -1 : PIPELINE_STEPS.indexOf(viewStage);
+  const showContactingPanel = effectiveViewStage === "Contacting";
+  const showNeedsAssessmentPanel = effectiveViewStage === "Needs Assessment";
+  const showProposalPanel = effectiveViewStage === "Proposal";
+  const showApplicationPanel = effectiveViewStage === "Application";
+  const showPolicyIssuancePanel = effectiveViewStage === "Policy Issuance";
+  const viewedStageIndex = effectiveViewStage === "Not Started" ? -1 : PIPELINE_STEPS.indexOf(effectiveViewStage);
   const isViewingPastStage = viewedStageIndex >= 0 && safeIndex > viewedStageIndex;
   const isViewingFutureStage = viewedStageIndex >= 0 && viewedStageIndex > safeIndex;
   const futureStageSubactivityHelperText =
@@ -2897,7 +2900,7 @@ function AgentLeadEngagement() {
     }
   }, [isLeadDropped, isLeadInProgress, selectedStageView, PIPELINE_STEPS, safeIndex]);
 
-  const mainTitle = viewStage === "Not Started" ? "Not Started" : viewStage || "—";
+  const mainTitle = effectiveViewStage === "Not Started" ? "Not Started" : effectiveViewStage || "—";
 
     // ✅ Add Attempt is allowed ONLY when:
     // - not blocked
@@ -5097,6 +5100,17 @@ function AgentLeadEngagement() {
                 <section className="le-card">
                   <div className="le-cardHeader">
                     <h2 className="le-cardTitle">{mainTitle}</h2>
+                    {historyStageView ? (
+                      <button type="button" className="le-btn secondary" onClick={() => setHistoryStageView("")}>
+                        Back to Current Flow
+                      </button>
+                    ) : (
+                      stage !== "Not Started" ? (
+                        <button type="button" className="le-btn secondary" onClick={() => setHistoryStageView(viewStage)}>
+                          View Engagement History
+                        </button>
+                      ) : null
+                    )}
                     {shouldShowStageActivityBadge ? <span className="le-badge">{stageActivityBadge}</span> : null}
                   </div>
 
