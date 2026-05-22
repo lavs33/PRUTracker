@@ -1534,6 +1534,7 @@ async function ensureTaskMissedNotificationsForUser(userObjectId, { forceUnread 
   const openTasks = await Task.find({
     assignedToUserId: userObjectId,
     status: { $in: ["Open", "Overdue"] },
+    softDeletedAt: null,
     dueAt: { $ne: null },
   })
     .select("_id title dueAt prospectId leadEngagementId")
@@ -1546,6 +1547,7 @@ async function ensureTaskMissedNotificationsForUser(userObjectId, { forceUnread 
   const overdueTasks = await Task.find({
     assignedToUserId: userObjectId,
     status: "Open",
+    softDeletedAt: null,
     dueAt: { $lt: now },
     ...(scopedTaskIds.length ? { _id: { $in: scopedTaskIds } } : {}),
   })
@@ -2088,7 +2090,7 @@ app.get("/api/agent/home", async (req, res) => {
     const userObjectId = new mongoose.Types.ObjectId(userId);
     await ensureTaskMissedNotificationsForUser(userObjectId);
 
-    let openTasks = await Task.find({ assignedToUserId: userObjectId, status: "Open" })
+    let openTasks = await Task.find({ assignedToUserId: userObjectId, status: "Open", softDeletedAt: null })
       .select("assignedToUserId prospectId leadEngagementId type title description dueAt status completedAt wasDelayed createdAt")
       .lean();
     openTasks = await attachTaskRefs(openTasks);
@@ -5216,8 +5218,73 @@ app.put("/api/prospects/:prospectId/leads/:leadId", async (req, res) => {
       existing.dropNotes = n;
       existing.droppedAt = existing.droppedAt || new Date();
 
+      const engagement = await LeadEngagement.findOne({ leadId: existing._id }).select("_id").lean();
+      let meetingsCancelledCount = 0;
+      let tasksSoftDeletedCount = 0;
+      let notificationsDeletedCount = 0;
+
+      if (engagement?._id) {
+        const cancelMeetingsResult = await ScheduledMeeting.updateMany(
+          {
+            leadEngagementId: engagement._id,
+            status: { $ne: "Completed" },
+          },
+          { $set: { status: "Cancelled" } }
+        );
+        meetingsCancelledCount = Number(cancelMeetingsResult?.modifiedCount || 0);
+
+        const tasksToSoftDelete = await Task.find({
+          assignedToUserId: userObjectId,
+          prospectId: prospectObjectId,
+          leadEngagementId: engagement._id,
+          status: { $in: ["Open", "Overdue"] },
+          softDeletedAt: null,
+        })
+          .select("_id")
+          .lean();
+
+        const taskIds = tasksToSoftDelete.map((t) => t._id);
+        if (taskIds.length) {
+          const softDeleteNow = new Date();
+          const softDeleteResult = await Task.updateMany(
+            { _id: { $in: taskIds } },
+            {
+              $set: {
+                softDeletedAt: softDeleteNow,
+                softDeleteReason: "LEAD_DROPPED",
+                softDeletedByUserId: userObjectId,
+              },
+            }
+          );
+          tasksSoftDeletedCount = Number(softDeleteResult?.modifiedCount || 0);
+
+          const softDeleteNotifResult = await Notification.updateMany({
+            assignedToUserId: userObjectId,
+            entityType: "Task",
+            entityId: { $in: taskIds },
+            type: { $in: ["TASK_ADDED", "TASK_DUE_TODAY", "TASK_MISSED"] },
+            softDeletedAt: null,
+          }, {
+            $set: {
+              softDeletedAt: softDeleteNow,
+              softDeleteReason: "TASK_SOFT_DELETED_LEAD_DROPPED",
+              softDeletedByUserId: userObjectId,
+            },
+          });
+          notificationsDeletedCount = Number(softDeleteNotifResult?.modifiedCount || 0);
+        }
+      }
+
       const saved = await existing.save();
-      return res.json({ message: "Lead dropped", lead: saved });
+      return res.json({
+        message: "Lead dropped",
+        lead: saved,
+        cleanup: {
+          meetingsCancelledCount,
+          tasksSoftDeletedCount,
+          notificationsDeletedCount,
+        },
+      });
     }
 
     // =========================
@@ -5248,7 +5315,71 @@ app.put("/api/prospects/:prospectId/leads/:leadId", async (req, res) => {
       // Clear statusBeforeDrop after successful restore
       existing.statusBeforeDrop = undefined;
 
-      const saved = await existing.save();
+      const session = await mongoose.startSession();
+      let saved = null;
+      await session.withTransaction(async () => {
+        const reopenNow = new Date();
+        const savedLead = await existing.save({ session });
+        saved = savedLead;
+
+        const engagement = await LeadEngagement.findOne({ leadId: existing._id }).session(session);
+        if (engagement) {
+          engagement.currentStage = "Contacting";
+          engagement.currentActivityKey = "Attempt Contact";
+          engagement.stageStartedAt = reopenNow;
+          engagement.stageCompletedAt = null;
+          engagement.isBlocked = false;
+          engagement.contactAttemptsCount = 0;
+          engagement.lastContactAttemptNo = 0;
+          engagement.lastContactAttemptAt = null;
+          engagement.nextAttemptAt = null;
+          engagement.stageHistory.push({
+            stage: "Contacting",
+            startedAt: reopenNow,
+            completedAt: null,
+            reason: "Lead re-opened. Restarted engagement from Contacting.",
+          });
+          await engagement.save({ session });
+
+          const prospectFullName = await Prospect.findById(prospectObjectId)
+            .select("firstName middleName lastName")
+            .session(session)
+            .lean()
+            .then((p) => `${p?.firstName || ""}${p?.middleName ? ` ${p.middleName}` : ""} ${p?.lastName || ""}`.trim() || "the prospect");
+
+          const now = new Date();
+          const due = new Date(now);
+          due.setHours(18, 0, 0, 0);
+          const cutoff = new Date(now);
+          cutoff.setHours(17, 30, 0, 0);
+          if (now.getTime() >= cutoff.getTime()) due.setDate(due.getDate() + 1);
+
+          const createdTask = await Task.create(
+            [
+              {
+                assignedToUserId: userObjectId,
+                prospectId: prospectObjectId,
+                leadEngagementId: engagement._id,
+                type: "APPROACH",
+                title: "Contact new lead",
+                description: `Contact ${prospectFullName} regarding this re-opened lead.`,
+                dueAt: due,
+                status: "Open",
+              },
+            ],
+            { session }
+          ).then((docs) => docs[0]);
+
+          await createTaskAddedNotifications({
+            assignedToUserId: userObjectId,
+            task: createdTask,
+            prospectFullName,
+            leadCode: savedLead.leadCode || "—",
+            session,
+          });
+        }
+      });
+      session.endSession();
       return res.json({ message: "Lead re-opened", lead: saved });
     }
 
@@ -5448,7 +5579,6 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
     const scheduledMeetings = await ScheduledMeeting.find({
       leadEngagementId: engagement._id,
       meetingType: "Needs Assessment",
-      status: { $ne: "Cancelled" },
     })
       .sort({ createdAt: -1, startAt: -1 })
       .select("meetingType startAt endAt durationMin mode platform platformOther link inviteSent place status createdAt")
@@ -5472,6 +5602,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
       assignedToUserId: userObjectId,
       prospectId: new mongoose.Types.ObjectId(prospectId),
       leadEngagementId: engagement._id,
+      softDeletedAt: null,
     })
       // Sort soonest due first; for ties, newest created first
       .sort({ dueAt: 1, createdAt: -1 })
@@ -5521,7 +5652,6 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
     const applicationSubmissionMeeting = await ScheduledMeeting.findOne({
       leadEngagementId: engagement._id,
       meetingType: "Application Submission",
-      status: { $ne: "Cancelled" },
     })
       .select("meetingType startAt endAt durationMin mode platform platformOther link inviteSent place status")
       .lean();
@@ -6120,6 +6250,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/contact-attempts", async (req
             leadEngagementId: engagement._id,
             type: "APPROACH",
             status: "Open",
+            softDeletedAt: null,
           }).session(session);
 
           if (!hasOpenApproachTask) {
@@ -6598,6 +6729,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/validate-contact", async (req
         leadEngagementId: engagement._id,
         type: { $in: ["APPROACH", "FOLLOW_UP"] },
         status: { $in: ["Open", "Overdue"] },
+        softDeletedAt: null,
       })
         .sort({ dueAt: -1, createdAt: -1 })
         .session(session);
@@ -6614,6 +6746,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/validate-contact", async (req
         leadEngagementId: engagement._id,
         type: "UPDATE_CONTACT_INFO",
         status: "Open",
+        softDeletedAt: null,
       }).session(session);
 
       let createdNewUpdateTask = false;
@@ -7490,7 +7623,6 @@ app.get("/api/prospects/:prospectId/leads/:leadId/needs-assessment", async (req,
     const proposalMeetings = await ScheduledMeeting.find({
       leadEngagementId: engagement._id,
       meetingType: "Proposal Presentation",
-      status: { $ne: "Cancelled" },
     })
       .sort({ startAt: -1, createdAt: -1 })
       .select("_id meetingType startAt endAt durationMin mode platform platformOther link inviteSent place status createdAt")
@@ -8241,7 +8373,6 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/schedule-pro
         ? await ScheduledMeeting.findOne({
             leadEngagementId: engagement._id,
             meetingType: "Proposal Presentation",
-            status: { $ne: "Cancelled" },
           })
             .sort({ startAt: -1, createdAt: -1 })
             .session(session)
@@ -10454,7 +10585,7 @@ app.get("/api/tasks/summary", async (req, res) => {
     await ensureTaskMissedNotificationsForUser(userObjectId);
 
     // Fetch only OPEN tasks for dashboard (Done tasks are excluded entirely)
-    let openTasks = await Task.find({ assignedToUserId: userObjectId, status: "Open" })
+    let openTasks = await Task.find({ assignedToUserId: userObjectId, status: "Open", softDeletedAt: null })
       .select("assignedToUserId prospectId leadEngagementId type title description dueAt status completedAt wasDelayed createdAt")
       .lean();
 
@@ -10532,7 +10663,7 @@ app.get("/api/tasks/progress", async (req, res) => {
     const userObjectId = new mongoose.Types.ObjectId(userId);
     await ensureTaskMissedNotificationsForUser(userObjectId);
 
-    let tasks = await Task.find({ assignedToUserId: userObjectId })
+    let tasks = await Task.find({ assignedToUserId: userObjectId, softDeletedAt: null })
       .select("_id prospectId leadEngagementId type title dueAt status completedAt wasDelayed createdAt")
       .lean();
 
@@ -10728,7 +10859,7 @@ app.get("/api/tasks", async (req, res) => {
     // Fetch tasks sorted for UI:
     // - earliest due first
     // - for same due date, newest created first
-    let tasks = await Task.find(query)
+    let tasks = await Task.find({ ...query, softDeletedAt: null })
       .sort({ dueAt: 1, createdAt: -1 })
       .select(
         "assignedToUserId prospectId leadEngagementId type title description dueAt status completedAt wasDelayed createdAt"

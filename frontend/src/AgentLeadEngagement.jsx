@@ -384,6 +384,7 @@ function AgentLeadEngagement() {
   });
 
   const [selectedStageView, setSelectedStageView] = useState("CURRENT");
+  const [historyStageView, setHistoryStageView] = useState("");
   const [availableProducts, setAvailableProducts] = useState([]);
 
   const [bookedWindows, setBookedWindows] = useState([]);
@@ -1989,15 +1990,17 @@ function AgentLeadEngagement() {
   // - CURRENT: follow backend current stage
   // - explicit stage click: inspect selected stage
   const viewStage = selectedStageView === "CURRENT" ? stage : selectedStageView;
-  const isViewingCurrentStage = viewStage === stage;
+  const isHistoryView = Boolean(historyStageView);
+  const effectiveViewStage = isHistoryView ? historyStageView : viewStage;
+  const isViewingCurrentStage = !isHistoryView && effectiveViewStage === stage;
 
   // Contacting panel is shown only when viewing Contacting stage
-  const showContactingPanel = viewStage === "Contacting";
-  const showNeedsAssessmentPanel = viewStage === "Needs Assessment";
-  const showProposalPanel = viewStage === "Proposal";
-  const showApplicationPanel = viewStage === "Application";
-  const showPolicyIssuancePanel = viewStage === "Policy Issuance";
-  const viewedStageIndex = viewStage === "Not Started" ? -1 : PIPELINE_STEPS.indexOf(viewStage);
+  const showContactingPanel = effectiveViewStage === "Contacting";
+  const showNeedsAssessmentPanel = effectiveViewStage === "Needs Assessment";
+  const showProposalPanel = effectiveViewStage === "Proposal";
+  const showApplicationPanel = effectiveViewStage === "Application";
+  const showPolicyIssuancePanel = effectiveViewStage === "Policy Issuance";
+  const viewedStageIndex = effectiveViewStage === "Not Started" ? -1 : PIPELINE_STEPS.indexOf(effectiveViewStage);
   const isViewingPastStage = viewedStageIndex >= 0 && safeIndex > viewedStageIndex;
   const isViewingFutureStage = viewedStageIndex >= 0 && viewedStageIndex > safeIndex;
   const futureStageSubactivityHelperText =
@@ -2856,7 +2859,27 @@ function AgentLeadEngagement() {
     };
   }, [needsAssessmentForm, resolveApproxIncome, scoreRiskProfile, toNonNegativeNumber, INVESTMENT_FUNDS, SUITABLE_RISK_RATINGS_BY_CATEGORY]);
 
-  const previousContactingActivity = String(lastAttempt?.outcomeActivity || effectiveActivityKey || "Attempt Contact").trim();
+  const latestReopenStartedAtMs = useMemo(() => {
+    const items = Array.isArray(engagement?.stageHistory) ? engagement.stageHistory : [];
+    let latest = 0;
+    for (const item of items) {
+      const reason = String(item?.reason || "").toLowerCase();
+      if (String(item?.stage || "") !== "Contacting") continue;
+      if (!reason.includes("lead re-opened")) continue;
+      const started = new Date(item?.startedAt || 0).getTime();
+      if (Number.isFinite(started) && started > latest) latest = started;
+    }
+    return latest;
+  }, [engagement?.stageHistory]);
+
+  const currentAttempts = useMemo(() => {
+    if (!latestReopenStartedAtMs) return attempts;
+    return attempts.filter((a) => new Date(a?.attemptedAt || 0).getTime() >= latestReopenStartedAtMs);
+  }, [attempts, latestReopenStartedAtMs]);
+
+  const displayedAttempts = isHistoryView ? attempts : currentAttempts;
+  const displayedLastAttempt = displayedAttempts.length ? displayedAttempts[displayedAttempts.length - 1] : null;
+  const previousContactingActivity = String(displayedLastAttempt?.outcomeActivity || effectiveActivityKey || "Attempt Contact").trim();
 
   const stageActivityBadge =
     showContactingPanel
@@ -2873,7 +2896,7 @@ function AgentLeadEngagement() {
       ? policyIssuanceUiActivityKey
       : "";
 
-  const showCurrentSubactivityStatus = isViewingCurrentStage && !isLeadClosed && !isLeadDropped;
+  const showCurrentSubactivityStatus = isViewingCurrentStage && !isHistoryView && !isLeadClosed && !isLeadDropped;
   const closedLeadSubactivityHelperText = "";
 
   const setStageViewIfAllowed = useCallback(
@@ -2897,14 +2920,14 @@ function AgentLeadEngagement() {
     }
   }, [isLeadDropped, isLeadInProgress, selectedStageView, PIPELINE_STEPS, safeIndex]);
 
-  const mainTitle = viewStage === "Not Started" ? "Not Started" : viewStage || "—";
+  const mainTitle = effectiveViewStage === "Not Started" ? "Not Started" : effectiveViewStage || "—";
 
     // ✅ Add Attempt is allowed ONLY when:
     // - not blocked
     // - and (no responded yet OR re-approach after Wrong Contact)
     // has open approach task
     const canAddAttempt = useMemo(() => {
-    if (isContactingReadOnly) return false;
+    if (isHistoryView || isContactingReadOnly) return false;
     if (isEngagementBlocked) return false;
 
     // if they haven't responded yet -> allow attempts
@@ -2912,7 +2935,7 @@ function AgentLeadEngagement() {
 
     // if they responded, only allow if re-approach conditions are met
     return isReApproachMode;
-  }, [isContactingReadOnly, isEngagementBlocked, isLastAttemptResponded, isReApproachMode]);
+  }, [isHistoryView, isContactingReadOnly, isEngagementBlocked, isLastAttemptResponded, isReApproachMode]);
 
   const addAttemptDisabledReason = useMemo(() => {
     if (isContactingReadOnly) return "Contacting stage is read-only.";
@@ -5097,7 +5120,20 @@ function AgentLeadEngagement() {
                 <section className="le-card">
                   <div className="le-cardHeader">
                     <h2 className="le-cardTitle">{mainTitle}</h2>
-                    {shouldShowStageActivityBadge ? <span className="le-badge">{stageActivityBadge}</span> : null}
+                    <div style={{ marginLeft: "auto", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 10 }}>
+                      {historyStageView ? (
+                        <button type="button" className="le-btn secondary" onClick={() => setHistoryStageView("")}>
+                          Back to Current Flow
+                        </button>
+                      ) : (
+                        stage !== "Not Started" ? (
+                          <button type="button" className="le-btn secondary" onClick={() => setHistoryStageView(viewStage)}>
+                            View Engagement History
+                          </button>
+                        ) : null
+                      )}
+                      {shouldShowStageActivityBadge ? <span className="le-badge">{stageActivityBadge}</span> : null}
+                    </div>
                   </div>
 
                   {stage === "Not Started" && (
@@ -6328,7 +6364,7 @@ function AgentLeadEngagement() {
                     <>
                       <div className="le-block">
                         <div className="le-blockHeader">
-                          <h4 className="le-blockTitle">{attempts.length > 0 ? "Contact Attempts" : "Add a Contact Attempt"}</h4>
+                          <h4 className="le-blockTitle">{displayedAttempts.length > 0 ? "Contact Attempts" : "Add a Contact Attempt"}</h4>
 
                           {!showAddAttempt ? (
                             <button
@@ -6359,7 +6395,7 @@ function AgentLeadEngagement() {
                               <label className="le-label">Attempt No.</label>
                               <input
                                 className="le-input"
-                                value={editingAttemptId ? `#${attempts.find((a) => a.attemptId === editingAttemptId)?.attemptNo || "—"}` : `#${nextAttemptNo}`}
+                                value={editingAttemptId ? `#${displayedAttempts.find((a) => a.attemptId === editingAttemptId)?.attemptNo || "—"}` : `#${nextAttemptNo}`}
                                 disabled
                               />
                             </div>
@@ -6488,18 +6524,19 @@ function AgentLeadEngagement() {
 
                         {!showAddAttempt && !editingAttemptId && (
                           <div className="le-attemptList">
-                            {attempts.map((a) => {
+                            {displayedAttempts.map((a) => {
                               return (
                                 <div key={a.attemptNo} className="le-attemptItem">
                                 <div className="le-attemptTop">
                                   <strong>Attempt #{a.attemptNo}</strong>
                                   <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                                     <span className="le-attemptDate">{formatDateTime(a.attemptedAt)}</span>
-                                    {!isContactingReadOnly &&
+                                    {!isHistoryView &&
+                                    !isContactingReadOnly &&
                                     !isLeadClosed &&
                                     !isLeadDropped &&
                                     String(a.attemptId || "").trim() &&
-                                    String(lastAttempt?.attemptId || "") === String(a.attemptId || "") ? (
+                                    String(displayedLastAttempt?.attemptId || "") === String(a.attemptId || "") ? (
                                       <button
                                         type="button"
                                         className="le-btn secondary"
