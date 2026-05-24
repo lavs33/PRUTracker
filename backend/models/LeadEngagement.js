@@ -237,6 +237,17 @@ const leadEngagementSchema = new mongoose.Schema(
       default: 1,
       min: 1,
     },
+    /**
+     * Logical Contact Attempt cycle within a single lead engagement.
+     * Increments on each lead reopen so attempt numbering can restart at #1
+     * without losing historical attempts from previous cycles.
+     */
+    contactAttemptCycle: {
+      type: Number,
+      default: 1,
+      min: 1,
+      index: true,
+    },
 
   },
     /**

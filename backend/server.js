@@ -767,7 +767,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
 
   const [tasks, prospects] = await Promise.all([
     scopedUserIds.length
-      ? Task.find({ assignedToUserId: { $in: scopedUserIds } })
+      ? Task.find({ assignedToUserId: { $in: scopedUserIds }, softDeletedAt: null })
           .select("assignedToUserId type title dueAt status completedAt wasDelayed createdAt")
           .lean()
       : [],
