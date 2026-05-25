@@ -55,6 +55,189 @@ function registerLegacyRoutes(app, deps) {
     syncTaskNotificationsForTasks,
     markTaskNotificationAsRead,
   } = deps;
+  let contactAttemptCycleIndexEnsured = false;
+  async function ensureContactAttemptCycleIndex() {
+    if (contactAttemptCycleIndexEnsured) return;
+    try {
+      const collection = ContactAttempt.collection;
+      const legacyIdxName = "leadEngagementId_1_attemptNo_1";
+      const hasLegacyUniqueIndex = await collection.indexExists(legacyIdxName);
+      if (hasLegacyUniqueIndex) {
+        await collection.dropIndex(legacyIdxName);
+      }
+      contactAttemptCycleIndexEnsured = true;
+    } catch (err) {
+      if (err?.codeName !== "IndexNotFound") throw err;
+      contactAttemptCycleIndexEnsured = true;
+    }
+  }
+
+  let scheduledMeetingAttemptCycleBackfilled = false;
+  async function ensureScheduledMeetingAttemptCycleBackfill() {
+    if (scheduledMeetingAttemptCycleBackfilled) return;
+
+    const engagementIds = await ScheduledMeeting.distinct("leadEngagementId");
+    for (const leadEngagementId of engagementIds) {
+      const meetings = await ScheduledMeeting.find({ leadEngagementId })
+        .sort({ createdAt: 1, startAt: 1, _id: 1 })
+        .select("_id createdAt startAt attemptCycle")
+        .lean();
+      if (!meetings.length) continue;
+
+      const attempts = await ContactAttempt.find({ leadEngagementId })
+        .sort({ attemptCycle: 1, attemptedAt: 1, _id: 1 })
+        .select("attemptCycle attemptedAt")
+        .lean();
+
+      const cycleStartByCycle = new Map();
+      attempts.forEach((a) => {
+        const cycle = Number(a?.attemptCycle || 1);
+        const t = a?.attemptedAt ? new Date(a.attemptedAt).getTime() : NaN;
+        if (!Number.isFinite(t)) return;
+        if (!cycleStartByCycle.has(cycle) || t < cycleStartByCycle.get(cycle)) {
+          cycleStartByCycle.set(cycle, t);
+        }
+      });
+
+      const sortedCycleStarts = Array.from(cycleStartByCycle.entries()).sort((a, b) => a[0] - b[0]);
+
+      const ops = [];
+      meetings.forEach((m) => {
+        const basisMsRaw = m?.createdAt || m?.startAt;
+        const basisMs = basisMsRaw ? new Date(basisMsRaw).getTime() : NaN;
+
+        let assignedCycle = 1;
+        if (Number.isFinite(basisMs) && sortedCycleStarts.length) {
+          for (const [cycle, startMs] of sortedCycleStarts) {
+            if (basisMs >= startMs) assignedCycle = cycle;
+            else break;
+          }
+        }
+
+        if (Number(m?.attemptCycle || 0) !== assignedCycle) {
+          ops.push({
+            updateOne: {
+              filter: { _id: m._id },
+              update: { $set: { attemptCycle: assignedCycle } },
+            },
+          });
+        }
+      });
+
+      if (ops.length) {
+        await ScheduledMeeting.bulkWrite(ops, { ordered: true });
+      }
+    }
+
+    scheduledMeetingAttemptCycleBackfilled = true;
+  }
+
+  let contactAttemptCycleBackfilled = false;
+  async function ensureContactAttemptCycleBackfill() {
+    if (contactAttemptCycleBackfilled) return;
+
+    const engagementIds = await ContactAttempt.distinct("leadEngagementId");
+    for (const leadEngagementId of engagementIds) {
+      const attempts = await ContactAttempt.find({ leadEngagementId })
+        .sort({ attemptedAt: 1, createdAt: 1, attemptNo: 1, _id: 1 })
+        .select("_id attemptNo attemptCycle")
+        .lean();
+
+      if (!attempts.length) continue;
+
+      let cycle = 1;
+      let prevAttemptNo = 0;
+      const plans = [];
+
+      attempts.forEach((attempt, idx) => {
+        const attemptNo = Number(attempt?.attemptNo || 0);
+        if (idx > 0) {
+          const resetByNo = attemptNo === 1 && prevAttemptNo >= 1;
+          const nonMonotonic = attemptNo > 0 && prevAttemptNo > 0 && attemptNo <= prevAttemptNo;
+          if (resetByNo || nonMonotonic) cycle += 1;
+        }
+
+        const currentCycle = Number(attempt?.attemptCycle || 0);
+        if (currentCycle !== cycle) {
+          plans.push({ _id: attempt._id, finalCycle: cycle });
+        }
+
+        prevAttemptNo = attemptNo;
+      });
+
+      if (plans.length) {
+        // Two-phase update to avoid temporary unique collisions on
+        // { leadEngagementId, attemptCycle, attemptNo } while remapping cycles.
+        const phaseOneOps = plans.map((plan) => ({
+          updateOne: {
+            filter: { _id: plan._id },
+            update: { $set: { attemptCycle: -1000000 - Number(plan.finalCycle || 0) } },
+          },
+        }));
+        await ContactAttempt.bulkWrite(phaseOneOps, { ordered: true });
+
+        const phaseTwoOps = plans.map((plan) => ({
+          updateOne: {
+            filter: { _id: plan._id },
+            update: { $set: { attemptCycle: Number(plan.finalCycle || 1) } },
+          },
+        }));
+        await ContactAttempt.bulkWrite(phaseTwoOps, { ordered: true });
+      }
+
+      // Keep engagement pointer aligned with reconstructed cycles.
+      const maxCycle = Math.max(...attempts.map((a, i) => {
+        // recompute from same rules to avoid stale read after phase writes
+        let c = 1;
+        let prev = 0;
+        for (let j = 0; j <= i; j += 1) {
+          const n = Number(attempts[j]?.attemptNo || 0);
+          if (j > 0) {
+            const resetByNo = n === 1 && prev >= 1;
+            const nonMonotonic = n > 0 && prev > 0 && n <= prev;
+            if (resetByNo || nonMonotonic) c += 1;
+          }
+          prev = n;
+        }
+        return c;
+      }));
+      await LeadEngagement.updateOne(
+        { _id: leadEngagementId, contactAttemptCycle: { $lt: maxCycle } },
+        { $set: { contactAttemptCycle: maxCycle } }
+      );
+    }
+
+    const cyclePointers = await ContactAttempt.aggregate([
+      {
+        $group: {
+          _id: "$leadEngagementId",
+          maxCycle: { $max: "$attemptCycle" },
+        },
+      },
+    ]);
+
+    for (const row of cyclePointers) {
+      const maxCycle = Math.max(1, Number(row?.maxCycle || 1));
+      await LeadEngagement.updateOne(
+        { _id: row._id, contactAttemptCycle: { $lt: maxCycle } },
+        { $set: { contactAttemptCycle: maxCycle } }
+      );
+    }
+
+    await LeadEngagement.updateMany(
+      {
+        $or: [
+          { contactAttemptCycle: { $exists: false } },
+          { contactAttemptCycle: null },
+          { contactAttemptCycle: { $lt: 1 } },
+        ],
+      },
+      { $set: { contactAttemptCycle: 1 } }
+    );
+
+    contactAttemptCycleBackfilled = true;
+  }
+
   let scheduledMeetingHistoryIndexEnsured = false;
   async function ensureScheduledMeetingHistoryIndex() {
     if (scheduledMeetingHistoryIndexEnsured) return;
@@ -1534,6 +1717,7 @@ async function ensureTaskMissedNotificationsForUser(userObjectId, { forceUnread 
   const openTasks = await Task.find({
     assignedToUserId: userObjectId,
     status: { $in: ["Open", "Overdue"] },
+    softDeletedAt: null,
     dueAt: { $ne: null },
   })
     .select("_id title dueAt prospectId leadEngagementId")
@@ -1546,6 +1730,7 @@ async function ensureTaskMissedNotificationsForUser(userObjectId, { forceUnread 
   const overdueTasks = await Task.find({
     assignedToUserId: userObjectId,
     status: "Open",
+    softDeletedAt: null,
     dueAt: { $lt: now },
     ...(scopedTaskIds.length ? { _id: { $in: scopedTaskIds } } : {}),
   })
@@ -2088,7 +2273,7 @@ app.get("/api/agent/home", async (req, res) => {
     const userObjectId = new mongoose.Types.ObjectId(userId);
     await ensureTaskMissedNotificationsForUser(userObjectId);
 
-    let openTasks = await Task.find({ assignedToUserId: userObjectId, status: "Open" })
+    let openTasks = await Task.find({ assignedToUserId: userObjectId, status: "Open", softDeletedAt: null })
       .select("assignedToUserId prospectId leadEngagementId type title description dueAt status completedAt wasDelayed createdAt")
       .lean();
     openTasks = await attachTaskRefs(openTasks);
@@ -4863,6 +5048,7 @@ app.post("/api/leads", async (req, res) => {
                 contactAttemptsCount: 0,
                 lastContactAttemptNo: 0,
                 lastContactAttemptAt: null,
+                contactAttemptCycle: 1,
 
                 nextAttemptAt: null,
 
@@ -5216,8 +5402,73 @@ app.put("/api/prospects/:prospectId/leads/:leadId", async (req, res) => {
       existing.dropNotes = n;
       existing.droppedAt = existing.droppedAt || new Date();
 
+      const engagement = await LeadEngagement.findOne({ leadId: existing._id }).select("_id").lean();
+      let meetingsCancelledCount = 0;
+      let tasksSoftDeletedCount = 0;
+      let notificationsDeletedCount = 0;
+
+      if (engagement?._id) {
+        const cancelMeetingsResult = await ScheduledMeeting.updateMany(
+          {
+            leadEngagementId: engagement._id,
+            status: { $ne: "Completed" },
+          },
+          { $set: { status: "Cancelled" } }
+        );
+        meetingsCancelledCount = Number(cancelMeetingsResult?.modifiedCount || 0);
+
+        const tasksToSoftDelete = await Task.find({
+          assignedToUserId: userObjectId,
+          prospectId: prospectObjectId,
+          leadEngagementId: engagement._id,
+          status: { $in: ["Open", "Overdue"] },
+          softDeletedAt: null,
+        })
+          .select("_id")
+          .lean();
+
+        const taskIds = tasksToSoftDelete.map((t) => t._id);
+        if (taskIds.length) {
+          const softDeleteNow = new Date();
+          const softDeleteResult = await Task.updateMany(
+            { _id: { $in: taskIds } },
+            {
+              $set: {
+                softDeletedAt: softDeleteNow,
+                softDeleteReason: "LEAD_DROPPED",
+                softDeletedByUserId: userObjectId,
+              },
+            }
+          );
+          tasksSoftDeletedCount = Number(softDeleteResult?.modifiedCount || 0);
+
+          const softDeleteNotifResult = await Notification.updateMany({
+            assignedToUserId: userObjectId,
+            entityType: "Task",
+            entityId: { $in: taskIds },
+            type: { $in: ["TASK_ADDED", "TASK_DUE_TODAY", "TASK_MISSED"] },
+            softDeletedAt: null,
+          }, {
+            $set: {
+              softDeletedAt: softDeleteNow,
+              softDeleteReason: "TASK_SOFT_DELETED_LEAD_DROPPED",
+              softDeletedByUserId: userObjectId,
+            },
+          });
+          notificationsDeletedCount = Number(softDeleteNotifResult?.modifiedCount || 0);
+        }
+      }
+
       const saved = await existing.save();
-      return res.json({ message: "Lead dropped", lead: saved });
+      return res.json({
+        message: "Lead dropped",
+        lead: saved,
+        cleanup: {
+          meetingsCancelledCount,
+          tasksSoftDeletedCount,
+          notificationsDeletedCount,
+        },
+      });
     }
 
     // =========================
@@ -5248,7 +5499,72 @@ app.put("/api/prospects/:prospectId/leads/:leadId", async (req, res) => {
       // Clear statusBeforeDrop after successful restore
       existing.statusBeforeDrop = undefined;
 
-      const saved = await existing.save();
+      const session = await mongoose.startSession();
+      let saved = null;
+      await session.withTransaction(async () => {
+        const reopenNow = new Date();
+        const savedLead = await existing.save({ session });
+        saved = savedLead;
+
+        const engagement = await LeadEngagement.findOne({ leadId: existing._id }).session(session);
+        if (engagement) {
+          engagement.currentStage = "Contacting";
+          engagement.currentActivityKey = "Attempt Contact";
+          engagement.stageStartedAt = reopenNow;
+          engagement.stageCompletedAt = null;
+          engagement.isBlocked = false;
+          engagement.contactAttemptsCount = 0;
+          engagement.lastContactAttemptNo = 0;
+          engagement.lastContactAttemptAt = null;
+          engagement.contactAttemptCycle = Number(engagement.contactAttemptCycle || 1) + 1;
+          engagement.nextAttemptAt = null;
+          engagement.stageHistory.push({
+            stage: "Contacting",
+            startedAt: reopenNow,
+            completedAt: null,
+            reason: "Lead re-opened. Restarted engagement from Contacting.",
+          });
+          await engagement.save({ session });
+
+          const prospectFullName = await Prospect.findById(prospectObjectId)
+            .select("firstName middleName lastName")
+            .session(session)
+            .lean()
+            .then((p) => `${p?.firstName || ""}${p?.middleName ? ` ${p.middleName}` : ""} ${p?.lastName || ""}`.trim() || "the prospect");
+
+          const now = new Date();
+          const due = new Date(now);
+          due.setHours(18, 0, 0, 0);
+          const cutoff = new Date(now);
+          cutoff.setHours(17, 30, 0, 0);
+          if (now.getTime() >= cutoff.getTime()) due.setDate(due.getDate() + 1);
+
+          const createdTask = await Task.create(
+            [
+              {
+                assignedToUserId: userObjectId,
+                prospectId: prospectObjectId,
+                leadEngagementId: engagement._id,
+                type: "APPROACH",
+                title: "Contact new lead",
+                description: `Contact ${prospectFullName} regarding this new lead.`,
+                dueAt: due,
+                status: "Open",
+              },
+            ],
+            { session }
+          ).then((docs) => docs[0]);
+
+          await createTaskAddedNotifications({
+            assignedToUserId: userObjectId,
+            task: createdTask,
+            prospectFullName,
+            leadCode: savedLead.leadCode || "—",
+            session,
+          });
+        }
+      });
+      session.endSession();
       return res.json({ message: "Lead re-opened", lead: saved });
     }
 
@@ -5424,6 +5740,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
         contactAttemptsCount: 0,
         lastContactAttemptNo: 0,
         lastContactAttemptAt: null,
+        contactAttemptCycle: 1,
 
         nextAttemptAt: null,
 
@@ -5436,29 +5753,49 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
     }
 
     // 4) Load contact attempts for the engagement (oldest→newest by attemptNo)
+    await ensureContactAttemptCycleBackfill();
+    await ensureScheduledMeetingAttemptCycleBackfill();
     const attempts = await ContactAttempt.find({
       leadEngagementId: engagement._id,
     })
-      .sort({ attemptNo: 1 })
+      .sort({ attemptCycle: 1, attemptNo: 1, attemptedAt: 1 })
       .select(
-        "attemptNo primaryChannel otherChannels response attemptedAt contactInfoVersion outcomeActivity notes phoneValidation interestLevel preferredChannel preferredChannelOther"
+        "attemptNo attemptCycle primaryChannel otherChannels response attemptedAt contactInfoVersion outcomeActivity notes phoneValidation interestLevel preferredChannel preferredChannelOther"
       )
       .lean();
 
     const scheduledMeetings = await ScheduledMeeting.find({
       leadEngagementId: engagement._id,
       meetingType: "Needs Assessment",
-      status: { $ne: "Cancelled" },
     })
       .sort({ createdAt: -1, startAt: -1 })
-      .select("meetingType startAt endAt durationMin mode platform platformOther link inviteSent place status createdAt")
+      .select("meetingType attemptCycle startAt endAt durationMin mode platform platformOther link inviteSent place status createdAt")
       .lean();
 
-    const sortedAttemptsDesc = [...attempts].sort((a, b) => Number(b?.attemptNo || 0) - Number(a?.attemptNo || 0));
-    const meetingByAttemptNo = new Map();
-    sortedAttemptsDesc.forEach((attemptDoc, idx) => {
-      if (!attemptDoc) return;
-      meetingByAttemptNo.set(Number(attemptDoc.attemptNo || 0), scheduledMeetings[idx] || null);
+    const sortedAttemptsDesc = [...attempts].sort((a, b) => {
+      const cycleDelta = Number(b?.attemptCycle || 1) - Number(a?.attemptCycle || 1);
+      if (cycleDelta !== 0) return cycleDelta;
+      return Number(b?.attemptNo || 0) - Number(a?.attemptNo || 0);
+    });
+    const meetingByAttemptKey = new Map();
+    const attemptsByCycle = new Map();
+    sortedAttemptsDesc.forEach((attemptDoc) => {
+      const cycle = Number(attemptDoc?.attemptCycle || 1);
+      if (!attemptsByCycle.has(cycle)) attemptsByCycle.set(cycle, []);
+      attemptsByCycle.get(cycle).push(attemptDoc);
+    });
+    const meetingsByCycle = new Map();
+    scheduledMeetings.forEach((m) => {
+      const cycle = Number(m?.attemptCycle || 1);
+      if (!meetingsByCycle.has(cycle)) meetingsByCycle.set(cycle, []);
+      meetingsByCycle.get(cycle).push(m);
+    });
+    attemptsByCycle.forEach((cycleAttempts, cycle) => {
+      const cycleMeetings = meetingsByCycle.get(cycle) || [];
+      cycleAttempts.forEach((attemptDoc, idx) => {
+        const k = `${cycle}:${Number(attemptDoc?.attemptNo || 0)}`;
+        meetingByAttemptKey.set(k, cycleMeetings[idx] || null);
+      });
     });
 
     /**
@@ -5472,6 +5809,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
       assignedToUserId: userObjectId,
       prospectId: new mongoose.Types.ObjectId(prospectId),
       leadEngagementId: engagement._id,
+      softDeletedAt: null,
     })
       // Sort soonest due first; for ties, newest created first
       .sort({ dueAt: 1, createdAt: -1 })
@@ -5520,8 +5858,8 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
 
     const applicationSubmissionMeeting = await ScheduledMeeting.findOne({
       leadEngagementId: engagement._id,
+      attemptCycle: Number(engagement.contactAttemptCycle || 1),
       meetingType: "Application Submission",
-      status: { $ne: "Cancelled" },
     })
       .select("meetingType startAt endAt durationMin mode platform platformOther link inviteSent place status")
       .lean();
@@ -5561,6 +5899,9 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
       return age >= 0 ? age : null;
     })();
 
+    const activeCycle = Number(engagement.contactAttemptCycle || 1);
+    const currentCycleAttempts = attempts.filter((a) => Number(a?.attemptCycle || 1) === activeCycle);
+
     /**
      * 5) Derive currentActivityKey for UI badge/tracker:
      * Priority:
@@ -5575,11 +5916,11 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
      * - Optionally validates that the activity is allowed for the stage
      *   using isValidActivityForStage() (currently only Contacting has a catalog).
      */
-    const lastAttempt = attempts.length ? attempts[attempts.length - 1] : null;
+    const lastAttempt = currentCycleAttempts.length ? currentCycleAttempts[currentCycleAttempts.length - 1] : null;
 
     let derivedActivityKey = engagement.currentActivityKey || lastAttempt?.outcomeActivity || null;
 
-    if (engagement.currentStage === "Not Started" && attempts.length === 0) {
+    if (engagement.currentStage === "Not Started" && currentCycleAttempts.length === 0) {
       derivedActivityKey = null;
     } 
 
@@ -5608,6 +5949,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
           meetingPlace: "",
           meetingStatus: t?.status === "Done" ? "Completed" : "Scheduled",
           meetingCreatedAt: t?.createdAt || null,
+          attemptCycle: null,
         };
       })
       .filter(Boolean);
@@ -5634,6 +5976,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
 
     const needsAssessmentMeetingRows = [
       ...scheduledMeetings.map((m) => ({
+        attemptCycle: Number(m?.attemptCycle || 1),
         meetingAt: m.startAt || null,
         meetingEndAt: m.endAt || null,
         meetingDurationMin: Number(m.durationMin || 0) || null,
@@ -5668,6 +6011,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
 
     const contactAttempts = attempts.map((a) => ({
       attemptId: String(a._id || ""),
+      attemptCycle: Number(a?.attemptCycle || 1),
       attemptNo: a.attemptNo,
       primaryChannel: a.primaryChannel,
       otherChannels: a.otherChannels || [],
@@ -5681,7 +6025,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
       preferredChannel: a.preferredChannel || "",
       preferredChannelOther: a.preferredChannelOther || "",
       ...(function () {
-        const m = meetingByAttemptNo.get(Number(a?.attemptNo || 0)) || null;
+        const m = meetingByAttemptKey.get(`${Number(a?.attemptCycle || 1)}:${Number(a?.attemptNo || 0)}`) || null;
         return {
           meetingAt: m?.startAt || null,
           meetingEndAt: m?.endAt || null,
@@ -5741,6 +6085,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
 
         contactInfoVersionAtStart: engagement.contactInfoVersionAtStart || 1,
         currentContactInfoVersion: engagement.currentContactInfoVersion || (prospect.contactInfoVersion || 1),
+        contactAttemptCycle: Number(engagement.contactAttemptCycle || 1),
 
         // Derived and validated current activity for tracker/badge
         currentActivityKey: derivedActivityKey, 
@@ -6002,6 +6347,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/contact-attempts", async (req
     const now = new Date();
     let createdAttempt;
 
+    await ensureContactAttemptCycleIndex();
     await session.withTransaction(async () => {
       // 1) Authorization: prospect must belong to agent
       // Only fetch contactInfoVersion because that is what we need for attempt versioning.
@@ -6063,6 +6409,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/contact-attempts", async (req
               contactAttemptsCount: 0,
               lastContactAttemptNo: 0,
               lastContactAttemptAt: null,
+              contactAttemptCycle: 1,
               nextAttemptAt: null,
               contactInfoVersionAtStart: latestVersion,
               currentContactInfoVersion: latestVersion,
@@ -6093,7 +6440,8 @@ app.post("/api/prospects/:prospectId/leads/:leadId/contact-attempts", async (req
        *     => allow new attempt only if there is an Open APPROACH task for this engagement,
        *        to enforce re-approach via the proper task flow (REAPPROACH_TASK_REQUIRED).
        */
-      const lastAttempt = await ContactAttempt.findOne({ leadEngagementId: engagement._id })
+      const currentAttemptCycle = Number(engagement.contactAttemptCycle || 1);
+      const lastAttempt = await ContactAttempt.findOne({ leadEngagementId: engagement._id, attemptCycle: currentAttemptCycle })
         .sort({ attemptNo: -1 })
         .select("response contactInfoVersion attemptedAt attemptNo")
         .session(session)
@@ -6120,6 +6468,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/contact-attempts", async (req
             leadEngagementId: engagement._id,
             type: "APPROACH",
             status: "Open",
+            softDeletedAt: null,
           }).session(session);
 
           if (!hasOpenApproachTask) {
@@ -6149,6 +6498,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/contact-attempts", async (req
           {
             leadEngagementId: engagement._id,
             attemptNo: nextAttemptNo,
+            attemptCycle: currentAttemptCycle,
             primaryChannel,
             otherChannels: cleanOthers,
             response,
@@ -6291,7 +6641,8 @@ app.patch("/api/prospects/:prospectId/leads/:leadId/contact-attempts/:attemptId"
       }).session(session);
       if (!attempt) throw Object.assign(new Error("Contact attempt not found."), { status: 404 });
 
-      const latestAttempt = await ContactAttempt.findOne({ leadEngagementId: engagement._id })
+      const currentAttemptCycle = Number(engagement.contactAttemptCycle || 1);
+      const latestAttempt = await ContactAttempt.findOne({ leadEngagementId: engagement._id, attemptCycle: currentAttemptCycle })
         .sort({ attemptNo: -1 })
         .select("_id attemptNo")
         .session(session)
@@ -6414,9 +6765,11 @@ app.patch("/api/prospects/:prospectId/leads/:leadId/contact-attempts/:attemptId"
   }
 });
 
-async function getLatestRespondedAttemptForEngagement(leadEngagementId, session) {
+async function getLatestRespondedAttemptForEngagement(leadEngagementId, attemptCycle, session) {
+  const cycle = Number(attemptCycle || 1);
   return ContactAttempt.findOne({
     leadEngagementId,
+    attemptCycle: cycle,
     response: "Responded",
   })
     .sort({ attemptNo: -1 })
@@ -6548,8 +6901,10 @@ app.post("/api/prospects/:prospectId/leads/:leadId/validate-contact", async (req
       const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).session(session);
       if (!engagement) throw Object.assign(new Error("Engagement not found."), { status: 404 });
 
+      const currentAttemptCycle = Number(engagement.contactAttemptCycle || 1);
       const attempt = await ContactAttempt.findOne({
         leadEngagementId: engagement._id,
+        attemptCycle: currentAttemptCycle,
         response: "Responded",
       })
         .sort({ attemptNo: -1 })
@@ -6598,6 +6953,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/validate-contact", async (req
         leadEngagementId: engagement._id,
         type: { $in: ["APPROACH", "FOLLOW_UP"] },
         status: { $in: ["Open", "Overdue"] },
+        softDeletedAt: null,
       })
         .sort({ dueAt: -1, createdAt: -1 })
         .session(session);
@@ -6614,6 +6970,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/validate-contact", async (req
         leadEngagementId: engagement._id,
         type: "UPDATE_CONTACT_INFO",
         status: "Open",
+        softDeletedAt: null,
       }).session(session);
 
       let createdNewUpdateTask = false;
@@ -6725,7 +7082,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/assess-interest", async (req,
         throw Object.assign(new Error("interestLevel must be INTERESTED or NOT_INTERESTED."), { status: 400 });
       }
 
-      const attempt = await getLatestRespondedAttemptForEngagement(engagement._id, session);
+      const attempt = await getLatestRespondedAttemptForEngagement(engagement._id, engagement.contactAttemptCycle, session);
       if (!attempt) throw Object.assign(new Error("No responded contact attempt found."), { status: 409 });
       const previousInterestLevel = String(attempt.interestLevel || "").trim().toUpperCase();
 
@@ -7092,8 +7449,10 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
 
       const endAt = new Date(dt.getTime() + durationMin * 60 * 1000);
       const meetingType = "Needs Assessment";
+      const currentAttemptCycle = Number(engagement.contactAttemptCycle || 1);
       const existingMeeting = await ScheduledMeeting.findOne({
         leadEngagementId: engagement._id,
+        attemptCycle: currentAttemptCycle,
         meetingType,
         status: "Scheduled",
       })
@@ -7144,7 +7503,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
         if (!place) throw Object.assign(new Error("meetingPlace is required for face-to-face meeting."), { status: 400 });
       }
 
-      const latestAttempt = await getLatestRespondedAttemptForEngagement(engagement._id, session);
+      const latestAttempt = await getLatestRespondedAttemptForEngagement(engagement._id, engagement.contactAttemptCycle, session);
       if (!latestAttempt) throw Object.assign(new Error("No responded contact attempt found."), { status: 409 });
       latestAttempt.outcomeActivity = "Schedule Meeting";
 
@@ -7195,7 +7554,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
         }
         if (allowAddNeedsAssessmentMeeting) {
           await ScheduledMeeting.updateMany(
-            { leadEngagementId: engagement._id, meetingType, status: "Scheduled" },
+            { leadEngagementId: engagement._id, attemptCycle: currentAttemptCycle, meetingType, status: "Scheduled" },
             { $set: { status: "Completed" } },
             { session }
           );
@@ -7204,6 +7563,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
           [
             {
               leadEngagementId: engagement._id,
+              attemptCycle: currentAttemptCycle,
               meetingType,
               startAt: dt,
               endAt,
@@ -7490,7 +7850,6 @@ app.get("/api/prospects/:prospectId/leads/:leadId/needs-assessment", async (req,
     const proposalMeetings = await ScheduledMeeting.find({
       leadEngagementId: engagement._id,
       meetingType: "Proposal Presentation",
-      status: { $ne: "Cancelled" },
     })
       .sort({ startAt: -1, createdAt: -1 })
       .select("_id meetingType startAt endAt durationMin mode platform platformOther link inviteSent place status createdAt")
@@ -8241,7 +8600,6 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/schedule-pro
         ? await ScheduledMeeting.findOne({
             leadEngagementId: engagement._id,
             meetingType: "Proposal Presentation",
-            status: { $ne: "Cancelled" },
           })
             .sort({ startAt: -1, createdAt: -1 })
             .session(session)
@@ -8372,8 +8730,10 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/schedule-pro
 
       const windows = await getAgentMeetingWindows(userObjectId, null, null, session);
       const meetingType = "Proposal Presentation";
+      const currentAttemptCycle = Number(engagement.contactAttemptCycle || 1);
       const existingMeeting = await ScheduledMeeting.findOne({
         leadEngagementId: engagement._id,
+        attemptCycle: currentAttemptCycle,
         meetingType,
         status: { $ne: "Cancelled" },
       })
@@ -8405,6 +8765,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/schedule-pro
         activeProposalMeeting = await ScheduledMeeting.create(
           [{
             leadEngagementId: engagement._id,
+            attemptCycle: currentAttemptCycle,
             meetingType,
             startAt: dt,
             endAt,
@@ -8439,6 +8800,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/schedule-pro
         activeProposalMeeting = await ScheduledMeeting.create(
           [{
             leadEngagementId: engagement._id,
+            attemptCycle: currentAttemptCycle,
             meetingType,
             startAt: dt,
             endAt,
@@ -8460,6 +8822,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/schedule-pro
       await ScheduledMeeting.updateMany(
         {
           leadEngagementId: engagement._id,
+          attemptCycle: currentAttemptCycle,
           meetingType: "Needs Assessment",
           status: "Scheduled",
         },
@@ -10109,8 +10472,10 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/schedule-application
 
       const activityNow = String(engagement.currentActivityKey || "").trim();
       const meetingType = "Application Submission";
+      const currentAttemptCycle = Number(engagement.contactAttemptCycle || 1);
       const existingMeeting = await ScheduledMeeting.findOne({
         leadEngagementId: engagement._id,
+        attemptCycle: currentAttemptCycle,
         meetingType,
       }).session(session);
       const canScheduleFromProposal = stageNow === "Proposal" && activityNow === "Schedule Application Submission";
@@ -10209,6 +10574,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/schedule-application
         await ScheduledMeeting.create(
           [{
             leadEngagementId: engagement._id,
+            attemptCycle: currentAttemptCycle,
             meetingType,
             startAt: dt,
             endAt,
@@ -10454,7 +10820,7 @@ app.get("/api/tasks/summary", async (req, res) => {
     await ensureTaskMissedNotificationsForUser(userObjectId);
 
     // Fetch only OPEN tasks for dashboard (Done tasks are excluded entirely)
-    let openTasks = await Task.find({ assignedToUserId: userObjectId, status: "Open" })
+    let openTasks = await Task.find({ assignedToUserId: userObjectId, status: "Open", softDeletedAt: null })
       .select("assignedToUserId prospectId leadEngagementId type title description dueAt status completedAt wasDelayed createdAt")
       .lean();
 
@@ -10532,7 +10898,7 @@ app.get("/api/tasks/progress", async (req, res) => {
     const userObjectId = new mongoose.Types.ObjectId(userId);
     await ensureTaskMissedNotificationsForUser(userObjectId);
 
-    let tasks = await Task.find({ assignedToUserId: userObjectId })
+    let tasks = await Task.find({ assignedToUserId: userObjectId, softDeletedAt: null })
       .select("_id prospectId leadEngagementId type title dueAt status completedAt wasDelayed createdAt")
       .lean();
 
@@ -10728,7 +11094,7 @@ app.get("/api/tasks", async (req, res) => {
     // Fetch tasks sorted for UI:
     // - earliest due first
     // - for same due date, newest created first
-    let tasks = await Task.find(query)
+    let tasks = await Task.find({ ...query, softDeletedAt: null })
       .sort({ dueAt: 1, createdAt: -1 })
       .select(
         "assignedToUserId prospectId leadEngagementId type title description dueAt status completedAt wasDelayed createdAt"
