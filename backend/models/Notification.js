@@ -206,7 +206,29 @@ const notificationSchema = new mongoose.Schema(
      * - multiple documents can have dedupeKey = null without violating uniqueness
      */
     dedupeKey: { type: String, default: null, index: true, unique: true, sparse: true },
-    
+    /**
+     * Soft-delete metadata
+     * --------------------
+     * Allows notifications to be hidden from all user-facing lists/counts
+     * while preserving history/audit context in storage.
+     */
+    softDeletedAt: {
+      type: Date,
+      default: null,
+      index: true,
+    },
+    softDeleteReason: {
+      type: String,
+      default: "",
+      trim: true,
+      maxlength: 120,
+    },
+    softDeletedByUserId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+      index: true,
+    },
   },
     /**
      * timestamps: true
