@@ -74,6 +74,18 @@ const contactAttemptSchema = new mongoose.Schema(
       required: true,
       min: 1,
     },
+    /**
+     * attemptCycle (Number)
+     * ---------------------
+     * Logical cycle number for attempt sequencing inside one LeadEngagement.
+     * Increments when a dropped lead is reopened so attemptNo can restart at 1.
+     */
+    attemptCycle: {
+      type: Number,
+      default: 1,
+      min: 1,
+      index: true,
+    },
 
     /**
      * primaryChannel (String enum)
@@ -261,7 +273,7 @@ const contactAttemptSchema = new mongoose.Schema(
  * Does NOT prevent different engagements from using the same attemptNo.
  */
 contactAttemptSchema.index(
-  { leadEngagementId: 1, attemptNo: 1 },
+  { leadEngagementId: 1, attemptCycle: 1, attemptNo: 1 },
   { unique: true }
 );
 
