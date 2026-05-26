@@ -30,6 +30,14 @@ const scheduledMeetingSchema = new mongoose.Schema(
       index: true,
     },
 
+
+    /** Engagement attempt cycle this meeting belongs to. */
+    attemptCycle: {
+      type: Number,
+      default: 1,
+      min: 1,
+      index: true,
+    },
     /** Business meeting type (needs assessment / proposal / application). */
     meetingType: {
       type: String,
@@ -102,6 +110,6 @@ const scheduledMeetingSchema = new mongoose.Schema(
 );
 
 // Supports fast timeline queries per engagement + meeting type.
-scheduledMeetingSchema.index({ leadEngagementId: 1, meetingType: 1, startAt: -1 });
+scheduledMeetingSchema.index({ leadEngagementId: 1, attemptCycle: 1, meetingType: 1, startAt: -1 });
 
 module.exports = mongoose.model("ScheduledMeeting", scheduledMeetingSchema);
