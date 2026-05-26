@@ -1210,3 +1210,36 @@
   font-weight: 800;
   color: #1f2937;
 }
+/* Enhanced section/subsection visual hierarchy */
+.le-sectionHeader {
+  background: linear-gradient(135deg, #fff7f6 0%, #ffeceb 100%);
+  border: 1px solid #f5c4c0;
+  border-bottom: 2px solid #da291c;
+  box-shadow: 0 6px 16px rgba(218, 41, 28, 0.08);
+}
+
+.le-subsectionHeaderBar {
+  background: linear-gradient(135deg, #f8fbff 0%, #eef5ff 100%);
+  border: 1px solid #d8e6ff;
+  border-bottom: 2px solid #7f9cf5;
+  box-shadow: 0 4px 12px rgba(79, 70, 229, 0.08);
+}
+
+.le-subsectionCard {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #dbe7ff;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #fcfdff 0%, #f4f8ff 100%);
+}
+
+.le-subsectionHeader {
+  margin-bottom: 8px;
+}
+
+.le-subsectionTitle {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 800;
+  color: #1f3b7a;
+}
