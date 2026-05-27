@@ -884,10 +884,7 @@ function AgentLeadEngagement() {
         const rawDraft = sessionStorage.getItem(`lead-engagement-needs-draft:${leadId}`);
         if (rawDraft) {
           const parsedDraft = JSON.parse(rawDraft);
-          const draftActivity = String(parsedDraft?.currentActivityKey || "").trim();
-          const canApplyDraft = parsedDraft?.needsAssessmentForm && (
-            draftActivity === String(currentNAActivity || "").trim() || !hasSavedNeedsAnalysisDetails
-          );
+          const canApplyDraft = Boolean(parsedDraft?.needsAssessmentForm);
           if (canApplyDraft) {
             mergedNeedsForm = {
               ...serverNeedsForm,
@@ -5307,15 +5304,14 @@ function AgentLeadEngagement() {
                       <strong className="le-summaryValue">{formatDateTime(lead.createdAt)}</strong>
                     </div>
 
-                    <div className="le-summaryItem le-span2 le-descriptionCycleRow">
-                      <div>
-                        <span className="le-summaryLabel">Description</span>
-                        <strong className="le-summaryValue">{lead.description || "—"}</strong>
-                      </div>
-                      <div className="le-cycleInline">
-                        <span className="le-summaryLabel">Engagement Cycle</span>
-                        <strong className="le-summaryValue">{currentAttemptCycle}</strong>
-                      </div>
+                    <div className="le-summaryItem le-span2">
+                      <span className="le-summaryLabel">Description</span>
+                      <strong className="le-summaryValue">{lead.description || "—"}</strong>
+                    </div>
+
+                    <div className="le-summaryItem">
+                      <span className="le-summaryLabel">Engagement Cycle</span>
+                      <strong className="le-summaryValue">{currentAttemptCycle}</strong>
                     </div>
                   </div>
                 </section>
