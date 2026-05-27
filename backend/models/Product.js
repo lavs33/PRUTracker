@@ -79,6 +79,50 @@ const productSchema = new mongoose.Schema(
       trim: true,
       maxlength: 150,
     },
+
+
+    /** Entry-age eligibility (inclusive). */
+    ageRequirement: {
+      minAge: { type: Number, default: null },
+      maxAge: { type: Number, default: null },
+      label: { type: String, trim: true, default: "" },
+    },
+
+    /** Minimum sum-assured requirement (supports tiered/none cases). */
+    minimumSumAssured: {
+      hasStandard: { type: Boolean, default: true },
+      amount: { type: Number, default: null },
+      tiers: {
+        type: [
+          {
+            minAge: { type: Number, default: null },
+            maxAge: { type: Number, default: null },
+            amount: { type: Number, default: null },
+            label: { type: String, trim: true, default: "" },
+          },
+        ],
+        default: [],
+      },
+      label: { type: String, trim: true, default: "" },
+    },
+
+    /** Minimum annual premium requirement (supports tiered/none cases). */
+    minimumAnnualPremium: {
+      hasStandard: { type: Boolean, default: true },
+      amount: { type: Number, default: null },
+      tiers: {
+        type: [
+          {
+            minAge: { type: Number, default: null },
+            maxAge: { type: Number, default: null },
+            amount: { type: Number, default: null },
+            label: { type: String, trim: true, default: "" },
+          },
+        ],
+        default: [],
+      },
+      label: { type: String, trim: true, default: "" },
+    },
   },
   { timestamps: true }
 );
