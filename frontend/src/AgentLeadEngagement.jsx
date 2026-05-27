@@ -126,6 +126,7 @@ function AgentLeadEngagement() {
   const proposalAttendanceProofInputRef = useRef(null);
 
   const [needsAssessmentLoading, setNeedsAssessmentLoading] = useState(false);
+  const needsDraftReadyRef = useRef(false);
   const [needsAssessmentSaving, setNeedsAssessmentSaving] = useState(false);
   const [recommendationRefreshToken, setRecommendationRefreshToken] = useState(0);
   const [needsAssessmentError, setNeedsAssessmentError] = useState("");
@@ -716,6 +717,7 @@ function AgentLeadEngagement() {
   const fetchNeedsAssessment = useCallback(async () => {
     if (!user?.id) return;
     try {
+      needsDraftReadyRef.current = false;
       setNeedsAssessmentLoading(true);
       setNeedsAssessmentError("");
       setAddNewNeedsMeetingMode(false);
@@ -884,18 +886,73 @@ function AgentLeadEngagement() {
         const rawDraft = sessionStorage.getItem(`lead-engagement-needs-draft:${leadId}`);
         if (rawDraft) {
           const parsedDraft = JSON.parse(rawDraft);
-          const draftActivity = String(parsedDraft?.currentActivityKey || "").trim();
-          const canApplyDraft = parsedDraft?.needsAssessmentForm && (
-            draftActivity === String(currentNAActivity || "").trim() || !hasSavedNeedsAnalysisDetails
-          );
+          const draftForm = parsedDraft?.needsAssessmentForm || null;
+          const canApplyDraft = Boolean(draftForm);
           if (canApplyDraft) {
+            const draftBasicInformation = draftForm.basicInformation || {};
+            const draftNeedsPriorities = draftForm.needsPriorities || {};
+            const draftProtection = draftNeedsPriorities.protection || {};
+            const draftHealth = draftNeedsPriorities.health || {};
+            const draftInvestment = draftNeedsPriorities.investment || {};
+            const draftRiskProfiler = draftInvestment.riskProfiler || {};
+            const draftFundChoice = draftInvestment.fundChoice || {};
+            const draftProductSelection = draftNeedsPriorities.productSelection || {};
             mergedNeedsForm = {
               ...serverNeedsForm,
-              ...parsedDraft.needsAssessmentForm,
+              ...draftForm,
+              attendanceChoice: serverNeedsForm.attendanceChoice,
+              attendanceProofImageDataUrl: serverNeedsForm.attendanceProofImageDataUrl,
+              attendanceProofFileName: serverNeedsForm.attendanceProofFileName,
+              basicInformation: {
+                ...serverNeedsForm.basicInformation,
+                ...draftBasicInformation,
+                fullName: String(serverNeedsForm.basicInformation?.fullName || "").trim(),
+                sex: String(draftBasicInformation.sex || "").trim() || String(serverNeedsForm.basicInformation?.sex || "").trim(),
+                civilStatus: String(draftBasicInformation.civilStatus || "").trim() || String(serverNeedsForm.basicInformation?.civilStatus || "").trim(),
+                birthday: String(draftBasicInformation.birthday || "").trim() || String(serverNeedsForm.basicInformation?.birthday || "").trim(),
+                age:
+                  String(draftBasicInformation.birthday || "").trim()
+                    ? (draftBasicInformation.age ?? serverNeedsForm.basicInformation?.age ?? "")
+                    : (serverNeedsForm.basicInformation?.age ?? draftBasicInformation.age ?? ""),
+              },
+              dependents: Array.isArray(draftForm.dependents)
+                ? draftForm.dependents
+                : serverNeedsForm.dependents,
               needsPriorities: {
                 ...serverNeedsForm.needsPriorities,
-                ...(parsedDraft.needsAssessmentForm.needsPriorities || {}),
+                ...draftNeedsPriorities,
+                productSelection: {
+                  ...(serverNeedsForm.needsPriorities?.productSelection || {}),
+                  ...draftProductSelection,
+                },
+                protection: {
+                  ...(serverNeedsForm.needsPriorities?.protection || {}),
+                  ...draftProtection,
+                },
+                health: {
+                  ...(serverNeedsForm.needsPriorities?.health || {}),
+                  ...draftHealth,
+                },
+                investment: {
+                  ...(serverNeedsForm.needsPriorities?.investment || {}),
+                  ...draftInvestment,
+                  riskProfiler: {
+                    ...(serverNeedsForm.needsPriorities?.investment?.riskProfiler || {}),
+                    ...draftRiskProfiler,
+                  },
+                  fundChoice: {
+                    ...(serverNeedsForm.needsPriorities?.investment?.fundChoice || {}),
+                    ...draftFundChoice,
+                    allocations: {
+                      ...((serverNeedsForm.needsPriorities?.investment?.fundChoice || {}).allocations || {}),
+                      ...(draftFundChoice.allocations || {}),
+                    },
+                  },
+                },
               },
+              existingPolicies: Array.isArray(draftForm.existingPolicies)
+                ? draftForm.existingPolicies
+                : serverNeedsForm.existingPolicies,
             };
           }
         }
@@ -906,6 +963,7 @@ function AgentLeadEngagement() {
       setNeedsAssessmentError(err?.message || "Failed to load needs assessment.");
     } finally {
       setNeedsAssessmentLoading(false);
+      needsDraftReadyRef.current = true;
     }
   }, [API_BASE, leadId, prospectId, user?.id]);
 
@@ -1431,6 +1489,34 @@ function AgentLeadEngagement() {
     return false;
   }, [needsAssessmentForm]);
 
+  const isNeedsPrioritiesValidForRecommendations = useMemo(() => {
+    const np = needsAssessmentForm?.needsPriorities || {};
+    if (!isNeedsPrioritiesCompleteForRecommendations) return false;
+    const minPremium = Number(String(np?.minPremium ?? "").trim());
+    const maxPremium = Number(String(np?.maxPremium ?? "").trim());
+    if (!Number.isFinite(minPremium) || !Number.isFinite(maxPremium) || minPremium < 0 || maxPremium < minPremium) return false;
+
+    const priority = String(np.currentPriority || "").trim();
+    if (priority === "Protection") {
+      const monthlySpend = Number(np?.protection?.monthlySpend);
+      const savings = Number(np?.protection?.savingsForProtection);
+      return Number.isFinite(monthlySpend) && Number.isFinite(savings) && monthlySpend >= 0 && savings >= 0;
+    }
+    if (priority === "Health") {
+      const amount = Number(np?.health?.amountToCoverCriticalIllness);
+      const savings = Number(np?.health?.savingsForCriticalIllness);
+      return Number.isFinite(amount) && Number.isFinite(savings) && amount >= 0 && savings >= 0 && savings <= amount;
+    }
+    if (priority === "Investment") {
+      const amount = Number(np?.investment?.targetSavingsAmount);
+      const savings = Number(np?.investment?.savingsForInvestment);
+      const year = Number(np?.investment?.targetUtilizationYear);
+      const currentYear = new Date().getFullYear();
+      return Number.isFinite(amount) && Number.isFinite(savings) && Number.isFinite(year) && amount >= 0 && savings >= 0 && savings <= amount && year >= currentYear + 2 && year <= currentYear + 20;
+    }
+    return false;
+  }, [needsAssessmentForm, isNeedsPrioritiesCompleteForRecommendations]);
+
   const productRecommendationView = useMemo(() => {
     const refreshTick = recommendationRefreshToken;
     const age = Number(needsAssessmentForm?.basicInformation?.age);
@@ -1486,7 +1572,7 @@ function AgentLeadEngagement() {
       if (sumHasStandard && !sumPass) reasons.push('Computed gap is below minimum sum assured');
 
       const recommended = agePass && annualPass && sumPass;
-      return { product, recommended, reasons, annualThreshold, sumThreshold, minAnnualTier, minSumTier };
+      return { product, recommended, reasons, annualThreshold, sumThreshold, minAnnualTier, minSumTier, minAnnual, minSum };
     });
 
     void refreshTick;
@@ -1495,6 +1581,13 @@ function AgentLeadEngagement() {
       alternatives: rows.filter((r) => !r.recommended),
     };
   }, [availableProductsByPriority, needsAssessmentForm, recommendationRefreshToken]);
+
+  const formatAmount = (value) => Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 });
+  const renderStandardLabel = (standard, fallbackLabel = "No Standard") => {
+    if (!standard || standard.hasStandard === false) return fallbackLabel;
+    if (Number.isFinite(Number(standard?.amount))) return `Php ${formatAmount(standard.amount)}`;
+    return String(standard?.label || fallbackLabel);
+  };
 
   const RESPONSES = useMemo(() => ["Responded", "No Response"], []);
   const INCOME_BAND_OPTIONS = useMemo(
@@ -2462,123 +2555,6 @@ function AgentLeadEngagement() {
     if (!shouldRefreshMeetingAvailability) return;
     fetchMeetingAvailability();
   }, [shouldRefreshMeetingAvailability, fetchMeetingAvailability]);
-  const isNeedsAnalysisReady = useMemo(() => {
-    if (needsAssessmentForm.attendanceChoice !== "YES") return false;
-
-    const basic = needsAssessmentForm.basicInformation || {};
-    if (!["Male", "Female"].includes(String(basic.sex || "").trim())) return false;
-    if (!String(basic.civilStatus || "").trim()) return false;
-    if (!["Employed", "Self-Employed", "Not Employed"].includes(String(basic.occupationCategory || ""))) return false;
-    if (["Employed", "Self-Employed"].includes(String(basic.occupationCategory || "")) && !String(basic.occupation || "").trim()) return false;
-    if (!String(basic.addressLine || "").trim()) return false;
-    if (!String(basic.barangay || "").trim()) return false;
-    if (!String(basic.city || "").trim()) return false;
-    if (String(basic.city || "") === "Other" && !String(basic.otherCity || "").trim()) return false;
-    if (!String(basic.region || "").trim()) return false;
-    const zip = String(basic.zipCode || "").trim();
-    if (!zip || !/^\d{4}$/.test(zip)) return false;
-
-    const birthday = String(basic.birthday || "").trim();
-    const age = Number(basic.age || "");
-    if (!birthday) return false;
-    const computed = computeAgeFromBirthday(birthday);
-    if (computed === null || computed < 18 || computed > 70) return false;
-    if (!Number.isFinite(age) || age < 18 || age > 70) return false;
-
-    const depsReady = (needsAssessmentForm.dependents || []).every((d) => {
-      const depAge = Number(d?.age);
-      return (
-        String(d?.name || "").trim() &&
-        Number.isFinite(depAge) &&
-        depAge >= 0 &&
-        depAge <= 120 &&
-        ["Male", "Female"].includes(String(d?.gender || "")) &&
-        ["Child", "Parent", "Sibling"].includes(String(d?.relationship || ""))
-      );
-    });
-    if (!depsReady) return false;
-
-    const np = needsAssessmentForm.needsPriorities || {};
-    const priority = String(np.currentPriority || "").trim();
-    const band = String(np.monthlyIncomeBand || "").trim();
-    const approxIncome = resolveApproxIncome(band, np.monthlyIncomeAmount);
-    const minPremium = toNonNegativeNumber(np.minPremium);
-    const maxPremium = toNonNegativeNumber(np.maxPremium);
-
-    if (!["Protection", "Health", "Investment"].includes(priority)) return false;
-    if (!["BELOW_15000", "15000_29999", "30000_49999", "50000_79999", "80000_99999", "100000_249999", "250000_499999", "ABOVE_500000"].includes(band)) return false;
-    if (band === "BELOW_15000" && !(toNonNegativeNumber(np.monthlyIncomeAmount) !== null && Number(np.monthlyIncomeAmount) < 15000)) return false;
-    if (band === "ABOVE_500000" && !(toNonNegativeNumber(np.monthlyIncomeAmount) !== null && Number(np.monthlyIncomeAmount) > 500000)) return false;
-    if (approxIncome === null) return false;
-    if (minPremium === null || maxPremium === null) return false;
-    if (minPremium > approxIncome || maxPremium > approxIncome || maxPremium < minPremium) return false;
-
-    const attendanceProofImageDataUrl = String(needsAssessmentForm.attendanceProofImageDataUrl || "").trim();
-
-    const selectedProductId = String(np?.productSelection?.selectedProductId || "").trim();
-    const requestedFrequency = String(np?.productSelection?.requestedFrequency || "Monthly").trim() || "Monthly";
-    const requestedPremiumPayment = toNonNegativeNumber(np?.productSelection?.requestedPremiumPayment);
-    const selectedProduct = (availableProductsByPriority || []).find((prod) => String(prod?._id || "") === selectedProductId);
-    if (!selectedProductId || !selectedProduct) return false;
-    if (!["Monthly", "Quarterly", "Half-yearly", "Yearly"].includes(requestedFrequency)) return false;
-    if (requestedPremiumPayment === null) return false;
-    if (!/^data:image\/(?:jpeg|png);base64,/i.test(attendanceProofImageDataUrl)) return false;
-
-    if (priority === "Protection") {
-      const monthlySpend = toNonNegativeNumber(np?.protection?.monthlySpend);
-      const savingsForProtection = toNonNegativeNumber(np?.protection?.savingsForProtection);
-      if (monthlySpend === null || savingsForProtection === null) return false;
-      if (monthlySpend > approxIncome) return false;
-    }
-
-    if (priority === "Health") {
-      const amountToCoverCriticalIllness = toNonNegativeNumber(np?.health?.amountToCoverCriticalIllness);
-      const savingsForCriticalIllness = toNonNegativeNumber(np?.health?.savingsForCriticalIllness);
-      if (amountToCoverCriticalIllness === null || savingsForCriticalIllness === null) return false;
-      if (savingsForCriticalIllness > amountToCoverCriticalIllness) return false;
-    }
-
-    if (priority === "Investment") {
-      const savingsPlan = String(np?.investment?.savingsPlan || "").trim();
-      const targetSavingsAmount = toNonNegativeNumber(np?.investment?.targetSavingsAmount);
-      const targetYear = Number(np?.investment?.targetUtilizationYear);
-      const savingsForInvestment = toNonNegativeNumber(np?.investment?.savingsForInvestment);
-      const { score, category } = scoreRiskProfile(np?.investment?.riskProfiler || {});
-      const currentYear = new Date().getFullYear();
-      if (!["Home", "Vehicle", "Holiday", "Early Retirement", "Other"].includes(savingsPlan)) return false;
-      if (savingsPlan === "Other" && !String(np?.investment?.savingsPlanOther || "").trim()) return false;
-      if (targetSavingsAmount === null || !Number.isFinite(targetYear) || savingsForInvestment === null) return false;
-      if (targetYear < currentYear + 2 || targetYear > currentYear + 20) return false;
-      if (savingsForInvestment > targetSavingsAmount) return false;
-      if (score === null || !category) return false;
-
-      const allocations = np?.investment?.fundChoice?.allocations && typeof np.investment.fundChoice.allocations === "object"
-        ? np.investment.fundChoice.allocations
-        : {};
-      const allowedRatings = SUITABLE_RISK_RATINGS_BY_CATEGORY[category] || [];
-      const selectedFunds = INVESTMENT_FUNDS
-        .map((fund) => ({ ...fund, allocationPercent: toNonNegativeNumber(allocations[fund.key]) ?? 0 }))
-        .filter((fund) => fund.allocationPercent > 0);
-      if (selectedFunds.length === 0) return false;
-      const totalAllocation = selectedFunds.reduce((sum, item) => sum + item.allocationPercent, 0);
-      if (Math.abs(totalAllocation - 100) > 0.0001) return false;
-      const fundMatch = selectedFunds.some((item) => !allowedRatings.includes(item.riskRating)) ? "No" : "Yes";
-      if (fundMatch === "No" && !String(np?.investment?.fundChoice?.mismatchReason || "").trim()) return false;
-    }
-    return true;
-  }, [needsAssessmentForm, resolveApproxIncome, scoreRiskProfile, toNonNegativeNumber, INVESTMENT_FUNDS, SUITABLE_RISK_RATINGS_BY_CATEGORY, availableProductsByPriority]);
-
-  const needsUiActivityKey =
-    isNeedsAssessmentEditableNow && isViewingCurrentStage
-      ? needsAssessmentForm.attendanceChoice !== "YES" || !String(needsAssessmentForm.attendanceProofImageDataUrl || "").trim()
-        ? "Record Prospect Attendance"
-        : !isNeedsAnalysisReady
-        ? "Perform Needs Analysis"
-        : needsFollowUpDecisionSaved && String(savedNeedsFollowUpRequired || "").trim().toUpperCase() === "NO"
-        ? "Schedule Proposal Presentation"
-        : "Perform Needs Analysis"
-      : needsActivityKeyRaw;
-
   const previousContactingCurrentActivityRef = useRef("");
   const previousNeedsCurrentActivityRef = useRef("");
   const previousProposalCurrentActivityRef = useRef("");
@@ -2602,6 +2578,13 @@ function AgentLeadEngagement() {
       previousNeedsCurrentActivityRef
     );
   }, [NEEDS_ASSESSMENT_STEPS_UI, needsActivityKeyRaw, syncViewedStepWithCurrent]);
+
+  useEffect(() => {
+    const isNeedsStageCurrent = String(engagement?.currentStage || "").trim() === "Needs Assessment";
+    if (!showNeedsAssessmentPanel || isHistoryView) return;
+    if (!isViewingCurrentStage && !isNeedsStageCurrent) return;
+    setNeedsAssessmentViewedActivityKey(needsActivityKeyRaw);
+  }, [showNeedsAssessmentPanel, isViewingCurrentStage, isHistoryView, needsActivityKeyRaw, engagement?.currentStage]);
 
   useEffect(() => {
     syncViewedStepWithCurrent(
@@ -3055,22 +3038,11 @@ function AgentLeadEngagement() {
   useEffect(() => {
     try {
       if (!leadId) return;
+      if (!needsDraftReadyRef.current) return;
       const payload = { needsAssessmentForm, needsSectionOpen, needsAnalysisEditMode, savedAt: Date.now(), currentActivityKey: needsAssessmentCurrentActivityKey, outcomeActivity: needsAssessmentOutcomeActivity };
       sessionStorage.setItem(needsDraftStorageKey, JSON.stringify(payload));
     } catch {}
   }, [leadId, needsDraftStorageKey, needsAssessmentForm, needsSectionOpen, needsAnalysisEditMode, needsAssessmentCurrentActivityKey, needsAssessmentOutcomeActivity]);
-
-  useEffect(() => {
-    try {
-      if (!leadId) return;
-      const raw = sessionStorage.getItem(needsDraftStorageKey);
-      if (!raw) return;
-      const draft = JSON.parse(raw);
-      if (draft?.needsAssessmentForm) setNeedsAssessmentForm(draft.needsAssessmentForm);
-      if (draft?.needsSectionOpen) setNeedsSectionOpen(draft.needsSectionOpen);
-      if (typeof draft?.needsAnalysisEditMode === 'boolean') setNeedsAnalysisEditMode(draft.needsAnalysisEditMode);
-    } catch {}
-  }, [leadId, needsDraftStorageKey]);
 
 
   const needsPrioritiesDerived = useMemo(() => {
@@ -3127,7 +3099,7 @@ function AgentLeadEngagement() {
         ? currentActivityLabel
         : previousContactingActivity
       : showNeedsAssessmentPanel
-      ? needsUiActivityKey
+      ? needsActivityKeyRaw
       : showProposalPanel
       ? proposalUiActivityKey
       : showApplicationPanel
@@ -5307,15 +5279,14 @@ function AgentLeadEngagement() {
                       <strong className="le-summaryValue">{formatDateTime(lead.createdAt)}</strong>
                     </div>
 
-                    <div className="le-summaryItem le-span2 le-descriptionCycleRow">
-                      <div>
-                        <span className="le-summaryLabel">Description</span>
-                        <strong className="le-summaryValue">{lead.description || "—"}</strong>
-                      </div>
-                      <div className="le-cycleInline">
-                        <span className="le-summaryLabel">Engagement Cycle</span>
-                        <strong className="le-summaryValue">{currentAttemptCycle}</strong>
-                      </div>
+                    <div className="le-summaryItem">
+                      <span className="le-summaryLabel">Description</span>
+                      <strong className="le-summaryValue">{lead.description || "—"}</strong>
+                    </div>
+
+                    <div className="le-summaryItem">
+                      <span className="le-summaryLabel">Engagement Cycle</span>
+                      <strong className="le-summaryValue">{currentAttemptCycle}</strong>
                     </div>
                   </div>
                 </section>
@@ -9087,21 +9058,25 @@ function AgentLeadEngagement() {
                                   <div className="le-priorityHeaderRow"><p className="le-priorityHeadline le-priorityHeadlineMedium" style={{ marginTop: 4 }}>Recommended Products Based on Priority:</p><button type="button" className="le-btn secondary" onClick={() => setRecommendationRefreshToken((v) => v + 1)}>Refresh</button></div>
                                   {!isNeedsPrioritiesCompleteForRecommendations ? (
                                     <p className="le-muted" style={{ marginTop: 8 }}>Complete all required Needs and Priorities fields first, then click Refresh.</p>
+                                  ) : !isNeedsPrioritiesValidForRecommendations ? (
+                                    <p className="le-muted" style={{ marginTop: 8 }}>Needs and Priorities has missing or invalid values. Fix all invalid fields first before product recommendations are shown.</p>
                                   ) : availableProductsByPriority.length === 0 ? (
                                     <p className="le-muted" style={{ marginTop: 8 }}>No products found for this priority.</p>
                                   ) : (
                                     <>
                                       <div className="le-attemptList" style={{ marginTop: 8 }}>
-                                        {productRecommendationView.recommended.length === 0 ? <p className="le-muted">No recommended products based on current criteria.</p> : productRecommendationView.recommended.map(({ product, annualThreshold, sumThreshold }) => {
+                                        {productRecommendationView.recommended.length === 0 ? <p className="le-muted">No recommended products based on current criteria.</p> : productRecommendationView.recommended.map(({ product, annualThreshold, sumThreshold, minAnnual, minSum }) => {
                                           const isSelected = String(needsAssessmentForm.needsPriorities?.productSelection?.selectedProductId || "") === String(product?._id || "");
                                           return (
                                             <div key={String(product?._id || product?.productName)} className="le-attemptItem le-productCard alternative">
                                               <h6 className="le-attemptSectionHeader le-productCardTitle" style={{ marginTop: 0 }}>{product?.productName || "—"}</h6>
                                               <p className="le-muted" style={{ marginTop: 4 }}>{product?.description || "No description available."}</p>
-                                              <p className="le-smallNote">Age Requirement: {product?.ageRequirement?.label || "No standard"}</p>
-                                              <p className="le-smallNote">Minimum Sum Assured: {Number.isFinite(sumThreshold) ? Number(sumThreshold).toLocaleString() : (product?.minimumSumAssured?.label || "No standard")}</p>
-                                              <p className="le-smallNote">Minimum Annual Premium: {Number.isFinite(annualThreshold) ? Number(annualThreshold).toLocaleString() : (product?.minimumAnnualPremium?.label || "No standard")}</p>
-                                              <p className="le-smallNote">Minimum Monthly Premium: {Number.isFinite(annualThreshold) ? (annualThreshold / 12).toLocaleString(undefined, { maximumFractionDigits: 2 }) : "No standard"}</p>
+                                              <p className="le-smallNote">Age Requirement: {product?.ageRequirement?.label || "No Standard"}</p>
+                                              <p className="le-smallNote">Minimum Sum Assured: {Number.isFinite(sumThreshold) ? `Php ${formatAmount(sumThreshold)}` : renderStandardLabel(minSum)}</p>
+                                              <p className="le-smallNote">Minimum Annual Premium: {Number.isFinite(annualThreshold) ? `Php ${formatAmount(annualThreshold)}` : renderStandardLabel(minAnnual)}</p>
+                                              <p className="le-smallNote">Minimum Monthly Premium: {Number.isFinite(annualThreshold) ? `Php ${formatAmount(annualThreshold / 12)}` : "No Standard"}</p>
+                                              {Array.isArray(minAnnual?.tiers) && minAnnual.tiers.length > 0 ? <p className="le-smallNote">Annual Premium Tiers: {minAnnual.tiers.map((t) => `${t?.minAge ?? "—"}-${t?.maxAge ?? "—"}: Php ${formatAmount(t?.amount || 0)} (Monthly Eq: Php ${formatAmount((Number(t?.amount) || 0) / 12)})`).join(" | ")}</p> : null}
+                                              {Array.isArray(minSum?.tiers) && minSum.tiers.length > 0 ? <p className="le-smallNote">Sum Assured Tiers: {minSum.tiers.map((t) => `${t?.minAge ?? "—"}-${t?.maxAge ?? "—"}: Php ${formatAmount(t?.amount || 0)}`).join(" | ")}</p> : null}
                                               <div className="le-actions" style={{ marginTop: 8 }}>
                                                 <button type="button" className={`le-btn ${isSelected ? "primary" : "secondary"}`} onClick={() => updateNeedsPriorities("productSelection", { selectedProductId: String(product?._id || ""), requestedFrequency: "Monthly", requestedPremiumPayment: computeRequestedPremiumFromMin(needsAssessmentForm.needsPriorities?.minPremium, "Monthly") })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}>{isSelected ? "Selected" : "Select"}</button>
                                               </div>
@@ -9111,16 +9086,18 @@ function AgentLeadEngagement() {
                                       </div>
                                       <p className="le-priorityHeadline le-priorityHeadlineMedium" style={{ marginTop: 10 }}>Alternative Products Based on Priority:</p>
                                       <div className="le-attemptList" style={{ marginTop: 8 }}>
-                                        {productRecommendationView.alternatives.length === 0 ? <p className="le-muted">No alternative products to show.</p> : productRecommendationView.alternatives.map(({ product, annualThreshold, sumThreshold, reasons }) => {
+                                        {productRecommendationView.alternatives.length === 0 ? <p className="le-muted">No alternative products to show.</p> : productRecommendationView.alternatives.map(({ product, annualThreshold, sumThreshold, reasons, minAnnual, minSum }) => {
                                           const isSelected = String(needsAssessmentForm.needsPriorities?.productSelection?.selectedProductId || "") === String(product?._id || "");
                                           return (
                                             <div key={`alt-${String(product?._id || product?.productName)}`} className="le-attemptItem le-productCard recommended">
                                               <h6 className="le-attemptSectionHeader le-productCardTitle" style={{ marginTop: 0 }}>{product?.productName || "—"}</h6>
                                               <p className="le-muted" style={{ marginTop: 4 }}>{product?.description || "No description available."}</p>
-                                              <p className="le-smallNote">Age Requirement: {product?.ageRequirement?.label || "No standard"}</p>
-                                              <p className="le-smallNote">Minimum Sum Assured: {Number.isFinite(sumThreshold) ? Number(sumThreshold).toLocaleString() : (product?.minimumSumAssured?.label || "No standard")}</p>
-                                              <p className="le-smallNote">Minimum Annual Premium: {Number.isFinite(annualThreshold) ? Number(annualThreshold).toLocaleString() : (product?.minimumAnnualPremium?.label || "No standard")}</p>
-                                              <p className="le-smallNote">Minimum Monthly Premium: {Number.isFinite(annualThreshold) ? (annualThreshold / 12).toLocaleString(undefined, { maximumFractionDigits: 2 }) : "No standard"}</p>
+                                              <p className="le-smallNote">Age Requirement: {product?.ageRequirement?.label || "No Standard"}</p>
+                                              <p className="le-smallNote">Minimum Sum Assured: {Number.isFinite(sumThreshold) ? `Php ${formatAmount(sumThreshold)}` : renderStandardLabel(minSum)}</p>
+                                              <p className="le-smallNote">Minimum Annual Premium: {Number.isFinite(annualThreshold) ? `Php ${formatAmount(annualThreshold)}` : renderStandardLabel(minAnnual)}</p>
+                                              <p className="le-smallNote">Minimum Monthly Premium: {Number.isFinite(annualThreshold) ? `Php ${formatAmount(annualThreshold / 12)}` : "No Standard"}</p>
+                                              {Array.isArray(minAnnual?.tiers) && minAnnual.tiers.length > 0 ? <p className="le-smallNote">Annual Premium Tiers: {minAnnual.tiers.map((t) => `${t?.minAge ?? "—"}-${t?.maxAge ?? "—"}: Php ${formatAmount(t?.amount || 0)} (Monthly Eq: Php ${formatAmount((Number(t?.amount) || 0) / 12)})`).join(" | ")}</p> : null}
+                                              {Array.isArray(minSum?.tiers) && minSum.tiers.length > 0 ? <p className="le-smallNote">Sum Assured Tiers: {minSum.tiers.map((t) => `${t?.minAge ?? "—"}-${t?.maxAge ?? "—"}: Php ${formatAmount(t?.amount || 0)}`).join(" | ")}</p> : null}
                                               <p className="le-smallNote" style={{ color: '#B45309' }}>⚠ This product did not fit criteria ({reasons.join('; ')}). Select wisely.</p>
                                               <div className="le-actions" style={{ marginTop: 8 }}>
                                                 <button type="button" className={`le-btn ${isSelected ? "primary" : "secondary"}`} onClick={() => updateNeedsPriorities("productSelection", { selectedProductId: String(product?._id || ""), requestedFrequency: "Monthly", requestedPremiumPayment: computeRequestedPremiumFromMin(needsAssessmentForm.needsPriorities?.minPremium, "Monthly") })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}>{isSelected ? "Selected" : "Select"}</button>
