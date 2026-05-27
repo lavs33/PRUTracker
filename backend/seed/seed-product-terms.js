@@ -159,6 +159,29 @@ const PRODUCT_TERMS = [
   },
 ];
 
+
+
+const PRODUCT_REQUIREMENTS = {
+  "PRULove for Life": { ageRequirement: { minAge: 18, maxAge: 60, label: "18 - 60" }, minimumSumAssured: { hasStandard: true, amount: 500000, label: "500,000" }, minimumAnnualPremium: { hasStandard: true, amount: 12000, label: "12,000" } },
+  "PRULifetime Income": { ageRequirement: { minAge: 18, maxAge: 60, label: "18 - 60" }, minimumSumAssured: { hasStandard: true, amount: 250000, label: "250,000" }, minimumAnnualPremium: { hasStandard: false, amount: null, label: "No standard" } },
+  "PRUSteady Income": { ageRequirement: { minAge: 18, maxAge: 60, label: "18 - 60" }, minimumSumAssured: { hasStandard: true, amount: 200000, label: "200,000" }, minimumAnnualPremium: { hasStandard: false, amount: null, label: "No standard" } },
+  "PRUWealth 10": { ageRequirement: { minAge: 18, maxAge: 70, label: "18 - 70" }, minimumSumAssured: { hasStandard: true, amount: null, label: "Tiered by age", tiers: [{ minAge: 18, maxAge: 59, amount: 500000, label: "500,000 for ages 18-59" }, { minAge: 60, maxAge: 70, amount: 3000000, label: "3,000,000 for ages 60-70" }] }, minimumAnnualPremium: { hasStandard: false, amount: null, label: "No standard" } },
+  "PRULife Your Term": { ageRequirement: { minAge: 18, maxAge: 79, label: "18 - 79" }, minimumSumAssured: { hasStandard: false, amount: null, label: "No standard" }, minimumAnnualPremium: { hasStandard: true, amount: null, label: "Tiered by age", tiers: [{ minAge: 18, maxAge: 39, amount: 8000, label: "8,000 for ages 18-39" }, { minAge: 40, maxAge: 59, amount: 15000, label: "15,000 for ages 40-59" }, { minAge: 60, maxAge: 79, amount: 35000, label: "35,000 for ages 60-79" }] } },
+  "PRUTerm 15": { ageRequirement: { minAge: 18, maxAge: 65, label: "18 - 65" }, minimumSumAssured: { hasStandard: false, amount: null, label: "No standard" }, minimumAnnualPremium: { hasStandard: true, amount: 7120, label: "7,120" } },
+  "PRUTerm Lindungi": { ageRequirement: { minAge: 18, maxAge: 60, label: "18 - 60" }, minimumSumAssured: { hasStandard: true, amount: 100000, label: "100,000" }, minimumAnnualPremium: { hasStandard: true, amount: null, label: "Tiered by age", tiers: [{ minAge: 18, maxAge: 40, amount: 250, label: "250 for ages 18-40" }, { minAge: 41, maxAge: 49, amount: 550, label: "550 for ages 41-49" }, { minAge: 50, maxAge: 55, amount: 1000, label: "1,000 for ages 50-55" }, { minAge: 56, maxAge: 60, amount: 1400, label: "1,400 for ages 56-60" }] } },
+  "PRUHealth FamLove": { ageRequirement: { minAge: 20, maxAge: 60, label: "20 - 60" }, minimumSumAssured: { hasStandard: true, amount: 500000, label: "500,000" }, minimumAnnualPremium: { hasStandard: false, amount: null, label: "No standard" } },
+  "PRUHealth Prime": { ageRequirement: { minAge: 18, maxAge: 60, label: "18 - 60" }, minimumSumAssured: { hasStandard: true, amount: 500000, label: "500,000" }, minimumAnnualPremium: { hasStandard: false, amount: null, label: "No standard" } },
+  "PRUWellness": { ageRequirement: { minAge: 18, maxAge: 64, label: "18 - 64" }, minimumSumAssured: { hasStandard: true, amount: 500000, label: "500,000" }, minimumAnnualPremium: { hasStandard: true, amount: 2311, label: "2,311" } },
+  "PRU Life Care Advance Plus": { ageRequirement: { minAge: 18, maxAge: 65, label: "18 - 65" }, minimumSumAssured: { hasStandard: true, amount: 250000, label: "250,000" }, minimumAnnualPremium: { hasStandard: false, amount: null, label: "No standard" } },
+  "PRU Multiple Life Care Plus": { ageRequirement: { minAge: 18, maxAge: 65, label: "18 - 65" }, minimumSumAssured: { hasStandard: true, amount: 250000, label: "250,000" }, minimumAnnualPremium: { hasStandard: false, amount: null, label: "No standard" } },
+  "PRUMillion Protect": { ageRequirement: { minAge: 18, maxAge: 70, label: "18 - 70" }, minimumSumAssured: { hasStandard: false, amount: null, label: "No standard" }, minimumAnnualPremium: { hasStandard: true, amount: 250000, label: "250,000" } },
+  "PRULink Elite Protector Series": { ageRequirement: { minAge: 18, maxAge: 70, label: "18 - 70" }, minimumSumAssured: { hasStandard: false, amount: null, label: "No standard" }, minimumAnnualPremium: { hasStandard: true, amount: 85000, label: "85,000" } },
+  "PRULink Exact Protector": { ageRequirement: { minAge: 18, maxAge: 70, label: "18 - 70" }, minimumSumAssured: { hasStandard: false, amount: null, label: "No standard" }, minimumAnnualPremium: { hasStandard: true, amount: 45000, label: "45,000" } },
+  "PRULink Assurance Account Plus": { ageRequirement: { minAge: 18, maxAge: 70, label: "18 - 70" }, minimumSumAssured: { hasStandard: false, amount: null, label: "No standard" }, minimumAnnualPremium: { hasStandard: true, amount: 20000, label: "20,000" } },
+  "PRUMillionaire": { ageRequirement: { minAge: 18, maxAge: 70, label: "18 - 70" }, minimumSumAssured: { hasStandard: false, amount: null, label: "No standard" }, minimumAnnualPremium: { hasStandard: true, amount: 1000000, label: "1,000,000" } },
+  "PRULink Investor Account Plus": { ageRequirement: { minAge: 18, maxAge: 70, label: "18 - 70" }, minimumSumAssured: { hasStandard: false, amount: null, label: "No standard" }, minimumAnnualPremium: { hasStandard: true, amount: 100000, label: "100,000" } },
+  "PRUMax Invest": { ageRequirement: { minAge: 18, maxAge: 65, label: "18 - 65" }, minimumSumAssured: { hasStandard: false, amount: null, label: "No standard" }, minimumAnnualPremium: { hasStandard: true, amount: 7120, label: "7,120" } },
+};
 (async () => {
   if (!MONGO_URI) {
     console.error("❌ Missing MONGO_URI in environment (.env).");
@@ -169,7 +192,9 @@ const PRODUCT_TERMS = [
 
   // bulkWrite keeps the seed fast and idempotent by matching on productName and
   // only updating the term metadata fields introduced by the workflow change.
-  const ops = PRODUCT_TERMS.map((p) => ({
+  const ops = PRODUCT_TERMS.map((p) => {
+    const requirements = PRODUCT_REQUIREMENTS[p.productName] || {};
+    return ({
     updateOne: {
       filter: { productName: p.productName },
       update: {
@@ -178,11 +203,15 @@ const PRODUCT_TERMS = [
           paymentTermLabel: p.paymentTermLabel,
           coverageDurationRule: p.coverageDurationRule,
           coverageDurationLabel: p.coverageDurationLabel,
+          ageRequirement: requirements.ageRequirement || { minAge: null, maxAge: null, label: "" },
+          minimumSumAssured: requirements.minimumSumAssured || { hasStandard: false, amount: null, tiers: [], label: "No standard" },
+          minimumAnnualPremium: requirements.minimumAnnualPremium || { hasStandard: false, amount: null, tiers: [], label: "No standard" },
         },
       },
       upsert: false,
     },
-  }));
+  });
+  });
 
   const result = await Product.collection.bulkWrite(ops, { ordered: false });
   console.log("✅ Product payment/coverage term seed complete.");
