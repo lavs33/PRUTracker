@@ -37,7 +37,7 @@ function createNotificationsController({
       const uid = new mongoose.Types.ObjectId(userId);
       await ensureTaskMissed(uid);
 
-      const query = { assignedToUserId: uid };
+      const query = { assignedToUserId: uid, softDeletedAt: null };
 
       if (entityType) {
         const e = String(entityType).trim();
@@ -150,14 +150,17 @@ function createNotificationsController({
 
       const uid = new mongoose.Types.ObjectId(userId);
 
-      const notif = await Notification.findOne({ _id: id, assignedToUserId: uid }).lean();
+      const notif = await Notification.findOne({ _id: id, assignedToUserId: uid, softDeletedAt: null }).lean();
       if (!notif) return res.status(404).json({ message: "Notification not found." });
 
       if (notif.status === "Read") {
         return res.json({ ok: true, status: "Read" });
       }
 
-      await Notification.updateOne({ _id: id, assignedToUserId: uid }, { $set: { status: "Read", readAt: new Date() } });
+      await Notification.updateOne(
+        { _id: id, assignedToUserId: uid, softDeletedAt: null },
+        { $set: { status: "Read", readAt: new Date() } }
+      );
 
       return res.json({ ok: true, status: "Read" });
     } catch (err) {
@@ -179,6 +182,7 @@ function createNotificationsController({
       const query = {
         assignedToUserId: uid,
         status: "Unread",
+        softDeletedAt: null,
       };
 
       const e = entityType ? String(entityType).trim() : "Task";
@@ -215,7 +219,7 @@ function createNotificationsController({
       const uid = new mongoose.Types.ObjectId(userId);
       await ensureTaskMissed(uid);
 
-      const q = { assignedToUserId: uid, status: "Unread" };
+      const q = { assignedToUserId: uid, status: "Unread", softDeletedAt: null };
 
       if (entityType) {
         const e = String(entityType).trim();
@@ -243,7 +247,7 @@ function createNotificationsController({
       const uid = new mongoose.Types.ObjectId(userId);
       await ensureTaskMissed(uid);
 
-      const qBase = { assignedToUserId: uid };
+      const qBase = { assignedToUserId: uid, softDeletedAt: null };
 
       const e = entityType ? String(entityType).trim() : "Task";
       if (!["Task"].includes(e)) return res.status(400).json({ message: "Invalid entityType." });

@@ -241,6 +241,29 @@ const taskSchema = new mongoose.Schema(
       trim: true,
       index: true,
     },
+    /**
+     * Soft-delete metadata
+     * --------------------
+     * Tasks cleared because the parent lead was dropped should disappear from
+     * all operational task views without adding a new task status.
+     */
+    softDeletedAt: {
+      type: Date,
+      default: null,
+      index: true,
+    },
+    softDeleteReason: {
+      type: String,
+      default: "",
+      trim: true,
+      maxlength: 120,
+    },
+    softDeletedByUserId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+      index: true,
+    },
   },
     /**
      * timestamps: true
