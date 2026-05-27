@@ -884,14 +884,14 @@ function AgentLeadEngagement() {
         const rawDraft = sessionStorage.getItem(`lead-engagement-needs-draft:${leadId}`);
         if (rawDraft) {
           const parsedDraft = JSON.parse(rawDraft);
-          const draftActivity = String(parsedDraft?.currentActivityKey || "").trim();
-          const canApplyDraft = parsedDraft?.needsAssessmentForm && (
-            draftActivity === String(currentNAActivity || "").trim() || !hasSavedNeedsAnalysisDetails
-          );
+          const canApplyDraft = Boolean(parsedDraft?.needsAssessmentForm);
           if (canApplyDraft) {
             mergedNeedsForm = {
               ...serverNeedsForm,
               ...parsedDraft.needsAssessmentForm,
+              attendanceChoice: serverNeedsForm.attendanceChoice,
+              attendanceProofImageDataUrl: serverNeedsForm.attendanceProofImageDataUrl,
+              attendanceProofFileName: serverNeedsForm.attendanceProofFileName,
               needsPriorities: {
                 ...serverNeedsForm.needsPriorities,
                 ...(parsedDraft.needsAssessmentForm.needsPriorities || {}),
@@ -2462,123 +2462,6 @@ function AgentLeadEngagement() {
     if (!shouldRefreshMeetingAvailability) return;
     fetchMeetingAvailability();
   }, [shouldRefreshMeetingAvailability, fetchMeetingAvailability]);
-  const isNeedsAnalysisReady = useMemo(() => {
-    if (needsAssessmentForm.attendanceChoice !== "YES") return false;
-
-    const basic = needsAssessmentForm.basicInformation || {};
-    if (!["Male", "Female"].includes(String(basic.sex || "").trim())) return false;
-    if (!String(basic.civilStatus || "").trim()) return false;
-    if (!["Employed", "Self-Employed", "Not Employed"].includes(String(basic.occupationCategory || ""))) return false;
-    if (["Employed", "Self-Employed"].includes(String(basic.occupationCategory || "")) && !String(basic.occupation || "").trim()) return false;
-    if (!String(basic.addressLine || "").trim()) return false;
-    if (!String(basic.barangay || "").trim()) return false;
-    if (!String(basic.city || "").trim()) return false;
-    if (String(basic.city || "") === "Other" && !String(basic.otherCity || "").trim()) return false;
-    if (!String(basic.region || "").trim()) return false;
-    const zip = String(basic.zipCode || "").trim();
-    if (!zip || !/^\d{4}$/.test(zip)) return false;
-
-    const birthday = String(basic.birthday || "").trim();
-    const age = Number(basic.age || "");
-    if (!birthday) return false;
-    const computed = computeAgeFromBirthday(birthday);
-    if (computed === null || computed < 18 || computed > 70) return false;
-    if (!Number.isFinite(age) || age < 18 || age > 70) return false;
-
-    const depsReady = (needsAssessmentForm.dependents || []).every((d) => {
-      const depAge = Number(d?.age);
-      return (
-        String(d?.name || "").trim() &&
-        Number.isFinite(depAge) &&
-        depAge >= 0 &&
-        depAge <= 120 &&
-        ["Male", "Female"].includes(String(d?.gender || "")) &&
-        ["Child", "Parent", "Sibling"].includes(String(d?.relationship || ""))
-      );
-    });
-    if (!depsReady) return false;
-
-    const np = needsAssessmentForm.needsPriorities || {};
-    const priority = String(np.currentPriority || "").trim();
-    const band = String(np.monthlyIncomeBand || "").trim();
-    const approxIncome = resolveApproxIncome(band, np.monthlyIncomeAmount);
-    const minPremium = toNonNegativeNumber(np.minPremium);
-    const maxPremium = toNonNegativeNumber(np.maxPremium);
-
-    if (!["Protection", "Health", "Investment"].includes(priority)) return false;
-    if (!["BELOW_15000", "15000_29999", "30000_49999", "50000_79999", "80000_99999", "100000_249999", "250000_499999", "ABOVE_500000"].includes(band)) return false;
-    if (band === "BELOW_15000" && !(toNonNegativeNumber(np.monthlyIncomeAmount) !== null && Number(np.monthlyIncomeAmount) < 15000)) return false;
-    if (band === "ABOVE_500000" && !(toNonNegativeNumber(np.monthlyIncomeAmount) !== null && Number(np.monthlyIncomeAmount) > 500000)) return false;
-    if (approxIncome === null) return false;
-    if (minPremium === null || maxPremium === null) return false;
-    if (minPremium > approxIncome || maxPremium > approxIncome || maxPremium < minPremium) return false;
-
-    const attendanceProofImageDataUrl = String(needsAssessmentForm.attendanceProofImageDataUrl || "").trim();
-
-    const selectedProductId = String(np?.productSelection?.selectedProductId || "").trim();
-    const requestedFrequency = String(np?.productSelection?.requestedFrequency || "Monthly").trim() || "Monthly";
-    const requestedPremiumPayment = toNonNegativeNumber(np?.productSelection?.requestedPremiumPayment);
-    const selectedProduct = (availableProductsByPriority || []).find((prod) => String(prod?._id || "") === selectedProductId);
-    if (!selectedProductId || !selectedProduct) return false;
-    if (!["Monthly", "Quarterly", "Half-yearly", "Yearly"].includes(requestedFrequency)) return false;
-    if (requestedPremiumPayment === null) return false;
-    if (!/^data:image\/(?:jpeg|png);base64,/i.test(attendanceProofImageDataUrl)) return false;
-
-    if (priority === "Protection") {
-      const monthlySpend = toNonNegativeNumber(np?.protection?.monthlySpend);
-      const savingsForProtection = toNonNegativeNumber(np?.protection?.savingsForProtection);
-      if (monthlySpend === null || savingsForProtection === null) return false;
-      if (monthlySpend > approxIncome) return false;
-    }
-
-    if (priority === "Health") {
-      const amountToCoverCriticalIllness = toNonNegativeNumber(np?.health?.amountToCoverCriticalIllness);
-      const savingsForCriticalIllness = toNonNegativeNumber(np?.health?.savingsForCriticalIllness);
-      if (amountToCoverCriticalIllness === null || savingsForCriticalIllness === null) return false;
-      if (savingsForCriticalIllness > amountToCoverCriticalIllness) return false;
-    }
-
-    if (priority === "Investment") {
-      const savingsPlan = String(np?.investment?.savingsPlan || "").trim();
-      const targetSavingsAmount = toNonNegativeNumber(np?.investment?.targetSavingsAmount);
-      const targetYear = Number(np?.investment?.targetUtilizationYear);
-      const savingsForInvestment = toNonNegativeNumber(np?.investment?.savingsForInvestment);
-      const { score, category } = scoreRiskProfile(np?.investment?.riskProfiler || {});
-      const currentYear = new Date().getFullYear();
-      if (!["Home", "Vehicle", "Holiday", "Early Retirement", "Other"].includes(savingsPlan)) return false;
-      if (savingsPlan === "Other" && !String(np?.investment?.savingsPlanOther || "").trim()) return false;
-      if (targetSavingsAmount === null || !Number.isFinite(targetYear) || savingsForInvestment === null) return false;
-      if (targetYear < currentYear + 2 || targetYear > currentYear + 20) return false;
-      if (savingsForInvestment > targetSavingsAmount) return false;
-      if (score === null || !category) return false;
-
-      const allocations = np?.investment?.fundChoice?.allocations && typeof np.investment.fundChoice.allocations === "object"
-        ? np.investment.fundChoice.allocations
-        : {};
-      const allowedRatings = SUITABLE_RISK_RATINGS_BY_CATEGORY[category] || [];
-      const selectedFunds = INVESTMENT_FUNDS
-        .map((fund) => ({ ...fund, allocationPercent: toNonNegativeNumber(allocations[fund.key]) ?? 0 }))
-        .filter((fund) => fund.allocationPercent > 0);
-      if (selectedFunds.length === 0) return false;
-      const totalAllocation = selectedFunds.reduce((sum, item) => sum + item.allocationPercent, 0);
-      if (Math.abs(totalAllocation - 100) > 0.0001) return false;
-      const fundMatch = selectedFunds.some((item) => !allowedRatings.includes(item.riskRating)) ? "No" : "Yes";
-      if (fundMatch === "No" && !String(np?.investment?.fundChoice?.mismatchReason || "").trim()) return false;
-    }
-    return true;
-  }, [needsAssessmentForm, resolveApproxIncome, scoreRiskProfile, toNonNegativeNumber, INVESTMENT_FUNDS, SUITABLE_RISK_RATINGS_BY_CATEGORY, availableProductsByPriority]);
-
-  const needsUiActivityKey =
-    isNeedsAssessmentEditableNow && isViewingCurrentStage
-      ? needsAssessmentForm.attendanceChoice !== "YES" || !String(needsAssessmentForm.attendanceProofImageDataUrl || "").trim()
-        ? "Record Prospect Attendance"
-        : !isNeedsAnalysisReady
-        ? "Perform Needs Analysis"
-        : needsFollowUpDecisionSaved && String(savedNeedsFollowUpRequired || "").trim().toUpperCase() === "NO"
-        ? "Schedule Proposal Presentation"
-        : "Perform Needs Analysis"
-      : needsActivityKeyRaw;
-
   const previousContactingCurrentActivityRef = useRef("");
   const previousNeedsCurrentActivityRef = useRef("");
   const previousProposalCurrentActivityRef = useRef("");
@@ -2602,6 +2485,13 @@ function AgentLeadEngagement() {
       previousNeedsCurrentActivityRef
     );
   }, [NEEDS_ASSESSMENT_STEPS_UI, needsActivityKeyRaw, syncViewedStepWithCurrent]);
+
+  useEffect(() => {
+    const isNeedsStageCurrent = String(engagement?.currentStage || "").trim() === "Needs Assessment";
+    if (!showNeedsAssessmentPanel || isHistoryView) return;
+    if (!isViewingCurrentStage && !isNeedsStageCurrent) return;
+    setNeedsAssessmentViewedActivityKey(needsActivityKeyRaw);
+  }, [showNeedsAssessmentPanel, isViewingCurrentStage, isHistoryView, needsActivityKeyRaw, engagement?.currentStage]);
 
   useEffect(() => {
     syncViewedStepWithCurrent(
@@ -3127,7 +3017,7 @@ function AgentLeadEngagement() {
         ? currentActivityLabel
         : previousContactingActivity
       : showNeedsAssessmentPanel
-      ? needsUiActivityKey
+      ? needsActivityKeyRaw
       : showProposalPanel
       ? proposalUiActivityKey
       : showApplicationPanel
@@ -5307,15 +5197,14 @@ function AgentLeadEngagement() {
                       <strong className="le-summaryValue">{formatDateTime(lead.createdAt)}</strong>
                     </div>
 
-                    <div className="le-summaryItem le-span2 le-descriptionCycleRow">
-                      <div>
-                        <span className="le-summaryLabel">Description</span>
-                        <strong className="le-summaryValue">{lead.description || "—"}</strong>
-                      </div>
-                      <div className="le-cycleInline">
-                        <span className="le-summaryLabel">Engagement Cycle</span>
-                        <strong className="le-summaryValue">{currentAttemptCycle}</strong>
-                      </div>
+                    <div className="le-summaryItem">
+                      <span className="le-summaryLabel">Description</span>
+                      <strong className="le-summaryValue">{lead.description || "—"}</strong>
+                    </div>
+
+                    <div className="le-summaryItem">
+                      <span className="le-summaryLabel">Engagement Cycle</span>
+                      <strong className="le-summaryValue">{currentAttemptCycle}</strong>
                     </div>
                   </div>
                 </section>
