@@ -884,10 +884,7 @@ function AgentLeadEngagement() {
         const rawDraft = sessionStorage.getItem(`lead-engagement-needs-draft:${leadId}`);
         if (rawDraft) {
           const parsedDraft = JSON.parse(rawDraft);
-          const draftActivity = String(parsedDraft?.currentActivityKey || "").trim();
-          const canApplyDraft = parsedDraft?.needsAssessmentForm && (
-            draftActivity === String(currentNAActivity || "").trim() || !hasSavedNeedsAnalysisDetails
-          );
+          const canApplyDraft = Boolean(parsedDraft?.needsAssessmentForm);
           if (canApplyDraft) {
             mergedNeedsForm = {
               ...serverNeedsForm,
@@ -2568,16 +2565,6 @@ function AgentLeadEngagement() {
     return true;
   }, [needsAssessmentForm, resolveApproxIncome, scoreRiskProfile, toNonNegativeNumber, INVESTMENT_FUNDS, SUITABLE_RISK_RATINGS_BY_CATEGORY, availableProductsByPriority]);
 
-  const needsUiActivityKey =
-    isNeedsAssessmentEditableNow && isViewingCurrentStage
-      ? needsAssessmentForm.attendanceChoice !== "YES" || !String(needsAssessmentForm.attendanceProofImageDataUrl || "").trim()
-        ? "Record Prospect Attendance"
-        : !isNeedsAnalysisReady
-        ? "Perform Needs Analysis"
-        : needsFollowUpDecisionSaved && String(savedNeedsFollowUpRequired || "").trim().toUpperCase() === "NO"
-        ? "Schedule Proposal Presentation"
-        : "Perform Needs Analysis"
-      : needsActivityKeyRaw;
 
   const previousContactingCurrentActivityRef = useRef("");
   const previousNeedsCurrentActivityRef = useRef("");
@@ -2602,6 +2589,11 @@ function AgentLeadEngagement() {
       previousNeedsCurrentActivityRef
     );
   }, [NEEDS_ASSESSMENT_STEPS_UI, needsActivityKeyRaw, syncViewedStepWithCurrent]);
+
+  useEffect(() => {
+    if (!showNeedsAssessmentPanel || !isViewingCurrentStage || isHistoryView) return;
+    setNeedsAssessmentViewedActivityKey(needsActivityKeyRaw);
+  }, [showNeedsAssessmentPanel, isViewingCurrentStage, isHistoryView, needsActivityKeyRaw]);
 
   useEffect(() => {
     syncViewedStepWithCurrent(
@@ -3127,7 +3119,7 @@ function AgentLeadEngagement() {
         ? currentActivityLabel
         : previousContactingActivity
       : showNeedsAssessmentPanel
-      ? needsUiActivityKey
+      ? needsActivityKeyRaw
       : showProposalPanel
       ? proposalUiActivityKey
       : showApplicationPanel
@@ -5307,15 +5299,14 @@ function AgentLeadEngagement() {
                       <strong className="le-summaryValue">{formatDateTime(lead.createdAt)}</strong>
                     </div>
 
-                    <div className="le-summaryItem le-span2 le-descriptionCycleRow">
-                      <div>
-                        <span className="le-summaryLabel">Description</span>
-                        <strong className="le-summaryValue">{lead.description || "—"}</strong>
-                      </div>
-                      <div className="le-cycleInline">
-                        <span className="le-summaryLabel">Engagement Cycle</span>
-                        <strong className="le-summaryValue">{currentAttemptCycle}</strong>
-                      </div>
+                    <div className="le-summaryItem">
+                      <span className="le-summaryLabel">Description</span>
+                      <strong className="le-summaryValue">{lead.description || "—"}</strong>
+                    </div>
+
+                    <div className="le-summaryItem">
+                      <span className="le-summaryLabel">Engagement Cycle</span>
+                      <strong className="le-summaryValue">{currentAttemptCycle}</strong>
                     </div>
                   </div>
                 </section>
