@@ -126,10 +126,11 @@ function AgentLeadEngagement() {
   const proposalAttendanceProofInputRef = useRef(null);
 
   const [needsAssessmentLoading, setNeedsAssessmentLoading] = useState(false);
+  const needsDraftReadyRef = useRef(false);
   const [needsAssessmentSaving, setNeedsAssessmentSaving] = useState(false);
-  const [recommendationRefreshToken, setRecommendationRefreshToken] = useState(0);
   const [needsAssessmentError, setNeedsAssessmentError] = useState("");
   const [needsAssessmentFieldErrors, setNeedsAssessmentFieldErrors] = useState({});
+  const [needsSaveAttempted, setNeedsSaveAttempted] = useState(false);
   const [, setNeedsAssessmentSavedAt] = useState("");
   const [needsAnalysisDetailsSaved, setNeedsAnalysisDetailsSaved] = useState(false);
   const [needsAnalysisEditMode, setNeedsAnalysisEditMode] = useState(true);
@@ -193,6 +194,8 @@ function AgentLeadEngagement() {
   const [proposalAttendanceSaving, setProposalAttendanceSaving] = useState(false);
   const [proposalAttendanceError, setProposalAttendanceError] = useState("");
   const [proposalAttendanceProofEditMode, setProposalAttendanceProofEditMode] = useState(false);
+  const [proposalAttendanceNoRescheduleConsumedAt, setProposalAttendanceNoRescheduleConsumedAt] = useState(0);
+  const [proposalAttendanceLastNoAt, setProposalAttendanceLastNoAt] = useState(0);
   const [proposalPresentationForm, setProposalPresentationForm] = useState({
     proposalAccepted: "",
     initialQuotationNotes: "",
@@ -203,7 +206,7 @@ function AgentLeadEngagement() {
   const [proposalPresentationNotesSaved, setProposalPresentationNotesSaved] = useState(false);
   const [proposalPresentationNotesEditMode, setProposalPresentationNotesEditMode] = useState(false);
   const [proposalPresentationDecisionEditMode, setProposalPresentationDecisionEditMode] = useState(false);
-  const [proposalPresentationFurtherPromptSaved, setProposalPresentationFurtherPromptSaved] = useState(false);
+  const [proposalPresentationDecisionPending, setProposalPresentationDecisionPending] = useState(false);
   const [proposalPresentationEditSnapshot, setProposalPresentationEditSnapshot] = useState({
     proposalAccepted: "",
     initialQuotationNotes: "",
@@ -553,6 +556,10 @@ function AgentLeadEngagement() {
         attendanceProofFileName: String(attendance?.attendanceProofFileName || ""),
         attendedAt: attendance?.attendedAt || "",
       });
+      if (String(attendance?.attendanceChoice || "").trim().toUpperCase() === "NO" && attendance?.attendedAt) {
+        const noAt = new Date(attendance.attendedAt).getTime();
+        if (Number.isFinite(noAt) && noAt > 0) setProposalAttendanceLastNoAt(noAt);
+      }
       setProposalAttendanceProofEditMode(false);
       setProposalPresentationForm({
         proposalAccepted: String(presentation?.proposalAccepted || ""),
@@ -562,7 +569,6 @@ function AgentLeadEngagement() {
       setProposalPresentationNotesSaved(Boolean(String(presentation?.initialQuotationNotes || "").trim()));
       setProposalPresentationNotesEditMode(false);
       setProposalPresentationDecisionEditMode(false);
-      setProposalPresentationFurtherPromptSaved(false);
       setProposalPresentationEditSnapshot({
         proposalAccepted: String(presentation?.proposalAccepted || ""),
         initialQuotationNotes: String(presentation?.initialQuotationNotes || ""),
@@ -716,6 +722,7 @@ function AgentLeadEngagement() {
   const fetchNeedsAssessment = useCallback(async () => {
     if (!user?.id) return;
     try {
+      needsDraftReadyRef.current = false;
       setNeedsAssessmentLoading(true);
       setNeedsAssessmentError("");
       setAddNewNeedsMeetingMode(false);
@@ -767,25 +774,26 @@ function AgentLeadEngagement() {
         if (Number.isFinite(bStart) && Number.isFinite(aStart) && bStart !== aStart) return bStart - aStart;
         return new Date(b?.createdAt || 0).getTime() - new Date(a?.createdAt || 0).getTime();
       });
+      const latestProposalMeeting = sortedProposalMeetings[0] || proposalMeeting || null;
       setProposalMeetingHistory(sortedProposalMeetings);
-      setProposalMeetingSaved(sortedProposalMeetings[0] || proposalMeeting);
+      setProposalMeetingSaved(latestProposalMeeting);
       setProposalMeetingRescheduleOriginal(null);
       setProposalMeetingScheduleMode("");
-      if (!proposalMeeting) {
+      if (!latestProposalMeeting) {
         setProposalMeetingNeedsPrefillKey("");
       }
       setProposalMeetingForm({
-        meetingDate: proposalMeeting?.startAt ? toDateInputValue(proposalMeeting.startAt) : "",
-        meetingStartTime: proposalMeeting?.startAt
-          ? `${String(new Date(proposalMeeting.startAt).getHours()).padStart(2, "0")}:${String(new Date(proposalMeeting.startAt).getMinutes()).padStart(2, "0")}`
+        meetingDate: latestProposalMeeting?.startAt ? toDateInputValue(latestProposalMeeting.startAt) : "",
+        meetingStartTime: latestProposalMeeting?.startAt
+          ? `${String(new Date(latestProposalMeeting.startAt).getHours()).padStart(2, "0")}:${String(new Date(latestProposalMeeting.startAt).getMinutes()).padStart(2, "0")}`
           : "",
-        meetingDurationMin: proposalMeeting?.durationMin ?? 120,
-        meetingMode: String(proposalMeeting?.mode || ""),
-        meetingPlatform: String(proposalMeeting?.platform || ""),
-        meetingPlatformOther: String(proposalMeeting?.platformOther || ""),
-        meetingLink: String(proposalMeeting?.link || ""),
-        meetingInviteSent: Boolean(proposalMeeting?.inviteSent),
-        meetingPlace: String(proposalMeeting?.place || ""),
+        meetingDurationMin: latestProposalMeeting?.durationMin ?? 120,
+        meetingMode: String(latestProposalMeeting?.mode || ""),
+        meetingPlatform: String(latestProposalMeeting?.platform || ""),
+        meetingPlatformOther: String(latestProposalMeeting?.platformOther || ""),
+        meetingLink: String(latestProposalMeeting?.link || ""),
+        meetingInviteSent: Boolean(latestProposalMeeting?.inviteSent),
+        meetingPlace: String(latestProposalMeeting?.place || ""),
       });
 
       const serverNeedsForm = {
@@ -884,18 +892,73 @@ function AgentLeadEngagement() {
         const rawDraft = sessionStorage.getItem(`lead-engagement-needs-draft:${leadId}`);
         if (rawDraft) {
           const parsedDraft = JSON.parse(rawDraft);
-          const draftActivity = String(parsedDraft?.currentActivityKey || "").trim();
-          const canApplyDraft = parsedDraft?.needsAssessmentForm && (
-            draftActivity === String(currentNAActivity || "").trim() || !hasSavedNeedsAnalysisDetails
-          );
+          const draftForm = parsedDraft?.needsAssessmentForm || null;
+          const canApplyDraft = Boolean(draftForm);
           if (canApplyDraft) {
+            const draftBasicInformation = draftForm.basicInformation || {};
+            const draftNeedsPriorities = draftForm.needsPriorities || {};
+            const draftProtection = draftNeedsPriorities.protection || {};
+            const draftHealth = draftNeedsPriorities.health || {};
+            const draftInvestment = draftNeedsPriorities.investment || {};
+            const draftRiskProfiler = draftInvestment.riskProfiler || {};
+            const draftFundChoice = draftInvestment.fundChoice || {};
+            const draftProductSelection = draftNeedsPriorities.productSelection || {};
             mergedNeedsForm = {
               ...serverNeedsForm,
-              ...parsedDraft.needsAssessmentForm,
+              ...draftForm,
+              attendanceChoice: serverNeedsForm.attendanceChoice,
+              attendanceProofImageDataUrl: serverNeedsForm.attendanceProofImageDataUrl,
+              attendanceProofFileName: serverNeedsForm.attendanceProofFileName,
+              basicInformation: {
+                ...serverNeedsForm.basicInformation,
+                ...draftBasicInformation,
+                fullName: String(serverNeedsForm.basicInformation?.fullName || "").trim(),
+                sex: String(draftBasicInformation.sex || "").trim() || String(serverNeedsForm.basicInformation?.sex || "").trim(),
+                civilStatus: String(draftBasicInformation.civilStatus || "").trim() || String(serverNeedsForm.basicInformation?.civilStatus || "").trim(),
+                birthday: String(draftBasicInformation.birthday || "").trim() || String(serverNeedsForm.basicInformation?.birthday || "").trim(),
+                age:
+                  String(draftBasicInformation.birthday || "").trim()
+                    ? (draftBasicInformation.age ?? serverNeedsForm.basicInformation?.age ?? "")
+                    : (serverNeedsForm.basicInformation?.age ?? draftBasicInformation.age ?? ""),
+              },
+              dependents: Array.isArray(draftForm.dependents)
+                ? draftForm.dependents
+                : serverNeedsForm.dependents,
               needsPriorities: {
                 ...serverNeedsForm.needsPriorities,
-                ...(parsedDraft.needsAssessmentForm.needsPriorities || {}),
+                ...draftNeedsPriorities,
+                productSelection: {
+                  ...(serverNeedsForm.needsPriorities?.productSelection || {}),
+                  ...draftProductSelection,
+                },
+                protection: {
+                  ...(serverNeedsForm.needsPriorities?.protection || {}),
+                  ...draftProtection,
+                },
+                health: {
+                  ...(serverNeedsForm.needsPriorities?.health || {}),
+                  ...draftHealth,
+                },
+                investment: {
+                  ...(serverNeedsForm.needsPriorities?.investment || {}),
+                  ...draftInvestment,
+                  riskProfiler: {
+                    ...(serverNeedsForm.needsPriorities?.investment?.riskProfiler || {}),
+                    ...draftRiskProfiler,
+                  },
+                  fundChoice: {
+                    ...(serverNeedsForm.needsPriorities?.investment?.fundChoice || {}),
+                    ...draftFundChoice,
+                    allocations: {
+                      ...((serverNeedsForm.needsPriorities?.investment?.fundChoice || {}).allocations || {}),
+                      ...(draftFundChoice.allocations || {}),
+                    },
+                  },
+                },
               },
+              existingPolicies: Array.isArray(draftForm.existingPolicies)
+                ? draftForm.existingPolicies
+                : serverNeedsForm.existingPolicies,
             };
           }
         }
@@ -906,6 +969,7 @@ function AgentLeadEngagement() {
       setNeedsAssessmentError(err?.message || "Failed to load needs assessment.");
     } finally {
       setNeedsAssessmentLoading(false);
+      needsDraftReadyRef.current = true;
     }
   }, [API_BASE, leadId, prospectId, user?.id]);
 
@@ -1021,15 +1085,38 @@ function AgentLeadEngagement() {
   };
 
   const onSaveNeedsAssessment = async () => {
+    setNeedsSaveAttempted(true);
     setNeedsAssessmentSavedAt("");
     setNeedsAssessmentError("");
-    setNeedsAssessmentFieldErrors({});
 
     if (!isNeedsAssessmentCurrentViewEditable) return;
 
     const aggregateFieldErrors = {};
     const basicInfo = needsAssessmentForm.basicInformation || {};
     const npCheck = needsAssessmentForm.needsPriorities || {};
+
+    const selectedProductIdCheck = String(npCheck.productSelection?.selectedProductId || "").trim();
+    const selectedProductCheck = (availableProductsByPriority || []).find((prod) => String(prod?._id || "") === selectedProductIdCheck);
+
+    if (needsSaveAttempted) {
+      if (!["Male", "Female"].includes(String(basicInfo.sex || "").trim())) aggregateFieldErrors.sex = "Sex is required.";
+      if (!String(basicInfo.civilStatus || "").trim()) aggregateFieldErrors.civilStatus = "Civil status is required.";
+      if (!String(basicInfo.birthday || "").trim()) aggregateFieldErrors.birthday = "Birthday is required.";
+      if (!["Employed", "Self-Employed", "Not Employed"].includes(String(basicInfo.occupationCategory || "").trim())) aggregateFieldErrors.occupationCategory = "Occupation category is required.";
+      if (["Employed", "Self-Employed"].includes(String(basicInfo.occupationCategory || "").trim()) && !String(basicInfo.occupation || "").trim()) aggregateFieldErrors.occupation = "Occupation is required for employed/self-employed prospects.";
+      if (!String(basicInfo.addressLine || "").trim()) aggregateFieldErrors.addressLine = "Street address is required.";
+      if (!String(basicInfo.barangay || "").trim()) aggregateFieldErrors.barangay = "Barangay is required.";
+      if (!String(basicInfo.city || "").trim()) aggregateFieldErrors.city = "City is required.";
+      if (!String(basicInfo.region || "").trim()) aggregateFieldErrors.region = "Region is required.";
+      if (!String(basicInfo.zipCode || "").trim()) aggregateFieldErrors.zipCode = "Zip code is required.";
+      if (!String(npCheck.currentPriority || "").trim()) aggregateFieldErrors.currentPriority = "Current priority is required.";
+      if (!String(npCheck.monthlyIncomeBand || "").trim()) aggregateFieldErrors.monthlyIncomeBand = "Approximate monthly income bracket is required.";
+      if (!String(npCheck.minPremium ?? "").trim()) aggregateFieldErrors.minPremium = "Minimum willing monthly premium is required.";
+      if (!String(npCheck.maxPremium ?? "").trim()) aggregateFieldErrors.maxPremium = "Maximum willing monthly premium is required.";
+      if (!selectedProductIdCheck || !selectedProductCheck) aggregateFieldErrors.selectedProductId = "Product Selection: please select a product under the chosen priority.";
+      if (!String(npCheck.productSelection?.requestedFrequency || "").trim()) aggregateFieldErrors.requestedFrequency = "Product Selection: requested frequency is invalid.";
+      if (!String(npCheck.productSelection?.requestedPremiumPayment ?? "").trim()) aggregateFieldErrors.requestedPremiumPayment = "Product Selection: requested premium payment is required.";
+    }
     if (needsAssessmentForm.attendanceChoice !== "YES") aggregateFieldErrors.attendanceChoice = "Prospect attendance must be marked YES before saving.";
     if (!String(needsAssessmentForm.attendanceProofImageDataUrl || "").trim()) aggregateFieldErrors.attendanceProof = "Please upload a proof of attendance image before proceeding.";
     if (!["Male", "Female"].includes(String(basicInfo.sex || "").trim())) aggregateFieldErrors.sex = "Sex is required.";
@@ -1048,12 +1135,83 @@ function AgentLeadEngagement() {
     if (!String(npCheck.monthlyIncomeBand || "").trim()) aggregateFieldErrors.monthlyIncomeBand = "Approximate monthly income bracket is required.";
     if (!String(npCheck.minPremium ?? "").trim()) aggregateFieldErrors.minPremium = "Minimum willing monthly premium is required.";
     if (!String(npCheck.maxPremium ?? "").trim()) aggregateFieldErrors.maxPremium = "Maximum willing monthly premium is required.";
-    if (!String(npCheck.productSelection?.selectedProductId || "").trim()) aggregateFieldErrors.selectedProductId = "Product Selection: please select a product under the chosen priority.";
+    if (!selectedProductIdCheck || !selectedProductCheck) aggregateFieldErrors.selectedProductId = "Product Selection: please select a product under the chosen priority.";
     if (!String(npCheck.productSelection?.requestedFrequency || "").trim()) aggregateFieldErrors.requestedFrequency = "Product Selection: requested frequency is invalid.";
     if (!String(npCheck.productSelection?.requestedPremiumPayment ?? "").trim()) aggregateFieldErrors.requestedPremiumPayment = "Product Selection: requested premium payment is required.";
+    if (String(npCheck.currentPriority || "").trim() === "Investment") {
+      const inv = npCheck.investment || {};
+      const rp = inv.riskProfiler || {};
+      if (!String(rp?.investmentHorizon || "").trim()) aggregateFieldErrors.investmentHorizon = "Investment horizon is required.";
+      if (!String(rp?.investmentGoal || "").trim()) aggregateFieldErrors.investmentGoal = "Investment goal is required.";
+      if (!String(rp?.marketExperience || "").trim()) aggregateFieldErrors.marketExperience = "Market experience is required.";
+      if (!String(rp?.volatilityReaction || "").trim()) aggregateFieldErrors.volatilityReaction = "Volatility reaction is required.";
+      if (!String(rp?.capitalLossAffordability || "").trim()) aggregateFieldErrors.capitalLossAffordability = "Capital loss affordability is required.";
+      if (!String(rp?.riskReturnTradeoff || "").trim()) aggregateFieldErrors.riskReturnTradeoff = "Risk and return trade-off is required.";
+
+      const allocations = inv?.fundChoice?.allocations && typeof inv.fundChoice.allocations === "object"
+        ? inv.fundChoice.allocations
+        : {};
+      const scored = scoreRiskProfile(rp || {});
+      const allowedRatings = SUITABLE_RISK_RATINGS_BY_CATEGORY[scored.category] || [];
+      const selectedFunds = INVESTMENT_FUNDS
+        .map((fund) => ({
+          ...fund,
+          allocationPercent: toNonNegativeNumber(allocations[fund.key]) ?? 0,
+          isSuitable: allowedRatings.includes(fund.riskRating),
+        }))
+        .filter((item) => item.allocationPercent > 0);
+      const totalAllocation = selectedFunds.reduce((sum, item) => sum + item.allocationPercent, 0);
+      const fundMatch = selectedFunds.some((item) => !item.isSuitable) ? "No" : "Yes";
+      const mismatchReason = String(inv?.fundChoice?.mismatchReason || "").trim();
+
+      if (selectedFunds.length === 0) aggregateFieldErrors.fundChoice = "Fund Choice: select at least one fund.";
+      else if (Math.abs(totalAllocation - 100) > 0.0001) aggregateFieldErrors.fundChoiceTotalAllocation = "Fund Choice: allocation in percentage must equal 100%.";
+      if (fundMatch === "No" && !mismatchReason) aggregateFieldErrors.mismatchReason = "Reason for mismatch is required.";
+    }
     if (Object.keys(aggregateFieldErrors).length) {
       setNeedsAssessmentFieldErrors(aggregateFieldErrors);
       setNeedsAssessmentError("Please complete all required fields.");
+      setNeedsSectionOpen((prev) => ({
+        ...prev,
+        basicInformation:
+          prev.basicInformation ||
+          Boolean(
+            aggregateFieldErrors.sex ||
+            aggregateFieldErrors.civilStatus ||
+            aggregateFieldErrors.birthday ||
+            aggregateFieldErrors.occupationCategory ||
+            aggregateFieldErrors.occupation ||
+            aggregateFieldErrors.addressLine ||
+            aggregateFieldErrors.barangay ||
+            aggregateFieldErrors.city ||
+            aggregateFieldErrors.otherCity ||
+            aggregateFieldErrors.region ||
+            aggregateFieldErrors.zipCode
+          ),
+        needsPriorities:
+          prev.needsPriorities ||
+          Boolean(
+            aggregateFieldErrors.currentPriority ||
+            aggregateFieldErrors.monthlyIncomeBand ||
+            aggregateFieldErrors.minPremium ||
+            aggregateFieldErrors.maxPremium ||
+            aggregateFieldErrors.investmentSavingsPlan ||
+            aggregateFieldErrors.investmentSavingsPlanOther ||
+            aggregateFieldErrors.investmentTargetAmount ||
+            aggregateFieldErrors.investmentTargetYear ||
+            aggregateFieldErrors.investmentSavings
+          ),
+        productSelection:
+          prev.productSelection ||
+          Boolean(
+            aggregateFieldErrors.selectedProductId ||
+            aggregateFieldErrors.requestedFrequency ||
+            aggregateFieldErrors.requestedPremiumPayment ||
+            aggregateFieldErrors.fundChoice ||
+            aggregateFieldErrors.fundChoiceTotalAllocation ||
+            aggregateFieldErrors.mismatchReason
+          ),
+      }));
       return;
     }
 
@@ -1431,8 +1589,35 @@ function AgentLeadEngagement() {
     return false;
   }, [needsAssessmentForm]);
 
+  const isNeedsPrioritiesValidForRecommendations = useMemo(() => {
+    const np = needsAssessmentForm?.needsPriorities || {};
+    if (!isNeedsPrioritiesCompleteForRecommendations) return false;
+    const minPremium = Number(String(np?.minPremium ?? "").trim());
+    const maxPremium = Number(String(np?.maxPremium ?? "").trim());
+    if (!Number.isFinite(minPremium) || !Number.isFinite(maxPremium) || minPremium < 0 || maxPremium < minPremium) return false;
+
+    const priority = String(np.currentPriority || "").trim();
+    if (priority === "Protection") {
+      const monthlySpend = Number(np?.protection?.monthlySpend);
+      const savings = Number(np?.protection?.savingsForProtection);
+      return Number.isFinite(monthlySpend) && Number.isFinite(savings) && monthlySpend >= 0 && savings >= 0;
+    }
+    if (priority === "Health") {
+      const amount = Number(np?.health?.amountToCoverCriticalIllness);
+      const savings = Number(np?.health?.savingsForCriticalIllness);
+      return Number.isFinite(amount) && Number.isFinite(savings) && amount >= 0 && savings >= 0 && savings <= amount;
+    }
+    if (priority === "Investment") {
+      const amount = Number(np?.investment?.targetSavingsAmount);
+      const savings = Number(np?.investment?.savingsForInvestment);
+      const year = Number(np?.investment?.targetUtilizationYear);
+      const currentYear = new Date().getFullYear();
+      return Number.isFinite(amount) && Number.isFinite(savings) && Number.isFinite(year) && amount >= 0 && savings >= 0 && savings <= amount && year >= currentYear + 2 && year <= currentYear + 20;
+    }
+    return false;
+  }, [needsAssessmentForm, isNeedsPrioritiesCompleteForRecommendations]);
+
   const productRecommendationView = useMemo(() => {
-    const refreshTick = recommendationRefreshToken;
     const age = Number(needsAssessmentForm?.basicInformation?.age);
     const hasAge = Number.isFinite(age);
     const maxMonthly = Number(needsAssessmentForm?.needsPriorities?.maxPremium);
@@ -1470,13 +1655,19 @@ function AgentLeadEngagement() {
 
       const minAnnual = product?.minimumAnnualPremium || {};
       const minAnnualTier = normalizeTierMatch(minAnnual?.tiers || []);
-      const annualThreshold = Number.isFinite(Number(minAnnual?.amount)) ? Number(minAnnual.amount) : (minAnnualTier && Number.isFinite(Number(minAnnualTier?.amount)) ? Number(minAnnualTier.amount) : null);
+      const hasAnnualTiers = Array.isArray(minAnnual?.tiers) && minAnnual.tiers.length > 0;
+      const annualThreshold = hasAnnualTiers
+        ? (minAnnualTier && Number.isFinite(Number(minAnnualTier?.amount)) ? Number(minAnnualTier.amount) : null)
+        : (Number.isFinite(Number(minAnnual?.amount)) ? Number(minAnnual.amount) : null);
       const annualHasStandard = Boolean(minAnnual?.hasStandard) && Number.isFinite(annualThreshold);
       const annualPass = !annualHasStandard || (Number.isFinite(maxAnnual) && maxAnnual >= annualThreshold);
 
       const minSum = product?.minimumSumAssured || {};
       const minSumTier = normalizeTierMatch(minSum?.tiers || []);
-      const sumThreshold = Number.isFinite(Number(minSum?.amount)) ? Number(minSum.amount) : (minSumTier && Number.isFinite(Number(minSumTier?.amount)) ? Number(minSumTier.amount) : null);
+      const hasSumTiers = Array.isArray(minSum?.tiers) && minSum.tiers.length > 0;
+      const sumThreshold = hasSumTiers
+        ? (minSumTier && Number.isFinite(Number(minSumTier?.amount)) ? Number(minSumTier.amount) : null)
+        : (Number.isFinite(Number(minSum?.amount)) ? Number(minSum.amount) : null);
       const sumHasStandard = Boolean(minSum?.hasStandard) && Number.isFinite(sumThreshold);
       const sumPass = !sumHasStandard || (Number.isFinite(gapValue) && gapValue >= sumThreshold);
 
@@ -1486,15 +1677,22 @@ function AgentLeadEngagement() {
       if (sumHasStandard && !sumPass) reasons.push('Computed gap is below minimum sum assured');
 
       const recommended = agePass && annualPass && sumPass;
-      return { product, recommended, reasons, annualThreshold, sumThreshold, minAnnualTier, minSumTier };
+      return { product, recommended, reasons, annualThreshold, sumThreshold, minAnnualTier, minSumTier, minAnnual, minSum };
     });
 
-    void refreshTick;
     return {
       recommended: rows.filter((r) => r.recommended),
       alternatives: rows.filter((r) => !r.recommended),
     };
-  }, [availableProductsByPriority, needsAssessmentForm, recommendationRefreshToken]);
+  }, [availableProductsByPriority, needsAssessmentForm]);
+
+  const formatAmount = (value) => Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 });
+  const renderStandardLabel = (standard, fallbackLabel = "No Standard") => {
+    if (!standard || standard.hasStandard === false) return fallbackLabel;
+    if (Number.isFinite(Number(standard?.amount)) && Number(standard.amount) > 0) return `Php ${formatAmount(standard.amount)}`;
+    return String(standard?.label || fallbackLabel);
+  };
+  const renderTierAmount = (value) => (Number.isFinite(Number(value)) && Number(value) > 0 ? `Php ${formatAmount(Number(value))}` : "No Standard");
 
   const RESPONSES = useMemo(() => ["Responded", "No Response"], []);
   const INCOME_BAND_OPTIONS = useMemo(
@@ -2158,6 +2356,14 @@ function AgentLeadEngagement() {
 
   const isNeedsAssessmentEditableNow =
     showNeedsAssessmentPanel &&
+    (
+      (isViewingCurrentStage && stage === "Needs Assessment") ||
+      (!isHistoryView && stage === "Proposal" && isViewingPastStage)
+    ) &&
+    !isLeadClosed &&
+    !isLeadDropped;
+  const isNeedsAssessmentCurrentStageEditable =
+    showNeedsAssessmentPanel &&
     isViewingCurrentStage &&
     stage === "Needs Assessment" &&
     !isLeadClosed &&
@@ -2316,9 +2522,7 @@ function AgentLeadEngagement() {
 
   const isProposalPresentationEditable =
     proposalUiActivityKey === "Present Proposal" &&
-    isProposalEditableNow &&
-    String(proposalPresentationForm.proposalAccepted || "").trim().toUpperCase() !== "NO" &&
-    !proposalPresentationForm.presentedAt;
+    isProposalEditableNow;
   const canEditSavedProposalPresentation =
     ["Present Proposal", "Schedule Application Submission"].includes(proposalUiActivityKey) &&
     isProposalEditableNow;
@@ -2462,123 +2666,6 @@ function AgentLeadEngagement() {
     if (!shouldRefreshMeetingAvailability) return;
     fetchMeetingAvailability();
   }, [shouldRefreshMeetingAvailability, fetchMeetingAvailability]);
-  const isNeedsAnalysisReady = useMemo(() => {
-    if (needsAssessmentForm.attendanceChoice !== "YES") return false;
-
-    const basic = needsAssessmentForm.basicInformation || {};
-    if (!["Male", "Female"].includes(String(basic.sex || "").trim())) return false;
-    if (!String(basic.civilStatus || "").trim()) return false;
-    if (!["Employed", "Self-Employed", "Not Employed"].includes(String(basic.occupationCategory || ""))) return false;
-    if (["Employed", "Self-Employed"].includes(String(basic.occupationCategory || "")) && !String(basic.occupation || "").trim()) return false;
-    if (!String(basic.addressLine || "").trim()) return false;
-    if (!String(basic.barangay || "").trim()) return false;
-    if (!String(basic.city || "").trim()) return false;
-    if (String(basic.city || "") === "Other" && !String(basic.otherCity || "").trim()) return false;
-    if (!String(basic.region || "").trim()) return false;
-    const zip = String(basic.zipCode || "").trim();
-    if (!zip || !/^\d{4}$/.test(zip)) return false;
-
-    const birthday = String(basic.birthday || "").trim();
-    const age = Number(basic.age || "");
-    if (!birthday) return false;
-    const computed = computeAgeFromBirthday(birthday);
-    if (computed === null || computed < 18 || computed > 70) return false;
-    if (!Number.isFinite(age) || age < 18 || age > 70) return false;
-
-    const depsReady = (needsAssessmentForm.dependents || []).every((d) => {
-      const depAge = Number(d?.age);
-      return (
-        String(d?.name || "").trim() &&
-        Number.isFinite(depAge) &&
-        depAge >= 0 &&
-        depAge <= 120 &&
-        ["Male", "Female"].includes(String(d?.gender || "")) &&
-        ["Child", "Parent", "Sibling"].includes(String(d?.relationship || ""))
-      );
-    });
-    if (!depsReady) return false;
-
-    const np = needsAssessmentForm.needsPriorities || {};
-    const priority = String(np.currentPriority || "").trim();
-    const band = String(np.monthlyIncomeBand || "").trim();
-    const approxIncome = resolveApproxIncome(band, np.monthlyIncomeAmount);
-    const minPremium = toNonNegativeNumber(np.minPremium);
-    const maxPremium = toNonNegativeNumber(np.maxPremium);
-
-    if (!["Protection", "Health", "Investment"].includes(priority)) return false;
-    if (!["BELOW_15000", "15000_29999", "30000_49999", "50000_79999", "80000_99999", "100000_249999", "250000_499999", "ABOVE_500000"].includes(band)) return false;
-    if (band === "BELOW_15000" && !(toNonNegativeNumber(np.monthlyIncomeAmount) !== null && Number(np.monthlyIncomeAmount) < 15000)) return false;
-    if (band === "ABOVE_500000" && !(toNonNegativeNumber(np.monthlyIncomeAmount) !== null && Number(np.monthlyIncomeAmount) > 500000)) return false;
-    if (approxIncome === null) return false;
-    if (minPremium === null || maxPremium === null) return false;
-    if (minPremium > approxIncome || maxPremium > approxIncome || maxPremium < minPremium) return false;
-
-    const attendanceProofImageDataUrl = String(needsAssessmentForm.attendanceProofImageDataUrl || "").trim();
-
-    const selectedProductId = String(np?.productSelection?.selectedProductId || "").trim();
-    const requestedFrequency = String(np?.productSelection?.requestedFrequency || "Monthly").trim() || "Monthly";
-    const requestedPremiumPayment = toNonNegativeNumber(np?.productSelection?.requestedPremiumPayment);
-    const selectedProduct = (availableProductsByPriority || []).find((prod) => String(prod?._id || "") === selectedProductId);
-    if (!selectedProductId || !selectedProduct) return false;
-    if (!["Monthly", "Quarterly", "Half-yearly", "Yearly"].includes(requestedFrequency)) return false;
-    if (requestedPremiumPayment === null) return false;
-    if (!/^data:image\/(?:jpeg|png);base64,/i.test(attendanceProofImageDataUrl)) return false;
-
-    if (priority === "Protection") {
-      const monthlySpend = toNonNegativeNumber(np?.protection?.monthlySpend);
-      const savingsForProtection = toNonNegativeNumber(np?.protection?.savingsForProtection);
-      if (monthlySpend === null || savingsForProtection === null) return false;
-      if (monthlySpend > approxIncome) return false;
-    }
-
-    if (priority === "Health") {
-      const amountToCoverCriticalIllness = toNonNegativeNumber(np?.health?.amountToCoverCriticalIllness);
-      const savingsForCriticalIllness = toNonNegativeNumber(np?.health?.savingsForCriticalIllness);
-      if (amountToCoverCriticalIllness === null || savingsForCriticalIllness === null) return false;
-      if (savingsForCriticalIllness > amountToCoverCriticalIllness) return false;
-    }
-
-    if (priority === "Investment") {
-      const savingsPlan = String(np?.investment?.savingsPlan || "").trim();
-      const targetSavingsAmount = toNonNegativeNumber(np?.investment?.targetSavingsAmount);
-      const targetYear = Number(np?.investment?.targetUtilizationYear);
-      const savingsForInvestment = toNonNegativeNumber(np?.investment?.savingsForInvestment);
-      const { score, category } = scoreRiskProfile(np?.investment?.riskProfiler || {});
-      const currentYear = new Date().getFullYear();
-      if (!["Home", "Vehicle", "Holiday", "Early Retirement", "Other"].includes(savingsPlan)) return false;
-      if (savingsPlan === "Other" && !String(np?.investment?.savingsPlanOther || "").trim()) return false;
-      if (targetSavingsAmount === null || !Number.isFinite(targetYear) || savingsForInvestment === null) return false;
-      if (targetYear < currentYear + 2 || targetYear > currentYear + 20) return false;
-      if (savingsForInvestment > targetSavingsAmount) return false;
-      if (score === null || !category) return false;
-
-      const allocations = np?.investment?.fundChoice?.allocations && typeof np.investment.fundChoice.allocations === "object"
-        ? np.investment.fundChoice.allocations
-        : {};
-      const allowedRatings = SUITABLE_RISK_RATINGS_BY_CATEGORY[category] || [];
-      const selectedFunds = INVESTMENT_FUNDS
-        .map((fund) => ({ ...fund, allocationPercent: toNonNegativeNumber(allocations[fund.key]) ?? 0 }))
-        .filter((fund) => fund.allocationPercent > 0);
-      if (selectedFunds.length === 0) return false;
-      const totalAllocation = selectedFunds.reduce((sum, item) => sum + item.allocationPercent, 0);
-      if (Math.abs(totalAllocation - 100) > 0.0001) return false;
-      const fundMatch = selectedFunds.some((item) => !allowedRatings.includes(item.riskRating)) ? "No" : "Yes";
-      if (fundMatch === "No" && !String(np?.investment?.fundChoice?.mismatchReason || "").trim()) return false;
-    }
-    return true;
-  }, [needsAssessmentForm, resolveApproxIncome, scoreRiskProfile, toNonNegativeNumber, INVESTMENT_FUNDS, SUITABLE_RISK_RATINGS_BY_CATEGORY, availableProductsByPriority]);
-
-  const needsUiActivityKey =
-    isNeedsAssessmentEditableNow && isViewingCurrentStage
-      ? needsAssessmentForm.attendanceChoice !== "YES" || !String(needsAssessmentForm.attendanceProofImageDataUrl || "").trim()
-        ? "Record Prospect Attendance"
-        : !isNeedsAnalysisReady
-        ? "Perform Needs Analysis"
-        : needsFollowUpDecisionSaved && String(savedNeedsFollowUpRequired || "").trim().toUpperCase() === "NO"
-        ? "Schedule Proposal Presentation"
-        : "Perform Needs Analysis"
-      : needsActivityKeyRaw;
-
   const previousContactingCurrentActivityRef = useRef("");
   const previousNeedsCurrentActivityRef = useRef("");
   const previousProposalCurrentActivityRef = useRef("");
@@ -2602,6 +2689,13 @@ function AgentLeadEngagement() {
       previousNeedsCurrentActivityRef
     );
   }, [NEEDS_ASSESSMENT_STEPS_UI, needsActivityKeyRaw, syncViewedStepWithCurrent]);
+
+  useEffect(() => {
+    const isNeedsStageCurrent = String(engagement?.currentStage || "").trim() === "Needs Assessment";
+    if (!showNeedsAssessmentPanel || isHistoryView) return;
+    if (!isViewingCurrentStage && !isNeedsStageCurrent) return;
+    setNeedsAssessmentViewedActivityKey(needsActivityKeyRaw);
+  }, [showNeedsAssessmentPanel, isViewingCurrentStage, isHistoryView, needsActivityKeyRaw, engagement?.currentStage]);
 
   useEffect(() => {
     syncViewedStepWithCurrent(
@@ -2705,6 +2799,25 @@ function AgentLeadEngagement() {
     String(engagement?.currentStage || "").trim() === "Proposal" &&
     String(proposalCurrentActivityKey || "").trim() === "Record Prospect Attendance" &&
     proposalAttendanceForm.attendanceChoice === "NO";
+  const canRescheduleFromLatestProposalAttendanceNo = useMemo(() => {
+    if (!isProposalAttendanceNoRescheduleMode) return false;
+    const attendanceNoAtMsRaw = proposalAttendanceForm?.attendedAt ? new Date(proposalAttendanceForm.attendedAt).getTime() : NaN;
+    const attendanceNoAtMs = Number.isFinite(attendanceNoAtMsRaw) && attendanceNoAtMsRaw > 0
+      ? attendanceNoAtMsRaw
+      : proposalAttendanceLastNoAt;
+    if (!Number.isFinite(attendanceNoAtMs) || attendanceNoAtMs <= 0) return false;
+    if (Number.isFinite(proposalAttendanceNoRescheduleConsumedAt) && proposalAttendanceNoRescheduleConsumedAt > 0 && attendanceNoAtMs <= proposalAttendanceNoRescheduleConsumedAt) {
+      return false;
+    }
+    const latestProposalMeetingSavedAtMs = new Date(
+      proposalMeetingSaved?.createdAt ||
+      proposalMeetingSaved?.updatedAt ||
+      proposalMeetingSaved?.startAt ||
+      0
+    ).getTime();
+    if (!Number.isFinite(latestProposalMeetingSavedAtMs) || latestProposalMeetingSavedAtMs <= 0) return false;
+    return latestProposalMeetingSavedAtMs <= attendanceNoAtMs;
+  }, [isProposalAttendanceNoRescheduleMode, proposalAttendanceNoRescheduleConsumedAt, proposalAttendanceForm?.attendedAt, proposalAttendanceLastNoAt, proposalMeetingSaved?.createdAt, proposalMeetingSaved?.updatedAt, proposalMeetingSaved?.startAt]);
   const latestProposalMeeting = useMemo(() => {
     if (proposalMeetingHistory.length) return proposalMeetingHistory[0];
     return proposalMeetingSaved || null;
@@ -2720,15 +2833,12 @@ function AgentLeadEngagement() {
     const decisionAtMs = new Date(proposalPresentationForm.presentedAt || 0).getTime();
     if (!Number.isFinite(decisionAtMs) || decisionAtMs <= 0) return false;
 
-    const latestMeetingScheduledAtMs = new Date(
-      latestProposalMeeting?.createdAt || latestProposalMeeting?.startAt || 0
+    const latestMeetingSavedAtMs = new Date(
+      latestProposalMeeting?.createdAt || latestProposalMeeting?.updatedAt || 0
     ).getTime();
 
-    return Number.isFinite(latestMeetingScheduledAtMs) && latestMeetingScheduledAtMs >= decisionAtMs;
-  }, [latestProposalMeeting?.createdAt, latestProposalMeeting?.startAt, proposalPresentationForm.presentedAt, proposalPresentationForm.proposalAccepted]);
-  const hasIncompleteLatestProposalMeeting =
-    Boolean(latestProposalMeeting?.startAt) &&
-    String(latestProposalMeeting?.status || "").trim() !== "Completed";
+    return Number.isFinite(latestMeetingSavedAtMs) && latestMeetingSavedAtMs >= decisionAtMs;
+  }, [latestProposalMeeting?.createdAt, latestProposalMeeting?.updatedAt, proposalPresentationForm.presentedAt, proposalPresentationForm.proposalAccepted]);
   const canScheduleFurtherProposalPresentation =
     proposalPresentationForm.proposalAccepted === "NO" &&
     !hasScheduledFurtherMeetingAfterDecision;
@@ -2767,29 +2877,37 @@ function AgentLeadEngagement() {
       return hh * 60 + mm >= minMinutes;
     });
   }, [applicationMeetingForm.meetingDate, applicationMeetingStartSlots, getNextHalfHourSlotAfterNow, latestOpenOrOverdueProposalMeeting?.durationMin, latestOpenOrOverdueProposalMeeting?.endAt, latestOpenOrOverdueProposalMeeting?.startAt]);
-  const isProposalPresentationNoRescheduleMode =
-    showNeedsAssessmentPanel &&
-    String(engagement?.currentStage || "").trim() === "Proposal" &&
-    String(proposalCurrentActivityKey || "").trim() === "Present Proposal" &&
-    canScheduleFurtherProposalPresentation;
-  const isProposalPresentationMeetingRescheduleMode =
-    showNeedsAssessmentPanel &&
-    String(engagement?.currentStage || "").trim() === "Proposal" &&
-    String(proposalCurrentActivityKey || "").trim() === "Present Proposal" &&
-    hasIncompleteLatestProposalMeeting;
-  const isProposalPendingPresentationRescheduleMode =
-    showNeedsAssessmentPanel &&
-    String(engagement?.currentStage || "").trim() === "Proposal" &&
-    String(proposalCurrentActivityKey || "").trim() === "Record Prospect Attendance" &&
-    !["YES", "NO"].includes(String(proposalAttendanceForm.attendanceChoice || "").trim().toUpperCase());
   const isNeedsScheduleEditable =
-    ((isNeedsAssessmentCurrentViewEditable && needsActivityKeyRaw === "Schedule Proposal Presentation") || isProposalAttendanceNoRescheduleMode || isProposalPresentationNoRescheduleMode || isProposalPresentationMeetingRescheduleMode || isProposalPendingPresentationRescheduleMode) &&
+    ((isNeedsAssessmentCurrentStageEditable && isNeedsAssessmentCurrentViewEditable && needsActivityKeyRaw === "Schedule Proposal Presentation") || canRescheduleFromLatestProposalAttendanceNo) &&
     needsAssessmentViewedActivityKey === "Schedule Proposal Presentation";
+  const isProposalPresentationRescheduleInProgress =
+    needsAssessmentViewedActivityKey === "Schedule Proposal Presentation" &&
+    proposalMeetingScheduleMode === "RESCHEDULE_EXISTING" &&
+    Boolean(proposalMeetingRescheduleOriginal?.startAt);
+  const isProposalPresentationAddFurtherInProgress =
+    needsAssessmentViewedActivityKey === "Schedule Proposal Presentation" &&
+    proposalMeetingScheduleMode === "ADD_FURTHER" &&
+    Boolean(proposalMeetingRescheduleOriginal?.startAt);
+  const canEditProposalScheduleForm = isNeedsScheduleEditable || isProposalPresentationRescheduleInProgress || isProposalPresentationAddFurtherInProgress;
   const isNeedsAnalysisViewed = needsAssessmentViewedActivityKey === "Perform Needs Analysis";
   const isNeedsScheduleViewed = needsAssessmentViewedActivityKey === "Schedule Proposal Presentation";
   const hasNeedsAttendanceSaved = !isHistoryView && ["YES", "NO"].includes(String(needsAssessmentForm.attendanceChoice || "").trim().toUpperCase());
   const hasNeedsAnalysisSaved = !isHistoryView && Boolean(String(needsAssessmentForm?.savedAt || needsAssessmentOutcomeActivity || "").trim());
   const hasNeedsScheduleSaved = !isHistoryView && Boolean(proposalMeetingSaved?.startAt);
+  const hasProposalGenerateSaved = !isHistoryView && Boolean(
+    String(proposalGenerateForm?.uploadedAt || "").trim() ||
+    String(proposalGenerateForm?.proposalFileName || "").trim() ||
+    String(proposalGenerateForm?.proposalFileDataUrl || "").trim()
+  );
+  const hasProposalAttendanceSaved = !isHistoryView && ["YES", "NO"].includes(String(proposalAttendanceForm?.attendanceChoice || "").trim().toUpperCase());
+  const hasProposalPresentationSaved = !isHistoryView && Boolean(
+    String(proposalPresentationForm?.initialQuotationNotes || "").trim() ||
+    String(proposalPresentationForm?.proposalAccepted || "").trim()
+  );
+  const selectedProposalProduct = useMemo(
+    () => (availableProducts || []).find((p) => String(p?._id || "") === String(proposalGenerateForm?.chosenProductId || "")) || null,
+    [availableProducts, proposalGenerateForm?.chosenProductId]
+  );
   const proposalMeetingMinimumDate = useMemo(() => {
     const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
     const fallback = toDateInputValue(tomorrow);
@@ -3030,13 +3148,83 @@ function AgentLeadEngagement() {
       aggregateFieldErrors.requestedPremiumPayment = "Product Selection: requested premium payment is invalid.";
     }
 
+    const currentPriority = String(npCheck.currentPriority || "").trim();
+    if (currentPriority === "Investment") {
+      const inv = npCheck.investment || {};
+      const savingsPlan = String(inv.savingsPlan || "").trim();
+      const savingsPlanOther = String(inv.savingsPlanOther || "").trim();
+      const targetAmountRaw = String(inv.targetSavingsAmount ?? "").trim();
+      const targetYearRaw = String(inv.targetUtilizationYear ?? "").trim();
+      const savingsRaw = String(inv.savingsForInvestment ?? "").trim();
+
+      if (!savingsPlan && needsSaveAttempted) aggregateFieldErrors.investmentSavingsPlan = "Investment: savings plan is required.";
+      if (savingsPlan === "Other" && !savingsPlanOther && needsSaveAttempted) {
+        aggregateFieldErrors.investmentSavingsPlanOther = "Investment: please specify other savings plan.";
+      }
+
+      const targetAmount = Number(targetAmountRaw);
+      const targetYear = Number(targetYearRaw);
+      const savingsValue = Number(savingsRaw);
+      const nowYear = new Date().getFullYear();
+
+      if (!targetAmountRaw) {
+        if (needsSaveAttempted) aggregateFieldErrors.investmentTargetAmount = "Investment: target savings amount is required.";
+      } else if (!Number.isFinite(targetAmount) || targetAmount < 0) aggregateFieldErrors.investmentTargetAmount = "Investment: target savings amount is invalid.";
+
+      if (!targetYearRaw) {
+        if (needsSaveAttempted) aggregateFieldErrors.investmentTargetYear = "Investment: target year to utilize savings is required.";
+      } else if (!Number.isFinite(targetYear) || targetYear < nowYear + 2 || targetYear > nowYear + 20) {
+        aggregateFieldErrors.investmentTargetYear = "Investment: target year must be between 2 and 20 years from current year.";
+      }
+
+      if (!savingsRaw) {
+        if (needsSaveAttempted) aggregateFieldErrors.investmentSavings = "Investment: savings for investment is required.";
+      } else if (!Number.isFinite(savingsValue) || savingsValue < 0) aggregateFieldErrors.investmentSavings = "Investment: savings for investment is invalid.";
+      else if (Number.isFinite(targetAmount) && savingsValue > targetAmount) {
+        aggregateFieldErrors.investmentSavings = "Investment: savings for investment cannot be higher than target savings amount.";
+      }
+
+      const rp = inv.riskProfiler || {};
+      if (!String(rp?.investmentHorizon || "").trim() && needsSaveAttempted) aggregateFieldErrors.investmentHorizon = "Investment horizon is required.";
+      if (!String(rp?.investmentGoal || "").trim() && needsSaveAttempted) aggregateFieldErrors.investmentGoal = "Investment goal is required.";
+      if (!String(rp?.marketExperience || "").trim() && needsSaveAttempted) aggregateFieldErrors.marketExperience = "Market experience is required.";
+      if (!String(rp?.volatilityReaction || "").trim() && needsSaveAttempted) aggregateFieldErrors.volatilityReaction = "Volatility reaction is required.";
+      if (!String(rp?.capitalLossAffordability || "").trim() && needsSaveAttempted) aggregateFieldErrors.capitalLossAffordability = "Capital loss affordability is required.";
+      if (!String(rp?.riskReturnTradeoff || "").trim() && needsSaveAttempted) aggregateFieldErrors.riskReturnTradeoff = "Risk and return trade-off is required.";
+
+      const allocations = inv?.fundChoice?.allocations && typeof inv.fundChoice.allocations === "object"
+        ? inv.fundChoice.allocations
+        : {};
+      const scored = scoreRiskProfile(rp || {});
+      const allowedRatings = SUITABLE_RISK_RATINGS_BY_CATEGORY[scored.category] || [];
+      const selectedFunds = INVESTMENT_FUNDS
+        .map((fund) => ({
+          ...fund,
+          allocationPercent: toNonNegativeNumber(allocations[fund.key]) ?? 0,
+          isSuitable: allowedRatings.includes(fund.riskRating),
+        }))
+        .filter((item) => item.allocationPercent > 0);
+      const totalAllocation = selectedFunds.reduce((sum, item) => sum + item.allocationPercent, 0);
+      const fundMatch = selectedFunds.some((item) => !item.isSuitable) ? "No" : "Yes";
+      const mismatchReason = String(inv?.fundChoice?.mismatchReason || "").trim();
+
+      if (selectedFunds.length === 0 && needsSaveAttempted) aggregateFieldErrors.fundChoice = "Fund Choice: select at least one fund.";
+      else if (selectedFunds.length > 0 && Math.abs(totalAllocation - 100) > 0.0001) aggregateFieldErrors.fundChoiceTotalAllocation = "Fund Choice: allocation in percentage must equal 100%.";
+      if (fundMatch === "No" && !mismatchReason && needsSaveAttempted) aggregateFieldErrors.mismatchReason = "Reason for mismatch is required.";
+    }
+
     setNeedsAssessmentFieldErrors(aggregateFieldErrors);
   }, [
     isNeedsAnalysisViewed,
     needsAnalysisEditMode,
     isNeedsAssessmentCurrentViewEditable,
     needsAssessmentSaving,
-    needsAssessmentForm
+    needsSaveAttempted,
+    needsAssessmentForm,
+    scoreRiskProfile,
+    SUITABLE_RISK_RATINGS_BY_CATEGORY,
+    INVESTMENT_FUNDS,
+    toNonNegativeNumber,
   ]);
 
   const renderNeedsAssessmentError = (fieldKey) => (
@@ -3055,22 +3243,11 @@ function AgentLeadEngagement() {
   useEffect(() => {
     try {
       if (!leadId) return;
+      if (!needsDraftReadyRef.current) return;
       const payload = { needsAssessmentForm, needsSectionOpen, needsAnalysisEditMode, savedAt: Date.now(), currentActivityKey: needsAssessmentCurrentActivityKey, outcomeActivity: needsAssessmentOutcomeActivity };
       sessionStorage.setItem(needsDraftStorageKey, JSON.stringify(payload));
     } catch {}
   }, [leadId, needsDraftStorageKey, needsAssessmentForm, needsSectionOpen, needsAnalysisEditMode, needsAssessmentCurrentActivityKey, needsAssessmentOutcomeActivity]);
-
-  useEffect(() => {
-    try {
-      if (!leadId) return;
-      const raw = sessionStorage.getItem(needsDraftStorageKey);
-      if (!raw) return;
-      const draft = JSON.parse(raw);
-      if (draft?.needsAssessmentForm) setNeedsAssessmentForm(draft.needsAssessmentForm);
-      if (draft?.needsSectionOpen) setNeedsSectionOpen(draft.needsSectionOpen);
-      if (typeof draft?.needsAnalysisEditMode === 'boolean') setNeedsAnalysisEditMode(draft.needsAnalysisEditMode);
-    } catch {}
-  }, [leadId, needsDraftStorageKey]);
 
 
   const needsPrioritiesDerived = useMemo(() => {
@@ -3127,7 +3304,7 @@ function AgentLeadEngagement() {
         ? currentActivityLabel
         : previousContactingActivity
       : showNeedsAssessmentPanel
-      ? needsUiActivityKey
+      ? needsActivityKeyRaw
       : showProposalPanel
       ? proposalUiActivityKey
       : showApplicationPanel
@@ -3477,27 +3654,6 @@ function AgentLeadEngagement() {
     setRescheduleFromNeedsMode(true);
   };
 
-  const startAddFurtherProposalPresentation = () => {
-    if (!proposalMeetingSaved?.startAt) return;
-    const originalMeeting = proposalMeetingSaved;
-    setProposalMeetingError("");
-    setProposalMeetingFieldErrors({});
-    setProposalMeetingRescheduleOriginal(originalMeeting);
-    setProposalMeetingScheduleMode("ADD_FURTHER");
-    setProposalMeetingForm({
-      meetingDate: "",
-      meetingStartTime: "",
-      meetingDurationMin: originalMeeting?.durationMin ?? 120,
-      meetingMode: String(originalMeeting?.mode || ""),
-      meetingPlatform: String(originalMeeting?.platform || ""),
-      meetingPlatformOther: String(originalMeeting?.platformOther || ""),
-      meetingLink: String(originalMeeting?.link || ""),
-      meetingInviteSent: Boolean(originalMeeting?.inviteSent),
-      meetingPlace: String(originalMeeting?.place || ""),
-    });
-    setProposalMeetingSaved(null);
-  };
-
   const startRescheduleProposalPresentation = () => {
     if (!proposalMeetingSaved?.startAt) return;
     const originalMeeting = proposalMeetingSaved;
@@ -3515,6 +3671,27 @@ function AgentLeadEngagement() {
       meetingLink: String(originalMeeting?.link || ""),
       meetingInviteSent: Boolean(originalMeeting?.inviteSent),
       meetingPlace: String(originalMeeting?.place || ""),
+    });
+    setProposalMeetingSaved(null);
+  };
+
+  const startAddFurtherProposalPresentation = () => {
+    const baseMeeting = latestOpenOrOverdueProposalMeeting || proposalMeetingSaved;
+    if (!baseMeeting?.startAt) return;
+    setProposalMeetingError("");
+    setProposalMeetingFieldErrors({});
+    setProposalMeetingRescheduleOriginal(baseMeeting);
+    setProposalMeetingScheduleMode("ADD_FURTHER");
+    setProposalMeetingForm({
+      meetingDate: toDateInputValue(baseMeeting.startAt),
+      meetingStartTime: "",
+      meetingDurationMin: baseMeeting?.durationMin ?? 120,
+      meetingMode: String(baseMeeting?.mode || ""),
+      meetingPlatform: String(baseMeeting?.platform || ""),
+      meetingPlatformOther: String(baseMeeting?.platformOther || ""),
+      meetingLink: String(baseMeeting?.link || ""),
+      meetingInviteSent: Boolean(baseMeeting?.inviteSent),
+      meetingPlace: String(baseMeeting?.place || ""),
     });
     setProposalMeetingSaved(null);
   };
@@ -3942,6 +4119,8 @@ function AgentLeadEngagement() {
 
       setProposalMeetingRescheduleOriginal(null);
       setProposalMeetingScheduleMode("");
+      const attendanceNoAtMs = proposalAttendanceForm?.attendedAt ? new Date(proposalAttendanceForm.attendedAt).getTime() : 0;
+      setProposalAttendanceNoRescheduleConsumedAt(Number.isFinite(attendanceNoAtMs) && attendanceNoAtMs > 0 ? attendanceNoAtMs : Date.now());
       setProposalAttendanceForm({
         attendanceChoice: "",
         attendanceProofImageDataUrl: "",
@@ -4176,6 +4355,9 @@ function AgentLeadEngagement() {
       if (!res.ok) throw new Error(data?.message || "Failed to save proposal attendance.");
       setProposalAttendanceProofEditMode(false);
       if (!attended) {
+        const noAt = Date.now();
+        setProposalAttendanceLastNoAt(noAt);
+        setProposalAttendanceNoRescheduleConsumedAt(0);
         await fetchNeedsAssessment();
         await fetchEngagement();
         setSelectedStageView("Needs Assessment");
@@ -4211,9 +4393,7 @@ function AgentLeadEngagement() {
         return;
       }
 
-      const savedDecision = String(proposalPresentationForm.proposalAccepted || "").trim().toUpperCase();
       const payload = { initialQuotationNotes: notes };
-      if (["YES", "NO"].includes(savedDecision)) payload.proposalAccepted = savedDecision;
 
       setProposalPresentationSaving(true);
       const res = await fetch(`${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/proposal/presentation?userId=${user.id}`, {
@@ -4225,13 +4405,10 @@ function AgentLeadEngagement() {
       if (!res.ok) throw new Error(data?.message || "Failed to save quotation proposal notes.");
       setProposalPresentationNotesSaved(true);
       setProposalPresentationNotesEditMode(false);
-      setProposalPresentationFurtherPromptSaved(false);
       setProposalPresentationEditSnapshot((prev) => ({
         ...prev,
-        proposalAccepted: ["YES", "NO"].includes(savedDecision) ? savedDecision : prev.proposalAccepted,
         initialQuotationNotes: notes,
       }));
-      await fetchEngagement();
     } catch (err) {
       setProposalPresentationError(err?.message || "Failed to save quotation proposal notes.");
     } finally {
@@ -4271,7 +4448,7 @@ function AgentLeadEngagement() {
         presentedAt: data?.presentedAt || f.presentedAt,
       }));
       setProposalPresentationDecisionEditMode(false);
-      setProposalPresentationFurtherPromptSaved(accepted === "NO");
+      setProposalPresentationDecisionPending(false);
       setProposalPresentationEditSnapshot({
         proposalAccepted: accepted,
         initialQuotationNotes: notes,
@@ -5307,15 +5484,14 @@ function AgentLeadEngagement() {
                       <strong className="le-summaryValue">{formatDateTime(lead.createdAt)}</strong>
                     </div>
 
-                    <div className="le-summaryItem le-span2 le-descriptionCycleRow">
-                      <div>
-                        <span className="le-summaryLabel">Description</span>
-                        <strong className="le-summaryValue">{lead.description || "—"}</strong>
-                      </div>
-                      <div className="le-cycleInline">
-                        <span className="le-summaryLabel">Engagement Cycle</span>
-                        <strong className="le-summaryValue">{currentAttemptCycle}</strong>
-                      </div>
+                    <div className="le-summaryItem">
+                      <span className="le-summaryLabel">Description</span>
+                      <strong className="le-summaryValue">{lead.description || "—"}</strong>
+                    </div>
+
+                    <div className="le-summaryItem">
+                      <span className="le-summaryLabel">Engagement Cycle</span>
+                      <strong className="le-summaryValue">{currentAttemptCycle}</strong>
                     </div>
                   </div>
                 </section>
@@ -5489,7 +5665,9 @@ function AgentLeadEngagement() {
                           : setNeedsAssessmentViewedActivityKey(stepKey)
                       }
                       helperText={
-                        !isViewingCurrentStage
+                        isHistoryView
+                          ? "History mode: select any subactivity to view saved details."
+                          : !isViewingCurrentStage
                           ? isViewingFutureStage
                             ? futureStageSubactivityHelperText
                             : ""
@@ -5520,7 +5698,9 @@ function AgentLeadEngagement() {
                           : setProposalViewedActivityKey(stepKey)
                       }
                       helperText={
-                        !isViewingCurrentStage
+                        isHistoryView
+                          ? "History mode: select any subactivity to view saved details."
+                          : !isViewingCurrentStage
                           ? isViewingFutureStage
                             ? futureStageSubactivityHelperText
                             : ""
@@ -5551,7 +5731,9 @@ function AgentLeadEngagement() {
                           : setApplicationViewedActivityKey(stepKey)
                       }
                       helperText={
-                        !isViewingCurrentStage
+                        isHistoryView
+                          ? "History mode: select any subactivity to view saved details."
+                          : !isViewingCurrentStage
                           ? isViewingFutureStage
                             ? futureStageSubactivityHelperText
                             : ""
@@ -5582,7 +5764,9 @@ function AgentLeadEngagement() {
                           : setPolicyViewedActivityKey(stepKey)
                       }
                       helperText={
-                        !isViewingCurrentStage
+                        isHistoryView
+                          ? "History mode: select any subactivity to view saved details."
+                          : !isViewingCurrentStage
                           ? isViewingFutureStage
                             ? futureStageSubactivityHelperText
                             : ""
@@ -7482,7 +7666,10 @@ function AgentLeadEngagement() {
                         </div>
                       )}
 
-                      {showProposalPanel && isProposalGenerateViewed && (
+                      {showProposalPanel && isProposalGenerateViewed && isHistoryView && !hasProposalGenerateSaved ? (
+                        <div className="le-block"><p className="le-muted" style={{ marginTop: 8 }}>No details were saved for this subactivity in the selected engagement cycle.</p></div>
+                      ) : null}
+                      {showProposalPanel && isProposalGenerateViewed && (!isHistoryView || hasProposalGenerateSaved) && (
                         <div className="le-block">
                           <h4 className="le-blockTitle">
                             {proposalGenerateEditMode
@@ -7518,6 +7705,18 @@ function AgentLeadEngagement() {
                             <div className="le-proposalDetailCard">
                               <span className="le-metaLabel">Coverage Duration</span>
                               <span className="le-metaValue">{String(proposalGenerateForm.chosenProductCoverageDurationLabel || "").trim() || "No coverage duration details available."}</span>
+                            </div>
+                            <div className="le-proposalDetailCard">
+                              <span className="le-metaLabel">Age Requirement</span>
+                              <span className="le-metaValue">{String(selectedProposalProduct?.ageRequirement?.label || "").trim() || "No Standard"}</span>
+                            </div>
+                            <div className="le-proposalDetailCard">
+                              <span className="le-metaLabel">Minimum Sum Assured</span>
+                              <span className="le-metaValue">{renderStandardLabel(selectedProposalProduct?.minimumSumAssured)}</span>
+                            </div>
+                            <div className="le-proposalDetailCard">
+                              <span className="le-metaLabel">Minimum Annual Premium</span>
+                              <span className="le-metaValue">{renderStandardLabel(selectedProposalProduct?.minimumAnnualPremium)}</span>
                             </div>
                           </div>
 
@@ -7681,7 +7880,10 @@ function AgentLeadEngagement() {
                         </div>
                       )}
 
-                      {showProposalPanel && isProposalAttendanceViewed ? (
+                      {showProposalPanel && isProposalAttendanceViewed && isHistoryView && !hasProposalAttendanceSaved ? (
+                        <div className="le-block"><p className="le-muted" style={{ marginTop: 8 }}>No details were saved for this subactivity in the selected engagement cycle.</p></div>
+                      ) : null}
+                      {showProposalPanel && isProposalAttendanceViewed && (!isHistoryView || hasProposalAttendanceSaved) ? (
                         <div className="le-block">
                           <h4 className="le-blockTitle">Prospect Attendance</h4>
 
@@ -7833,9 +8035,12 @@ function AgentLeadEngagement() {
                         </div>
                       ) : null}
 
-                      {showProposalPanel && isProposalPresentationViewed ? (
+                      {showProposalPanel && isProposalPresentationViewed && isHistoryView && !hasProposalPresentationSaved ? (
+                        <div className="le-block"><p className="le-muted" style={{ marginTop: 8 }}>No details were saved for this subactivity in the selected engagement cycle.</p></div>
+                      ) : null}
+                      {showProposalPanel && isProposalPresentationViewed && (!isHistoryView || hasProposalPresentationSaved) ? (
                         <div className="le-block">
-                          <h4 className="le-blockTitle">{isProposalPresentationEditable ? "Present Proposal" : "Proposal Presentation"}</h4>
+                          <h4 className="le-blockTitle">{proposalPresentationNotesSaved ? "Proposal Presentation" : "Present Proposal"}</h4>
 
                           {isProposalPresentationEditable ? (
                             <>
@@ -7958,6 +8163,7 @@ function AgentLeadEngagement() {
                                               initialQuotationNotes: proposalPresentationForm.initialQuotationNotes,
                                             });
                                             setProposalPresentationDecisionEditMode(true);
+                                            setProposalPresentationDecisionPending(false);
                                           }}
                                           disabled={proposalPresentationSaving}
                                         >
@@ -7965,7 +8171,7 @@ function AgentLeadEngagement() {
                                         </button>
                                       ) : null}
                                     </div>
-                                    {proposalPresentationDecisionEditMode || !["YES", "NO"].includes(String(proposalPresentationForm.proposalAccepted || "").trim().toUpperCase()) ? (
+                                    {proposalPresentationDecisionEditMode || proposalPresentationDecisionPending || !["YES", "NO"].includes(String(proposalPresentationForm.proposalAccepted || "").trim().toUpperCase()) ? (
                                       <>
                                         <select
                                           className="le-input"
@@ -7973,6 +8179,8 @@ function AgentLeadEngagement() {
                                           onChange={(e) => {
                                             const requiresFurther = e.target.value;
                                             setProposalPresentationError("");
+                                            setProposalPresentationDecisionPending(true);
+                                            setProposalPresentationDecisionEditMode(true);
                                             setProposalPresentationForm((f) => ({
                                               ...f,
                                               proposalAccepted: requiresFurther === "YES" ? "NO" : requiresFurther === "NO" ? "YES" : "",
@@ -7985,6 +8193,9 @@ function AgentLeadEngagement() {
                                           <option value="YES">Yes</option>
                                           <option value="NO">No</option>
                                         </select>
+                                        {proposalPresentationError && proposalPresentationError.includes("Please select if further proposal presentation meet is required")
+                                          ? <p className="le-smallNote" style={{ color: "#DA291C", marginTop: 6 }}>{proposalPresentationError}</p>
+                                          : null}
                                         <div className="le-actions" style={{ marginTop: 8 }}>
                                           <button
                                             type="button"
@@ -7997,12 +8208,14 @@ function AgentLeadEngagement() {
                                                   proposalAccepted: proposalPresentationEditSnapshot.proposalAccepted,
                                                 }));
                                                 setProposalPresentationDecisionEditMode(false);
+                                                setProposalPresentationDecisionPending(false);
                                                 return;
                                               }
                                               setProposalPresentationForm((f) => ({
                                                 ...f,
                                                 proposalAccepted: "",
                                               }));
+                                              setProposalPresentationDecisionPending(false);
                                             }}
                                             disabled={proposalPresentationSaving}
                                           >
@@ -8023,7 +8236,23 @@ function AgentLeadEngagement() {
                                     )}
                                   </div>
 
-                                  {proposalPresentationError ? <p className="le-smallNote" style={{ color: "#DA291C", marginTop: 8 }}>{proposalPresentationError}</p> : null}
+                                  {proposalPresentationError && !proposalPresentationError.includes("Please select if further proposal presentation meet is required")
+                                    ? <p className="le-smallNote" style={{ color: "#DA291C", marginTop: 8 }}>{proposalPresentationError}</p>
+                                    : null}
+                                  {!proposalPresentationDecisionEditMode && !proposalPresentationDecisionPending && canScheduleFurtherProposalPresentation ? (
+                                    <p className="le-muted le-presentationFurtherPrompt">
+                                      Further Proposal Presentation can be scheduled.{" "}
+                                      <button
+                                        type="button"
+                                        className="le-btn ghost"
+                                        style={{ padding: 0, border: 0, background: "transparent", textDecoration: "underline" }}
+                                        onClick={goToScheduleProposalPresentationFromProposalNo}
+                                        disabled={proposalPresentationSaving}
+                                      >
+                                        Go to Schedule Proposal Presentation
+                                      </button>
+                                    </p>
+                                  ) : null}
                                 </>
                               )}
                             </>
@@ -8106,6 +8335,7 @@ function AgentLeadEngagement() {
                                           initialQuotationNotes: proposalPresentationForm.initialQuotationNotes,
                                         });
                                         setProposalPresentationDecisionEditMode(true);
+                                        setProposalPresentationDecisionPending(false);
                                       }}
                                       disabled={proposalPresentationSaving}
                                     >
@@ -8113,7 +8343,7 @@ function AgentLeadEngagement() {
                                     </button>
                                   ) : null}
                                 </div>
-                                {proposalPresentationDecisionEditMode ? (
+                                {proposalPresentationDecisionEditMode || proposalPresentationDecisionPending ? (
                                   <>
                                     <select
                                       className="le-input"
@@ -8121,6 +8351,8 @@ function AgentLeadEngagement() {
                                       onChange={(e) => {
                                         const requiresFurther = e.target.value;
                                         setProposalPresentationError("");
+                                        setProposalPresentationDecisionPending(true);
+                                        setProposalPresentationDecisionEditMode(true);
                                         setProposalPresentationForm((f) => ({
                                           ...f,
                                           proposalAccepted: requiresFurther === "YES" ? "NO" : requiresFurther === "NO" ? "YES" : "",
@@ -8144,6 +8376,7 @@ function AgentLeadEngagement() {
                                             proposalAccepted: proposalPresentationEditSnapshot.proposalAccepted,
                                           }));
                                           setProposalPresentationDecisionEditMode(false);
+                                          setProposalPresentationDecisionPending(false);
                                         }}
                                         disabled={proposalPresentationSaving}
                                       >
@@ -8164,7 +8397,7 @@ function AgentLeadEngagement() {
                                 )}
                               </div>
                               {proposalPresentationError ? <p className="le-smallNote" style={{ color: "#DA291C", marginTop: 8 }}>{proposalPresentationError}</p> : null}
-                              {!proposalPresentationDecisionEditMode && proposalPresentationFurtherPromptSaved && canScheduleFurtherProposalPresentation ? (
+                              {!proposalPresentationDecisionEditMode && !proposalPresentationDecisionPending && canScheduleFurtherProposalPresentation ? (
                                 <p className="le-muted le-presentationFurtherPrompt">
                                   Further Proposal Presentation can be scheduled.{" "}
                                   <button
@@ -8183,7 +8416,10 @@ function AgentLeadEngagement() {
                         </div>
                       ) : null}
 
-                      {showProposalPanel && isProposalScheduleApplicationViewed ? (
+                      {showProposalPanel && isProposalScheduleApplicationViewed && isHistoryView && !applicationMeetingSaved ? (
+                        <div className="le-block"><p className="le-muted" style={{ marginTop: 8 }}>No details were saved for this subactivity in the selected engagement cycle.</p></div>
+                      ) : null}
+                      {showProposalPanel && isProposalScheduleApplicationViewed && (!isHistoryView || applicationMeetingSaved) ? (
                         <div className="le-block">
                           {!applicationMeetingSaved ? <h4 className="le-blockTitle">Schedule Application Submission</h4> : null}
 
@@ -9015,11 +9251,17 @@ function AgentLeadEngagement() {
                                   {renderNeedsAssessmentError("investmentRiskProfiler")}
 
                                   <div className="le-formRow"><label className="le-label">INVESTMENT HORIZON *</label><p className="le-muted" style={{ marginTop: 4, marginBottom: 8 }}>How long will you allow your money to grow before you feel the need to have access to it?</p><select className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.riskProfiler?.investmentHorizon || ""} onChange={(e) => updateNeedsPrioritySection("investment", "riskProfiler", { ...(needsAssessmentForm.needsPriorities?.investment?.riskProfiler || {}), investmentHorizon: e.target.value })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}><option value="">Select</option><option value="LT_3">Less than three years</option><option value="BETWEEN_3_7">Between three and seven years</option><option value="BETWEEN_7_10">Longer than seven years but less than 10 years</option><option value="AT_LEAST_10">At least 10 years</option></select></div>
+                                  {renderNeedsAssessmentError("investmentHorizon")}
                                   <div className="le-formRow"><label className="le-label">INVESTMENT GOAL *</label><p className="le-muted" style={{ marginTop: 4, marginBottom: 8 }}>What is your goal for this investment?</p><select className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.riskProfiler?.investmentGoal || ""} onChange={(e) => updateNeedsPrioritySection("investment", "riskProfiler", { ...(needsAssessmentForm.needsPriorities?.investment?.riskProfiler || {}), investmentGoal: e.target.value })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}><option value="">Select</option><option value="CAPITAL_PRESERVATION">Capital preservation with a potential return that is slightly higher than time deposit rate</option><option value="STEADY_GROWTH">Steady growth in capital</option><option value="SIGNIFICANT_APPRECIATION">A significant level of capital appreciation</option></select></div>
+                                  {renderNeedsAssessmentError("investmentGoal")}
                                   <div className="le-formRow"><label className="le-label">EXPERIENCE WITH INVESTMENTS AND/OR FINANCIAL MARKETS *</label><p className="le-muted" style={{ marginTop: 4, marginBottom: 8 }}>Have you had any experience investing in the following:</p><p className="le-smallNote" style={{ marginTop: 0, marginBottom: 8 }}>I. Mutual funds, unit investment trust funds, unit-linked insurance policies, local government and/or corporate bonds, listed stocks in the Philippine Stock Market</p><p className="le-smallNote" style={{ marginTop: 0, marginBottom: 8 }}>II. Foreign investments (stocks, bonds, funds outside the Philippine market), foreign currencies, hedge funds, derivatives (options, futures, forwards, etc.)</p><select className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.riskProfiler?.marketExperience || ""} onChange={(e) => updateNeedsPrioritySection("investment", "riskProfiler", { ...(needsAssessmentForm.needsPriorities?.investment?.riskProfiler || {}), marketExperience: e.target.value })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}><option value="">Select</option><option value="NONE">None of the above</option><option value="I_ONLY">In "I" only</option><option value="II_ONLY">In "II" only</option><option value="BOTH">In both "I" and "II"</option></select></div>
+                                  {renderNeedsAssessmentError("marketExperience")}
                                   <div className="le-formRow"><label className="le-label">REACTION TO SHORT-TERM VOLATILITY *</label><p className="le-muted" style={{ marginTop: 4, marginBottom: 8 }}>What will you do if you experience a significant drop (e.g. 30%) in fund value within a year?</p><select className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.riskProfiler?.volatilityReaction || ""} onChange={(e) => updateNeedsPrioritySection("investment", "riskProfiler", { ...(needsAssessmentForm.needsPriorities?.investment?.riskProfiler || {}), volatilityReaction: e.target.value })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}><option value="">Select</option><option value="FULL_WITHDRAW">Make a full withdrawal</option><option value="LESS_RISKY">Switch to a less risky fund</option><option value="HOLD">Do nothing or hold on to the funds</option><option value="TOP_UPS">Do top-ups or make additional investments</option></select></div>
+                                  {renderNeedsAssessmentError("volatilityReaction")}
                                   <div className="le-formRow"><label className="le-label">AFFORDABILITY TO CAPITAL LOSS *</label><p className="le-muted" style={{ marginTop: 4, marginBottom: 8 }}>In the long term (more than five years), what is the level of capital loss you can afford to take?</p><select className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.riskProfiler?.capitalLossAffordability || ""} onChange={(e) => updateNeedsPrioritySection("investment", "riskProfiler", { ...(needsAssessmentForm.needsPriorities?.investment?.riskProfiler || {}), capitalLossAffordability: e.target.value })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}><option value="">Select</option><option value="NO_LOSS">I cannot afford a loss</option><option value="UP_TO_5">I can afford up to 5% loss</option><option value="UP_TO_10">I can afford up to 10% loss</option><option value="ABOVE_10">I can afford more than 10% loss</option></select></div>
+                                  {renderNeedsAssessmentError("capitalLossAffordability")}
                                   <div className="le-formRow"><label className="le-label">RISK AND RETURN TRADE-OFF *</label><p className="le-muted" style={{ marginTop: 4, marginBottom: 8 }}>Which of the sample portfolio would you prefer?</p><select className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.riskProfiler?.riskReturnTradeoff || ""} onChange={(e) => updateNeedsPrioritySection("investment", "riskProfiler", { ...(needsAssessmentForm.needsPriorities?.investment?.riskProfiler || {}), riskReturnTradeoff: e.target.value })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}><option value="">Select</option><option value="PORTFOLIO_A">Portfolio A: 4% Potential annual gain, -3% Potential annual loss</option><option value="PORTFOLIO_B">Portfolio B: 6% Potential annual gain, -6% Potential annual loss</option><option value="PORTFOLIO_C">Portfolio C: 10% Potential annual gain, -12% Potential annual loss</option><option value="PORTFOLIO_D">Portfolio D: 20% or more Potential annual gain, -28% or more Potential annual loss</option></select></div>
+                                  {renderNeedsAssessmentError("riskReturnTradeoff")}
 
                                   <h5 className="le-attemptSectionHeader" style={{ marginTop: 10 }}>Investor Risk Profile</h5>
                                   <div className="le-formRow"><label className="le-label">Risk Profile Score</label><input className="le-input" value={needsPrioritiesDerived.riskProfileScore ?? ""} disabled /></div>
@@ -9066,9 +9308,13 @@ function AgentLeadEngagement() {
                                   </div>
 
                                   <div className="le-formRow"><label className="le-label">Total Allocation (%)</label><input className="le-input" value={Number.isFinite(needsPrioritiesDerived.totalFundAllocation) ? needsPrioritiesDerived.totalFundAllocation : ""} disabled /></div>
+                                  {renderNeedsAssessmentError("fundChoiceTotalAllocation")}
                                   <div className="le-formRow"><label className="le-label">Fund Match</label><input className="le-input" value={needsPrioritiesDerived.fundMatch} disabled /></div>
                                   {needsPrioritiesDerived.fundMatch === "No" && (
-                                    <div className="le-formRow"><label className="le-label">Reason for Mismatch *</label><textarea className="le-input" rows={3} value={needsAssessmentForm.needsPriorities?.investment?.fundChoice?.mismatchReason || ""} onChange={(e) => updateNeedsPrioritySection("investment", "fundChoice", { ...(needsAssessmentForm.needsPriorities?.investment?.fundChoice || {}), mismatchReason: e.target.value })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
+                                    <>
+                                      <div className="le-formRow"><label className="le-label">Reason for Mismatch *</label><textarea className="le-input" rows={3} value={needsAssessmentForm.needsPriorities?.investment?.fundChoice?.mismatchReason || ""} onChange={(e) => updateNeedsPrioritySection("investment", "fundChoice", { ...(needsAssessmentForm.needsPriorities?.investment?.fundChoice || {}), mismatchReason: e.target.value })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
+                                      {needsSaveAttempted ? renderNeedsAssessmentError("mismatchReason") : null}
+                                    </>
                                   )}
                                 </>
                               )}
@@ -9083,25 +9329,30 @@ function AgentLeadEngagement() {
                               </div>
                               {needsSectionOpen.productSelection && (
                                 <>
-                                  <p className="le-priorityHeadline le-priorityHeadlineMedium">Prospect's financial priority: {needsPrioritiesDerived.priority || "—"}</p>
-                                  <div className="le-priorityHeaderRow"><p className="le-priorityHeadline le-priorityHeadlineMedium" style={{ marginTop: 4 }}>Recommended Products Based on Priority:</p><button type="button" className="le-btn secondary" onClick={() => setRecommendationRefreshToken((v) => v + 1)}>Refresh</button></div>
+                                  <p className="le-priorityHeadline le-priorityHeadlineMedium le-priorityTitleSpaced">Prospect's financial priority: {needsPrioritiesDerived.priority || "—"}</p>
+                                  <div className="le-priorityHeaderRow le-priorityHeaderSpaced"><p className="le-priorityHeadline le-priorityHeadlineMedium">Recommended Products Based on Priority:</p></div>
+                                  {renderNeedsAssessmentError("selectedProductId")}
                                   {!isNeedsPrioritiesCompleteForRecommendations ? (
-                                    <p className="le-muted" style={{ marginTop: 8 }}>Complete all required Needs and Priorities fields first, then click Refresh.</p>
+                                    <p className="le-muted" style={{ marginTop: 8 }}>Complete all required Needs and Priorities fields first to view recommendations.</p>
+                                  ) : !isNeedsPrioritiesValidForRecommendations ? (
+                                    <p className="le-muted" style={{ marginTop: 8 }}>Needs and Priorities has missing or invalid values. Fix all invalid fields first before product recommendations are shown.</p>
                                   ) : availableProductsByPriority.length === 0 ? (
                                     <p className="le-muted" style={{ marginTop: 8 }}>No products found for this priority.</p>
                                   ) : (
                                     <>
                                       <div className="le-attemptList" style={{ marginTop: 8 }}>
-                                        {productRecommendationView.recommended.length === 0 ? <p className="le-muted">No recommended products based on current criteria.</p> : productRecommendationView.recommended.map(({ product, annualThreshold, sumThreshold }) => {
+                                        {productRecommendationView.recommended.length === 0 ? <p className="le-muted">No recommended products based on current criteria.</p> : productRecommendationView.recommended.map(({ product, annualThreshold, sumThreshold, minAnnual, minSum, minAnnualTier, minSumTier }) => {
                                           const isSelected = String(needsAssessmentForm.needsPriorities?.productSelection?.selectedProductId || "") === String(product?._id || "");
                                           return (
                                             <div key={String(product?._id || product?.productName)} className="le-attemptItem le-productCard alternative">
                                               <h6 className="le-attemptSectionHeader le-productCardTitle" style={{ marginTop: 0 }}>{product?.productName || "—"}</h6>
                                               <p className="le-muted" style={{ marginTop: 4 }}>{product?.description || "No description available."}</p>
-                                              <p className="le-smallNote">Age Requirement: {product?.ageRequirement?.label || "No standard"}</p>
-                                              <p className="le-smallNote">Minimum Sum Assured: {Number.isFinite(sumThreshold) ? Number(sumThreshold).toLocaleString() : (product?.minimumSumAssured?.label || "No standard")}</p>
-                                              <p className="le-smallNote">Minimum Annual Premium: {Number.isFinite(annualThreshold) ? Number(annualThreshold).toLocaleString() : (product?.minimumAnnualPremium?.label || "No standard")}</p>
-                                              <p className="le-smallNote">Minimum Monthly Premium: {Number.isFinite(annualThreshold) ? (annualThreshold / 12).toLocaleString(undefined, { maximumFractionDigits: 2 }) : "No standard"}</p>
+                                              <p className="le-smallNote">Age Requirement: {product?.ageRequirement?.label || "No Standard"}</p>
+                                              <p className="le-smallNote">Minimum Sum Assured: {Number.isFinite(sumThreshold) && sumThreshold > 0 ? `Php ${formatAmount(sumThreshold)}` : renderStandardLabel(minSum)}</p>
+                                              <p className="le-smallNote">Minimum Annual Premium: {Number.isFinite(annualThreshold) && annualThreshold > 0 ? `Php ${formatAmount(annualThreshold)}` : renderStandardLabel(minAnnual)}</p>
+                                              <p className="le-smallNote">Minimum Monthly Premium: {Number.isFinite(annualThreshold) && annualThreshold > 0 ? `Php ${formatAmount(annualThreshold / 12)}` : "No Standard"}</p>
+                                              {minAnnualTier ? <div className="le-tierBlock le-tierBlockRecommended"><p className="le-smallNote le-tierTitle">Applicable Annual Premium Tier</p><p className="le-smallNote le-tierRow">• Ages {minAnnualTier?.minAge ?? "—"}-{minAnnualTier?.maxAge ?? "—"}: {renderTierAmount(minAnnualTier?.amount)} <span className="le-tierEq">(Monthly Eq: {Number.isFinite(Number(minAnnualTier?.amount)) && Number(minAnnualTier?.amount) > 0 ? `Php ${formatAmount(Number(minAnnualTier.amount) / 12)}` : "No Standard"})</span></p></div> : null}
+                                              {minSumTier ? <div className="le-tierBlock le-tierBlockRecommended"><p className="le-smallNote le-tierTitle">Applicable Sum Assured Tier</p><p className="le-smallNote le-tierRow">• Ages {minSumTier?.minAge ?? "—"}-{minSumTier?.maxAge ?? "—"}: {renderTierAmount(minSumTier?.amount)}</p></div> : null}
                                               <div className="le-actions" style={{ marginTop: 8 }}>
                                                 <button type="button" className={`le-btn ${isSelected ? "primary" : "secondary"}`} onClick={() => updateNeedsPriorities("productSelection", { selectedProductId: String(product?._id || ""), requestedFrequency: "Monthly", requestedPremiumPayment: computeRequestedPremiumFromMin(needsAssessmentForm.needsPriorities?.minPremium, "Monthly") })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}>{isSelected ? "Selected" : "Select"}</button>
                                               </div>
@@ -9109,31 +9360,27 @@ function AgentLeadEngagement() {
                                           );
                                         })}
                                       </div>
-                                      <p className="le-priorityHeadline le-priorityHeadlineMedium" style={{ marginTop: 10 }}>Alternative Products Based on Priority:</p>
+                                      <p className="le-priorityHeadline le-priorityHeadlineMedium le-altTitleSpaced">Alternative Products Based on Priority:</p>
                                       <div className="le-attemptList" style={{ marginTop: 8 }}>
-                                        {productRecommendationView.alternatives.length === 0 ? <p className="le-muted">No alternative products to show.</p> : productRecommendationView.alternatives.map(({ product, annualThreshold, sumThreshold, reasons }) => {
-                                          const isSelected = String(needsAssessmentForm.needsPriorities?.productSelection?.selectedProductId || "") === String(product?._id || "");
+                                        {productRecommendationView.alternatives.length === 0 ? <p className="le-muted">No alternative products to show.</p> : productRecommendationView.alternatives.map(({ product, annualThreshold, sumThreshold, reasons, minAnnual, minSum, minAnnualTier, minSumTier }) => {
                                           return (
                                             <div key={`alt-${String(product?._id || product?.productName)}`} className="le-attemptItem le-productCard recommended">
                                               <h6 className="le-attemptSectionHeader le-productCardTitle" style={{ marginTop: 0 }}>{product?.productName || "—"}</h6>
                                               <p className="le-muted" style={{ marginTop: 4 }}>{product?.description || "No description available."}</p>
-                                              <p className="le-smallNote">Age Requirement: {product?.ageRequirement?.label || "No standard"}</p>
-                                              <p className="le-smallNote">Minimum Sum Assured: {Number.isFinite(sumThreshold) ? Number(sumThreshold).toLocaleString() : (product?.minimumSumAssured?.label || "No standard")}</p>
-                                              <p className="le-smallNote">Minimum Annual Premium: {Number.isFinite(annualThreshold) ? Number(annualThreshold).toLocaleString() : (product?.minimumAnnualPremium?.label || "No standard")}</p>
-                                              <p className="le-smallNote">Minimum Monthly Premium: {Number.isFinite(annualThreshold) ? (annualThreshold / 12).toLocaleString(undefined, { maximumFractionDigits: 2 }) : "No standard"}</p>
-                                              <p className="le-smallNote" style={{ color: '#B45309' }}>⚠ This product did not fit criteria ({reasons.join('; ')}). Select wisely.</p>
-                                              <div className="le-actions" style={{ marginTop: 8 }}>
-                                                <button type="button" className={`le-btn ${isSelected ? "primary" : "secondary"}`} onClick={() => updateNeedsPriorities("productSelection", { selectedProductId: String(product?._id || ""), requestedFrequency: "Monthly", requestedPremiumPayment: computeRequestedPremiumFromMin(needsAssessmentForm.needsPriorities?.minPremium, "Monthly") })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}>{isSelected ? "Selected" : "Select"}</button>
-                                              </div>
+                                              <p className="le-smallNote">Age Requirement: {product?.ageRequirement?.label || "No Standard"}</p>
+                                              <p className="le-smallNote">Minimum Sum Assured: {Number.isFinite(sumThreshold) && sumThreshold > 0 ? `Php ${formatAmount(sumThreshold)}` : renderStandardLabel(minSum)}</p>
+                                              <p className="le-smallNote">Minimum Annual Premium: {Number.isFinite(annualThreshold) && annualThreshold > 0 ? `Php ${formatAmount(annualThreshold)}` : renderStandardLabel(minAnnual)}</p>
+                                              <p className="le-smallNote">Minimum Monthly Premium: {Number.isFinite(annualThreshold) && annualThreshold > 0 ? `Php ${formatAmount(annualThreshold / 12)}` : "No Standard"}</p>
+                                              {minAnnualTier ? <div className="le-tierBlock le-tierBlockAlternative"><p className="le-smallNote le-tierTitle">Applicable Annual Premium Tier</p><p className="le-smallNote le-tierRow">• Ages {minAnnualTier?.minAge ?? "—"}-{minAnnualTier?.maxAge ?? "—"}: {renderTierAmount(minAnnualTier?.amount)} <span className="le-tierEq">(Monthly Eq: {Number.isFinite(Number(minAnnualTier?.amount)) && Number(minAnnualTier?.amount) > 0 ? `Php ${formatAmount(Number(minAnnualTier.amount) / 12)}` : "No Standard"})</span></p></div> : null}
+                                              {minSumTier ? <div className="le-tierBlock le-tierBlockAlternative"><p className="le-smallNote le-tierTitle">Applicable Sum Assured Tier</p><p className="le-smallNote le-tierRow">• Ages {minSumTier?.minAge ?? "—"}-{minSumTier?.maxAge ?? "—"}: {renderTierAmount(minSumTier?.amount)}</p></div> : null}
+                                              <p className="le-smallNote" style={{ color: '#B45309' }}>⚠ This product did not fit criteria ({reasons.join('; ')}).</p>
                                             </div>
                                           );
                                         })}
                                       </div>
                                     </>
                                   )}
-                                  {renderNeedsAssessmentError("selectedProductId")}
-
-                              <div className="le-blockHeader withTopBorder le-subsectionHeaderBar">
+                              <div className="le-blockHeader withTopBorder le-subsectionHeaderBar le-ridersHeaderTone">
                                 <h4 className="le-blockTitle">Riders (Optional)</h4>
                                 <button
                                   type="button"
@@ -9144,7 +9391,7 @@ function AgentLeadEngagement() {
                                 </button>
                               </div>
                               {needsSectionOpen.optionalRiders ? (
-                              <div className="le-subsectionCard">
+                              <div className="le-subsectionCard le-ridersCardTone">
                                 <div className="le-attemptList" style={{ marginTop: 8 }}>
                                 {OPTIONAL_RIDER_CATALOG.map((rider, idx) => {
                                   const saved = (needsAssessmentForm.needsPriorities?.optionalRiders || []).find((r) => String(r?.riderKey || "") === rider.riderKey);
@@ -9188,7 +9435,7 @@ function AgentLeadEngagement() {
                               ) : null}
 
                               <div className="le-subsectionCard">
-                                                                <div className="le-formRow"><label className="le-label">Requested Frequency of Premium Payment *</label><select className="le-input" value={needsAssessmentForm.needsPriorities?.productSelection?.requestedFrequency || "Monthly"} onChange={(e) => { const v = e.target.value; const currentRequested = String(needsAssessmentForm.needsPriorities?.productSelection?.requestedPremiumPayment ?? "").trim(); const nextRequested = currentRequested === "" ? computeRequestedPremiumFromMin(needsAssessmentForm.needsPriorities?.minPremium, v) : currentRequested; updateNeedsPriorities("productSelection", { ...(needsAssessmentForm.needsPriorities?.productSelection || {}), requestedFrequency: v, requestedPremiumPayment: nextRequested }); }} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}><option value="Monthly">Monthly</option><option value="Quarterly">Quarterly</option><option value="Half-yearly">Half-yearly</option><option value="Yearly">Yearly</option></select></div>
+                                <div className="le-formRow"><label className="le-label">Requested Frequency of Premium Payment *</label><select className="le-input" value={needsAssessmentForm.needsPriorities?.productSelection?.requestedFrequency || "Monthly"} onChange={(e) => { const v = e.target.value; const currentRequested = String(needsAssessmentForm.needsPriorities?.productSelection?.requestedPremiumPayment ?? "").trim(); const nextRequested = currentRequested === "" ? computeRequestedPremiumFromMin(needsAssessmentForm.needsPriorities?.minPremium, v) : currentRequested; updateNeedsPriorities("productSelection", { ...(needsAssessmentForm.needsPriorities?.productSelection || {}), requestedFrequency: v, requestedPremiumPayment: nextRequested }); }} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}><option value="Monthly">Monthly</option><option value="Quarterly">Quarterly</option><option value="Half-yearly">Half-yearly</option><option value="Yearly">Yearly</option></select></div>
                                 {renderNeedsAssessmentError("requestedFrequency")}
                                 <div className="le-formRow"><label className="le-label">Requested Premium Payment (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.productSelection?.requestedPremiumPayment ?? ""} onChange={(e) => updateNeedsPriorities("productSelection", { ...(needsAssessmentForm.needsPriorities?.productSelection || {}), requestedPremiumPayment: e.target.value })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
                                 {renderNeedsAssessmentError("requestedPremiumPayment")}
@@ -9207,6 +9454,9 @@ function AgentLeadEngagement() {
                                 className="le-btn secondary"
                                 onClick={() => {
                                   setNeedsAssessmentError("");
+                                  setNeedsSaveAttempted(false);
+                                  setNeedsAssessmentFieldErrors({});
+                                  try { sessionStorage.removeItem(needsDraftStorageKey); } catch {}
                                   if (needsAnalysisDetailsSaved) {
                                     setNeedsAnalysisEditMode(false);
                                     fetchNeedsAssessment();
@@ -9243,6 +9493,7 @@ function AgentLeadEngagement() {
                                 </button>
                               ) : null}
                             </div>
+                            <div className="le-savedNeedsSection">
                             <p className="le-smallNote">Basic Information</p>
                             <div className="le-attemptMeta">
                               {String(needsAssessmentForm.basicInformation?.fullName || "").trim() ? <div><span className="le-metaLabel">Full Name</span><span className="le-metaValue">{needsAssessmentForm.basicInformation.fullName}</span></div> : null}
@@ -9271,9 +9522,10 @@ function AgentLeadEngagement() {
                                   ].filter(Boolean).join(", ")}</span></div>
                                 : null}
                             </div>
+                            </div>
                             {(needsAssessmentForm.dependents || []).length > 0 ? (
-                              <>
-                                <p className="le-smallNote" style={{ marginTop: 12 }}>Dependents</p>
+                              <div className="le-savedNeedsSection">
+                                <p className="le-smallNote">Dependents</p>
                                 <div className="le-attemptList" style={{ marginTop: 8 }}>
                                   {(needsAssessmentForm.dependents || []).map((d, idx) => (
                                     <div key={`saved-dep-${idx}`} className="le-attemptItem">
@@ -9286,10 +9538,11 @@ function AgentLeadEngagement() {
                                     </div>
                                   ))}
                                 </div>
-                              </>
+                              </div>
                             ) : null}
 
-                            <p className="le-smallNote" style={{ marginTop: 12 }}>Needs & Priorities</p>
+                            <div className="le-savedNeedsSection">
+                            <p className="le-smallNote">Needs & Priorities</p>
                             <div className="le-attemptMeta">
                               {String(needsAssessmentForm.needsPriorities?.currentPriority || "").trim() ? <div><span className="le-metaLabel">Current Priority</span><span className="le-metaValue">{needsAssessmentForm.needsPriorities.currentPriority}</span></div> : null}
                               {String(needsAssessmentForm.needsPriorities?.monthlyIncomeBand || "").trim() ? <div><span className="le-metaLabel">Income Band</span><span className="le-metaValue">{needsAssessmentForm.needsPriorities.monthlyIncomeBand}</span></div> : null}
@@ -9299,10 +9552,11 @@ function AgentLeadEngagement() {
                               {needsAssessmentForm.needsPriorities?.productSelection?.requestedPremiumPayment !== "" && needsAssessmentForm.needsPriorities?.productSelection?.requestedPremiumPayment !== null && needsAssessmentForm.needsPriorities?.productSelection?.requestedPremiumPayment !== undefined ? <div><span className="le-metaLabel">Requested Premium Payment</span><span className="le-metaValue">{needsAssessmentForm.needsPriorities.productSelection.requestedPremiumPayment}</span></div> : null}
                               {String(needsAssessmentForm.needsPriorities?.productSelection?.requestedFrequency || "").trim() ? <div><span className="le-metaLabel">Requested Frequency</span><span className="le-metaValue">{needsAssessmentForm.needsPriorities.productSelection.requestedFrequency}</span></div> : null}
                             </div>
+                            </div>
 
                             {needsPrioritiesDerived.priority === "Protection" ? (
-                              <>
-                                <p className="le-smallNote" style={{ marginTop: 12 }}>Protection Details</p>
+                              <div className="le-savedNeedsSection">
+                                <p className="le-smallNote">Protection Details</p>
                                 <div className="le-attemptMeta">
                                   {needsAssessmentForm.needsPriorities?.protection?.monthlySpend !== "" && needsAssessmentForm.needsPriorities?.protection?.monthlySpend !== null && needsAssessmentForm.needsPriorities?.protection?.monthlySpend !== undefined ? <div><span className="le-metaLabel">Monthly Spend</span><span className="le-metaValue">{needsAssessmentForm.needsPriorities.protection.monthlySpend}</span></div> : null}
                                   {Number.isFinite(needsPrioritiesDerived.numberOfDependents) ? <div><span className="le-metaLabel">Number of Dependents</span><span className="le-metaValue">{needsPrioritiesDerived.numberOfDependents}</span></div> : null}
@@ -9310,23 +9564,23 @@ function AgentLeadEngagement() {
                                   {needsAssessmentForm.needsPriorities?.protection?.savingsForProtection !== "" && needsAssessmentForm.needsPriorities?.protection?.savingsForProtection !== null && needsAssessmentForm.needsPriorities?.protection?.savingsForProtection !== undefined ? <div><span className="le-metaLabel">Savings for Protection</span><span className="le-metaValue">{needsAssessmentForm.needsPriorities.protection.savingsForProtection}</span></div> : null}
                                   {Number.isFinite(needsPrioritiesDerived.protectionGap) ? <div><span className="le-metaLabel">Protection Gap</span><span className="le-metaValue">{needsPrioritiesDerived.protectionGap}</span></div> : null}
                                 </div>
-                              </>
+                              </div>
                             ) : null}
 
                             {needsPrioritiesDerived.priority === "Health" ? (
-                              <>
-                                <p className="le-smallNote" style={{ marginTop: 12 }}>Health Details</p>
+                              <div className="le-savedNeedsSection">
+                                <p className="le-smallNote">Health Details</p>
                                 <div className="le-attemptMeta">
                                   {needsAssessmentForm.needsPriorities?.health?.amountToCoverCriticalIllness !== "" && needsAssessmentForm.needsPriorities?.health?.amountToCoverCriticalIllness !== null && needsAssessmentForm.needsPriorities?.health?.amountToCoverCriticalIllness !== undefined ? <div><span className="le-metaLabel">Amount to Cover Critical Illness</span><span className="le-metaValue">{needsAssessmentForm.needsPriorities.health.amountToCoverCriticalIllness}</span></div> : null}
                                   {needsAssessmentForm.needsPriorities?.health?.savingsForCriticalIllness !== "" && needsAssessmentForm.needsPriorities?.health?.savingsForCriticalIllness !== null && needsAssessmentForm.needsPriorities?.health?.savingsForCriticalIllness !== undefined ? <div><span className="le-metaLabel">Savings for Critical Illness</span><span className="le-metaValue">{needsAssessmentForm.needsPriorities.health.savingsForCriticalIllness}</span></div> : null}
                                   {Number.isFinite(needsPrioritiesDerived.criticalIllnessGap) ? <div><span className="le-metaLabel">Critical Illness Gap</span><span className="le-metaValue">{needsPrioritiesDerived.criticalIllnessGap}</span></div> : null}
                                 </div>
-                              </>
+                              </div>
                             ) : null}
 
                             {needsPrioritiesDerived.priority === "Investment" ? (
-                              <>
-                                <p className="le-smallNote" style={{ marginTop: 12 }}>Investment Details</p>
+                              <div className="le-savedNeedsSection">
+                                <p className="le-smallNote">Investment Details</p>
                                 <div className="le-attemptMeta">
                                   {String(needsAssessmentForm.needsPriorities?.investment?.savingsPlan || "").trim() ? <div><span className="le-metaLabel">Savings Plan</span><span className="le-metaValue">{needsAssessmentForm.needsPriorities.investment.savingsPlan}</span></div> : null}
                                   {String(needsAssessmentForm.needsPriorities?.investment?.savingsPlanOther || "").trim() ? <div><span className="le-metaLabel">Savings Plan (Other)</span><span className="le-metaValue">{needsAssessmentForm.needsPriorities.investment.savingsPlanOther}</span></div> : null}
@@ -9342,8 +9596,8 @@ function AgentLeadEngagement() {
                                 </div>
 
                                 {(needsPrioritiesDerived.selectedFunds || []).length > 0 ? (
-                                  <>
-                                    <p className="le-smallNote" style={{ marginTop: 12 }}>Selected Funds</p>
+                                  <div className="le-savedNeedsSubSection">
+                                    <p className="le-smallNote">Selected Funds</p>
                                     <div className="le-attemptList" style={{ marginTop: 8 }}>
                                       {needsPrioritiesDerived.selectedFunds.map((fund) => (
                                         <div key={`saved-fund-${fund.key}`} className="le-attemptItem">
@@ -9355,14 +9609,14 @@ function AgentLeadEngagement() {
                                         </div>
                                       ))}
                                     </div>
-                                  </>
+                                  </div>
                                 ) : null}
-                              </>
+                              </div>
                             ) : null}
 
                             {((needsAssessmentForm.needsPriorities?.optionalRiders || []).filter((r) => r?.enabled).length > 0 || String(needsAssessmentForm.needsPriorities?.productRidersNotes || "").trim()) ? (
-                              <>
-                                <p className="le-smallNote" style={{ marginTop: 12 }}>Riders & Notes</p>
+                              <div className="le-savedNeedsSection">
+                                <p className="le-smallNote">Riders & Notes</p>
                                 <div className="le-attemptMeta">
                                   {(needsAssessmentForm.needsPriorities?.optionalRiders || []).filter((r) => r?.enabled).length > 0 ? (
                                     <div>
@@ -9374,7 +9628,7 @@ function AgentLeadEngagement() {
                                     <div><span className="le-metaLabel">Notes</span><span className="le-metaValue">{needsAssessmentForm.needsPriorities.productRidersNotes}</span></div>
                                   ) : null}
                                 </div>
-                              </>
+                              </div>
                             ) : null}
                           </div>
 
@@ -9388,7 +9642,7 @@ function AgentLeadEngagement() {
                           <div className="le-block" style={{ marginTop: 16 }}>
                             <div className="le-inlineActionRow">
                               <h4 className="le-blockTitle" style={{ fontSize: 16 }}>Schedule Further Needs Assessment Meet</h4>
-                              {isNeedsAssessmentEditableNow && needsFollowUpDecisionSaved && !needsFollowUpDecisionEditMode ? (
+                              {isNeedsAssessmentCurrentStageEditable && needsFollowUpDecisionSaved && !needsFollowUpDecisionEditMode ? (
                                 <button
                                   type="button"
                                   className="le-btn secondary"
@@ -9401,7 +9655,7 @@ function AgentLeadEngagement() {
                                 >
                                   Edit
                                 </button>
-                              ) : isNeedsAssessmentEditableNow && !needsFollowUpDecisionSaved && needsFollowUpDecisionDismissed ? (
+                              ) : isNeedsAssessmentCurrentStageEditable && !needsFollowUpDecisionSaved && needsFollowUpDecisionDismissed ? (
                                 <button
                                   type="button"
                                   className="le-btn secondary"
@@ -9428,27 +9682,25 @@ function AgentLeadEngagement() {
                                       setNeedsFollowUpDecisionDismissed(false);
                                       setNeedsFollowUpDecisionEditMode(true);
                                     }}
-                                    disabled={!isNeedsAssessmentEditableNow || (needsFollowUpDecisionSaved && !needsFollowUpDecisionEditMode)}
+                                    disabled={!isNeedsAssessmentCurrentStageEditable || (needsFollowUpDecisionSaved && !needsFollowUpDecisionEditMode)}
                                   >
                                     <option value="">Select</option>
                                     <option value="YES">Yes</option>
                                     <option value="NO">No</option>
                                   </select>
                                 </div>
-                                {isNeedsAssessmentEditableNow && (!needsFollowUpDecisionSaved || needsFollowUpDecisionEditMode) ? (
+                                {isNeedsAssessmentCurrentStageEditable && (!needsFollowUpDecisionSaved || needsFollowUpDecisionEditMode) ? (
                                   <div className="le-actions">
                                     <button
                                       type="button"
                                       className="le-btn secondary"
                                       onClick={() => {
-                                        setNeedsFollowUpRequired(needsFollowUpDecisionSaved ? savedNeedsFollowUpRequired : "");
-                                        setNeedsFollowUpDecisionEditMode(false);
-                                        setNeedsFollowUpDecisionDismissed(!needsFollowUpDecisionSaved);
+                                        setNeedsFollowUpRequired("");
                                         setNeedsFollowUpDecisionError("");
                                       }}
                                       disabled={needsFollowUpDecisionSaving}
                                     >
-                                      Cancel
+                                      Clear
                                     </button>
                                     <button
                                       type="button"
@@ -9515,7 +9767,7 @@ function AgentLeadEngagement() {
                               </>
                             ) : null}
                             {needsFollowUpDecisionError ? <p className="le-smallNote" style={{ marginTop: 8, color: "#DA291C" }}>{needsFollowUpDecisionError}</p> : null}
-                            {isNeedsAssessmentEditableNow && needsFollowUpDecisionSaved && !needsFollowUpDecisionEditMode && savedNeedsFollowUpRequired === "YES" && !hasAddedFollowUpNeedsMeeting ? (
+                            {isNeedsAssessmentCurrentStageEditable && needsFollowUpDecisionSaved && !needsFollowUpDecisionEditMode && savedNeedsFollowUpRequired === "YES" && !hasAddedFollowUpNeedsMeeting ? (
                               <p className="le-smallNote" style={{ marginTop: 8 }}>
                                 Further Needs Assessment can be Scheduled. {" "}
                                 <button
@@ -9541,18 +9793,6 @@ function AgentLeadEngagement() {
                           <div className="le-block" style={{ marginTop: 16 }}>
                             {!proposalMeetingSaved ? <h4 className="le-blockTitle">Schedule Proposal Presentation</h4> : null}
                             {isHistoryView && !hasNeedsScheduleSaved ? <p className="le-muted" style={{ marginTop: 8 }}>No details were saved for this subactivity in the selected engagement cycle.</p> : null}
-                            {proposalMeetingSaved && isNeedsScheduleEditable && isProposalPresentationNoRescheduleMode ? (
-                              <div className="le-actions" style={{ marginTop: 0, marginBottom: 12 }}>
-                                <button
-                                  type="button"
-                                  className="le-btn secondary"
-                                  onClick={startAddFurtherProposalPresentation}
-                                  disabled={savingProposalMeeting}
-                                >
-                                  Add Further Proposal Presentation Meet
-                                </button>
-                              </div>
-                            ) : null}
                             {proposalMeetingSaved ? (
                               <div className="le-attemptList" style={{ marginTop: 8 }}>
                                 {(proposalMeetingHistory.length ? proposalMeetingHistory : [proposalMeetingSaved]).map((meeting, idx, arr) => {
@@ -9572,16 +9812,31 @@ function AgentLeadEngagement() {
                                         {meeting?.place ? <div><span className="le-metaLabel">Meeting Place</span><span className="le-metaValue">{meeting.place}</span></div> : null}
                                         {meeting?.status ? <div><span className="le-metaLabel">Status</span><span className="le-metaValue">{meeting.status}</span></div> : null}
                                       </div>
-                                      {idx === 0 && isNeedsScheduleEditable && !isProposalPresentationNoRescheduleMode && String(meeting?.status || "").trim() !== "Completed" ? (
+                                      {idx === 0 && (
+                                        (isNeedsScheduleEditable && String(meeting?.status || "").trim() !== "Completed") ||
+                                        canScheduleFurtherProposalPresentation
+                                      ) ? (
                                         <div className="le-actions" style={{ marginTop: 12 }}>
-                                          <button
-                                            type="button"
-                                            className="le-btn secondary"
-                                            onClick={startRescheduleProposalPresentation}
-                                            disabled={savingProposalMeeting}
-                                          >
-                                            Reschedule Meeting
-                                          </button>
+                                          {isNeedsScheduleEditable && String(meeting?.status || "").trim() !== "Completed" ? (
+                                            <button
+                                              type="button"
+                                              className="le-btn secondary"
+                                              onClick={startRescheduleProposalPresentation}
+                                              disabled={savingProposalMeeting}
+                                            >
+                                              Reschedule Meeting
+                                            </button>
+                                          ) : null}
+                                          {canScheduleFurtherProposalPresentation ? (
+                                            <button
+                                              type="button"
+                                              className="le-btn secondary"
+                                              onClick={startAddFurtherProposalPresentation}
+                                              disabled={savingProposalMeeting}
+                                            >
+                                              Add Further Proposal Presentation Meet
+                                            </button>
+                                          ) : null}
                                         </div>
                                       ) : null}
                                     </div>
@@ -9605,7 +9860,7 @@ function AgentLeadEngagement() {
                                   setProposalMeetingForm((f) => ({ ...f, meetingDate: v }));
                                   setProposalMeetingFieldErrors((prev) => ({ ...prev, meetingDate: "", meetingStartTime: "" }));
                                 }}
-                                disabled={!isNeedsScheduleEditable || savingProposalMeeting}
+                                disabled={!canEditProposalScheduleForm || savingProposalMeeting}
                               />
                               {proposalMeetingFieldErrors.meetingDate ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{proposalMeetingFieldErrors.meetingDate}</p> : null}
                             </div>
@@ -9619,7 +9874,7 @@ function AgentLeadEngagement() {
                                   setProposalMeetingForm((f) => ({ ...f, meetingStartTime: v }));
                                   setProposalMeetingFieldErrors((prev) => ({ ...prev, meetingStartTime: "" }));
                                 }}
-                                disabled={!isNeedsScheduleEditable || savingProposalMeeting}
+                                disabled={!canEditProposalScheduleForm || savingProposalMeeting}
                               >
                                 <option value="">Select Time</option>
                                 {proposalMeetingStartSlots.map((t) => {
@@ -9657,7 +9912,7 @@ function AgentLeadEngagement() {
                                   setProposalMeetingForm((f) => ({ ...f, meetingDurationMin: e.target.value ? Number(e.target.value) : "" }));
                                   setProposalMeetingFieldErrors((prev) => ({ ...prev, meetingDurationMin: "", meetingStartTime: "" }));
                                 }}
-                                disabled={!isNeedsScheduleEditable || savingProposalMeeting}
+                                disabled={!canEditProposalScheduleForm || savingProposalMeeting}
                               >
                                 <option value="">Select Duration</option>
                                 <option value={30}>30 mins</option>
@@ -9684,7 +9939,7 @@ function AgentLeadEngagement() {
                                   }));
                                   setProposalMeetingFieldErrors((prev) => ({ ...prev, meetingMode: "" }));
                                 }}
-                                disabled={!isNeedsScheduleEditable || savingProposalMeeting}
+                                disabled={!canEditProposalScheduleForm || savingProposalMeeting}
                               >
                                 <option value="">Select</option>
                                 <option value="Online">Online</option>
@@ -9704,7 +9959,7 @@ function AgentLeadEngagement() {
                                       setProposalMeetingForm((f) => ({ ...f, meetingPlatform: e.target.value }));
                                       setProposalMeetingFieldErrors((prev) => ({ ...prev, meetingPlatform: "", meetingPlatformOther: "" }));
                                     }}
-                                    disabled={!isNeedsScheduleEditable || savingProposalMeeting}
+                                    disabled={!canEditProposalScheduleForm || savingProposalMeeting}
                                   >
                                     <option value="">Select</option>
                                     <option value="Zoom">Zoom</option>
@@ -9723,7 +9978,7 @@ function AgentLeadEngagement() {
                                         setProposalMeetingForm((f) => ({ ...f, meetingPlatformOther: e.target.value }));
                                         setProposalMeetingFieldErrors((prev) => ({ ...prev, meetingPlatformOther: "" }));
                                       }}
-                                      disabled={!isNeedsScheduleEditable || savingProposalMeeting}
+                                      disabled={!canEditProposalScheduleForm || savingProposalMeeting}
                                     />
                                     {proposalMeetingFieldErrors.meetingPlatformOther ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{proposalMeetingFieldErrors.meetingPlatformOther}</p> : null}
                                   </div>
@@ -9738,7 +9993,7 @@ function AgentLeadEngagement() {
                                       setProposalMeetingFieldErrors((prev) => ({ ...prev, meetingLink: "" }));
                                     }}
                                     placeholder="https://..."
-                                    disabled={!isNeedsScheduleEditable || savingProposalMeeting}
+                                    disabled={!canEditProposalScheduleForm || savingProposalMeeting}
                                   />
                                   {proposalMeetingFieldErrors.meetingLink ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{proposalMeetingFieldErrors.meetingLink}</p> : null}
                                 </div>
@@ -9751,7 +10006,7 @@ function AgentLeadEngagement() {
                                         setProposalMeetingForm((f) => ({ ...f, meetingInviteSent: e.target.checked }));
                                         setProposalMeetingFieldErrors((prev) => ({ ...prev, meetingInviteSent: "" }));
                                       }}
-                                      disabled={!isNeedsScheduleEditable || savingProposalMeeting}
+                                      disabled={!canEditProposalScheduleForm || savingProposalMeeting}
                                     />
                                     <span>I confirm invite link has been sent (required)</span>
                                   </label>
@@ -9770,7 +10025,7 @@ function AgentLeadEngagement() {
                                     setProposalMeetingForm((f) => ({ ...f, meetingPlace: e.target.value }));
                                     setProposalMeetingFieldErrors((prev) => ({ ...prev, meetingPlace: "" }));
                                   }}
-                                  disabled={!isNeedsScheduleEditable || savingProposalMeeting}
+                                  disabled={!canEditProposalScheduleForm || savingProposalMeeting}
                                 />
                                 {proposalMeetingFieldErrors.meetingPlace ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{proposalMeetingFieldErrors.meetingPlace}</p> : null}
                               </div>
@@ -9800,7 +10055,7 @@ function AgentLeadEngagement() {
                                   });
                                   setProposalMeetingNeedsPrefillKey(proposalNeedsPrefillKey);
                                 }}
-                                disabled={!isNeedsScheduleEditable || savingProposalMeeting}
+                                disabled={!canEditProposalScheduleForm || savingProposalMeeting}
                               >
                                 {proposalMeetingRescheduleOriginal ? "Cancel" : "Clear"}
                               </button>
@@ -9808,7 +10063,7 @@ function AgentLeadEngagement() {
                                 type="button"
                                 className="le-btn primary"
                                 onClick={submitScheduleProposalPresentation}
-                                disabled={!isNeedsScheduleEditable || savingProposalMeeting}
+                                disabled={!canEditProposalScheduleForm || savingProposalMeeting}
                               >
                                 {savingProposalMeeting ? "Saving..." : "Save Proposal Presentation Schedule"}
                               </button>
