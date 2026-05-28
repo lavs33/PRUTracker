@@ -7873,7 +7873,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/needs-assessment", async (req,
     } else if (!needsAssessment.attendanceConfirmed) {
       effectiveNeedsActivityKey = "Record Prospect Attendance";
     } else if (["Perform Needs Analysis", "Schedule Proposal Presentation"].includes(naOutcome)) {
-      effectiveNeedsActivityKey = "Schedule Proposal Presentation";
+      effectiveNeedsActivityKey = naOutcome;
     } else if (naOutcome === "Record Prospect Attendance") {
       effectiveNeedsActivityKey = "Perform Needs Analysis";
     } else {
