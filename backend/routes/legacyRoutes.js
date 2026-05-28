@@ -7873,7 +7873,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/needs-assessment", async (req,
     } else if (!needsAssessment.attendanceConfirmed) {
       effectiveNeedsActivityKey = "Record Prospect Attendance";
     } else if (["Perform Needs Analysis", "Schedule Proposal Presentation"].includes(naOutcome)) {
-      effectiveNeedsActivityKey = "Schedule Proposal Presentation";
+      effectiveNeedsActivityKey = naOutcome;
     } else if (naOutcome === "Record Prospect Attendance") {
       effectiveNeedsActivityKey = "Perform Needs Analysis";
     } else {
@@ -10741,6 +10741,8 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/presentation", async
     const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
     const leadObjectId = new mongoose.Types.ObjectId(leadId);
 
+    let proposalPresentationResponse = { currentActivityKey: "Present Proposal", presentedAt: null };
+
     await session.withTransaction(async () => {
       const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).session(session);
       if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
@@ -10759,31 +10761,42 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/presentation", async
         throw Object.assign(new Error("Present Proposal decision can only be edited while in Proposal subactivities."), { status: 409 });
       }
 
-      const nextProposalActivityKey = hasDecision && accepted === "YES" ? "Schedule Application Submission" : "Present Proposal";
-      engagement.currentActivityKey = nextProposalActivityKey;
-      await engagement.save({ session });
+      let currentActivityKey = String(engagement.currentActivityKey || "Present Proposal").trim() || "Present Proposal";
+      const presentedAt = hasDecision ? new Date() : null;
+
+      if (hasDecision) {
+        currentActivityKey = accepted === "YES" ? "Schedule Application Submission" : "Present Proposal";
+        engagement.currentActivityKey = currentActivityKey;
+        await engagement.save({ session });
+      }
+
+      const proposalSet = hasDecision
+        ? {
+            outcomeActivity: currentActivityKey,
+            "presentProposal.proposalAccepted": accepted,
+            "presentProposal.initialQuotationNotes": notes,
+            "presentProposal.presentedAt": presentedAt,
+          }
+        : {
+            "presentProposal.initialQuotationNotes": notes,
+          };
 
       await Proposal.updateOne(
         { leadEngagementId: engagement._id },
         {
           $setOnInsert: { leadEngagementId: engagement._id },
-          $set: {
-            outcomeActivity: hasDecision && accepted === "YES" ? "Schedule Application Submission" : "Present Proposal",
-            presentProposal: {
-              proposalAccepted: hasDecision ? accepted : "",
-              initialQuotationNotes: notes,
-              presentedAt: hasDecision ? new Date() : null,
-            },
-          },
+          $set: proposalSet,
         },
         { upsert: true, session }
       );
+
+      proposalPresentationResponse = { currentActivityKey, presentedAt };
     });
 
     return res.json({
       message: hasDecision ? "Proposal presentation details saved." : "Quotation proposal notes saved.",
-      currentActivityKey: hasDecision && accepted === "YES" ? "Schedule Application Submission" : "Present Proposal",
-      presentedAt: hasDecision ? new Date() : null,
+      currentActivityKey: proposalPresentationResponse.currentActivityKey,
+      presentedAt: proposalPresentationResponse.presentedAt,
     });
   } catch (err) {
     console.error("Save proposal presentation error:", err);
