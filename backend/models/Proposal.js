@@ -87,6 +87,13 @@ const proposalSchema = new mongoose.Schema(
         type: String,
         default: "",
         trim: true,
+        validate: {
+          validator(value) {
+            const accepted = String(this?.proposalAccepted || "").trim().toUpperCase();
+            return !["YES", "NO"].includes(accepted) || Boolean(String(value || "").trim());
+          },
+          message: "Notes on Quotation Proposal is required.",
+        },
       },
       presentedAt: {
         type: Date,
