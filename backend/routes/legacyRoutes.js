@@ -5283,6 +5283,111 @@ app.get("/api/prospects/:prospectId/leads/:leadId/details", async (req, res) => 
   }
 });
 
+
+// View Policyholder Details (under a Lead)
+// GET /api/prospects/:prospectId/leads/:leadId/policyholders/:policyholderId/details?userId=...
+app.get("/api/prospects/:prospectId/leads/:leadId/policyholders/:policyholderId/details", async (req, res) => {
+  try {
+    const { userId } = req.query;
+    const { prospectId, leadId, policyholderId } = req.params;
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId)) return res.status(400).json({ message: "Invalid userId." });
+    if (!mongoose.isValidObjectId(prospectId)) return res.status(400).json({ message: "Invalid prospectId." });
+    if (!mongoose.isValidObjectId(leadId)) return res.status(400).json({ message: "Invalid leadId." });
+    if (!mongoose.isValidObjectId(policyholderId)) return res.status(400).json({ message: "Invalid policyholderId." });
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
+    const leadObjectId = new mongoose.Types.ObjectId(leadId);
+    const policyholderObjectId = new mongoose.Types.ObjectId(policyholderId);
+
+    const prospect = await Prospect.findOne({
+      _id: prospectObjectId,
+      assignedToUserId: userObjectId,
+    })
+      .select("firstName middleName lastName")
+      .lean();
+
+    if (!prospect) return res.status(404).json({ message: "Prospect not found." });
+
+    const lead = await Lead.findOne({
+      _id: leadObjectId,
+      prospectId: prospectObjectId,
+    })
+      .select("leadCode")
+      .lean();
+
+    if (!lead) return res.status(404).json({ message: "Lead not found." });
+
+    const leadEngagement = await LeadEngagement.findOne({ leadId: leadObjectId })
+      .select("_id")
+      .lean();
+
+    if (!leadEngagement) return res.status(404).json({ message: "Lead engagement not found." });
+
+    const policyholder = await Policyholder.findOne({
+      _id: policyholderObjectId,
+      leadEngagementId: leadEngagement._id,
+      assignedToUserId: userObjectId,
+    })
+      .select("policyholderCode productId policyNumber lastPaidDate nextPaymentDate status createdAt updatedAt")
+      .lean();
+
+    if (!policyholder) return res.status(404).json({ message: "Policyholder not found." });
+
+    const [product, policy] = await Promise.all([
+      policyholder.productId
+        ? Product.findById(policyholder.productId).select("productName").lean()
+        : null,
+      Policy.findOne({ leadEngagementId: leadEngagement._id })
+        .select("recordPolicyApplicationStatus uploadPolicySummary recordCoverageDurationDetails")
+        .lean(),
+    ]);
+
+    const coverage = policy?.recordCoverageDurationDetails || {};
+    const policyIssuance = policy?.recordPolicyApplicationStatus || {};
+    const summary = policy?.uploadPolicySummary || {};
+    const prospectName = `${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName}`.trim();
+
+    return res.json({
+      prospect: {
+        _id: prospect._id,
+        fullName: prospectName,
+      },
+      lead: {
+        _id: lead._id,
+        leadCode: lead.leadCode,
+      },
+      policyholder: {
+        _id: policyholder._id,
+        policyholderCode: policyholder.policyholderCode,
+        policyNumber: policyholder.policyNumber || summary.policyNumber || coverage.policyNumber || "",
+        status: policyholder.status,
+        lastPaidDate: policyholder.lastPaidDate || null,
+        nextPaymentDate: policyholder.nextPaymentDate || coverage.nextPaymentDate || null,
+        createdAt: policyholder.createdAt || null,
+        updatedAt: policyholder.updatedAt || null,
+      },
+      product: {
+        _id: product?._id || policyholder.productId || null,
+        productName: product?.productName || "",
+      },
+      coverage: {
+        policyIssuanceDate: policyIssuance.issuanceDate || null,
+        policyEndDate: coverage.policyEndDate || coverage.coverageEndDate || null,
+        coverageDurationLabel: coverage.coverageDurationLabel || "",
+        coverageDurationType: coverage.coverageDurationType || "",
+        coverageDurationYears: coverage.coverageDurationYears ?? null,
+        coverageDurationUntilAge: coverage.coverageDurationUntilAge ?? null,
+      },
+    });
+  } catch (err) {
+    console.error("Get policyholder details error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
 /* ===========================
    LEADS: UPDATE (Agent)
    PUT /api/prospects/:prospectId/leads/:leadId?userId=...
@@ -5861,7 +5966,24 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
       attemptCycle: Number(engagement.contactAttemptCycle || 1),
       meetingType: "Application Submission",
     })
-      .select("meetingType startAt endAt durationMin mode platform platformOther link inviteSent place status")
+      .sort({ startAt: -1, createdAt: -1 })
+      .select("meetingType attemptCycle startAt endAt durationMin mode platform platformOther link inviteSent place status createdAt updatedAt")
+      .lean();
+
+    const applicationSubmissionMeetings = await ScheduledMeeting.find({
+      leadEngagementId: engagement._id,
+      meetingType: "Application Submission",
+    })
+      .sort({ attemptCycle: -1, startAt: -1, createdAt: -1 })
+      .select("meetingType attemptCycle startAt endAt durationMin mode platform platformOther link inviteSent place status createdAt updatedAt")
+      .lean();
+
+    const proposalPresentationMeetings = await ScheduledMeeting.find({
+      leadEngagementId: engagement._id,
+      meetingType: "Proposal Presentation",
+    })
+      .sort({ endAt: -1, startAt: -1, createdAt: -1 })
+      .select("meetingType attemptCycle startAt endAt durationMin mode platform platformOther link inviteSent place status createdAt updatedAt")
       .lean();
 
     const proposalSaved = proposalDoc?.generateProposal || {};
@@ -6229,9 +6351,28 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
             initialQuotationNotes: proposalPresentation?.initialQuotationNotes || "",
             presentedAt: proposalPresentation?.presentedAt || null,
           },
+          proposalPresentationMeetings: (proposalPresentationMeetings || []).map((meeting) => ({
+            id: meeting._id || null,
+            meetingType: meeting.meetingType,
+            attemptCycle: meeting.attemptCycle ?? null,
+            startAt: meeting.startAt || null,
+            endAt: meeting.endAt || null,
+            durationMin: meeting.durationMin ?? null,
+            mode: meeting.mode || "",
+            platform: meeting.platform || "",
+            platformOther: meeting.platformOther || "",
+            link: meeting.link || "",
+            inviteSent: Boolean(meeting.inviteSent),
+            place: meeting.place || "",
+            status: meeting.status || "",
+            createdAt: meeting.createdAt || null,
+            updatedAt: meeting.updatedAt || null,
+          })),
           applicationSubmissionMeeting: applicationSubmissionMeeting
             ? {
+                id: applicationSubmissionMeeting._id || null,
                 meetingType: applicationSubmissionMeeting.meetingType,
+                attemptCycle: applicationSubmissionMeeting.attemptCycle ?? null,
                 startAt: applicationSubmissionMeeting.startAt || null,
                 endAt: applicationSubmissionMeeting.endAt || null,
                 durationMin: applicationSubmissionMeeting.durationMin ?? null,
@@ -6242,8 +6383,27 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
                 inviteSent: Boolean(applicationSubmissionMeeting.inviteSent),
                 place: applicationSubmissionMeeting.place || "",
                 status: applicationSubmissionMeeting.status || "",
+                createdAt: applicationSubmissionMeeting.createdAt || null,
+                updatedAt: applicationSubmissionMeeting.updatedAt || null,
               }
             : null,
+          applicationSubmissionMeetings: (applicationSubmissionMeetings || []).map((meeting) => ({
+            id: meeting._id || null,
+            meetingType: meeting.meetingType,
+            attemptCycle: meeting.attemptCycle ?? null,
+            startAt: meeting.startAt || null,
+            endAt: meeting.endAt || null,
+            durationMin: meeting.durationMin ?? null,
+            mode: meeting.mode || "",
+            platform: meeting.platform || "",
+            platformOther: meeting.platformOther || "",
+            link: meeting.link || "",
+            inviteSent: Boolean(meeting.inviteSent),
+            place: meeting.place || "",
+            status: meeting.status || "",
+            createdAt: meeting.createdAt || null,
+            updatedAt: meeting.updatedAt || null,
+          })),
           prospectEmail: prospect.email || "",
           pruOneProposalUrl: "https://pruone.prulifeuk.com.ph/web",
         },
@@ -7873,7 +8033,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/needs-assessment", async (req,
     } else if (!needsAssessment.attendanceConfirmed) {
       effectiveNeedsActivityKey = "Record Prospect Attendance";
     } else if (["Perform Needs Analysis", "Schedule Proposal Presentation"].includes(naOutcome)) {
-      effectiveNeedsActivityKey = "Schedule Proposal Presentation";
+      effectiveNeedsActivityKey = naOutcome;
     } else if (naOutcome === "Record Prospect Attendance") {
       effectiveNeedsActivityKey = "Perform Needs Analysis";
     } else {
@@ -8563,11 +8723,18 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/schedule-pro
         engagement.currentStage === "Proposal" &&
         engagement.currentActivityKey === "Present Proposal" &&
         proposalPresentationScheduleActionNormalized === "RESCHEDULE_EXISTING";
+      const isProposalPresentationAddFurther =
+        engagement.currentStage === "Proposal" &&
+        engagement.currentActivityKey === "Present Proposal" &&
+        proposalPresentationScheduleActionNormalized === "ADD_FURTHER" &&
+        String(proposalDocForReschedule?.presentProposal?.proposalAccepted || "").trim().toUpperCase() === "NO";
       const isProposalPresentationRetry =
         engagement.currentStage === "Proposal" &&
         engagement.currentActivityKey === "Present Proposal" &&
         !isProposalPresentationExistingReschedule &&
-        String(proposalDocForReschedule?.presentProposal?.proposalAccepted || "").trim().toUpperCase() === "NO";
+        (isProposalPresentationAddFurther ||
+          (!proposalPresentationScheduleActionNormalized &&
+            String(proposalDocForReschedule?.presentProposal?.proposalAccepted || "").trim().toUpperCase() === "NO"));
       const isProposalPendingPresentationReschedule =
         engagement.currentStage === "Proposal" &&
         engagement.currentActivityKey === "Record Prospect Attendance" &&
@@ -9397,6 +9564,8 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/attendance", asyn
     const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
     const leadObjectId = new mongoose.Types.ObjectId(leadId);
 
+    let responseCurrentActivityKey = "Record Premium Payment Transfer";
+
     await session.withTransaction(async () => {
       const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).session(session);
       if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
@@ -9411,18 +9580,35 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/attendance", asyn
         throw Object.assign(new Error("Lead is not in Application stage."), { status: 409 });
       }
 
-      engagement.currentActivityKey = "Record Premium Payment Transfer";
+      const existingApplicationDoc = await Application.findOne({ leadEngagementId: engagement._id }).session(session);
+      const currentApplicationActivity = String(engagement.currentActivityKey || "").trim();
+      const isAttendanceStep = currentApplicationActivity === "Record Prospect Attendance";
+      const isFutureProofEdit =
+        ["Record Premium Payment Transfer", "Record Application Submission"].includes(currentApplicationActivity) &&
+        existingApplicationDoc?.recordProspectAttendance?.attended === true;
+
+      if (!isAttendanceStep && !isFutureProofEdit) {
+        throw Object.assign(new Error("Record Prospect Attendance is not the current activity."), { status: 409 });
+      }
+
+      const nextActivityKey = isFutureProofEdit ? currentApplicationActivity : "Record Premium Payment Transfer";
+      responseCurrentActivityKey = nextActivityKey;
+      engagement.currentActivityKey = nextActivityKey;
       await engagement.save({ session });
+
+      const nextOutcomeActivity = isFutureProofEdit
+        ? String(existingApplicationDoc?.outcomeActivity || currentApplicationActivity || "Record Premium Payment Transfer").trim()
+        : "Record Premium Payment Transfer";
 
       await Application.updateOne(
         { leadEngagementId: engagement._id },
         {
           $setOnInsert: { leadEngagementId: engagement._id },
           $set: {
-            outcomeActivity: "Record Premium Payment Transfer",
+            outcomeActivity: nextOutcomeActivity,
             recordProspectAttendance: {
               attended: true,
-              attendedAt: new Date(),
+              attendedAt: existingApplicationDoc?.recordProspectAttendance?.attendedAt || new Date(),
               attendanceProofImageDataUrl: proofDataUrl,
               attendanceProofFileName: proofFileName,
             },
@@ -9434,7 +9620,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/attendance", asyn
 
     return res.json({
       message: "Application prospect attendance saved.",
-      currentActivityKey: "Record Premium Payment Transfer",
+      currentActivityKey: responseCurrentActivityKey,
     });
   } catch (err) {
     console.error("Application attendance save error:", err);
@@ -10504,6 +10690,22 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/schedule-application
         throw Object.assign(new Error("meetingAt must be in the future."), { status: 400 });
       }
 
+      const latestProposalPresentationMeeting = await ScheduledMeeting.findOne({
+        leadEngagementId: engagement._id,
+        meetingType: "Proposal Presentation",
+      })
+        .sort({ endAt: -1, startAt: -1, createdAt: -1 })
+        .session(session);
+      if (latestProposalPresentationMeeting?.startAt) {
+        const proposalStart = new Date(latestProposalPresentationMeeting.startAt);
+        const proposalEnd = latestProposalPresentationMeeting.endAt
+          ? new Date(latestProposalPresentationMeeting.endAt)
+          : new Date(proposalStart.getTime() + Number(latestProposalPresentationMeeting.durationMin || 120) * 60 * 1000);
+        if (!Number.isNaN(proposalEnd.getTime()) && dt.getTime() <= proposalEnd.getTime()) {
+          throw Object.assign(new Error("Application submission meeting must start after the last proposal presentation meeting ends."), { status: 400 });
+        }
+      }
+
       if (![30, 60, 90, 120].includes(durationMin)) {
         throw Object.assign(new Error("meetingDurationMin must be one of 30, 60, 90, 120."), { status: 400 });
       }
@@ -10741,6 +10943,8 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/presentation", async
     const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
     const leadObjectId = new mongoose.Types.ObjectId(leadId);
 
+    let proposalPresentationResponse = { currentActivityKey: "Present Proposal", presentedAt: null };
+
     await session.withTransaction(async () => {
       const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).session(session);
       if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
@@ -10759,31 +10963,42 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/presentation", async
         throw Object.assign(new Error("Present Proposal decision can only be edited while in Proposal subactivities."), { status: 409 });
       }
 
-      const nextProposalActivityKey = hasDecision && accepted === "YES" ? "Schedule Application Submission" : "Present Proposal";
-      engagement.currentActivityKey = nextProposalActivityKey;
-      await engagement.save({ session });
+      let currentActivityKey = String(engagement.currentActivityKey || "Present Proposal").trim() || "Present Proposal";
+      const presentedAt = hasDecision ? new Date() : null;
+
+      if (hasDecision) {
+        currentActivityKey = accepted === "YES" ? "Schedule Application Submission" : "Present Proposal";
+        engagement.currentActivityKey = currentActivityKey;
+        await engagement.save({ session });
+      }
+
+      const proposalSet = hasDecision
+        ? {
+            outcomeActivity: currentActivityKey,
+            "presentProposal.proposalAccepted": accepted,
+            "presentProposal.initialQuotationNotes": notes,
+            "presentProposal.presentedAt": presentedAt,
+          }
+        : {
+            "presentProposal.initialQuotationNotes": notes,
+          };
 
       await Proposal.updateOne(
         { leadEngagementId: engagement._id },
         {
           $setOnInsert: { leadEngagementId: engagement._id },
-          $set: {
-            outcomeActivity: hasDecision && accepted === "YES" ? "Schedule Application Submission" : "Present Proposal",
-            presentProposal: {
-              proposalAccepted: hasDecision ? accepted : "",
-              initialQuotationNotes: notes,
-              presentedAt: hasDecision ? new Date() : null,
-            },
-          },
+          $set: proposalSet,
         },
         { upsert: true, session }
       );
+
+      proposalPresentationResponse = { currentActivityKey, presentedAt };
     });
 
     return res.json({
       message: hasDecision ? "Proposal presentation details saved." : "Quotation proposal notes saved.",
-      currentActivityKey: hasDecision && accepted === "YES" ? "Schedule Application Submission" : "Present Proposal",
-      presentedAt: hasDecision ? new Date() : null,
+      currentActivityKey: proposalPresentationResponse.currentActivityKey,
+      presentedAt: proposalPresentationResponse.presentedAt,
     });
   } catch (err) {
     console.error("Save proposal presentation error:", err);
