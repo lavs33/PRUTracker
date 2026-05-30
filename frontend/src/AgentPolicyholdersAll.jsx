@@ -126,11 +126,10 @@ function AgentPolicyholdersAll() {
   const shownCount = rows.length;
   const totalCount = totalForThisUser;
 
-  const openPolicyholderLeadDetails = (policyholder) => {
-    const prospectId = String(policyholder?.prospectId || "").trim();
-    const leadId = String(policyholder?.leadId || "").trim();
-    if (!prospectId || !leadId) return;
-    navigate(`/agent/${user.username}/prospects/${prospectId}/leads/${leadId}`);
+  const openPolicyholderDetails = (policyholder) => {
+    const policyholderId = String(policyholder?._id || policyholder?.policyholderId || "").trim();
+    if (!policyholderId) return;
+    navigate(`/agent/${user.username}/policyholders/${policyholderId}`);
   };
 
   const resetFilters = () => {
@@ -263,24 +262,26 @@ function AgentPolicyholdersAll() {
                   </thead>
                   <tbody>
                     {rows.map((p) => {
-                      const canOpenLeadDetails = Boolean(String(p?.prospectId || "").trim() && String(p?.leadId || "").trim());
+                      const canOpenPolicyholderDetails = Boolean(
+                        String(p?._id || p?.policyholderId || "").trim()
+                      );
 
                       return (
                       <tr
                         key={p._id}
-                        className={`allpol-row ${canOpenLeadDetails ? "allpol-row--clickable" : ""}`.trim()}
-                        onClick={canOpenLeadDetails ? () => openPolicyholderLeadDetails(p) : undefined}
-                        onKeyDown={canOpenLeadDetails
+                        className={`allpol-row ${canOpenPolicyholderDetails ? "allpol-row--clickable" : ""}`.trim()}
+                        onClick={canOpenPolicyholderDetails ? () => openPolicyholderDetails(p) : undefined}
+                        onKeyDown={canOpenPolicyholderDetails
                           ? (e) => {
                               if (e.key === "Enter" || e.key === " ") {
                                 e.preventDefault();
-                                openPolicyholderLeadDetails(p);
+                                openPolicyholderDetails(p);
                               }
                             }
                           : undefined}
-                        role={canOpenLeadDetails ? "link" : undefined}
-                        tabIndex={canOpenLeadDetails ? 0 : undefined}
-                        title={canOpenLeadDetails ? "Open lead details" : undefined}
+                        role={canOpenPolicyholderDetails ? "link" : undefined}
+                        tabIndex={canOpenPolicyholderDetails ? 0 : undefined}
+                        title={canOpenPolicyholderDetails ? "Open policyholder details" : undefined}
                       >
                         <td>{String(p.policyholderNo ?? 0).padStart(2, "0")}</td>
                         <td className="allpol-mono allpol-cell-nowrap">{p.policyholderCode || "—"}</td>
