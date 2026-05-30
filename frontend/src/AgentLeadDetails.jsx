@@ -263,8 +263,9 @@ const handleSideNav = (key) => {
     navigate(`/agent/${user.username}/prospects/${prospectId}/leads/${leadId}/engage`);
   };
 
-  const goToPolicyDetails = (policyId) => {
-    navigate(`/agent/${user.username}/prospects/${prospectId}/policies/${policyId}`);
+  const goToPolicyholderDetails = (policyId) => {
+    if (!policyId) return;
+    navigate(`/agent/${user.username}/policyholders/${policyId}`);
   };
 
   const startEdit = () => {
@@ -801,8 +802,8 @@ const handleSideNav = (key) => {
                   <button
                     type="button"
                     className="ld-policyCard"
-                    onClick={() => goToPolicyDetails(policy._id)}
-                    title="View Policy Details"
+                    onClick={() => goToPolicyholderDetails(policy._id)}
+                    title="View Policyholder Details"
                   >
                     <div className="ld-policyTop">
                       <div className="ld-policyCode">{policy.policyholderCode || "—"}</div>
