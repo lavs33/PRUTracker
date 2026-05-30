@@ -168,11 +168,10 @@ const formatDateOnly = (d) => {
   });
 };
 
-const openPolicyholderLeadDetails = (policyholder) => {
-  const prospectId = String(policyholder?.prospectId || "").trim();
-  const leadId = String(policyholder?.leadId || "").trim();
-  if (!prospectId || !leadId) return;
-  navigate(`/agent/${user.username}/prospects/${prospectId}/leads/${leadId}`);
+const openPolicyholderDetails = (policyholder) => {
+  const policyholderId = String(policyholder?._id || policyholder?.policyholderId || "").trim();
+  if (!policyholderId) return;
+  navigate(`/agent/${user.username}/policyholders/${policyholderId}`);
 };
 
   if (!isReady) return null;
@@ -389,26 +388,26 @@ const handleSideNav = (key) => {
 
                   <tbody>
                     {recentPolicyholders.map((c) => {
-                      const canOpenLeadDetails = Boolean(
-                        String(c?.prospectId || "").trim() && String(c?.leadId || "").trim()
+                      const canOpenPolicyholderDetails = Boolean(
+                        String(c?._id || c?.policyholderId || "").trim()
                       );
 
                       return (
                         <tr
                           key={c._id}
-                          className={`prospect-row ${canOpenLeadDetails ? "prospect-row--clickable" : ""}`.trim()}
-                          onClick={canOpenLeadDetails ? () => openPolicyholderLeadDetails(c) : undefined}
-                          onKeyDown={canOpenLeadDetails
+                          className={`prospect-row ${canOpenPolicyholderDetails ? "prospect-row--clickable" : ""}`.trim()}
+                          onClick={canOpenPolicyholderDetails ? () => openPolicyholderDetails(c) : undefined}
+                          onKeyDown={canOpenPolicyholderDetails
                             ? (e) => {
                                 if (e.key === "Enter" || e.key === " ") {
                                   e.preventDefault();
-                                  openPolicyholderLeadDetails(c);
+                                  openPolicyholderDetails(c);
                                 }
                               }
                             : undefined}
-                          role={canOpenLeadDetails ? "link" : undefined}
-                          tabIndex={canOpenLeadDetails ? 0 : undefined}
-                          title={canOpenLeadDetails ? "Open lead details" : undefined}
+                          role={canOpenPolicyholderDetails ? "link" : undefined}
+                          tabIndex={canOpenPolicyholderDetails ? 0 : undefined}
+                          title={canOpenPolicyholderDetails ? "Open policyholder details" : undefined}
                         >
                         <td>{String(c.policyholderNo ?? 0).padStart(2, "0")}</td>
                         <td>{c.firstName || "—"}</td>
