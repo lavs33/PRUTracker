@@ -27,6 +27,8 @@ const RENEWAL_PAYMENT_METHODS = [
   "Bills Payments",
 ];
 
+const PREMIUM_PAYMENT_FREQUENCIES = ["Monthly", "Quarterly", "Half-yearly", "Yearly"];
+
 /**
  * applicationSchema
  * -----------------
@@ -86,6 +88,12 @@ const applicationSchema = new mongoose.Schema(
 
     /** Premium transfer details captured before formal submission. */
     recordPremiumPaymentTransfer: {
+      frequencyOfPremiumPayment: {
+        type: String,
+        enum: [...PREMIUM_PAYMENT_FREQUENCIES, ""],
+        default: "",
+        trim: true,
+      },
       totalAnnualPremiumPhp: {
         type: Number,
         default: null,

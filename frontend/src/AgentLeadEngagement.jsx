@@ -239,6 +239,7 @@ function AgentLeadEngagement() {
   const [applicationAttendanceSaving, setApplicationAttendanceSaving] = useState(false);
   const [applicationAttendanceProofEditMode, setApplicationAttendanceProofEditMode] = useState(false);
   const [applicationPremiumPaymentForm, setApplicationPremiumPaymentForm] = useState({
+    frequencyOfPremiumPayment: "",
     totalAnnualPremiumPhp: "",
     totalFrequencyPremiumPhp: "",
     methodForInitialPayment: "",
@@ -595,6 +596,7 @@ function AgentLeadEngagement() {
       setApplicationAttendanceProofEditMode(false);
       setApplicationAttendanceError("");
       setApplicationPremiumPaymentForm({
+        frequencyOfPremiumPayment: String(appPremiumPayment?.frequencyOfPremiumPayment || appNeedsSelection?.requestedFrequency || ""),
         totalAnnualPremiumPhp:
           appPremiumPayment?.totalAnnualPremiumPhp !== null && appPremiumPayment?.totalAnnualPremiumPhp !== undefined
             ? String(appPremiumPayment.totalAnnualPremiumPhp)
@@ -2591,10 +2593,12 @@ function AgentLeadEngagement() {
   ).trim();
 
   const hasSavedApplicationPremiumPaymentTransfer = useMemo(() => {
+    const selectedFrequency = String(applicationPremiumPaymentForm.frequencyOfPremiumPayment || "").trim();
     const annualRaw = String(applicationPremiumPaymentForm.totalAnnualPremiumPhp ?? "").trim();
     const frequencyRaw = String(applicationPremiumPaymentForm.totalFrequencyPremiumPhp ?? "").trim();
+    const hasFrequencySelection = ["Monthly", "Quarterly", "Half-yearly", "Yearly"].includes(selectedFrequency);
     const hasAnnual = annualRaw !== "" && toNonNegativeNumber(annualRaw) !== null;
-    const hasFrequency = frequencyRaw !== "" && toNonNegativeNumber(frequencyRaw) !== null;
+    const hasFrequency = selectedFrequency === "Yearly" || (frequencyRaw !== "" && toNonNegativeNumber(frequencyRaw) !== null);
     const hasInitialMethod = ["Credit Card / Debit Card", "Mobile Wallet / GCash", "Dated Check", "Bills Payments"].includes(
       String(applicationPremiumPaymentForm.methodForInitialPayment || "").trim()
     );
@@ -2603,8 +2607,9 @@ function AgentLeadEngagement() {
     );
     const hasProof = Boolean(String(applicationPremiumPaymentForm.paymentProofImageDataUrl || "").trim());
     const hasSavedTimestamp = Boolean(String(applicationPremiumPaymentForm.savedAt || "").trim());
-    return hasAnnual && hasFrequency && hasInitialMethod && hasRenewalMethod && hasProof && hasSavedTimestamp;
+    return hasFrequencySelection && hasAnnual && hasFrequency && hasInitialMethod && hasRenewalMethod && hasProof && hasSavedTimestamp;
   }, [
+    applicationPremiumPaymentForm.frequencyOfPremiumPayment,
     applicationPremiumPaymentForm.totalAnnualPremiumPhp,
     applicationPremiumPaymentForm.totalFrequencyPremiumPhp,
     applicationPremiumPaymentForm.methodForInitialPayment,
@@ -2690,27 +2695,29 @@ function AgentLeadEngagement() {
     ? hasSavedApplicationSubmission && isTimestampInSelectedHistoryCycle(applicationSubmissionForm.savedAt)
     : hasSavedApplicationSubmission;
 
+  const selectedApplicationPaymentFrequency = String(applicationPremiumPaymentForm.frequencyOfPremiumPayment || requestedFrequencyFromNeedsAssessment || "").trim();
+
   const totalFrequencyPremiumLabel = useMemo(() => {
-    const freq = String(requestedFrequencyFromNeedsAssessment || "").trim();
+    const freq = String(selectedApplicationPaymentFrequency || "").trim();
     if (!freq) return "Total Requested Frequency Premium (in Php)";
     if (freq.toLowerCase() === "monthly") return "Total Monthly Premium (in Php)";
     return `Total ${freq} Premium (in Php)`;
-  }, [requestedFrequencyFromNeedsAssessment]);
+  }, [selectedApplicationPaymentFrequency]);
 
   const shouldShowFrequencyPremiumField = useMemo(() => {
-    return String(requestedFrequencyFromNeedsAssessment || "").trim().toLowerCase() !== "yearly";
-  }, [requestedFrequencyFromNeedsAssessment]);
+    return String(selectedApplicationPaymentFrequency || "").trim().toLowerCase() !== "yearly";
+  }, [selectedApplicationPaymentFrequency]);
 
   const computedFrequencyPremiumValue = useMemo(() => {
     const annualRaw = String(applicationPremiumPaymentForm.totalAnnualPremiumPhp ?? "").trim();
     const annual = toNonNegativeNumber(annualRaw);
     if (annual === null) return "";
 
-    const freq = String(requestedFrequencyFromNeedsAssessment || "").trim().toLowerCase();
+    const freq = String(selectedApplicationPaymentFrequency || "").trim().toLowerCase();
     const divisor = freq === "monthly" ? 12 : freq === "quarterly" ? 4 : freq === "half-yearly" ? 2 : 1;
     const computed = annual / divisor;
     return Number.isFinite(computed) ? String(Math.round(computed * 100) / 100) : "";
-  }, [applicationPremiumPaymentForm.totalAnnualPremiumPhp, requestedFrequencyFromNeedsAssessment, toNonNegativeNumber]);
+  }, [applicationPremiumPaymentForm.totalAnnualPremiumPhp, selectedApplicationPaymentFrequency, toNonNegativeNumber]);
 
   const needsActivityKeyRaw = useMemo(() => {
     const stageNow = String(engagement?.currentStage || "").trim();
@@ -4646,6 +4653,7 @@ function AgentLeadEngagement() {
       setApplicationPremiumPaymentError("");
       setApplicationPremiumPaymentFieldErrors({});
 
+      const frequencyOfPremiumPayment = String(applicationPremiumPaymentForm.frequencyOfPremiumPayment || "").trim();
       const totalAnnualPremiumRaw = String(applicationPremiumPaymentForm.totalAnnualPremiumPhp ?? "").trim();
       const totalFrequencyPremiumRaw = String(computedFrequencyPremiumValue || applicationPremiumPaymentForm.totalFrequencyPremiumPhp || "").trim();
       const totalAnnualPremiumPhp = toNonNegativeNumber(totalAnnualPremiumRaw);
@@ -4656,12 +4664,17 @@ function AgentLeadEngagement() {
       const paymentProofFileName = String(applicationPremiumPaymentForm.paymentProofFileName || "").trim();
 
       const allowedPaymentMethods = ["Credit Card / Debit Card", "Mobile Wallet / GCash", "Dated Check", "Bills Payments"];
+      const allowedFrequencies = ["Monthly", "Quarterly", "Half-yearly", "Yearly"];
 
+      if (!allowedFrequencies.includes(frequencyOfPremiumPayment)) {
+        setApplicationPremiumPaymentFieldErrors({ frequencyOfPremiumPayment: "Frequency of Premium Payment is required." });
+        return;
+      }
       if (!totalAnnualPremiumRaw || totalAnnualPremiumPhp === null) {
         setApplicationPremiumPaymentFieldErrors({ totalAnnualPremiumPhp: "Total Annual Premium (in Php) is required." });
         return;
       }
-      if (!totalFrequencyPremiumRaw || totalFrequencyPremiumPhp === null) {
+      if (frequencyOfPremiumPayment !== "Yearly" && (!totalFrequencyPremiumRaw || totalFrequencyPremiumPhp === null)) {
         setApplicationPremiumPaymentFieldErrors({ totalFrequencyPremiumPhp: `${totalFrequencyPremiumLabel} is required.` });
         return;
       }
@@ -4684,8 +4697,9 @@ function AgentLeadEngagement() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          frequencyOfPremiumPayment,
           totalAnnualPremiumPhp,
-          totalFrequencyPremiumPhp,
+          totalFrequencyPremiumPhp: frequencyOfPremiumPayment === "Yearly" ? totalAnnualPremiumPhp : totalFrequencyPremiumPhp,
           methodForInitialPayment,
           methodForRenewalPayment,
           paymentProofImageDataUrl,
@@ -4700,9 +4714,11 @@ function AgentLeadEngagement() {
       setApplicationViewedActivityKey(data?.currentActivityKey || "Record Application Submission");
     } catch (err) {
       const msg = String(err?.message || "Failed to save premium payment transfer.");
-      if (msg.includes("Total annual premium")) {
+      if (msg.includes("Frequency of premium payment")) {
+        setApplicationPremiumPaymentFieldErrors({ frequencyOfPremiumPayment: "Frequency of Premium Payment is required." });
+      } else if (msg.includes("Total annual premium")) {
         setApplicationPremiumPaymentFieldErrors({ totalAnnualPremiumPhp: "Total Annual Premium (in Php) is required." });
-      } else if (msg.includes("Total requested-frequency premium")) {
+      } else if (msg.includes("Total frequency premium") || msg.includes("Total requested-frequency premium")) {
         setApplicationPremiumPaymentFieldErrors({ totalFrequencyPremiumPhp: `${totalFrequencyPremiumLabel} is required.` });
       } else if (msg.includes("Method for initial payment")) {
         setApplicationPremiumPaymentFieldErrors({ methodForInitialPayment: "Method for initial payment is required." });
@@ -6182,44 +6198,21 @@ function AgentLeadEngagement() {
                       {isApplicationPremiumViewed && isHistoryView && !displayedHasSavedApplicationPremiumPaymentTransfer ? (
                         <div className="le-block"><p className="le-muted" style={{ marginTop: 8 }}>No details were saved for this subactivity in the selected engagement cycle.</p></div>
                       ) : null}
-                      {isApplicationPremiumViewed && !isHistoryView && (
+                      {isApplicationPremiumViewed && (!isHistoryView ? hasSavedApplicationAttendance : displayedHasSavedApplicationPremiumPaymentTransfer) ? (
                         <div className="le-block">
-                          <div className="le-formRow">
-                            <label className="le-label">Quotation Proposal File</label>
-                            <p className="le-smallNote">{proposalGenerateForm.proposalFileName || "No proposal file available."}</p>
-                          </div>
-
+                          <h4 className="le-blockTitle">{displayedHasSavedApplicationPremiumPaymentTransfer ? "Premium Payment Transfer Details" : "Record Premium Payment Transfer"}</h4>
                           <div className="le-formRow" style={{ marginTop: 10 }}>
-                            <label className="le-label">PDF Preview</label>
-                            {proposalGenerateForm.proposalFileDataUrl ? (
-                              <iframe
-                                title="Quotation Proposal Preview"
-                                src={proposalGenerateForm.proposalFileDataUrl}
-                                style={{ width: "100%", minHeight: 320, border: "1px solid #e5e7eb", borderRadius: 10 }}
-                              />
-                            ) : (
-                              <p className="le-smallNote">No proposal preview available.</p>
-                            )}
-                          </div>
-
-                          <div className="le-formRow" style={{ marginTop: 20 }}>
-                            <label className="le-label">Application Submission link:</label>
+                            <label className="le-label">Application Submission Link</label>
                             <p className="le-smallNote">
                               <a href="https://pruone.prulifeuk.com.ph/web" target="_blank" rel="noreferrer">https://pruone.prulifeuk.com.ph/web</a>
                             </p>
                           </div>
-                        </div>
-                      )}
-
-                      {isApplicationPremiumViewed && (!isHistoryView ? hasSavedApplicationAttendance : displayedHasSavedApplicationPremiumPaymentTransfer) ? (
-                        <div className="le-block">
-                          <h4 className="le-blockTitle">{displayedHasSavedApplicationPremiumPaymentTransfer ? "Premium Payment Transfer Details" : "Record Premium Payment Transfer"}</h4>
 
                           {displayedHasSavedApplicationPremiumPaymentTransfer ? (
                             <>
                               <div className="le-formRow">
-                                <label className="le-label">Requested Frequency of Premium Payment</label>
-                                <p className="le-smallNote">{requestedFrequencyFromNeedsAssessment || "—"}</p>
+                                <label className="le-label">Frequency of Premium Payment</label>
+                                <p className="le-smallNote">{selectedApplicationPaymentFrequency || "—"}</p>
                               </div>
                               <div className="le-formRow">
                                 <label className="le-label">Total Annual Premium (Php)</label>
@@ -6256,8 +6249,33 @@ function AgentLeadEngagement() {
                           ) : (
                             <>
                               <div className="le-formRow">
-                                <label className="le-label">Requested Frequency of Premium Payment</label>
-                                <p className="le-smallNote">{requestedFrequencyFromNeedsAssessment || "Not available from Needs Assessment."}</p>
+                                <label className="le-label">Frequency of Premium Payment *</label>
+                                <select
+                                  className="le-input"
+                                  value={applicationPremiumPaymentForm.frequencyOfPremiumPayment}
+                                  onChange={(e) => {
+                                    const frequencyOfPremiumPayment = e.target.value;
+                                    setApplicationPremiumPaymentForm((f) => ({
+                                      ...f,
+                                      frequencyOfPremiumPayment,
+                                      totalFrequencyPremiumPhp: "",
+                                    }));
+                                    setApplicationPremiumPaymentFieldErrors((prev) => ({ ...prev, frequencyOfPremiumPayment: "", totalFrequencyPremiumPhp: "" }));
+                                  }}
+                                  disabled={applicationPremiumPaymentSaving}
+                                >
+                                  <option value="">Select</option>
+                                  <option value="Monthly">Monthly</option>
+                                  <option value="Quarterly">Quarterly</option>
+                                  <option value="Half-yearly">Half-yearly</option>
+                                  <option value="Yearly">Yearly</option>
+                                </select>
+                                {requestedFrequencyFromNeedsAssessment ? (
+                                  <p className="le-smallNote" style={{ marginTop: 6 }}>Prefilled from Needs Assessment requested frequency; you may change it if needed.</p>
+                                ) : null}
+                                {applicationPremiumPaymentFieldErrors.frequencyOfPremiumPayment ? (
+                                  <p className="le-smallNote" style={{ color: "#DA291C", marginTop: 6 }}>{applicationPremiumPaymentFieldErrors.frequencyOfPremiumPayment}</p>
+                                ) : null}
                               </div>
 
                               <div className="le-formRow">
@@ -6376,6 +6394,7 @@ function AgentLeadEngagement() {
                                     setApplicationPremiumPaymentFieldErrors({});
                                     setApplicationPremiumPaymentForm((f) => ({
                                       ...f,
+                                      frequencyOfPremiumPayment: requestedFrequencyFromNeedsAssessment || "",
                                       totalAnnualPremiumPhp: "",
                                       totalFrequencyPremiumPhp: "",
                                       methodForInitialPayment: "",
@@ -6388,7 +6407,7 @@ function AgentLeadEngagement() {
                                   }}
                                   disabled={applicationPremiumPaymentSaving}
                                 >
-                                  Cancel
+                                  Clear
                                 </button>
                                 <button
                                   type="button"
