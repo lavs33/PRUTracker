@@ -2820,7 +2820,7 @@ app.get("/api/sales/performance", async (req, res) => {
 
     const applications = engagementIds.length
       ? await Application.find({ leadEngagementId: { $in: engagementIds } })
-          .select("leadEngagementId recordPremiumPaymentTransfer.totalAnnualPremiumPhp recordPremiumPaymentTransfer.totalFrequencyPremiumPhp")
+          .select("leadEngagementId recordPremiumPaymentTransfer.frequencyOfPremiumPayment recordPremiumPaymentTransfer.totalAnnualPremiumPhp recordPremiumPaymentTransfer.totalFrequencyPremiumPhp")
           .lean()
       : [];
 
@@ -2864,6 +2864,12 @@ app.get("/api/sales/performance", async (req, res) => {
         String(n?.needsPriorities?.productSelection?.requestedFrequency || "").trim(),
       ])
     );
+
+    scopedApplications.forEach((application) => {
+      const engagementId = String(application?.leadEngagementId || "");
+      const finalFrequency = String(application?.recordPremiumPaymentTransfer?.frequencyOfPremiumPayment || "").trim();
+      if (engagementId && finalFrequency) engagementToFrequency.set(engagementId, finalFrequency);
+    });
 
     const frequencyPremiumBreakdown = {
       monthlyPremiumPhp: 0,
@@ -3047,7 +3053,7 @@ app.get("/api/sales/performance", async (req, res) => {
         const application = leadIdToApplication.get(leadKey) || null;
         const needsAssessment = leadIdToNeedsAssessment.get(leadKey) || null;
         const fullName = [prospect?.firstName, prospect?.middleName, prospect?.lastName].filter(Boolean).join(" ").trim() || "—";
-        const requestedFrequency = String(needsAssessment?.needsPriorities?.productSelection?.requestedFrequency || "").trim() || "—";
+        const requestedFrequency = String(application?.recordPremiumPaymentTransfer?.frequencyOfPremiumPayment || needsAssessment?.needsPriorities?.productSelection?.requestedFrequency || "").trim() || "—";
 
         return {
           leadCode: lead.leadCode || "—",
@@ -6357,6 +6363,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
             attendanceProofFileName: applicationDoc?.recordProspectAttendance?.attendanceProofFileName || "",
           },
           recordPremiumPaymentTransfer: {
+            frequencyOfPremiumPayment: applicationDoc?.recordPremiumPaymentTransfer?.frequencyOfPremiumPayment || "",
             totalAnnualPremiumPhp: applicationDoc?.recordPremiumPaymentTransfer?.totalAnnualPremiumPhp ?? null,
             totalFrequencyPremiumPhp: applicationDoc?.recordPremiumPaymentTransfer?.totalFrequencyPremiumPhp ?? null,
             methodForInitialPayment:
@@ -9755,6 +9762,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/premium-payment-t
     const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
     const {
+      frequencyOfPremiumPayment,
       totalAnnualPremiumPhp,
       totalFrequencyPremiumPhp,
       methodForInitialPayment,
@@ -9774,19 +9782,28 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/premium-payment-t
     };
     const hasAtMostTwoDecimals = (n) => Number.isFinite(n) && Math.abs(n * 100 - Math.round(n * 100)) < 1e-8;
 
+    const paymentFrequency = String(frequencyOfPremiumPayment || "").trim();
     const annualPremiumRaw = String(totalAnnualPremiumPhp ?? "").trim();
     const frequencyPremiumRaw = String(totalFrequencyPremiumPhp ?? "").trim();
     const annualPremium = toNonNegativeNumber(annualPremiumRaw);
-    const frequencyPremium = toNonNegativeNumber(frequencyPremiumRaw);
+    let frequencyPremium = toNonNegativeNumber(frequencyPremiumRaw);
     const initialPaymentMethod = String(methodForInitialPayment || "").trim();
     const renewalMethod = String(methodForRenewalPayment || "").trim();
     const proofDataUrl = String(paymentProofImageDataUrl || "").trim();
     const proofFileName = String(paymentProofFileName || "").trim();
 
+    const allowedFrequencies = ["Monthly", "Quarterly", "Half-yearly", "Yearly"];
+    if (!allowedFrequencies.includes(paymentFrequency)) {
+      return res.status(400).json({ message: "Frequency of premium payment is required." });
+    }
     if (!annualPremiumRaw || annualPremium === null) return res.status(400).json({ message: "Total annual premium is required." });
-    if (!frequencyPremiumRaw || frequencyPremium === null) return res.status(400).json({ message: "Total requested-frequency premium is required." });
+    if (paymentFrequency === "Yearly") {
+      frequencyPremium = annualPremium;
+    } else if (!frequencyPremiumRaw || frequencyPremium === null) {
+      return res.status(400).json({ message: "Total frequency premium is required." });
+    }
     if (!hasAtMostTwoDecimals(annualPremium)) return res.status(400).json({ message: "Total annual premium must have at most 2 decimal places." });
-    if (!hasAtMostTwoDecimals(frequencyPremium)) return res.status(400).json({ message: "Total requested-frequency premium must have at most 2 decimal places." });
+    if (!hasAtMostTwoDecimals(frequencyPremium)) return res.status(400).json({ message: "Total frequency premium must have at most 2 decimal places." });
 
     const allowedPaymentMethods = ["Credit Card / Debit Card", "Mobile Wallet / GCash", "Dated Check", "Bills Payments"];
     if (!allowedPaymentMethods.includes(initialPaymentMethod)) {
@@ -9821,16 +9838,6 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/premium-payment-t
         throw Object.assign(new Error("Lead is not in Application stage."), { status: 409 });
       }
 
-      const needsAssessment = await NeedsAssessment.findOne({ leadEngagementId: engagement._id })
-        .select("needsPriorities.productSelection.requestedFrequency")
-        .session(session);
-
-      const requestedFrequency = String(needsAssessment?.needsPriorities?.productSelection?.requestedFrequency || "").trim();
-
-      if (!requestedFrequency) {
-        throw Object.assign(new Error("Requested frequency is missing from Needs Assessment."), { status: 409 });
-      }
-
       engagement.currentActivityKey = "Record Application Submission";
       await engagement.save({ session });
 
@@ -9841,6 +9848,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/premium-payment-t
           $set: {
             outcomeActivity: "Record Application Submission",
             recordPremiumPaymentTransfer: {
+              frequencyOfPremiumPayment: paymentFrequency,
               totalAnnualPremiumPhp: annualPremium,
               totalFrequencyPremiumPhp: frequencyPremium,
               methodForInitialPayment: initialPaymentMethod,

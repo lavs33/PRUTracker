@@ -852,7 +852,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       : [],
     engagementIds.length
       ? Application.find({ leadEngagementId: { $in: engagementIds } })
-          .select("leadEngagementId recordPremiumPaymentTransfer.totalAnnualPremiumPhp recordPremiumPaymentTransfer.totalFrequencyPremiumPhp")
+          .select("leadEngagementId recordPremiumPaymentTransfer.frequencyOfPremiumPayment recordPremiumPaymentTransfer.totalAnnualPremiumPhp recordPremiumPaymentTransfer.totalFrequencyPremiumPhp")
           .lean()
       : [],
     engagementIds.length
@@ -868,6 +868,12 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       String(needsAssessment?.needsPriorities?.productSelection?.requestedFrequency || "").trim(),
     ])
   );
+
+  applications.forEach((application) => {
+    const engagementId = String(application?.leadEngagementId || "");
+    const finalFrequency = String(application?.recordPremiumPaymentTransfer?.frequencyOfPremiumPayment || "").trim();
+    if (engagementId && finalFrequency) engagementIdToFrequency.set(engagementId, finalFrequency);
+  });
 
   const applySalesMetrics = ({ leadList, metricsByUserId, policyholderList, applicationList }) => {
     for (const lead of leadList) {
