@@ -148,6 +148,21 @@ const policyholderSchema = new mongoose.Schema(
       default: "Active",
       index: true,
     },
+
+    /** Payment records attached to this converted policyholder. */
+    paymentRecords: [
+      {
+        paymentId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "Payment",
+          required: true,
+        },
+        recordedAt: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
   },
     /**
      * timestamps: true
