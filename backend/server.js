@@ -36,6 +36,7 @@ const NeedsAssessment = require("./models/NeedsAssessment");
 const Proposal = require("./models/Proposal");
 const Application = require("./models/Application");
 const Policy = require("./models/Policy");
+const Payment = require("./models/Payment");
 const Product = require("./models/Product");
 const Task = require("./models/Task");
 const Notification = require("./models/Notification");
@@ -844,7 +845,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
     engagements.map((engagement) => [String(engagement._id), String(engagement.leadId || "")])
   );
 
-  const [policyholders, applications, needsAssessments] = await Promise.all([
+  const [policyholders, applications, needsAssessments, payments] = await Promise.all([
     scopedUserIds.length
       ? Policyholder.find({ assignedToUserId: { $in: scopedUserIds } })
           .select("assignedToUserId leadEngagementId status createdAt")
@@ -852,12 +853,17 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       : [],
     engagementIds.length
       ? Application.find({ leadEngagementId: { $in: engagementIds } })
-          .select("leadEngagementId recordPremiumPaymentTransfer.totalAnnualPremiumPhp recordPremiumPaymentTransfer.totalFrequencyPremiumPhp")
+          .select("leadEngagementId recordPremiumPaymentTransfer.frequencyOfPremiumPayment recordPremiumPaymentTransfer.totalAnnualPremiumPhp recordPremiumPaymentTransfer.totalFrequencyPremiumPhp")
           .lean()
       : [],
     engagementIds.length
       ? NeedsAssessment.find({ leadEngagementId: { $in: engagementIds } })
           .select("leadEngagementId needsPriorities.productSelection.requestedFrequency")
+          .lean()
+      : [],
+    engagementIds.length
+      ? Payment.find({ leadEngagementId: { $in: engagementIds } })
+          .select("leadEngagementId recordPremiumPaymentTransfer.totalPremiumPaidPhp recordPremiumPaymentTransfer.frequencyOfPremiumPayment")
           .lean()
       : [],
   ]);
@@ -867,6 +873,22 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       String(needsAssessment?.leadEngagementId || ""),
       String(needsAssessment?.needsPriorities?.productSelection?.requestedFrequency || "").trim(),
     ])
+  );
+
+  applications.forEach((application) => {
+    const engagementId = String(application?.leadEngagementId || "");
+    const finalFrequency = String(application?.recordPremiumPaymentTransfer?.frequencyOfPremiumPayment || "").trim();
+    if (engagementId && finalFrequency) engagementIdToFrequency.set(engagementId, finalFrequency);
+  });
+
+  payments.forEach((payment) => {
+    const engagementId = String(payment?.leadEngagementId || "");
+    const finalFrequency = String(payment?.recordPremiumPaymentTransfer?.frequencyOfPremiumPayment || "").trim();
+    if (engagementId && finalFrequency) engagementIdToFrequency.set(engagementId, finalFrequency);
+  });
+
+  const engagementIdToPayment = new Map(
+    payments.map((payment) => [String(payment?.leadEngagementId || ""), payment]).filter(([engagementId]) => engagementId)
   );
 
   const applySalesMetrics = ({ leadList, metricsByUserId, policyholderList, applicationList }) => {
@@ -911,8 +933,13 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       const metrics = metricsByUserId.get(assignedUserId);
       if (!metrics) continue;
 
+      const payment = engagementIdToPayment.get(engagementId) || null;
       const annualPremium = Number(application?.recordPremiumPaymentTransfer?.totalAnnualPremiumPhp || 0);
-      const frequencyPremium = Number(application?.recordPremiumPaymentTransfer?.totalFrequencyPremiumPhp || 0);
+      const frequencyPremium = Number(
+        payment?.recordPremiumPaymentTransfer?.totalPremiumPaidPhp
+        ?? application?.recordPremiumPaymentTransfer?.totalFrequencyPremiumPhp
+        ?? 0
+      );
       metrics.annualPremium += annualPremium;
       metrics.frequencyPremium += frequencyPremium;
 
@@ -1094,6 +1121,7 @@ registerLegacyRoutes(app, {
   Proposal,
   Application,
   Policy,
+  Payment,
   Product,
   Task,
   Notification,
