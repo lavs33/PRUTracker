@@ -148,6 +148,21 @@ const policyholderSchema = new mongoose.Schema(
       default: "Active",
       index: true,
     },
+
+    /** Annual payment records attached to this converted policyholder. */
+    annualPaymentRecords: [
+      {
+        annualPaymentId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "AnnualPayment",
+          required: true,
+        },
+        recordedAt: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
   },
     /**
      * timestamps: true
