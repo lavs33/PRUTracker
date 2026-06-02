@@ -27,6 +27,8 @@ const RENEWAL_PAYMENT_METHODS = [
   "Bills Payments",
 ];
 
+const PREMIUM_PAYMENT_FREQUENCIES = ["Monthly", "Quarterly", "Half-yearly", "Yearly"];
+
 /**
  * applicationSchema
  * -----------------
@@ -86,38 +88,26 @@ const applicationSchema = new mongoose.Schema(
 
     /** Premium transfer details captured before formal submission. */
     recordPremiumPaymentTransfer: {
+      paymentId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Payment",
+        default: null,
+      },
+      frequencyOfPremiumPayment: {
+        type: String,
+        enum: [...PREMIUM_PAYMENT_FREQUENCIES, ""],
+        default: "",
+        trim: true,
+      },
       totalAnnualPremiumPhp: {
         type: Number,
         default: null,
-      },
-      totalFrequencyPremiumPhp: {
-        type: Number,
-        default: null,
-      },
-      methodForInitialPayment: {
-        type: String,
-        enum: [...RENEWAL_PAYMENT_METHODS, ""],
-        default: "",
-        trim: true,
       },
       methodForRenewalPayment: {
         type: String,
         enum: [...RENEWAL_PAYMENT_METHODS, ""],
         default: "",
         trim: true,
-      },
-      paymentProofImageDataUrl: {
-        type: String,
-        default: "",
-      },
-      paymentProofFileName: {
-        type: String,
-        default: "",
-        trim: true,
-      },
-      savedAt: {
-        type: Date,
-        default: null,
       },
     },
 
