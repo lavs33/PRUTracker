@@ -1,0 +1,157 @@
+@import "./AgentAnnualPaymentRecord.css";
+
+.pay-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid #eef0f2;
+}
+
+.pay-summaryGrid {
+  margin-top: 18px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.pay-summaryTilePrimary {
+  border-color: rgba(218, 41, 28, 0.18);
+  background: linear-gradient(135deg, rgba(218, 41, 28, 0.08), #ffffff 62%);
+}
+
+.pay-detailGrid {
+  margin-top: 22px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.pay-detailCard {
+  border: 1px solid #eef0f2;
+  border-radius: 16px;
+  background: #ffffff;
+  padding: 16px;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  align-content: start;
+  gap: 14px;
+  font-family: "FSAlbertArabic", sans-serif;
+}
+
+.pay-detailCardHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 32px;
+}
+
+.pay-detailCardHeader h2 {
+  margin: 0;
+  color: #373A36;
+  font-size: 17px;
+  font-weight: 900;
+}
+
+.pay-fileLink {
+  border: 0;
+  background: transparent;
+  color: #DA291C;
+  cursor: pointer;
+  display: inline-grid;
+  gap: 3px;
+  font-family: "FSAlbertArabic", sans-serif;
+  font-size: 14px;
+  font-weight: 900;
+  padding: 0;
+  text-align: left;
+}
+
+.pay-fileLink small {
+  color: #6b6e6a;
+  font-size: 12px;
+  font-weight: 800;
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  transform: translateY(-2px);
+  transition: max-height 0.15s ease, opacity 0.15s ease, transform 0.15s ease;
+}
+
+.pay-fileLink:hover,
+.pay-fileLink:focus-visible {
+  color: #b42318;
+  outline: none;
+  text-decoration: underline;
+}
+
+.pay-fileLink:hover small,
+.pay-fileLink:focus-visible small {
+  max-height: 18px;
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.pay-detailRows {
+  display: grid;
+  gap: 10px;
+}
+
+.pay-detailRow {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.6fr) minmax(0, 1fr);
+  gap: 12px;
+  padding-top: 10px;
+  border-top: 1px solid #f1f2f3;
+}
+
+.pay-detailRow:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.pay-detailRow span {
+  color: #6b6e6a;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.pay-detailRow strong {
+  color: #373A36;
+  font-size: 14px;
+  font-weight: 900;
+  word-break: break-word;
+}
+
+.pay-previewImage {
+  display: block;
+  width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
+  background: #f8fafc;
+  border-radius: 0 0 18px 18px;
+}
+
+@media (max-width: 900px) {
+  .pay-detailGrid,
+  .pay-summaryGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .pay-hero,
+  .pay-detailCardHeader,
+  .pay-detailRow {
+    grid-template-columns: 1fr;
+  }
+
+  .pay-hero,
+  .pay-detailCardHeader {
+    flex-direction: column;
+  }
+}

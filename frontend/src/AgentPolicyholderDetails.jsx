@@ -34,9 +34,8 @@ function AgentPolicyholderDetails() {
 
   useEffect(() => {
     if (!user) return;
-    const code = details?.policyholder?.policyholderCode;
-    document.title = `${user.username} | ${code || "Policyholder Details"}`;
-  }, [details?.policyholder?.policyholderCode, user]);
+    document.title = `${user.username} | Policyholder Details`;
+  }, [user]);
 
   useEffect(() => {
     if (!isReady || !user?.id) return;
@@ -155,6 +154,7 @@ function AgentPolicyholderDetails() {
   const product = details?.product || {};
   const coverage = details?.coverage || {};
   const policySummary = details?.policySummary || {};
+  const annualPaymentRecords = Array.isArray(details?.annualPaymentRecords) ? details.annualPaymentRecords : [];
   const policySummaryFileDataUrl = String(policySummary.fileDataUrl || "").trim();
 
   const formatAge = (value) => {
@@ -355,19 +355,42 @@ function AgentPolicyholderDetails() {
                         Payment Records
                       </button>
                     </div>
-
-                    <div className="ph-recordActions">
-                      <button type="button" className="ph-actionBtn" title="Add new payment">
-                        + New Payment
-                      </button>
-                    </div>
                   </div>
 
-                  <div className="ph-recordsBody ph-recordsBodyPad">
-                    <div className="ph-empty">
-                      <div className="ph-emptyIcon">💳</div>
-                      <div className="ph-emptyText">No payment records yet.</div>
-                    </div>
+                  <div className={`ph-recordsBody ph-recordsBodyPad ${annualPaymentRecords.length ? "ph-recordsBodyList" : ""}`.trim()}>
+                    {annualPaymentRecords.length ? (
+                      <div className="ph-annualPaymentGrid">
+                        {annualPaymentRecords.map((record) => {
+                          const recordId = String(record?.annualPaymentId || record?._id || "");
+                          const status = String(record?.status || "Not Started");
+                          const progressLabel = String(record?.paymentProgress?.label || "0/0");
+                          return (
+                            <button
+                              key={recordId || record?.label || record?.recordedAt}
+                              type="button"
+                              className="ph-annualPaymentCard"
+                              onClick={() => navigate(`/agent/${user.username}/policyholders/${policyholder._id || policyholderId}/annual-payments/${recordId}`)}
+                            >
+                              <span className="ph-annualPaymentCardLabel">{record?.label || record?.annualPaymentPeriod?.label || "Annual payment period"}</span>
+                              <span className="ph-annualPaymentMetaRow">
+                                <span className="ph-annualPaymentMeta">
+                                  <span className="ph-annualPaymentMetaLabel">Progress</span>
+                                  <strong>{progressLabel}</strong>
+                                </span>
+                                <span className={`ph-paymentStatus ${status.toLowerCase().replace(/\s+/g, "-")}`}>
+                                  {status}
+                                </span>
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="ph-empty">
+                        <div className="ph-emptyIcon">💳</div>
+                        <div className="ph-emptyText">No payment records yet.</div>
+                      </div>
+                    )}
                   </div>
                 </section>
               </>
