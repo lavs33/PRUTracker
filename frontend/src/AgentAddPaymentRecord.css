@@ -273,3 +273,74 @@
     grid-template-columns: 1fr;
   }
 }
+.addpay-proofPreviewCard {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid rgba(218, 41, 28, 0.24);
+  border-radius: 14px;
+  box-shadow: 0 8px 20px rgba(218, 41, 28, 0.08);
+  color: #373A36;
+  cursor: pointer;
+  display: flex;
+  gap: 12px;
+  padding: 10px;
+  text-align: left;
+  width: 100%;
+}
+
+.addpay-proofPreviewCard:hover,
+.addpay-proofPreviewCard:focus-visible {
+  background: rgba(218, 41, 28, 0.04);
+  border-color: rgba(218, 41, 28, 0.5);
+  outline: none;
+}
+
+.addpay-proofPreviewThumb {
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid #eef0f2;
+  border-radius: 10px;
+  display: inline-flex;
+  flex: 0 0 64px;
+  height: 64px;
+  justify-content: center;
+  overflow: hidden;
+  width: 64px;
+}
+
+.addpay-proofPreviewThumb img {
+  height: 100%;
+  object-fit: cover;
+  width: 100%;
+}
+
+.addpay-proofPreviewIcon {
+  color: #DA291C;
+  font-family: "FSAlbertArabic", sans-serif;
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+}
+
+.addpay-proofPreviewText {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.addpay-proofPreviewText strong {
+  color: #DA291C;
+  font-family: "FSAlbertArabic", sans-serif;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.addpay-proofPreviewText small {
+  color: #6b6e6a;
+  font-family: "FSAlbertArabic", sans-serif;
+  font-size: 12px;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

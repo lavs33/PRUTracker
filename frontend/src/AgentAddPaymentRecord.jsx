@@ -7,6 +7,33 @@ import "./AgentAddPaymentRecord.css";
 
 const API_BASE = "http://localhost:5000";
 const PAYMENT_METHODS = ["Credit Card / Debit Card", "Mobile Wallet / GCash", "Dated Check", "Bills Payments"];
+const PROOF_FILE_EXTENSIONS = /\.(jpe?g|png|pdf)$/i;
+
+function getDataUrlMimeType(dataUrl) {
+  const match = String(dataUrl || "").match(/^data:([^;,]+)[;,]/i);
+  return match?.[1] || "";
+}
+
+function getMimeTypeFromFileName(fileName) {
+  const normalizedFileName = String(fileName || "").toLowerCase();
+  if (normalizedFileName.endsWith(".pdf")) return "application/pdf";
+  if (normalizedFileName.endsWith(".png")) return "image/png";
+  if (normalizedFileName.endsWith(".jpg") || normalizedFileName.endsWith(".jpeg")) return "image/jpeg";
+  return "";
+}
+
+function getFileMimeType(file, dataUrl = "") {
+  const browserMimeType = String(file?.type || "").trim();
+  if (/^(image\/(jpeg|jpg|pjpeg|png)|application\/pdf)$/i.test(browserMimeType)) return browserMimeType;
+  const fileNameMimeType = getMimeTypeFromFileName(file?.name);
+  if (fileNameMimeType) return fileNameMimeType;
+  return getDataUrlMimeType(dataUrl);
+}
+
+function isSupportedProofFile(file) {
+  const mimeType = String(file?.type || "");
+  return /^(image\/(jpeg|jpg|pjpeg|png)|application\/pdf)$/i.test(mimeType) || PROOF_FILE_EXTENSIONS.test(String(file?.name || ""));
+}
 
 function addMonthsPreservingDay(date, months) {
   const next = new Date(date);
@@ -180,19 +207,22 @@ function AgentAddPaymentRecord() {
   const handleFileChange = (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    if (!/^(image\/(jpeg|png)|application\/pdf)$/i.test(file.type)) {
+    if (!isSupportedProofFile(file)) {
       setFieldErrors((prev) => ({ ...prev, proofOfPaymentFileDataUrl: "Proof of payment must be a JPG, PNG, or PDF file." }));
+      event.target.value = "";
       return;
     }
     const reader = new FileReader();
     reader.onload = () => {
+      const dataUrl = String(reader.result || "");
       setForm((prev) => ({
         ...prev,
-        proofOfPaymentFileDataUrl: String(reader.result || ""),
+        proofOfPaymentFileDataUrl: dataUrl,
         proofOfPaymentFileName: file.name,
-        proofOfPaymentFileMimeType: file.type,
+        proofOfPaymentFileMimeType: getFileMimeType(file, dataUrl),
       }));
       setFieldErrors((prev) => ({ ...prev, proofOfPaymentFileDataUrl: "" }));
+      setActivePreview("proof");
     };
     reader.onerror = () => setFieldErrors((prev) => ({ ...prev, proofOfPaymentFileDataUrl: "Failed to read proof of payment file." }));
     reader.readAsDataURL(file);
@@ -299,6 +329,8 @@ function AgentAddPaymentRecord() {
   const frequencyLabel = annualPayment.frequencyOfPayment === "Half-yearly" ? "Half-Yearly" : (annualPayment.frequencyOfPayment || "Payment");
   const paymentPeriodLabel = derivePaymentPeriodLabel(form.paymentDate, annualPayment.frequencyOfPayment);
   const policyNumber = policyholder.policyNumber || policySummary.policyNumber || "";
+  const proofMimeType = form.proofOfPaymentFileMimeType || getDataUrlMimeType(form.proofOfPaymentFileDataUrl);
+  const isProofImage = String(proofMimeType || "").startsWith("image/");
   const preview = activePreview === "policy"
     ? {
         title: "Policy Summary Preview",
@@ -311,7 +343,7 @@ function AgentAddPaymentRecord() {
           title: "Proof of Payment Preview",
           fileName: form.proofOfPaymentFileName,
           dataUrl: form.proofOfPaymentFileDataUrl,
-          mimeType: form.proofOfPaymentFileMimeType,
+          mimeType: proofMimeType,
         }
       : activePreview === "eor"
         ? {
@@ -326,7 +358,8 @@ function AgentAddPaymentRecord() {
     if (!preview?.dataUrl) {
       return <div className="ph-previewEmpty"><p>No file is available for preview.</p></div>;
     }
-    if (String(preview.mimeType || "").startsWith("image/")) {
+    const mimeType = preview.mimeType || getDataUrlMimeType(preview.dataUrl);
+    if (String(mimeType || "").startsWith("image/")) {
       return <img src={preview.dataUrl} alt={preview.fileName || preview.title} className="pay-previewImage" />;
     }
     return <iframe title={preview.title} src={preview.dataUrl} className="ph-previewFrame" />;
@@ -464,12 +497,22 @@ function AgentAddPaymentRecord() {
                     {form.proofOfPaymentFileName ? (
                       <button
                         type="button"
-                        className="addpay-filePreview"
+                        className="addpay-proofPreviewCard"
                         onMouseDown={(event) => event.stopPropagation()}
                         onClick={(event) => handlePreviewButtonClick(event, "proof")}
                         title="Preview proof of payment"
                       >
-                        Selected file: {form.proofOfPaymentFileName}
+                        <span className="addpay-proofPreviewThumb" aria-hidden="true">
+                          {isProofImage && form.proofOfPaymentFileDataUrl ? (
+                            <img src={form.proofOfPaymentFileDataUrl} alt="" />
+                          ) : (
+                            <span className="addpay-proofPreviewIcon">PDF</span>
+                          )}
+                        </span>
+                        <span className="addpay-proofPreviewText">
+                          <strong>Preview proof of payment</strong>
+                          <small>{form.proofOfPaymentFileName}</small>
+                        </span>
                       </button>
                     ) : null}
                     {fieldErrors.proofOfPaymentFileDataUrl ? <small>{fieldErrors.proofOfPaymentFileDataUrl}</small> : null}
