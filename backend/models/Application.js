@@ -86,38 +86,16 @@ const applicationSchema = new mongoose.Schema(
 
     /** Premium transfer details captured before formal submission. */
     recordPremiumPaymentTransfer: {
-      totalAnnualPremiumPhp: {
-        type: Number,
+      paymentId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Payment",
         default: null,
-      },
-      totalFrequencyPremiumPhp: {
-        type: Number,
-        default: null,
-      },
-      methodForInitialPayment: {
-        type: String,
-        enum: [...RENEWAL_PAYMENT_METHODS, ""],
-        default: "",
-        trim: true,
       },
       methodForRenewalPayment: {
         type: String,
         enum: [...RENEWAL_PAYMENT_METHODS, ""],
         default: "",
         trim: true,
-      },
-      paymentProofImageDataUrl: {
-        type: String,
-        default: "",
-      },
-      paymentProofFileName: {
-        type: String,
-        default: "",
-        trim: true,
-      },
-      savedAt: {
-        type: Date,
-        default: null,
       },
     },
 
