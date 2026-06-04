@@ -1,0 +1,232 @@
+@import "./AgentPaymentRecordDetails.css";
+
+.addpay-hero {
+  padding-bottom: 18px;
+  border-bottom: 1px solid #eef0f2;
+}
+
+.addpay-error {
+  margin-top: 16px;
+}
+
+.addpay-form {
+  margin-top: 20px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  font-family: "FSAlbertArabic", sans-serif;
+}
+
+.addpay-field {
+  display: grid;
+  gap: 8px;
+}
+
+.addpay-field span {
+  color: #6b6e6a;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.addpay-field input,
+.addpay-field select {
+  border: 1px solid #d8dcdf;
+  border-radius: 12px;
+  color: #373A36;
+  font-family: "FSAlbertArabic", sans-serif;
+  font-size: 15px;
+  font-weight: 800;
+  padding: 12px 14px;
+}
+
+.addpay-field input[readonly] {
+  background: #f8fafc;
+  color: #6b6e6a;
+}
+
+.addpay-field small {
+  color: #DA291C;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.addpay-fileField strong {
+  color: #373A36;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.addpay-filePreview {
+  border: 0;
+  background: transparent;
+  color: #DA291C;
+  cursor: pointer;
+  font-family: "FSAlbertArabic", sans-serif;
+  font-size: 13px;
+  font-weight: 900;
+  padding: 0;
+  text-align: left;
+}
+
+.addpay-filePreview:hover,
+.addpay-filePreview:focus-visible {
+  color: #b42318;
+  outline: none;
+  text-decoration: underline;
+}
+
+.addpay-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.addpay-primary,
+.addpay-secondary {
+  border-radius: 999px;
+  cursor: pointer;
+  font-family: "FSAlbertArabic", sans-serif;
+  font-size: 14px;
+  font-weight: 900;
+  padding: 11px 18px;
+}
+
+.addpay-primary {
+  border: 1px solid #DA291C;
+  background: rgba(218, 41, 28, 0.813);
+  color: #ffffff;
+}
+
+.addpay-primary:hover:not(:disabled),
+.addpay-primary:focus-visible:not(:disabled) {
+  filter: brightness(0.9);
+  outline: none;
+}
+
+.addpay-primary:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.addpay-secondary {
+  border: 1px solid #d8dcdf;
+  background: #ffffff;
+  color: #373A36;
+}
+
+.addpay-secondary:hover,
+.addpay-secondary:focus-visible {
+  background: rgba(218, 41, 28, 0.08);
+  outline: none;
+}
+
+@media (max-width: 760px) {
+  .addpay-form {
+    grid-template-columns: 1fr;
+  }
+
+  .addpay-actions {
+    justify-content: stretch;
+    flex-direction: column-reverse;
+  }
+}
+
+.addpay-pipeline {
+  align-items: center;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) 48px minmax(0, 1fr);
+  margin-top: 18px;
+}
+
+.addpay-stage {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #d8dcdf;
+  border-radius: 14px;
+  color: #6b6e6a;
+  cursor: pointer;
+  display: flex;
+  font-family: "FSAlbertArabic", sans-serif;
+  gap: 10px;
+  padding: 12px 14px;
+  text-align: left;
+}
+
+.addpay-stage span {
+  align-items: center;
+  background: #eef0f2;
+  border-radius: 50%;
+  color: #373A36;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 13px;
+  font-weight: 900;
+  height: 28px;
+  justify-content: center;
+  width: 28px;
+}
+
+.addpay-stage strong {
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.addpay-stage.is-active {
+  border-color: rgba(218, 41, 28, 0.55);
+  box-shadow: 0 10px 24px rgba(218, 41, 28, 0.08);
+  color: #373A36;
+}
+
+.addpay-stage.is-active span,
+.addpay-stage.is-complete span {
+  background: #DA291C;
+  color: #ffffff;
+}
+
+.addpay-stage:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.addpay-stage:not(:disabled):hover,
+.addpay-stage:not(:disabled):focus-visible {
+  background: rgba(218, 41, 28, 0.06);
+  outline: none;
+}
+
+.addpay-stageLine {
+  background: #d8dcdf;
+  height: 2px;
+}
+
+.addpay-stageNotice {
+  background: rgba(218, 41, 28, 0.06);
+  border: 1px solid rgba(218, 41, 28, 0.16);
+  border-radius: 14px;
+  color: #373A36;
+  font-family: "FSAlbertArabic", sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  grid-column: 1 / -1;
+  padding: 12px 14px;
+}
+
+.addpay-stageNotice strong {
+  color: #DA291C;
+  font-weight: 900;
+}
+
+@media (max-width: 760px) {
+  .addpay-pipeline {
+    grid-template-columns: 1fr;
+  }
+
+  .addpay-stageLine {
+    display: none;
+  }
+}
