@@ -273,3 +273,32 @@
     grid-template-columns: 1fr;
   }
 }
+
+.addpay-fileName {
+  color: #6b6e6a;
+  font-family: "FSAlbertArabic", sans-serif;
+  font-size: 13px;
+  font-weight: 800;
+  margin: 0;
+  word-break: break-word;
+}
+
+.addpay-inlinePreview {
+  display: grid;
+  gap: 8px;
+}
+
+.addpay-inlinePreview span {
+  color: #6b6e6a;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.addpay-inlinePreviewImage {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  max-width: 260px;
+  width: 100%;
+}
