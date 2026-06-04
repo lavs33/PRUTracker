@@ -1,0 +1,105 @@
+@import "./AgentPaymentRecordDetails.css";
+
+.addpay-hero {
+  padding-bottom: 18px;
+  border-bottom: 1px solid #eef0f2;
+}
+
+.addpay-error {
+  margin-top: 16px;
+}
+
+.addpay-form {
+  margin-top: 20px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  font-family: "FSAlbertArabic", sans-serif;
+}
+
+.addpay-field {
+  display: grid;
+  gap: 8px;
+}
+
+.addpay-field span {
+  color: #6b6e6a;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.addpay-field input,
+.addpay-field select {
+  border: 1px solid #d8dcdf;
+  border-radius: 12px;
+  color: #373A36;
+  font-family: "FSAlbertArabic", sans-serif;
+  font-size: 15px;
+  font-weight: 800;
+  padding: 12px 14px;
+}
+
+.addpay-field input[readonly] {
+  background: #f8fafc;
+  color: #6b6e6a;
+}
+
+.addpay-field small {
+  color: #DA291C;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.addpay-fileField strong {
+  color: #373A36;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.addpay-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.addpay-primary,
+.addpay-secondary {
+  border-radius: 999px;
+  cursor: pointer;
+  font-family: "FSAlbertArabic", sans-serif;
+  font-size: 14px;
+  font-weight: 900;
+  padding: 11px 18px;
+}
+
+.addpay-primary {
+  border: 1px solid #DA291C;
+  background: #DA291C;
+  color: #ffffff;
+}
+
+.addpay-primary:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.addpay-secondary {
+  border: 1px solid #d8dcdf;
+  background: #ffffff;
+  color: #373A36;
+}
+
+@media (max-width: 760px) {
+  .addpay-form {
+    grid-template-columns: 1fr;
+  }
+
+  .addpay-actions {
+    justify-content: stretch;
+    flex-direction: column-reverse;
+  }
+}

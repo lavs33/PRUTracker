@@ -14,6 +14,8 @@ function registerLegacyRoutes(app, deps) {
     Proposal,
     Application,
     Policy,
+    Payment,
+    AnnualPayment,
     Product,
     Task,
     Notification,
@@ -73,6 +75,122 @@ function registerLegacyRoutes(app, deps) {
   }
 
   let scheduledMeetingAttemptCycleBackfilled = false;
+  function addMonthsPreservingDay(date, months) {
+    const next = new Date(date);
+    next.setMonth(next.getMonth() + months);
+    return next;
+  }
+
+  function formatPaymentPeriodDate(date) {
+    if (!date || Number.isNaN(date.getTime())) return "";
+    return date.toLocaleDateString("en-US", {
+      month: "short",
+      day: "2-digit",
+      year: "numeric",
+    });
+  }
+
+  function derivePaymentPeriod(paymentDate, frequency) {
+    const startDate = paymentDate ? new Date(paymentDate) : null;
+    if (!startDate || Number.isNaN(startDate.getTime())) {
+      return { startDate: null, endDate: null, label: "" };
+    }
+
+    const normalizedFrequency = String(frequency || "").trim();
+    const intervalMonthsByFrequency = {
+      Monthly: 1,
+      Quarterly: 3,
+      "Half-yearly": 6,
+      Yearly: 12,
+    };
+    const intervalMonths = intervalMonthsByFrequency[normalizedFrequency] || 0;
+    if (!intervalMonths) {
+      return { startDate, endDate: null, label: "" };
+    }
+
+    const endDate = addMonthsPreservingDay(startDate, intervalMonths);
+    endDate.setDate(endDate.getDate() - 1);
+    return {
+      startDate,
+      endDate,
+      label: `${formatPaymentPeriodDate(startDate)} - ${formatPaymentPeriodDate(endDate)}`,
+    };
+  }
+
+  function deriveAnnualPaymentPeriod(paymentDate) {
+    const startDate = paymentDate ? new Date(paymentDate) : null;
+    if (!startDate || Number.isNaN(startDate.getTime())) {
+      return { startDate: null, endDate: null, label: "" };
+    }
+
+    const endDate = new Date(startDate);
+    endDate.setFullYear(endDate.getFullYear() + 1);
+    endDate.setDate(endDate.getDate() - 1);
+
+    return {
+      startDate,
+      endDate,
+      label: `${formatPaymentPeriodDate(startDate)} - ${formatPaymentPeriodDate(endDate)}`,
+    };
+  }
+
+  function annualPaymentTotalCountForFrequency(frequency) {
+    const countsByFrequency = {
+      Monthly: 12,
+      Quarterly: 4,
+      "Half-yearly": 2,
+      Yearly: 1,
+    };
+    return countsByFrequency[String(frequency || "").trim()] || 0;
+  }
+
+  function buildAnnualPaymentMetrics({ totalAnnualPremiumPhp, amountPaidSoFarPhp, paidCount, frequencyOfPayment }) {
+    const totalAnnual = Number(totalAnnualPremiumPhp || 0);
+    const amountPaid = Number(amountPaidSoFarPhp || 0);
+    const normalizedPaid = Number.isFinite(amountPaid) && amountPaid > 0 ? Math.round(amountPaid * 100) / 100 : 0;
+    const normalizedTotal = Number.isFinite(totalAnnual) && totalAnnual > 0 ? Math.round(totalAnnual * 100) / 100 : 0;
+    const remainingBalancePhp = Math.max(0, Math.round((normalizedTotal - normalizedPaid) * 100) / 100);
+    const totalCount = annualPaymentTotalCountForFrequency(frequencyOfPayment);
+    const normalizedPaidCount = Math.max(0, Number(paidCount || 0));
+    const status = normalizedPaidCount <= 0 && normalizedPaid <= 0
+      ? "Not Started"
+      : (normalizedTotal > 0 && normalizedPaid >= normalizedTotal && totalCount > 0 && normalizedPaidCount >= totalCount ? "Completed" : "Ongoing");
+
+    return {
+      amountPaidSoFarPhp: normalizedPaid,
+      remainingBalancePhp,
+      paymentProgress: {
+        paidCount: normalizedPaidCount,
+        totalCount,
+        label: `${normalizedPaidCount}/${totalCount}`,
+      },
+      status,
+    };
+  }
+
+  function paymentHasCompletedPremiumTransfer(payment = {}) {
+    const transfer = payment?.recordPremiumPaymentTransfer || {};
+    return Boolean(
+      transfer.savedAt
+      || transfer.paymentDate
+      || transfer.totalPremiumPaidPhp !== undefined && transfer.totalPremiumPaidPhp !== null
+      || String(transfer.methodForPayment || "").trim()
+      || String(transfer.proofOfPaymentFileDataUrl || "").trim()
+      || String(transfer.proofOfPaymentFileName || "").trim()
+    );
+  }
+
+  function paymentHasUploadedEor(payment = {}) {
+    const eor = payment?.uploadPremiumPaymentEor || {};
+    return Boolean(
+      eor.uploadedAt
+      || eor.receiptDate
+      || String(eor.eorNumber || "").trim()
+      || String(eor.eorFileName || "").trim()
+      || String(eor.eorFileDataUrl || "").trim()
+    );
+  }
+
   async function ensureScheduledMeetingAttemptCycleBackfill() {
     if (scheduledMeetingAttemptCycleBackfilled) return;
 
@@ -1506,6 +1624,47 @@ async function getNextLeadCode() {
 }
 
 
+async function loadAnnualPaymentRecordsForPolicyholder(policyholder) {
+  const rawRecords = Array.isArray(policyholder?.annualPaymentRecords) ? policyholder.annualPaymentRecords : [];
+  const annualPaymentIds = rawRecords
+    .map((record) => record?.annualPaymentId)
+    .filter((id) => id && mongoose.isValidObjectId(id));
+
+  const query = annualPaymentIds.length
+    ? { _id: { $in: annualPaymentIds } }
+    : { leadEngagementId: policyholder?.leadEngagementId };
+
+  const annualPayments = await AnnualPayment.find(query)
+    .select("annualPaymentPeriod totalAnnualPremiumPhp amountPaidSoFarPhp remainingBalancePhp frequencyOfPayment paymentProgress status createdAt updatedAt")
+    .lean();
+
+  const recordedAtByAnnualPaymentId = new Map(
+    rawRecords.map((record) => [String(record?.annualPaymentId || ""), record?.recordedAt || null])
+  );
+
+  return annualPayments
+    .map((annualPayment) => ({
+      _id: annualPayment._id,
+      annualPaymentId: annualPayment._id,
+      annualPaymentPeriod: annualPayment.annualPaymentPeriod || {},
+      label: annualPayment?.annualPaymentPeriod?.label || "",
+      totalAnnualPremiumPhp: annualPayment.totalAnnualPremiumPhp ?? null,
+      amountPaidSoFarPhp: annualPayment.amountPaidSoFarPhp ?? 0,
+      remainingBalancePhp: annualPayment.remainingBalancePhp ?? 0,
+      frequencyOfPayment: annualPayment.frequencyOfPayment || "",
+      paymentProgress: annualPayment.paymentProgress || { paidCount: 0, totalCount: 0, label: "0/0" },
+      status: annualPayment.status || "Not Started",
+      recordedAt: recordedAtByAnnualPaymentId.get(String(annualPayment._id)) || annualPayment.createdAt || null,
+      createdAt: annualPayment.createdAt || null,
+      updatedAt: annualPayment.updatedAt || null,
+    }))
+    .sort((left, right) => {
+      const rightTime = new Date(right?.annualPaymentPeriod?.startDate || right?.recordedAt || right?.createdAt || 0).getTime();
+      const leftTime = new Date(left?.annualPaymentPeriod?.startDate || left?.recordedAt || left?.createdAt || 0).getTime();
+      return rightTime - leftTime;
+    });
+}
+
 async function getNextPolicyholderCode() {
   const last = await Policyholder.findOne({ policyholderCode: { $regex: /^PH-\d{6}$/ } })
     .sort({ policyholderCode: -1 })
@@ -2323,9 +2482,9 @@ app.get("/api/agent/home", async (req, res) => {
           .lean()
       : [];
 
-    const applications = engagementIds.length
-      ? await Application.find({ leadEngagementId: { $in: engagementIds } })
-          .select("leadEngagementId recordPremiumPaymentTransfer.totalAnnualPremiumPhp")
+    const annualPayments = engagementIds.length
+      ? await AnnualPayment.find({ leadEngagementId: { $in: engagementIds } })
+          .select("leadEngagementId totalAnnualPremiumPhp")
           .lean()
       : [];
 
@@ -2385,8 +2544,8 @@ app.get("/api/agent/home", async (req, res) => {
         return b.convertedLeads - a.convertedLeads;
       })[0] || null;
 
-    const totalAnnualPremiumPhp = applications.reduce(
-      (sum, application) => sum + Number(application?.recordPremiumPaymentTransfer?.totalAnnualPremiumPhp || 0),
+    const totalAnnualPremiumPhp = annualPayments.reduce(
+      (sum, annualPayment) => sum + Number(annualPayment?.totalAnnualPremiumPhp || 0),
       0
     );
 
@@ -2820,13 +2979,25 @@ app.get("/api/sales/performance", async (req, res) => {
 
     const applications = engagementIds.length
       ? await Application.find({ leadEngagementId: { $in: engagementIds } })
-          .select("leadEngagementId recordPremiumPaymentTransfer.totalAnnualPremiumPhp recordPremiumPaymentTransfer.totalFrequencyPremiumPhp")
+          .select("leadEngagementId recordPremiumPaymentTransfer")
           .lean()
       : [];
 
     const needsAssessments = engagementIds.length
       ? await NeedsAssessment.find({ leadEngagementId: { $in: engagementIds } })
           .select("leadEngagementId needsPriorities.productSelection.requestedFrequency")
+          .lean()
+      : [];
+
+    const payments = engagementIds.length
+      ? await Payment.find({ leadEngagementId: { $in: engagementIds } })
+          .select("leadEngagementId annualPaymentId recordPremiumPaymentTransfer.totalPremiumPaidPhp recordPremiumPaymentTransfer.frequencyOfPremiumPayment")
+          .lean()
+      : [];
+
+    const annualPayments = engagementIds.length
+      ? await AnnualPayment.find({ leadEngagementId: { $in: engagementIds } })
+          .select("leadEngagementId totalAnnualPremiumPhp frequencyOfPayment")
           .lean()
       : [];
 
@@ -2857,6 +3028,20 @@ app.get("/api/sales/performance", async (req, res) => {
       policyStatus === "ALL"
         ? needsAssessments
         : needsAssessments.filter((needsAssessment) => scopedEngagementIds.has(String(needsAssessment?.leadEngagementId || "")));
+    const scopedPayments =
+      policyStatus === "ALL"
+        ? payments
+        : payments.filter((payment) => scopedEngagementIds.has(String(payment?.leadEngagementId || "")));
+    const scopedAnnualPayments =
+      policyStatus === "ALL"
+        ? annualPayments
+        : annualPayments.filter((annualPayment) => scopedEngagementIds.has(String(annualPayment?.leadEngagementId || "")));
+    const engagementToPayment = new Map(
+      scopedPayments.map((payment) => [String(payment?.leadEngagementId || ""), payment]).filter(([engagementId]) => engagementId)
+    );
+    const engagementToAnnualPayment = new Map(
+      scopedAnnualPayments.map((annualPayment) => [String(annualPayment?.leadEngagementId || ""), annualPayment]).filter(([engagementId]) => engagementId)
+    );
 
     const engagementToFrequency = new Map(
       scopedNeedsAssessments.map((n) => [
@@ -2864,6 +3049,18 @@ app.get("/api/sales/performance", async (req, res) => {
         String(n?.needsPriorities?.productSelection?.requestedFrequency || "").trim(),
       ])
     );
+
+    scopedAnnualPayments.forEach((annualPayment) => {
+      const engagementId = String(annualPayment?.leadEngagementId || "");
+      const finalFrequency = String(annualPayment?.frequencyOfPayment || "").trim();
+      if (engagementId && finalFrequency) engagementToFrequency.set(engagementId, finalFrequency);
+    });
+
+    scopedPayments.forEach((payment) => {
+      const engagementId = String(payment?.leadEngagementId || "");
+      const finalFrequency = String(payment?.recordPremiumPaymentTransfer?.frequencyOfPremiumPayment || "").trim();
+      if (engagementId && finalFrequency) engagementToFrequency.set(engagementId, finalFrequency);
+    });
 
     const frequencyPremiumBreakdown = {
       monthlyPremiumPhp: 0,
@@ -2883,18 +3080,27 @@ app.get("/api/sales/performance", async (req, res) => {
       return null;
     };
 
-    const totalAnnualPremiumPhp = scopedApplications.reduce(
-      (sum, a) => sum + Number(a?.recordPremiumPaymentTransfer?.totalAnnualPremiumPhp || 0),
+    const totalAnnualPremiumPhp = scopedAnnualPayments.reduce(
+      (sum, annualPayment) => sum + Number(annualPayment?.totalAnnualPremiumPhp || 0),
       0
     );
-    const totalFrequencyPremiumPhp = scopedApplications.reduce(
-      (sum, a) => sum + Number(a?.recordPremiumPaymentTransfer?.totalFrequencyPremiumPhp || 0),
-      0
-    );
+    const totalFrequencyPremiumPhp = scopedApplications.reduce((sum, application) => {
+      const engagementId = String(application?.leadEngagementId || "");
+      const payment = engagementToPayment.get(engagementId) || null;
+      return sum + Number(
+        payment?.recordPremiumPaymentTransfer?.totalPremiumPaidPhp
+        ?? 0
+      );
+    }, 0);
 
     for (const appDoc of scopedApplications) {
-      const premium = Number(appDoc?.recordPremiumPaymentTransfer?.totalFrequencyPremiumPhp || 0);
-      const freq = engagementToFrequency.get(String(appDoc?.leadEngagementId)) || "";
+      const engagementId = String(appDoc?.leadEngagementId || "");
+      const payment = engagementToPayment.get(engagementId) || null;
+      const premium = Number(
+        payment?.recordPremiumPaymentTransfer?.totalPremiumPaidPhp
+        ?? 0
+      );
+      const freq = engagementToFrequency.get(engagementId) || "";
       const frequencyKey = normalizeFrequencyKey(freq);
 
       if (frequencyKey) frequencyPremiumBreakdown[frequencyKey] += premium;
@@ -3034,6 +3240,12 @@ app.get("/api/sales/performance", async (req, res) => {
         return [String(leadId || ""), needsAssessment];
       }).filter(([leadId]) => leadId)
     );
+    const leadIdToPayment = new Map(
+      scopedPayments.map((payment) => {
+        const leadId = engagementToLead.get(String(payment.leadEngagementId));
+        return [String(leadId || ""), payment];
+      }).filter(([leadId]) => leadId)
+    );
 
     const salesRows = reportingLeads
       .filter((lead) => String(lead?.status || "").trim().toLowerCase() !== "dropped")
@@ -3046,8 +3258,19 @@ app.get("/api/sales/performance", async (req, res) => {
         const latestPolicy = relatedPolicies[0] || null;
         const application = leadIdToApplication.get(leadKey) || null;
         const needsAssessment = leadIdToNeedsAssessment.get(leadKey) || null;
+        const payment = leadIdToPayment.get(leadKey) || null;
         const fullName = [prospect?.firstName, prospect?.middleName, prospect?.lastName].filter(Boolean).join(" ").trim() || "—";
-        const requestedFrequency = String(needsAssessment?.needsPriorities?.productSelection?.requestedFrequency || "").trim() || "—";
+        const requestedFrequency = String(
+          payment?.recordPremiumPaymentTransfer?.frequencyOfPremiumPayment
+          || application?.recordPremiumPaymentTransfer?.frequencyOfPremiumPayment
+          || needsAssessment?.needsPriorities?.productSelection?.requestedFrequency
+          || ""
+        ).trim() || "—";
+        const frequencyPremiumPhp = Number(
+          payment?.recordPremiumPaymentTransfer?.totalPremiumPaidPhp
+          ?? application?.recordPremiumPaymentTransfer?.totalFrequencyPremiumPhp
+          ?? 0
+        );
 
         return {
           leadCode: lead.leadCode || "—",
@@ -3061,7 +3284,7 @@ app.get("/api/sales/performance", async (req, res) => {
           convertedAt: latestPolicy?.createdAt || null,
           requestedFrequency,
           annualPremiumPhp: Number(application?.recordPremiumPaymentTransfer?.totalAnnualPremiumPhp || 0),
-          frequencyPremiumPhp: Number(application?.recordPremiumPaymentTransfer?.totalFrequencyPremiumPhp || 0),
+          frequencyPremiumPhp,
         };
       })
       .sort((a, b) => {
@@ -5302,7 +5525,7 @@ app.get("/api/policyholders/:policyholderId/details", async (req, res) => {
       _id: policyholderObjectId,
       assignedToUserId: userObjectId,
     })
-      .select("policyholderCode productId policyNumber leadEngagementId lastPaidDate nextPaymentDate status createdAt updatedAt")
+      .select("policyholderCode productId policyNumber leadEngagementId lastPaidDate nextPaymentDate status annualPaymentRecords createdAt updatedAt")
       .lean();
 
     if (!policyholder) return res.status(404).json({ message: "Policyholder not found." });
@@ -5341,6 +5564,7 @@ app.get("/api/policyholders/:policyholderId/details", async (req, res) => {
     const policyIssuance = policy?.recordPolicyApplicationStatus || {};
     const summary = policy?.uploadPolicySummary || {};
     const prospectName = `${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName}`.trim();
+    const annualPaymentRecords = await loadAnnualPaymentRecordsForPolicyholder(policyholder);
 
     return res.json({
       prospect: {
@@ -5358,7 +5582,7 @@ app.get("/api/policyholders/:policyholderId/details", async (req, res) => {
         policyNumber: policyholder.policyNumber || summary.policyNumber || coverage.policyNumber || "",
         status: policyholder.status,
         lastPaidDate: policyholder.lastPaidDate || null,
-        nextPaymentDate: policyholder.nextPaymentDate || coverage.nextPaymentDate || null,
+        nextPaymentDate: policyholder.nextPaymentDate || null,
         createdAt: policyholder.createdAt || null,
         updatedAt: policyholder.updatedAt || null,
       },
@@ -5385,12 +5609,461 @@ app.get("/api/policyholders/:policyholderId/details", async (req, res) => {
         selectedPaymentTermYears: coverage.selectedPaymentTermYears ?? null,
         selectedPaymentTermUntilAge: coverage.selectedPaymentTermUntilAge ?? null,
       },
+      annualPaymentRecords,
     });
   } catch (err) {
     console.error("Get policyholder details error:", err);
     return res.status(500).json({ message: "Server error." });
   }
 });
+// GET /api/policyholders/:policyholderId/annual-payments/:annualPaymentId?userId=...
+app.get("/api/policyholders/:policyholderId/annual-payments/:annualPaymentId", async (req, res) => {
+  try {
+    const { userId } = req.query;
+    const { policyholderId, annualPaymentId } = req.params;
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId)) return res.status(400).json({ message: "Invalid userId." });
+    if (!mongoose.isValidObjectId(policyholderId)) return res.status(400).json({ message: "Invalid policyholderId." });
+    if (!mongoose.isValidObjectId(annualPaymentId)) return res.status(400).json({ message: "Invalid annualPaymentId." });
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const policyholderObjectId = new mongoose.Types.ObjectId(policyholderId);
+    const annualPaymentObjectId = new mongoose.Types.ObjectId(annualPaymentId);
+
+    const policyholder = await Policyholder.findOne({
+      _id: policyholderObjectId,
+      assignedToUserId: userObjectId,
+    })
+      .select("policyholderCode productId policyNumber leadEngagementId lastPaidDate nextPaymentDate status annualPaymentRecords createdAt updatedAt")
+      .lean();
+
+    if (!policyholder) return res.status(404).json({ message: "Policyholder not found." });
+
+    const annualPaymentIsLinked = (policyholder.annualPaymentRecords || []).some(
+      (record) => String(record?.annualPaymentId || "") === String(annualPaymentObjectId)
+    );
+
+    const annualPayment = await AnnualPayment.findOne({
+      _id: annualPaymentObjectId,
+      leadEngagementId: policyholder.leadEngagementId,
+    })
+      .select("leadEngagementId annualPaymentPeriod totalAnnualPremiumPhp amountPaidSoFarPhp remainingBalancePhp frequencyOfPayment paymentProgress status createdAt updatedAt")
+      .lean();
+
+    if (!annualPayment || (!annualPaymentIsLinked && String(annualPayment.leadEngagementId || "") !== String(policyholder.leadEngagementId || ""))) {
+      return res.status(404).json({ message: "Annual payment record not found." });
+    }
+
+    const leadEngagement = await LeadEngagement.findById(policyholder.leadEngagementId)
+      .select("_id leadId")
+      .lean();
+    if (!leadEngagement) return res.status(404).json({ message: "Lead engagement not found." });
+
+    const lead = await Lead.findById(leadEngagement.leadId)
+      .select("leadCode prospectId")
+      .lean();
+    if (!lead) return res.status(404).json({ message: "Lead not found." });
+
+    const prospect = await Prospect.findOne({
+      _id: lead.prospectId,
+      assignedToUserId: userObjectId,
+    })
+      .select("firstName middleName lastName age")
+      .lean();
+    if (!prospect) return res.status(404).json({ message: "Prospect not found." });
+
+    const policyNumberFilter = String(policyholder.policyNumber || "").trim();
+    const policyLookupConditions = [{ leadEngagementId: policyholder.leadEngagementId }];
+    if (policyNumberFilter) {
+      policyLookupConditions.push(
+        { "uploadPolicySummary.policyNumber": policyNumberFilter },
+        { "recordCoverageDurationDetails.policyNumber": policyNumberFilter }
+      );
+    }
+
+    const [product, policy, payments] = await Promise.all([
+      policyholder.productId
+        ? Product.findById(policyholder.productId).select("productName").lean()
+        : null,
+      Policy.findOne({ $or: policyLookupConditions })
+        .select("uploadPolicySummary recordCoverageDurationDetails")
+        .lean(),
+      Payment.find({ annualPaymentId: annualPaymentObjectId })
+        .select("status recordPremiumPaymentTransfer uploadPremiumPaymentEor createdAt updatedAt")
+        .sort({ "recordPremiumPaymentTransfer.paymentDate": -1, createdAt: -1 })
+        .lean(),
+    ]);
+
+    const summary = policy?.uploadPolicySummary || {};
+    const coverage = policy?.recordCoverageDurationDetails || {};
+    const policyNumber = policyholder.policyNumber || summary.policyNumber || coverage.policyNumber || "";
+    const prospectName = `${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName}`.trim();
+
+    return res.json({
+      prospect: {
+        _id: prospect._id,
+        fullName: prospectName,
+        age: prospect.age ?? null,
+      },
+      lead: {
+        _id: lead._id,
+        leadCode: lead.leadCode,
+      },
+      policyholder: {
+        _id: policyholder._id,
+        policyholderCode: policyholder.policyholderCode,
+        policyNumber,
+        status: policyholder.status,
+        nextPaymentDate: policyholder.nextPaymentDate || null,
+      },
+      policySummary: {
+        policyNumber,
+        fileName: summary.policySummaryFileName || "",
+        mimeType: summary.policySummaryFileMimeType || "",
+        fileDataUrl: summary.policySummaryFileDataUrl || "",
+        uploadedAt: summary.uploadedAt || null,
+      },
+      product: {
+        _id: product?._id || policyholder.productId || null,
+        productName: product?.productName || "",
+      },
+      annualPayment: {
+        _id: annualPayment._id,
+        annualPaymentId: annualPayment._id,
+        annualPaymentPeriod: annualPayment.annualPaymentPeriod || {},
+        label: annualPayment?.annualPaymentPeriod?.label || "",
+        totalAnnualPremiumPhp: annualPayment.totalAnnualPremiumPhp ?? null,
+        amountPaidSoFarPhp: annualPayment.amountPaidSoFarPhp ?? 0,
+        remainingBalancePhp: annualPayment.remainingBalancePhp ?? 0,
+        frequencyOfPayment: annualPayment.frequencyOfPayment || "",
+        paymentProgress: annualPayment.paymentProgress || { paidCount: 0, totalCount: 0, label: "0/0" },
+        status: annualPayment.status || "Not Started",
+        createdAt: annualPayment.createdAt || null,
+        updatedAt: annualPayment.updatedAt || null,
+      },
+      payments: payments.map((payment) => ({
+        _id: payment._id,
+        paymentId: payment._id,
+        status: payment.status || "Pending",
+        totalPremiumPaidPhp: payment?.recordPremiumPaymentTransfer?.totalPremiumPaidPhp ?? null,
+        paymentDate: payment?.recordPremiumPaymentTransfer?.paymentDate || null,
+        paymentPeriod: payment?.recordPremiumPaymentTransfer?.paymentPeriod || {},
+        paymentPeriodLabel: payment?.recordPremiumPaymentTransfer?.paymentPeriod?.label || "",
+        methodForPayment: payment?.recordPremiumPaymentTransfer?.methodForPayment || "",
+        proofOfPaymentFileName: payment?.recordPremiumPaymentTransfer?.proofOfPaymentFileName || "",
+        proofOfPaymentFileMimeType: payment?.recordPremiumPaymentTransfer?.proofOfPaymentFileMimeType || "",
+        savedAt: payment?.recordPremiumPaymentTransfer?.savedAt || null,
+        eorNumber: payment?.uploadPremiumPaymentEor?.eorNumber || "",
+        receiptDate: payment?.uploadPremiumPaymentEor?.receiptDate || null,
+        eorFileName: payment?.uploadPremiumPaymentEor?.eorFileName || "",
+        uploadedAt: payment?.uploadPremiumPaymentEor?.uploadedAt || null,
+        createdAt: payment.createdAt || null,
+        updatedAt: payment.updatedAt || null,
+      })),
+    });
+  } catch (err) {
+    console.error("Get annual payment details error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+// GET /api/policyholders/:policyholderId/annual-payments/:annualPaymentId/payments/:paymentId?userId=...
+app.get("/api/policyholders/:policyholderId/annual-payments/:annualPaymentId/payments/:paymentId", async (req, res) => {
+  try {
+    const { userId } = req.query;
+    const { policyholderId, annualPaymentId, paymentId } = req.params;
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId)) return res.status(400).json({ message: "Invalid userId." });
+    if (!mongoose.isValidObjectId(policyholderId)) return res.status(400).json({ message: "Invalid policyholderId." });
+    if (!mongoose.isValidObjectId(annualPaymentId)) return res.status(400).json({ message: "Invalid annualPaymentId." });
+    if (!mongoose.isValidObjectId(paymentId)) return res.status(400).json({ message: "Invalid paymentId." });
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const policyholderObjectId = new mongoose.Types.ObjectId(policyholderId);
+    const annualPaymentObjectId = new mongoose.Types.ObjectId(annualPaymentId);
+    const paymentObjectId = new mongoose.Types.ObjectId(paymentId);
+
+    const policyholder = await Policyholder.findOne({
+      _id: policyholderObjectId,
+      assignedToUserId: userObjectId,
+    })
+      .select("policyholderCode productId policyNumber leadEngagementId status annualPaymentRecords")
+      .lean();
+
+    if (!policyholder) return res.status(404).json({ message: "Policyholder not found." });
+
+    const annualPaymentIsLinked = (policyholder.annualPaymentRecords || []).some(
+      (record) => String(record?.annualPaymentId || "") === String(annualPaymentObjectId)
+    );
+
+    const annualPayment = await AnnualPayment.findOne({
+      _id: annualPaymentObjectId,
+      leadEngagementId: policyholder.leadEngagementId,
+    })
+      .select("leadEngagementId annualPaymentPeriod totalAnnualPremiumPhp amountPaidSoFarPhp remainingBalancePhp frequencyOfPayment paymentProgress status createdAt updatedAt")
+      .lean();
+
+    if (!annualPayment || (!annualPaymentIsLinked && String(annualPayment.leadEngagementId || "") !== String(policyholder.leadEngagementId || ""))) {
+      return res.status(404).json({ message: "Annual payment record not found." });
+    }
+
+    const payment = await Payment.findOne({
+      _id: paymentObjectId,
+      annualPaymentId: annualPaymentObjectId,
+      leadEngagementId: policyholder.leadEngagementId,
+    })
+      .select("status recordPremiumPaymentTransfer uploadPremiumPaymentEor createdAt updatedAt")
+      .lean();
+
+    if (!payment) return res.status(404).json({ message: "Payment record not found." });
+
+    const leadEngagement = await LeadEngagement.findById(policyholder.leadEngagementId)
+      .select("_id leadId")
+      .lean();
+    if (!leadEngagement) return res.status(404).json({ message: "Lead engagement not found." });
+
+    const lead = await Lead.findById(leadEngagement.leadId)
+      .select("leadCode prospectId")
+      .lean();
+    if (!lead) return res.status(404).json({ message: "Lead not found." });
+
+    const prospect = await Prospect.findOne({
+      _id: lead.prospectId,
+      assignedToUserId: userObjectId,
+    })
+      .select("firstName middleName lastName age")
+      .lean();
+    if (!prospect) return res.status(404).json({ message: "Prospect not found." });
+
+    const policyNumberFilter = String(policyholder.policyNumber || "").trim();
+    const policyLookupConditions = [{ leadEngagementId: policyholder.leadEngagementId }];
+    if (policyNumberFilter) {
+      policyLookupConditions.push(
+        { "uploadPolicySummary.policyNumber": policyNumberFilter },
+        { "recordCoverageDurationDetails.policyNumber": policyNumberFilter }
+      );
+    }
+
+    const [product, policy, annualPayments] = await Promise.all([
+      policyholder.productId
+        ? Product.findById(policyholder.productId).select("productName").lean()
+        : null,
+      Policy.findOne({ $or: policyLookupConditions })
+        .select("uploadPolicySummary recordCoverageDurationDetails")
+        .lean(),
+      Payment.find({ annualPaymentId: annualPaymentObjectId })
+        .select("_id")
+        .sort({ "recordPremiumPaymentTransfer.paymentDate": -1, createdAt: -1 })
+        .lean(),
+    ]);
+
+    const paymentIndex = annualPayments.findIndex((candidate) => String(candidate?._id || "") === String(paymentObjectId));
+    const paymentNumber = paymentIndex >= 0 ? annualPayments.length - paymentIndex : null;
+    const summary = policy?.uploadPolicySummary || {};
+    const coverage = policy?.recordCoverageDurationDetails || {};
+    const policyNumber = policyholder.policyNumber || summary.policyNumber || coverage.policyNumber || "";
+    const prospectName = `${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName}`.trim();
+
+    return res.json({
+      prospect: {
+        _id: prospect._id,
+        fullName: prospectName,
+        age: prospect.age ?? null,
+      },
+      lead: {
+        _id: lead._id,
+        leadCode: lead.leadCode,
+      },
+      policyholder: {
+        _id: policyholder._id,
+        policyholderCode: policyholder.policyholderCode,
+        policyNumber,
+        status: policyholder.status,
+      },
+      policySummary: {
+        policyNumber,
+        fileName: summary.policySummaryFileName || "",
+        mimeType: summary.policySummaryFileMimeType || "",
+        fileDataUrl: summary.policySummaryFileDataUrl || "",
+        uploadedAt: summary.uploadedAt || null,
+      },
+      product: {
+        _id: product?._id || policyholder.productId || null,
+        productName: product?.productName || "",
+      },
+      annualPayment: {
+        _id: annualPayment._id,
+        annualPaymentId: annualPayment._id,
+        annualPaymentPeriod: annualPayment.annualPaymentPeriod || {},
+        label: annualPayment?.annualPaymentPeriod?.label || "",
+        totalAnnualPremiumPhp: annualPayment.totalAnnualPremiumPhp ?? null,
+        amountPaidSoFarPhp: annualPayment.amountPaidSoFarPhp ?? 0,
+        remainingBalancePhp: annualPayment.remainingBalancePhp ?? 0,
+        frequencyOfPayment: annualPayment.frequencyOfPayment || "",
+        paymentProgress: annualPayment.paymentProgress || { paidCount: 0, totalCount: 0, label: "0/0" },
+        status: annualPayment.status || "Not Started",
+      },
+      payment: {
+        _id: payment._id,
+        paymentId: payment._id,
+        paymentNumber,
+        status: payment.status || "Pending",
+        totalPremiumPaidPhp: payment?.recordPremiumPaymentTransfer?.totalPremiumPaidPhp ?? null,
+        frequencyOfPremiumPayment: payment?.recordPremiumPaymentTransfer?.frequencyOfPremiumPayment || "",
+        paymentDate: payment?.recordPremiumPaymentTransfer?.paymentDate || null,
+        paymentPeriod: payment?.recordPremiumPaymentTransfer?.paymentPeriod || {},
+        paymentPeriodLabel: payment?.recordPremiumPaymentTransfer?.paymentPeriod?.label || "",
+        methodForPayment: payment?.recordPremiumPaymentTransfer?.methodForPayment || "",
+        proofOfPaymentFileName: payment?.recordPremiumPaymentTransfer?.proofOfPaymentFileName || "",
+        proofOfPaymentFileMimeType: payment?.recordPremiumPaymentTransfer?.proofOfPaymentFileMimeType || "",
+        proofOfPaymentFileDataUrl: payment?.recordPremiumPaymentTransfer?.proofOfPaymentFileDataUrl || "",
+        savedAt: payment?.recordPremiumPaymentTransfer?.savedAt || null,
+        eorNumber: payment?.uploadPremiumPaymentEor?.eorNumber || "",
+        receiptDate: payment?.uploadPremiumPaymentEor?.receiptDate || null,
+        eorFileName: payment?.uploadPremiumPaymentEor?.eorFileName || "",
+        eorFileMimeType: payment?.uploadPremiumPaymentEor?.eorFileMimeType || "",
+        eorFileDataUrl: payment?.uploadPremiumPaymentEor?.eorFileDataUrl || "",
+        uploadedAt: payment?.uploadPremiumPaymentEor?.uploadedAt || null,
+        createdAt: payment.createdAt || null,
+        updatedAt: payment.updatedAt || null,
+      },
+    });
+  } catch (err) {
+    console.error("Get payment record details error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+
+
+// POST /api/policyholders/:policyholderId/annual-payments/:annualPaymentId/payments?userId=...
+app.post("/api/policyholders/:policyholderId/annual-payments/:annualPaymentId/payments", async (req, res) => {
+  try {
+    const { userId } = req.query;
+    const { policyholderId, annualPaymentId } = req.params;
+    const {
+      totalPremiumPaidPhp,
+      paymentDate,
+      methodForPayment,
+      proofOfPaymentFileDataUrl,
+      proofOfPaymentFileName,
+      proofOfPaymentFileMimeType,
+    } = req.body || {};
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId)) return res.status(400).json({ message: "Invalid userId." });
+    if (!mongoose.isValidObjectId(policyholderId)) return res.status(400).json({ message: "Invalid policyholderId." });
+    if (!mongoose.isValidObjectId(annualPaymentId)) return res.status(400).json({ message: "Invalid annualPaymentId." });
+
+    const amount = Number(totalPremiumPaidPhp);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return res.status(400).json({ message: "Total premium paid must be greater than zero." });
+    }
+    if (Math.abs(amount * 100 - Math.round(amount * 100)) > 1e-8) {
+      return res.status(400).json({ message: "Total premium paid can have at most two decimal places." });
+    }
+
+    const paymentDateValue = paymentDate ? new Date(paymentDate) : null;
+    if (!paymentDateValue || Number.isNaN(paymentDateValue.getTime())) {
+      return res.status(400).json({ message: "Payment date is required." });
+    }
+
+    const paymentMethod = String(methodForPayment || "").trim();
+    const allowedPaymentMethods = ["Credit Card / Debit Card", "Mobile Wallet / GCash", "Dated Check", "Bills Payments"];
+    if (!allowedPaymentMethods.includes(paymentMethod)) {
+      return res.status(400).json({ message: "Valid method of payment is required." });
+    }
+
+    const proofDataUrl = String(proofOfPaymentFileDataUrl || "").trim();
+    const proofFileName = String(proofOfPaymentFileName || "").trim();
+    const proofMimeType = String(proofOfPaymentFileMimeType || "").trim();
+    if (!proofDataUrl || !proofFileName) {
+      return res.status(400).json({ message: "Proof of payment file is required." });
+    }
+    if (!/^data:(?:image\/(?:jpeg|png)|application\/pdf);base64,/i.test(proofDataUrl)) {
+      return res.status(400).json({ message: "Proof of payment must be a JPG, PNG, or PDF file." });
+    }
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const policyholderObjectId = new mongoose.Types.ObjectId(policyholderId);
+    const annualPaymentObjectId = new mongoose.Types.ObjectId(annualPaymentId);
+
+    const policyholder = await Policyholder.findOne({
+      _id: policyholderObjectId,
+      assignedToUserId: userObjectId,
+    }).select("leadEngagementId annualPaymentRecords");
+
+    if (!policyholder) return res.status(404).json({ message: "Policyholder not found." });
+
+    const annualPaymentIsLinked = (policyholder.annualPaymentRecords || []).some(
+      (record) => String(record?.annualPaymentId || "") === String(annualPaymentObjectId)
+    );
+
+    const annualPayment = await AnnualPayment.findOne({
+      _id: annualPaymentObjectId,
+      leadEngagementId: policyholder.leadEngagementId,
+    });
+
+    if (!annualPayment || (!annualPaymentIsLinked && String(annualPayment.leadEngagementId || "") !== String(policyholder.leadEngagementId || ""))) {
+      return res.status(404).json({ message: "Annual payment record not found." });
+    }
+
+    if (!["Not Started", "Ongoing"].includes(String(annualPayment.status || ""))) {
+      return res.status(409).json({ message: "This annual payment record is already completed." });
+    }
+
+    const paymentPeriod = derivePaymentPeriod(paymentDateValue, annualPayment.frequencyOfPayment);
+    const now = new Date();
+    const paymentDoc = await Payment.create({
+      leadEngagementId: policyholder.leadEngagementId,
+      annualPaymentId: annualPayment._id,
+      status: "Pending",
+      recordPremiumPaymentTransfer: {
+        totalPremiumPaidPhp: Math.round(amount * 100) / 100,
+        frequencyOfPremiumPayment: annualPayment.frequencyOfPayment || "",
+        paymentDate: paymentDateValue,
+        paymentPeriod,
+        methodForPayment: paymentMethod,
+        proofOfPaymentFileName: proofFileName,
+        proofOfPaymentFileMimeType: proofMimeType,
+        proofOfPaymentFileDataUrl: proofDataUrl,
+        savedAt: now,
+      },
+    });
+
+    const annualPayments = await Payment.find({ annualPaymentId: annualPayment._id })
+      .select("recordPremiumPaymentTransfer")
+      .lean();
+    const amountPaidSoFarPhp = annualPayments.reduce((sum, payment) => {
+      const paid = Number(payment?.recordPremiumPaymentTransfer?.totalPremiumPaidPhp || 0);
+      return sum + (Number.isFinite(paid) && paid > 0 ? paid : 0);
+    }, 0);
+    const paidCount = annualPayments.filter(paymentHasCompletedPremiumTransfer).length;
+    const metrics = buildAnnualPaymentMetrics({
+      totalAnnualPremiumPhp: annualPayment.totalAnnualPremiumPhp,
+      amountPaidSoFarPhp,
+      paidCount,
+      frequencyOfPayment: annualPayment.frequencyOfPayment,
+    });
+    annualPayment.amountPaidSoFarPhp = metrics.amountPaidSoFarPhp;
+    annualPayment.remainingBalancePhp = metrics.remainingBalancePhp;
+    annualPayment.paymentProgress = metrics.paymentProgress;
+    annualPayment.status = metrics.status;
+    await annualPayment.save();
+
+    return res.status(201).json({
+      message: "Payment record added.",
+      paymentId: paymentDoc._id,
+      annualPaymentId: annualPayment._id,
+    });
+  } catch (err) {
+    console.error("Add annual payment record error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
 
 // GET /api/prospects/:prospectId/leads/:leadId/policyholders/:policyholderId/details?userId=...
 app.get("/api/prospects/:prospectId/leads/:leadId/policyholders/:policyholderId/details", async (req, res) => {
@@ -5438,7 +6111,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/policyholders/:policyholderId/
       leadEngagementId: leadEngagement._id,
       assignedToUserId: userObjectId,
     })
-      .select("policyholderCode productId policyNumber lastPaidDate nextPaymentDate status createdAt updatedAt")
+      .select("policyholderCode productId policyNumber leadEngagementId lastPaidDate nextPaymentDate status annualPaymentRecords createdAt updatedAt")
       .lean();
 
     if (!policyholder) return res.status(404).json({ message: "Policyholder not found." });
@@ -5456,6 +6129,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/policyholders/:policyholderId/
     const policyIssuance = policy?.recordPolicyApplicationStatus || {};
     const summary = policy?.uploadPolicySummary || {};
     const prospectName = `${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName}`.trim();
+    const annualPaymentRecords = await loadAnnualPaymentRecordsForPolicyholder(policyholder);
 
     return res.json({
       prospect: {
@@ -5473,7 +6147,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/policyholders/:policyholderId/
         policyNumber: policyholder.policyNumber || summary.policyNumber || coverage.policyNumber || "",
         status: policyholder.status,
         lastPaidDate: policyholder.lastPaidDate || null,
-        nextPaymentDate: policyholder.nextPaymentDate || coverage.nextPaymentDate || null,
+        nextPaymentDate: policyholder.nextPaymentDate || null,
         createdAt: policyholder.createdAt || null,
         updatedAt: policyholder.updatedAt || null,
       },
@@ -5500,6 +6174,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/policyholders/:policyholderId/
         selectedPaymentTermYears: coverage.selectedPaymentTermYears ?? null,
         selectedPaymentTermUntilAge: coverage.selectedPaymentTermUntilAge ?? null,
       },
+      annualPaymentRecords,
     });
   } catch (err) {
     console.error("Get policyholder details error:", err);
@@ -6056,6 +6731,21 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
       .select("chosenProductId outcomeActivity recordPolicyApplicationStatus uploadInitialPremiumEor uploadPolicySummary recordCoverageDurationDetails")
       .lean();
 
+    const paymentDoc = await Payment.findOne({ leadEngagementId: engagement._id })
+      .select("annualPaymentId recordPremiumPaymentTransfer uploadPremiumPaymentEor")
+      .lean();
+
+    const annualPaymentDoc = await AnnualPayment.findOne({ leadEngagementId: engagement._id })
+      .select("annualPaymentPeriod totalAnnualPremiumPhp amountPaidSoFarPhp remainingBalancePhp frequencyOfPayment paymentProgress status")
+      .lean();
+
+    const applicationPaymentId = applicationDoc?.recordPremiumPaymentTransfer?.paymentId || null;
+    const policyPaymentId = policyDoc?.uploadInitialPremiumEor?.paymentId || null;
+    const isPaymentDocLinkedToApplication = Boolean(applicationPaymentId && paymentDoc?._id && String(paymentDoc._id) === String(applicationPaymentId));
+    const isPaymentDocLinkedToPolicy = Boolean(policyPaymentId && paymentDoc?._id && String(paymentDoc._id) === String(policyPaymentId));
+    const applicationPaymentDoc = isPaymentDocLinkedToApplication && paymentHasCompletedPremiumTransfer(paymentDoc) ? paymentDoc : null;
+    const policyPaymentDoc = isPaymentDocLinkedToPolicy && paymentHasUploadedEor(paymentDoc) ? paymentDoc : null;
+
     const proposalProductId = proposalDoc?.chosenProductId || null;
     const needsSelectedProductId = needsAssessment?.needsPriorities?.productSelection?.selectedProductId || null;
     const policyProductId = policyDoc?.chosenProductId || null;
@@ -6357,15 +7047,30 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
             attendanceProofFileName: applicationDoc?.recordProspectAttendance?.attendanceProofFileName || "",
           },
           recordPremiumPaymentTransfer: {
-            totalAnnualPremiumPhp: applicationDoc?.recordPremiumPaymentTransfer?.totalAnnualPremiumPhp ?? null,
-            totalFrequencyPremiumPhp: applicationDoc?.recordPremiumPaymentTransfer?.totalFrequencyPremiumPhp ?? null,
-            methodForInitialPayment:
-              applicationDoc?.recordPremiumPaymentTransfer?.methodForInitialPayment
+            paymentId: applicationPaymentDoc?._id || null,
+            annualPaymentId: annualPaymentDoc?._id || applicationPaymentDoc?.annualPaymentId || null,
+            frequencyOfPremiumPayment:
+              annualPaymentDoc?.frequencyOfPayment
+              || applicationPaymentDoc?.recordPremiumPaymentTransfer?.frequencyOfPremiumPayment
               || "",
+            totalAnnualPremiumPhp: annualPaymentDoc?.totalAnnualPremiumPhp ?? null,
+            annualPaymentPeriodStartDate: annualPaymentDoc?.annualPaymentPeriod?.startDate || null,
+            annualPaymentPeriodEndDate: annualPaymentDoc?.annualPaymentPeriod?.endDate || null,
+            annualPaymentPeriodLabel: annualPaymentDoc?.annualPaymentPeriod?.label || "",
+            annualPaymentAmountPaidSoFarPhp: annualPaymentDoc?.amountPaidSoFarPhp ?? null,
+            annualPaymentRemainingBalancePhp: annualPaymentDoc?.remainingBalancePhp ?? null,
+            annualPaymentProgressLabel: annualPaymentDoc?.paymentProgress?.label || "",
+            annualPaymentStatus: annualPaymentDoc?.status || "",
+            totalFrequencyPremiumPhp: applicationPaymentDoc?.recordPremiumPaymentTransfer?.totalPremiumPaidPhp ?? null,
+            paymentDate: applicationPaymentDoc?.recordPremiumPaymentTransfer?.paymentDate || null,
+            paymentPeriodStartDate: applicationPaymentDoc?.recordPremiumPaymentTransfer?.paymentPeriod?.startDate || null,
+            paymentPeriodEndDate: applicationPaymentDoc?.recordPremiumPaymentTransfer?.paymentPeriod?.endDate || null,
+            paymentPeriodLabel: applicationPaymentDoc?.recordPremiumPaymentTransfer?.paymentPeriod?.label || "",
+            methodForInitialPayment: applicationPaymentDoc?.recordPremiumPaymentTransfer?.methodForPayment || "",
             methodForRenewalPayment: applicationDoc?.recordPremiumPaymentTransfer?.methodForRenewalPayment || "",
-            paymentProofImageDataUrl: applicationDoc?.recordPremiumPaymentTransfer?.paymentProofImageDataUrl || "",
-            paymentProofFileName: applicationDoc?.recordPremiumPaymentTransfer?.paymentProofFileName || "",
-            savedAt: applicationDoc?.recordPremiumPaymentTransfer?.savedAt || null,
+            paymentProofImageDataUrl: applicationPaymentDoc?.recordPremiumPaymentTransfer?.proofOfPaymentFileDataUrl || "",
+            paymentProofFileName: applicationPaymentDoc?.recordPremiumPaymentTransfer?.proofOfPaymentFileName || "",
+            savedAt: applicationPaymentDoc?.recordPremiumPaymentTransfer?.savedAt || null,
           },
           recordApplicationSubmission: {
             pruOneTransactionId: applicationDoc?.recordApplicationSubmission?.pruOneTransactionId || "",
@@ -6400,12 +7105,13 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
             savedAt: policyDoc?.recordPolicyApplicationStatus?.savedAt || null,
           },
           uploadInitialPremiumEor: {
-            eorNumber: policyDoc?.uploadInitialPremiumEor?.eorNumber || "",
-            receiptDate: policyDoc?.uploadInitialPremiumEor?.receiptDate || null,
-            eorFileName: policyDoc?.uploadInitialPremiumEor?.eorFileName || "",
-            eorFileMimeType: policyDoc?.uploadInitialPremiumEor?.eorFileMimeType || "",
-            eorFileDataUrl: policyDoc?.uploadInitialPremiumEor?.eorFileDataUrl || "",
-            uploadedAt: policyDoc?.uploadInitialPremiumEor?.uploadedAt || null,
+            paymentId: policyPaymentDoc?._id || null,
+            eorNumber: policyPaymentDoc?.uploadPremiumPaymentEor?.eorNumber || "",
+            receiptDate: policyPaymentDoc?.uploadPremiumPaymentEor?.receiptDate || null,
+            eorFileName: policyPaymentDoc?.uploadPremiumPaymentEor?.eorFileName || "",
+            eorFileMimeType: policyPaymentDoc?.uploadPremiumPaymentEor?.eorFileMimeType || "",
+            eorFileDataUrl: policyPaymentDoc?.uploadPremiumPaymentEor?.eorFileDataUrl || "",
+            uploadedAt: policyPaymentDoc?.uploadPremiumPaymentEor?.uploadedAt || null,
           },
           uploadPolicySummary: {
             policyNumber: policyDoc?.uploadPolicySummary?.policyNumber || "",
@@ -6427,7 +7133,6 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
             coverageStartDate: policyDoc?.recordCoverageDurationDetails?.coverageStartDate || null,
             coverageEndDate: policyDoc?.recordCoverageDurationDetails?.coverageEndDate || null,
             policyEndDate: policyDoc?.recordCoverageDurationDetails?.policyEndDate || null,
-            nextPaymentDate: policyDoc?.recordCoverageDurationDetails?.nextPaymentDate || null,
             savedAt: policyDoc?.recordCoverageDurationDetails?.savedAt || null,
           },
         },
@@ -9755,8 +10460,10 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/premium-payment-t
     const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
     const {
+      frequencyOfPremiumPayment,
       totalAnnualPremiumPhp,
       totalFrequencyPremiumPhp,
+      paymentDate,
       methodForInitialPayment,
       methodForRenewalPayment,
       paymentProofImageDataUrl,
@@ -9774,19 +10481,40 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/premium-payment-t
     };
     const hasAtMostTwoDecimals = (n) => Number.isFinite(n) && Math.abs(n * 100 - Math.round(n * 100)) < 1e-8;
 
+    const paymentFrequency = String(frequencyOfPremiumPayment || "").trim();
     const annualPremiumRaw = String(totalAnnualPremiumPhp ?? "").trim();
     const frequencyPremiumRaw = String(totalFrequencyPremiumPhp ?? "").trim();
+    const paymentDateRaw = String(paymentDate || "").trim();
     const annualPremium = toNonNegativeNumber(annualPremiumRaw);
-    const frequencyPremium = toNonNegativeNumber(frequencyPremiumRaw);
+    let frequencyPremium = toNonNegativeNumber(frequencyPremiumRaw);
     const initialPaymentMethod = String(methodForInitialPayment || "").trim();
     const renewalMethod = String(methodForRenewalPayment || "").trim();
     const proofDataUrl = String(paymentProofImageDataUrl || "").trim();
     const proofFileName = String(paymentProofFileName || "").trim();
 
+    const allowedFrequencies = ["Monthly", "Quarterly", "Half-yearly", "Yearly"];
+    if (!allowedFrequencies.includes(paymentFrequency)) {
+      return res.status(400).json({ message: "Frequency of premium payment is required." });
+    }
     if (!annualPremiumRaw || annualPremium === null) return res.status(400).json({ message: "Total annual premium is required." });
-    if (!frequencyPremiumRaw || frequencyPremium === null) return res.status(400).json({ message: "Total requested-frequency premium is required." });
+    if (!paymentDateRaw) return res.status(400).json({ message: "Payment date is required." });
+    if (paymentFrequency === "Yearly") {
+      frequencyPremium = annualPremium;
+    } else if (!frequencyPremiumRaw || frequencyPremium === null) {
+      return res.status(400).json({ message: "Total frequency premium is required." });
+    }
     if (!hasAtMostTwoDecimals(annualPremium)) return res.status(400).json({ message: "Total annual premium must have at most 2 decimal places." });
-    if (!hasAtMostTwoDecimals(frequencyPremium)) return res.status(400).json({ message: "Total requested-frequency premium must have at most 2 decimal places." });
+    if (!hasAtMostTwoDecimals(frequencyPremium)) return res.status(400).json({ message: "Total frequency premium must have at most 2 decimal places." });
+
+    const paymentDateValue = new Date(`${paymentDateRaw}T00:00:00`);
+    if (Number.isNaN(paymentDateValue.getTime())) {
+      return res.status(400).json({ message: "Payment date is invalid." });
+    }
+    const todayEnd = new Date();
+    todayEnd.setHours(23, 59, 59, 999);
+    if (paymentDateValue > todayEnd) {
+      return res.status(400).json({ message: "Payment date cannot be in the future." });
+    }
 
     const allowedPaymentMethods = ["Credit Card / Debit Card", "Mobile Wallet / GCash", "Dated Check", "Bills Payments"];
     if (!allowedPaymentMethods.includes(initialPaymentMethod)) {
@@ -9821,18 +10549,76 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/premium-payment-t
         throw Object.assign(new Error("Lead is not in Application stage."), { status: 409 });
       }
 
-      const needsAssessment = await NeedsAssessment.findOne({ leadEngagementId: engagement._id })
-        .select("needsPriorities.productSelection.requestedFrequency")
-        .session(session);
+      const latestApplicationSubmissionMeeting = await ScheduledMeeting.findOne({
+        leadEngagementId: engagement._id,
+        meetingType: "Application Submission",
+      })
+        .sort({ startAt: -1, createdAt: -1 })
+        .select("startAt")
+        .session(session)
+        .lean();
 
-      const requestedFrequency = String(needsAssessment?.needsPriorities?.productSelection?.requestedFrequency || "").trim();
-
-      if (!requestedFrequency) {
-        throw Object.assign(new Error("Requested frequency is missing from Needs Assessment."), { status: 409 });
+      if (latestApplicationSubmissionMeeting?.startAt) {
+        const minPaymentDate = new Date(latestApplicationSubmissionMeeting.startAt);
+        minPaymentDate.setHours(0, 0, 0, 0);
+        if (paymentDateValue < minPaymentDate) {
+          throw Object.assign(new Error("Payment date cannot be earlier than the latest scheduled Application Submission meeting date."), { status: 400 });
+        }
       }
 
       engagement.currentActivityKey = "Record Application Submission";
       await engagement.save({ session });
+
+      const savedAt = new Date();
+      const proofMimeType = /^data:(image\/(?:jpeg|png));base64,/i.exec(proofDataUrl)?.[1]?.toLowerCase() || "";
+      const paymentPeriod = derivePaymentPeriod(paymentDateValue, paymentFrequency);
+      const annualPaymentPeriod = deriveAnnualPaymentPeriod(paymentDateValue);
+      const annualPaymentMetrics = buildAnnualPaymentMetrics({
+        totalAnnualPremiumPhp: annualPremium,
+        amountPaidSoFarPhp: frequencyPremium,
+        paidCount: 1,
+        frequencyOfPayment: paymentFrequency,
+      });
+      const annualPaymentDoc = await AnnualPayment.findOneAndUpdate(
+        { leadEngagementId: engagement._id },
+        {
+          $setOnInsert: { leadEngagementId: engagement._id },
+          $set: {
+            annualPaymentPeriod,
+            totalAnnualPremiumPhp: annualPremium,
+            frequencyOfPayment: paymentFrequency,
+            ...annualPaymentMetrics,
+          },
+        },
+        { upsert: true, new: true, session }
+      );
+      const existingPaymentDoc = await Payment.findOne({ leadEngagementId: engagement._id })
+        .select("status")
+        .session(session)
+        .lean();
+      const nextPaymentStatus = String(existingPaymentDoc?.status || "") === "Processed" ? "Processed" : "Pending";
+      const paymentDoc = await Payment.findOneAndUpdate(
+        { leadEngagementId: engagement._id },
+        {
+          $setOnInsert: { leadEngagementId: engagement._id },
+          $set: {
+            status: nextPaymentStatus,
+            annualPaymentId: annualPaymentDoc._id,
+            recordPremiumPaymentTransfer: {
+              totalPremiumPaidPhp: frequencyPremium,
+              frequencyOfPremiumPayment: paymentFrequency,
+              paymentDate: paymentDateValue,
+              paymentPeriod,
+              methodForPayment: initialPaymentMethod,
+              proofOfPaymentFileName: proofFileName,
+              proofOfPaymentFileMimeType: proofMimeType,
+              proofOfPaymentFileDataUrl: proofDataUrl,
+              savedAt,
+            },
+          },
+        },
+        { upsert: true, new: true, session }
+      );
 
       await Application.updateOne(
         { leadEngagementId: engagement._id },
@@ -9841,13 +10627,8 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/premium-payment-t
           $set: {
             outcomeActivity: "Record Application Submission",
             recordPremiumPaymentTransfer: {
-              totalAnnualPremiumPhp: annualPremium,
-              totalFrequencyPremiumPhp: frequencyPremium,
-              methodForInitialPayment: initialPaymentMethod,
+              paymentId: paymentDoc._id,
               methodForRenewalPayment: renewalMethod,
-              paymentProofImageDataUrl: proofDataUrl,
-              paymentProofFileName: proofFileName,
-              savedAt: new Date(),
             },
           },
         },
@@ -10245,10 +11026,10 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/initial-premi
     }
 
     const applicationDoc = await Application.findOne({ leadEngagementId: engagement._id })
-      .select("recordApplicationSubmission.savedAt")
+      .select("recordApplicationSubmission.savedAt recordPremiumPaymentTransfer.paymentId")
       .lean();
     const policyDoc = await Policy.findOne({ leadEngagementId: engagement._id })
-      .select("recordPolicyApplicationStatus.status recordPolicyApplicationStatus.issuanceDate")
+      .select("recordPolicyApplicationStatus.status recordPolicyApplicationStatus.issuanceDate uploadInitialPremiumEor.paymentId")
       .lean();
 
     const applicationSubmittedAt = applicationDoc?.recordApplicationSubmission?.savedAt
@@ -10274,6 +11055,29 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/initial-premi
       return res.status(400).json({ message: "Receipt date must be between application submission date and policy issuance date." });
     }
 
+    const uploadedAt = new Date();
+
+    const applicationPaymentId = applicationDoc?.recordPremiumPaymentTransfer?.paymentId || null;
+    if (!applicationPaymentId) {
+      return res.status(409).json({ message: "Record Premium Payment Transfer must be completed before uploading Initial Premium eOR." });
+    }
+
+    const paymentDoc = await Payment.findOne({ _id: applicationPaymentId, leadEngagementId: engagement._id });
+    if (!paymentDoc || !paymentHasCompletedPremiumTransfer(paymentDoc)) {
+      return res.status(409).json({ message: "Record Premium Payment Transfer must be completed before uploading Initial Premium eOR." });
+    }
+
+    paymentDoc.status = "Processed";
+    paymentDoc.uploadPremiumPaymentEor = {
+      eorNumber: eorNo,
+      receiptDate: receiptDateValue,
+      eorFileDataUrl: pdfDataUrl,
+      eorFileName: fileName,
+      eorFileMimeType: "application/pdf",
+      uploadedAt,
+    };
+    await paymentDoc.save();
+
     await Policy.updateOne(
       { leadEngagementId: engagement._id },
       {
@@ -10281,12 +11085,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/initial-premi
         $set: {
           outcomeActivity: "Upload Policy Summary",
           uploadInitialPremiumEor: {
-            eorNumber: eorNo,
-            receiptDate: receiptDateValue,
-            eorFileDataUrl: pdfDataUrl,
-            eorFileName: fileName,
-            eorFileMimeType: "application/pdf",
-            uploadedAt: new Date(),
+            paymentId: paymentDoc._id,
           },
         },
       },
@@ -10301,7 +11100,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/initial-premi
     return res.json({ message: "Initial premium eOR uploaded.", currentActivityKey: "Upload Policy Summary" });
   } catch (err) {
     console.error("Policy issuance initial premium eOR save error:", err);
-    if (err?.code === 11000 && String(err?.message || "").includes("uploadInitialPremiumEor.eorNumber")) {
+    if (err?.code === 11000 && /(?:uploadInitialPremiumEor|uploadPremiumPaymentEor)\.eorNumber/.test(String(err?.message || ""))) {
       return res.status(409).json({ message: "eOR number already exists." });
     }
     return res.status(500).json({ message: "Server error." });
@@ -10434,10 +11233,33 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-dura
       }
 
       const policyDoc = await Policy.findOne({ leadEngagementId: engagement._id })
-        .select("chosenProductId uploadPolicySummary.policyNumber uploadInitialPremiumEor.receiptDate recordPolicyApplicationStatus.status recordPolicyApplicationStatus.issuanceDate")
+        .select("chosenProductId uploadPolicySummary.policyNumber uploadInitialPremiumEor.paymentId recordPolicyApplicationStatus.status recordPolicyApplicationStatus.issuanceDate")
         .session(session)
         .lean();
       if (!policyDoc) throw Object.assign(new Error("Policy record not found."), { status: 404 });
+
+      const paymentFilters = [{ leadEngagementId: engagement._id }];
+      if (policyDoc?.uploadInitialPremiumEor?.paymentId) paymentFilters.unshift({ _id: policyDoc.uploadInitialPremiumEor.paymentId });
+      const paymentDoc = await Payment.findOne({ $or: paymentFilters })
+        .select("_id status annualPaymentId recordPremiumPaymentTransfer uploadPremiumPaymentEor")
+        .session(session)
+        .lean();
+      if (!paymentDoc?._id || String(paymentDoc?.status || "") !== "Processed") {
+        throw Object.assign(new Error("Processed premium payment record is required before saving coverage duration details."), { status: 409 });
+      }
+
+      const annualPaymentDoc = paymentDoc?.annualPaymentId && mongoose.isValidObjectId(paymentDoc.annualPaymentId)
+        ? await AnnualPayment.findById(paymentDoc.annualPaymentId)
+            .select("_id frequencyOfPayment")
+            .session(session)
+            .lean()
+        : await AnnualPayment.findOne({ leadEngagementId: engagement._id })
+            .select("_id frequencyOfPayment")
+            .session(session)
+            .lean();
+      if (!annualPaymentDoc?._id) {
+        throw Object.assign(new Error("Annual payment record is required before saving coverage duration details."), { status: 409 });
+      }
 
       const productId = policyDoc?.chosenProductId;
       if (!productId || !mongoose.isValidObjectId(productId)) {
@@ -10558,15 +11380,20 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-dura
       const policyEndDate = new Date(issuanceDate);
       policyEndDate.setFullYear(policyEndDate.getFullYear() + yearsToAdd);
 
-      const receiptDate = policyDoc?.uploadInitialPremiumEor?.receiptDate
-        ? new Date(policyDoc.uploadInitialPremiumEor.receiptDate)
+      const paymentDate = paymentDoc?.recordPremiumPaymentTransfer?.paymentDate
+        ? new Date(paymentDoc.recordPremiumPaymentTransfer.paymentDate)
         : null;
 
       const needsAssessment = await NeedsAssessment.findOne({ leadEngagementId: engagement._id })
         .select("needsPriorities.productSelection.requestedFrequency")
         .session(session)
         .lean();
-      const requestedFrequency = String(needsAssessment?.needsPriorities?.productSelection?.requestedFrequency || "").trim();
+      const requestedFrequency = String(
+        annualPaymentDoc?.frequencyOfPayment
+        || paymentDoc?.recordPremiumPaymentTransfer?.frequencyOfPremiumPayment
+        || needsAssessment?.needsPriorities?.productSelection?.requestedFrequency
+        || ""
+      ).trim();
 
       const monthsByFrequency = {
         Monthly: 1,
@@ -10594,12 +11421,12 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-dura
       let nextPaymentDate = null;
       if (
         recurringIntervalMonths
-        && receiptDate
-        && !Number.isNaN(receiptDate.getTime())
+        && paymentDate
+        && !Number.isNaN(paymentDate.getTime())
         && paymentTermEndDate
         && !Number.isNaN(paymentTermEndDate.getTime())
       ) {
-        const candidate = new Date(receiptDate);
+        const candidate = new Date(paymentDate);
         candidate.setMonth(candidate.getMonth() + recurringIntervalMonths);
         if (candidate < paymentTermEndDate) {
           nextPaymentDate = candidate;
@@ -10627,7 +11454,6 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-dura
               coverageStartDate: issuanceDate,
               coverageEndDate: policyEndDate,
               policyEndDate,
-              nextPaymentDate,
               savedAt: now,
             },
           },
@@ -10665,8 +11491,8 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-dura
         await lead.save({ session });
 
         const policyNumber = String(policyDoc?.uploadPolicySummary?.policyNumber || "").trim();
-        if (!receiptDate || Number.isNaN(receiptDate.getTime())) {
-          throw Object.assign(new Error("Initial premium receipt date is required to create policyholder."), { status: 409 });
+        if (!paymentDate || Number.isNaN(paymentDate.getTime())) {
+          throw Object.assign(new Error("Premium payment date is required to create policyholder."), { status: 409 });
         }
         if (!policyNumber) {
           throw Object.assign(new Error("Policy number is required to create policyholder."), { status: 409 });
@@ -10677,9 +11503,15 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-dura
           existingPolicyholder.assignedToUserId = userObjectId;
           existingPolicyholder.productId = new mongoose.Types.ObjectId(productId);
           existingPolicyholder.policyNumber = policyNumber;
-          existingPolicyholder.lastPaidDate = receiptDate;
+          existingPolicyholder.lastPaidDate = paymentDate;
           existingPolicyholder.nextPaymentDate = nextPaymentDate;
           existingPolicyholder.status = "Active";
+          if (annualPaymentDoc?._id) {
+            const alreadyRecorded = (existingPolicyholder.annualPaymentRecords || []).some((record) => String(record?.annualPaymentId || "") === String(annualPaymentDoc._id));
+            if (!alreadyRecorded) {
+              existingPolicyholder.annualPaymentRecords.push({ annualPaymentId: annualPaymentDoc._id, recordedAt: now });
+            }
+          }
           await existingPolicyholder.save({ session });
         } else {
           const MAX_TRIES = 5;
@@ -10694,9 +11526,10 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-dura
                   leadEngagementId: engagement._id,
                   productId: new mongoose.Types.ObjectId(productId),
                   policyNumber,
-                  lastPaidDate: receiptDate,
+                  lastPaidDate: paymentDate,
                   nextPaymentDate,
                   status: "Active",
+                  annualPaymentRecords: annualPaymentDoc?._id ? [{ annualPaymentId: annualPaymentDoc._id, recordedAt: now }] : [],
                 },
               ], { session });
               lastErr = null;
