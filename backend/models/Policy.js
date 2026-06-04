@@ -69,34 +69,13 @@ const policySchema = new mongoose.Schema(
     },
     /** Initial premium receipt/eOR upload details. */
     uploadInitialPremiumEor: {
-      eorNumber: {
-        type: String,
-        default: "",
-        trim: true,
-      },
-      receiptDate: {
-        type: Date,
-        default: null,
-      },
-      eorFileName: {
-        type: String,
-        default: "",
-        trim: true,
-      },
-      eorFileMimeType: {
-        type: String,
-        default: "",
-        trim: true,
-      },
-      eorFileDataUrl: {
-        type: String,
-        default: "",
-      },
-      uploadedAt: {
-        type: Date,
+      paymentId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Payment",
         default: null,
       },
     },
+
     /** Policy summary document metadata and insurer policy number. */
     uploadPolicySummary: {
       policyNumber: {
@@ -179,10 +158,6 @@ const policySchema = new mongoose.Schema(
         type: Date,
         default: null,
       },
-      nextPaymentDate: {
-        type: Date,
-        default: null,
-      },
       savedAt: {
         type: Date,
         default: null,
@@ -191,17 +166,6 @@ const policySchema = new mongoose.Schema(
 
   },
   { timestamps: true }
-);
-
-
-policySchema.index(
-  { "uploadInitialPremiumEor.eorNumber": 1 },
-  {
-    unique: true,
-    partialFilterExpression: {
-      "uploadInitialPremiumEor.eorNumber": { $type: "string", $ne: "" },
-    },
-  }
 );
 
 
