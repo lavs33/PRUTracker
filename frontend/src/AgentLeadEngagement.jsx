@@ -239,8 +239,14 @@ function AgentLeadEngagement() {
   const [applicationAttendanceSaving, setApplicationAttendanceSaving] = useState(false);
   const [applicationAttendanceProofEditMode, setApplicationAttendanceProofEditMode] = useState(false);
   const [applicationPremiumPaymentForm, setApplicationPremiumPaymentForm] = useState({
+    paymentId: "",
+    frequencyOfPremiumPayment: "",
     totalAnnualPremiumPhp: "",
     totalFrequencyPremiumPhp: "",
+    paymentDate: "",
+    paymentPeriodLabel: "",
+    paymentPeriodStartDate: "",
+    paymentPeriodEndDate: "",
     methodForInitialPayment: "",
     methodForRenewalPayment: "",
     paymentProofImageDataUrl: "",
@@ -310,7 +316,6 @@ function AgentLeadEngagement() {
     coverageDurationUntilAge: "",
     coverageStartDate: "",
     policyEndDate: "",
-    nextPaymentDate: "",
     savedAt: "",
   });
   const [policyCoverageFieldErrors, setPolicyCoverageFieldErrors] = useState({});
@@ -416,6 +421,36 @@ function AgentLeadEngagement() {
     const mm = String(dt.getMonth() + 1).padStart(2, "0");
     const dd = String(dt.getDate()).padStart(2, "0");
     return `${yyyy}-${mm}-${dd}`;
+  };
+
+  const formatPaymentPeriodDate = (date) => {
+    if (!date || Number.isNaN(date.getTime())) return "";
+    return date.toLocaleDateString("en-US", {
+      month: "short",
+      day: "2-digit",
+      year: "numeric",
+    });
+  };
+
+  const derivePaymentPeriodLabel = (paymentDate, frequency) => {
+    const dateInput = String(paymentDate || "").trim();
+    const normalizedFrequency = String(frequency || "").trim();
+    const intervalMonthsByFrequency = {
+      Monthly: 1,
+      Quarterly: 3,
+      "Half-yearly": 6,
+      Yearly: 12,
+    };
+    const intervalMonths = intervalMonthsByFrequency[normalizedFrequency] || 0;
+    if (!dateInput || !intervalMonths) return "";
+
+    const startDate = new Date(`${dateInput}T00:00:00`);
+    if (Number.isNaN(startDate.getTime())) return "";
+
+    const endDate = new Date(startDate);
+    endDate.setMonth(endDate.getMonth() + intervalMonths);
+    endDate.setDate(endDate.getDate() - 1);
+    return `${formatPaymentPeriodDate(startDate)} - ${formatPaymentPeriodDate(endDate)}`;
   };
 
   const toNonNegativeNumber = useCallback((value) => {
@@ -595,6 +630,8 @@ function AgentLeadEngagement() {
       setApplicationAttendanceProofEditMode(false);
       setApplicationAttendanceError("");
       setApplicationPremiumPaymentForm({
+        paymentId: String(appPremiumPayment?.paymentId || ""),
+        frequencyOfPremiumPayment: String(appPremiumPayment?.frequencyOfPremiumPayment || appNeedsSelection?.requestedFrequency || ""),
         totalAnnualPremiumPhp:
           appPremiumPayment?.totalAnnualPremiumPhp !== null && appPremiumPayment?.totalAnnualPremiumPhp !== undefined
             ? String(appPremiumPayment.totalAnnualPremiumPhp)
@@ -603,6 +640,10 @@ function AgentLeadEngagement() {
           appPremiumPayment?.totalFrequencyPremiumPhp !== null && appPremiumPayment?.totalFrequencyPremiumPhp !== undefined
             ? String(appPremiumPayment.totalFrequencyPremiumPhp)
             : "",
+        paymentDate: appPremiumPayment?.paymentDate ? toDateInputValue(appPremiumPayment.paymentDate) : toDateInputValue(new Date()),
+        paymentPeriodLabel: String(appPremiumPayment?.paymentPeriodLabel || ""),
+        paymentPeriodStartDate: appPremiumPayment?.paymentPeriodStartDate ? toDateInputValue(appPremiumPayment.paymentPeriodStartDate) : "",
+        paymentPeriodEndDate: appPremiumPayment?.paymentPeriodEndDate ? toDateInputValue(appPremiumPayment.paymentPeriodEndDate) : "",
         methodForInitialPayment: String(appPremiumPayment?.methodForInitialPayment || ""),
         methodForRenewalPayment: String(appPremiumPayment?.methodForRenewalPayment || ""),
         paymentProofImageDataUrl: String(appPremiumPayment?.paymentProofImageDataUrl || ""),
@@ -685,9 +726,6 @@ function AgentLeadEngagement() {
           : (policyStage?.recordCoverageDurationDetails?.coverageEndDate
             ? toDateInputValue(policyStage.recordCoverageDurationDetails.coverageEndDate)
             : ""),
-        nextPaymentDate: policyStage?.recordCoverageDurationDetails?.nextPaymentDate
-          ? toDateInputValue(policyStage.recordCoverageDurationDetails.nextPaymentDate)
-          : "",
         savedAt: policyStage?.recordCoverageDurationDetails?.savedAt || "",
       });
       setPolicyCoverageFieldErrors({});
@@ -2591,10 +2629,12 @@ function AgentLeadEngagement() {
   ).trim();
 
   const hasSavedApplicationPremiumPaymentTransfer = useMemo(() => {
+    const selectedFrequency = String(applicationPremiumPaymentForm.frequencyOfPremiumPayment || "").trim();
     const annualRaw = String(applicationPremiumPaymentForm.totalAnnualPremiumPhp ?? "").trim();
     const frequencyRaw = String(applicationPremiumPaymentForm.totalFrequencyPremiumPhp ?? "").trim();
+    const hasFrequencySelection = ["Monthly", "Quarterly", "Half-yearly", "Yearly"].includes(selectedFrequency);
     const hasAnnual = annualRaw !== "" && toNonNegativeNumber(annualRaw) !== null;
-    const hasFrequency = frequencyRaw !== "" && toNonNegativeNumber(frequencyRaw) !== null;
+    const hasFrequency = selectedFrequency === "Yearly" || (frequencyRaw !== "" && toNonNegativeNumber(frequencyRaw) !== null);
     const hasInitialMethod = ["Credit Card / Debit Card", "Mobile Wallet / GCash", "Dated Check", "Bills Payments"].includes(
       String(applicationPremiumPaymentForm.methodForInitialPayment || "").trim()
     );
@@ -2603,8 +2643,11 @@ function AgentLeadEngagement() {
     );
     const hasProof = Boolean(String(applicationPremiumPaymentForm.paymentProofImageDataUrl || "").trim());
     const hasSavedTimestamp = Boolean(String(applicationPremiumPaymentForm.savedAt || "").trim());
-    return hasAnnual && hasFrequency && hasInitialMethod && hasRenewalMethod && hasProof && hasSavedTimestamp;
+    const hasPaymentId = Boolean(String(applicationPremiumPaymentForm.paymentId || "").trim());
+    return hasPaymentId && hasFrequencySelection && hasAnnual && hasFrequency && hasInitialMethod && hasRenewalMethod && hasProof && hasSavedTimestamp;
   }, [
+    applicationPremiumPaymentForm.paymentId,
+    applicationPremiumPaymentForm.frequencyOfPremiumPayment,
     applicationPremiumPaymentForm.totalAnnualPremiumPhp,
     applicationPremiumPaymentForm.totalFrequencyPremiumPhp,
     applicationPremiumPaymentForm.methodForInitialPayment,
@@ -2690,27 +2733,34 @@ function AgentLeadEngagement() {
     ? hasSavedApplicationSubmission && isTimestampInSelectedHistoryCycle(applicationSubmissionForm.savedAt)
     : hasSavedApplicationSubmission;
 
+  const selectedApplicationPaymentFrequency = String(applicationPremiumPaymentForm.frequencyOfPremiumPayment || requestedFrequencyFromNeedsAssessment || "").trim();
+
   const totalFrequencyPremiumLabel = useMemo(() => {
-    const freq = String(requestedFrequencyFromNeedsAssessment || "").trim();
+    const freq = String(selectedApplicationPaymentFrequency || "").trim();
     if (!freq) return "Total Requested Frequency Premium (in Php)";
     if (freq.toLowerCase() === "monthly") return "Total Monthly Premium (in Php)";
     return `Total ${freq} Premium (in Php)`;
-  }, [requestedFrequencyFromNeedsAssessment]);
+  }, [selectedApplicationPaymentFrequency]);
 
   const shouldShowFrequencyPremiumField = useMemo(() => {
-    return String(requestedFrequencyFromNeedsAssessment || "").trim().toLowerCase() !== "yearly";
-  }, [requestedFrequencyFromNeedsAssessment]);
+    return String(selectedApplicationPaymentFrequency || "").trim().toLowerCase() !== "yearly";
+  }, [selectedApplicationPaymentFrequency]);
 
   const computedFrequencyPremiumValue = useMemo(() => {
     const annualRaw = String(applicationPremiumPaymentForm.totalAnnualPremiumPhp ?? "").trim();
     const annual = toNonNegativeNumber(annualRaw);
     if (annual === null) return "";
 
-    const freq = String(requestedFrequencyFromNeedsAssessment || "").trim().toLowerCase();
+    const freq = String(selectedApplicationPaymentFrequency || "").trim().toLowerCase();
     const divisor = freq === "monthly" ? 12 : freq === "quarterly" ? 4 : freq === "half-yearly" ? 2 : 1;
     const computed = annual / divisor;
     return Number.isFinite(computed) ? String(Math.round(computed * 100) / 100) : "";
-  }, [applicationPremiumPaymentForm.totalAnnualPremiumPhp, requestedFrequencyFromNeedsAssessment, toNonNegativeNumber]);
+  }, [applicationPremiumPaymentForm.totalAnnualPremiumPhp, selectedApplicationPaymentFrequency, toNonNegativeNumber]);
+
+  const applicationPaymentPeriodLabel = derivePaymentPeriodLabel(
+    applicationPremiumPaymentForm.paymentDate,
+    selectedApplicationPaymentFrequency
+  ) || String(applicationPremiumPaymentForm.paymentPeriodLabel || "").trim();
 
   const needsActivityKeyRaw = useMemo(() => {
     const stageNow = String(engagement?.currentStage || "").trim();
@@ -4646,23 +4696,42 @@ function AgentLeadEngagement() {
       setApplicationPremiumPaymentError("");
       setApplicationPremiumPaymentFieldErrors({});
 
+      const frequencyOfPremiumPayment = String(applicationPremiumPaymentForm.frequencyOfPremiumPayment || "").trim();
       const totalAnnualPremiumRaw = String(applicationPremiumPaymentForm.totalAnnualPremiumPhp ?? "").trim();
       const totalFrequencyPremiumRaw = String(computedFrequencyPremiumValue || applicationPremiumPaymentForm.totalFrequencyPremiumPhp || "").trim();
       const totalAnnualPremiumPhp = toNonNegativeNumber(totalAnnualPremiumRaw);
       const totalFrequencyPremiumPhp = toNonNegativeNumber(totalFrequencyPremiumRaw);
+      const paymentDate = String(applicationPremiumPaymentForm.paymentDate || "").trim();
       const methodForInitialPayment = String(applicationPremiumPaymentForm.methodForInitialPayment || "").trim();
       const methodForRenewalPayment = String(applicationPremiumPaymentForm.methodForRenewalPayment || "").trim();
       const paymentProofImageDataUrl = String(applicationPremiumPaymentForm.paymentProofImageDataUrl || "").trim();
       const paymentProofFileName = String(applicationPremiumPaymentForm.paymentProofFileName || "").trim();
 
       const allowedPaymentMethods = ["Credit Card / Debit Card", "Mobile Wallet / GCash", "Dated Check", "Bills Payments"];
+      const allowedFrequencies = ["Monthly", "Quarterly", "Half-yearly", "Yearly"];
 
+      if (!allowedFrequencies.includes(frequencyOfPremiumPayment)) {
+        setApplicationPremiumPaymentFieldErrors({ frequencyOfPremiumPayment: "Frequency of Premium Payment is required." });
+        return;
+      }
       if (!totalAnnualPremiumRaw || totalAnnualPremiumPhp === null) {
         setApplicationPremiumPaymentFieldErrors({ totalAnnualPremiumPhp: "Total Annual Premium (in Php) is required." });
         return;
       }
-      if (!totalFrequencyPremiumRaw || totalFrequencyPremiumPhp === null) {
+      if (frequencyOfPremiumPayment !== "Yearly" && (!totalFrequencyPremiumRaw || totalFrequencyPremiumPhp === null)) {
         setApplicationPremiumPaymentFieldErrors({ totalFrequencyPremiumPhp: `${totalFrequencyPremiumLabel} is required.` });
+        return;
+      }
+      if (!paymentDate) {
+        setApplicationPremiumPaymentFieldErrors({ paymentDate: "Payment Date is required." });
+        return;
+      }
+      if (applicationPaymentDateMinInput && paymentDate < applicationPaymentDateMinInput) {
+        setApplicationPremiumPaymentFieldErrors({ paymentDate: "Payment Date cannot be earlier than the latest scheduled Application Submission meeting date." });
+        return;
+      }
+      if (paymentDate > todayDateInput) {
+        setApplicationPremiumPaymentFieldErrors({ paymentDate: "Payment Date cannot be in the future." });
         return;
       }
       if (!allowedPaymentMethods.includes(methodForInitialPayment)) {
@@ -4684,8 +4753,10 @@ function AgentLeadEngagement() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          frequencyOfPremiumPayment,
           totalAnnualPremiumPhp,
-          totalFrequencyPremiumPhp,
+          totalFrequencyPremiumPhp: frequencyOfPremiumPayment === "Yearly" ? totalAnnualPremiumPhp : totalFrequencyPremiumPhp,
+          paymentDate,
           methodForInitialPayment,
           methodForRenewalPayment,
           paymentProofImageDataUrl,
@@ -4700,10 +4771,20 @@ function AgentLeadEngagement() {
       setApplicationViewedActivityKey(data?.currentActivityKey || "Record Application Submission");
     } catch (err) {
       const msg = String(err?.message || "Failed to save premium payment transfer.");
-      if (msg.includes("Total annual premium")) {
+      if (msg.includes("Frequency of premium payment")) {
+        setApplicationPremiumPaymentFieldErrors({ frequencyOfPremiumPayment: "Frequency of Premium Payment is required." });
+      } else if (msg.includes("Total annual premium")) {
         setApplicationPremiumPaymentFieldErrors({ totalAnnualPremiumPhp: "Total Annual Premium (in Php) is required." });
-      } else if (msg.includes("Total requested-frequency premium")) {
+      } else if (msg.includes("Total frequency premium") || msg.includes("Total requested-frequency premium")) {
         setApplicationPremiumPaymentFieldErrors({ totalFrequencyPremiumPhp: `${totalFrequencyPremiumLabel} is required.` });
+      } else if (msg.includes("Payment date")) {
+        setApplicationPremiumPaymentFieldErrors({
+          paymentDate: msg.includes("earlier")
+            ? "Payment Date cannot be earlier than the latest scheduled Application Submission meeting date."
+            : msg.includes("future")
+              ? "Payment Date cannot be in the future."
+              : "Payment Date is required.",
+        });
       } else if (msg.includes("Method for initial payment")) {
         setApplicationPremiumPaymentFieldErrors({ methodForInitialPayment: "Method for initial payment is required." });
       } else if (msg.includes("Method for renewal payment")) {
@@ -4773,6 +4854,10 @@ function AgentLeadEngagement() {
   }, [applicationSubmissionForm?.savedAt]);
 
   const todayDateInput = useMemo(() => toDateInputValue(new Date()), []);
+  const applicationPaymentDateMinInput = useMemo(
+    () => (applicationMeetingSaved?.startAt ? toDateInputValue(applicationMeetingSaved.startAt) : ""),
+    [applicationMeetingSaved?.startAt]
+  );
 
   const hasSavedPolicyApplicationStatus = useMemo(() => {
     const status = String(policyStatusForm.status || "").trim();
@@ -4874,6 +4959,11 @@ function AgentLeadEngagement() {
       const receiptDate = String(policyInitialEorForm.receiptDate || "").trim();
       const eorFileDataUrl = String(policyInitialEorForm.eorFileDataUrl || "").trim();
       const eorFileName = String(policyInitialEorForm.eorFileName || "").trim();
+
+      if (!hasSavedApplicationPremiumPaymentTransfer) {
+        setPolicyInitialEorError("Record Premium Payment Transfer must be completed before uploading Initial Premium eOR.");
+        return;
+      }
 
       if (!eorNumber) {
         setPolicyInitialEorFieldErrors({ eorNumber: "eOR number is required." });
@@ -5015,62 +5105,6 @@ function AgentLeadEngagement() {
   const hasSavedPolicyCoverageDetails = useMemo(() => {
     return Boolean(String(policyCoverageForm.savedAt || "").trim());
   }, [policyCoverageForm.savedAt]);
-
-  const computedNextPaymentDate = useMemo(() => {
-    const receiptRaw = String(policyInitialEorForm.receiptDate || "").trim();
-    if (!receiptRaw) return "";
-
-    const receiptDate = new Date(`${receiptRaw}T00:00:00`);
-    if (Number.isNaN(receiptDate.getTime())) return "";
-
-    const frequency = String(requestedFrequencyFromNeedsAssessment || "").trim();
-    const monthsByFrequency = {
-      Monthly: 1,
-      Quarterly: 3,
-      "Half-yearly": 6,
-      Yearly: 12,
-    };
-    const recurringIntervalMonths = monthsByFrequency[frequency] ?? null;
-    if (!recurringIntervalMonths) return "";
-
-    const issuanceRaw = String(policyStatusForm.issuanceDate || "").trim();
-    if (!issuanceRaw) return "";
-    const issuanceDate = new Date(`${issuanceRaw}T00:00:00`);
-    if (Number.isNaN(issuanceDate.getTime())) return "";
-
-    let paymentTermEndDate = null;
-    const paymentType = String(policyCoverageForm.selectedPaymentTermType || "").trim();
-    if (paymentType === "FIXED_YEARS") {
-      const years = Number(policyCoverageForm.selectedPaymentTermYears || "");
-      if (Number.isFinite(years) && years > 0) {
-        paymentTermEndDate = new Date(issuanceDate);
-        paymentTermEndDate.setFullYear(paymentTermEndDate.getFullYear() + years);
-      }
-    } else if (["UNTIL_AGE", "RANGE_TO_AGE"].includes(paymentType)) {
-      const untilAge = Number(policyCoverageForm.selectedPaymentTermUntilAge || "");
-      if (Number.isFinite(untilAge) && Number.isFinite(policyIssuanceAge)) {
-        const years = untilAge - Number(policyIssuanceAge);
-        if (years > 0) {
-          paymentTermEndDate = new Date(issuanceDate);
-          paymentTermEndDate.setFullYear(paymentTermEndDate.getFullYear() + years);
-        }
-      }
-    }
-    if (!paymentTermEndDate || Number.isNaN(paymentTermEndDate.getTime())) return "";
-
-    const candidate = new Date(receiptDate);
-    candidate.setMonth(candidate.getMonth() + recurringIntervalMonths);
-    if (candidate >= paymentTermEndDate) return "";
-    return toDateInputValue(candidate);
-  }, [
-    policyInitialEorForm.receiptDate,
-    requestedFrequencyFromNeedsAssessment,
-    policyStatusForm.issuanceDate,
-    policyCoverageForm.selectedPaymentTermType,
-    policyCoverageForm.selectedPaymentTermYears,
-    policyCoverageForm.selectedPaymentTermUntilAge,
-    policyIssuanceAge,
-  ]);
 
   const isViewedStageFullyFinished = useMemo(() => {
     if (!isViewingCurrentStage) return true;
@@ -6182,44 +6216,29 @@ function AgentLeadEngagement() {
                       {isApplicationPremiumViewed && isHistoryView && !displayedHasSavedApplicationPremiumPaymentTransfer ? (
                         <div className="le-block"><p className="le-muted" style={{ marginTop: 8 }}>No details were saved for this subactivity in the selected engagement cycle.</p></div>
                       ) : null}
-                      {isApplicationPremiumViewed && !isHistoryView && (
+                      {isApplicationPremiumViewed && (!isHistoryView ? hasSavedApplicationAttendance : displayedHasSavedApplicationPremiumPaymentTransfer) ? (
                         <div className="le-block">
-                          <div className="le-formRow">
-                            <label className="le-label">Quotation Proposal File</label>
-                            <p className="le-smallNote">{proposalGenerateForm.proposalFileName || "No proposal file available."}</p>
-                          </div>
-
+                          <h4 className="le-blockTitle">{displayedHasSavedApplicationPremiumPaymentTransfer ? "Premium Payment Transfer Details" : "Record Premium Payment Transfer"}</h4>
                           <div className="le-formRow" style={{ marginTop: 10 }}>
-                            <label className="le-label">PDF Preview</label>
-                            {proposalGenerateForm.proposalFileDataUrl ? (
-                              <iframe
-                                title="Quotation Proposal Preview"
-                                src={proposalGenerateForm.proposalFileDataUrl}
-                                style={{ width: "100%", minHeight: 320, border: "1px solid #e5e7eb", borderRadius: 10 }}
-                              />
-                            ) : (
-                              <p className="le-smallNote">No proposal preview available.</p>
-                            )}
-                          </div>
-
-                          <div className="le-formRow" style={{ marginTop: 20 }}>
-                            <label className="le-label">Application Submission link:</label>
+                            <label className="le-label">Application Submission Link</label>
                             <p className="le-smallNote">
                               <a href="https://pruone.prulifeuk.com.ph/web" target="_blank" rel="noreferrer">https://pruone.prulifeuk.com.ph/web</a>
                             </p>
                           </div>
-                        </div>
-                      )}
-
-                      {isApplicationPremiumViewed && (!isHistoryView ? hasSavedApplicationAttendance : displayedHasSavedApplicationPremiumPaymentTransfer) ? (
-                        <div className="le-block">
-                          <h4 className="le-blockTitle">{displayedHasSavedApplicationPremiumPaymentTransfer ? "Premium Payment Transfer Details" : "Record Premium Payment Transfer"}</h4>
 
                           {displayedHasSavedApplicationPremiumPaymentTransfer ? (
                             <>
                               <div className="le-formRow">
-                                <label className="le-label">Requested Frequency of Premium Payment</label>
-                                <p className="le-smallNote">{requestedFrequencyFromNeedsAssessment || "—"}</p>
+                                <label className="le-label">Frequency of Premium Payment</label>
+                                <p className="le-smallNote">{selectedApplicationPaymentFrequency || "—"}</p>
+                              </div>
+                              <div className="le-formRow">
+                                <label className="le-label">Payment Date</label>
+                                <p className="le-smallNote">{applicationPremiumPaymentForm.paymentDate || "—"}</p>
+                              </div>
+                              <div className="le-formRow">
+                                <label className="le-label">Payment Period</label>
+                                <p className="le-smallNote">{applicationPaymentPeriodLabel || "—"}</p>
                               </div>
                               <div className="le-formRow">
                                 <label className="le-label">Total Annual Premium (Php)</label>
@@ -6256,8 +6275,54 @@ function AgentLeadEngagement() {
                           ) : (
                             <>
                               <div className="le-formRow">
-                                <label className="le-label">Requested Frequency of Premium Payment</label>
-                                <p className="le-smallNote">{requestedFrequencyFromNeedsAssessment || "Not available from Needs Assessment."}</p>
+                                <label className="le-label">Frequency of Premium Payment *</label>
+                                <select
+                                  className="le-input"
+                                  value={applicationPremiumPaymentForm.frequencyOfPremiumPayment}
+                                  onChange={(e) => {
+                                    const frequencyOfPremiumPayment = e.target.value;
+                                    setApplicationPremiumPaymentForm((f) => ({
+                                      ...f,
+                                      frequencyOfPremiumPayment,
+                                      totalFrequencyPremiumPhp: "",
+                                    }));
+                                    setApplicationPremiumPaymentFieldErrors((prev) => ({ ...prev, frequencyOfPremiumPayment: "", totalFrequencyPremiumPhp: "" }));
+                                  }}
+                                  disabled={applicationPremiumPaymentSaving}
+                                >
+                                  <option value="">Select</option>
+                                  <option value="Monthly">Monthly</option>
+                                  <option value="Quarterly">Quarterly</option>
+                                  <option value="Half-yearly">Half-yearly</option>
+                                  <option value="Yearly">Yearly</option>
+                                </select>
+                                {applicationPremiumPaymentFieldErrors.frequencyOfPremiumPayment ? (
+                                  <p className="le-smallNote" style={{ color: "#DA291C", marginTop: 6 }}>{applicationPremiumPaymentFieldErrors.frequencyOfPremiumPayment}</p>
+                                ) : null}
+                              </div>
+
+                              <div className="le-formRow">
+                                <label className="le-label">Payment Date *</label>
+                                <input
+                                  type="date"
+                                  className={`le-input ${applicationPremiumPaymentFieldErrors.paymentDate ? "error" : ""}`}
+                                  value={applicationPremiumPaymentForm.paymentDate}
+                                  onChange={(e) => {
+                                    setApplicationPremiumPaymentForm((f) => ({ ...f, paymentDate: e.target.value }));
+                                    setApplicationPremiumPaymentFieldErrors((prev) => ({ ...prev, paymentDate: "" }));
+                                  }}
+                                  min={applicationPaymentDateMinInput || undefined}
+                                  max={todayDateInput}
+                                  disabled={applicationPremiumPaymentSaving}
+                                />
+                                {applicationPremiumPaymentFieldErrors.paymentDate ? (
+                                  <p className="le-smallNote" style={{ color: "#DA291C", marginTop: 6 }}>{applicationPremiumPaymentFieldErrors.paymentDate}</p>
+                                ) : null}
+                              </div>
+
+                              <div className="le-formRow">
+                                <label className="le-label">Payment Period</label>
+                                <input className="le-input" value={applicationPaymentPeriodLabel || ""} disabled />
                               </div>
 
                               <div className="le-formRow">
@@ -6376,8 +6441,14 @@ function AgentLeadEngagement() {
                                     setApplicationPremiumPaymentFieldErrors({});
                                     setApplicationPremiumPaymentForm((f) => ({
                                       ...f,
+                                      paymentId: "",
+                                      frequencyOfPremiumPayment: requestedFrequencyFromNeedsAssessment || "",
                                       totalAnnualPremiumPhp: "",
                                       totalFrequencyPremiumPhp: "",
+                                      paymentDate: toDateInputValue(new Date()),
+                                      paymentPeriodLabel: "",
+                                      paymentPeriodStartDate: "",
+                                      paymentPeriodEndDate: "",
                                       methodForInitialPayment: "",
                                       methodForRenewalPayment: "",
                                       paymentProofImageDataUrl: "",
@@ -6388,7 +6459,7 @@ function AgentLeadEngagement() {
                                   }}
                                   disabled={applicationPremiumPaymentSaving}
                                 >
-                                  Cancel
+                                  Clear
                                 </button>
                                 <button
                                   type="button"
@@ -6896,10 +6967,6 @@ function AgentLeadEngagement() {
                                 </div>
                               ) : null}
                               <div className="le-formRow">
-                                <label className="le-label">Next Payment Date</label>
-                                <p className="le-smallNote">{policyCoverageForm.nextPaymentDate || computedNextPaymentDate || "Not applicable"}</p>
-                              </div>
-                              <div className="le-formRow">
                                 <label className="le-label">Coverage Duration</label>
                                 <p className="le-smallNote">{policyCoverageForm.coverageDurationLabel || "—"}</p>
                               </div>
@@ -6974,11 +7041,6 @@ function AgentLeadEngagement() {
                                   {policyCoverageFieldErrors.selectedPaymentTermUntilAge ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyCoverageFieldErrors.selectedPaymentTermUntilAge}</p> : null}
                                 </div>
                               ) : null}
-
-                              <div className="le-formRow">
-                                <label className="le-label">Next Payment Date</label>
-                                <p className="le-smallNote">{policyCoverageForm.nextPaymentDate || computedNextPaymentDate || "Not applicable"}</p>
-                              </div>
 
                               <div className="le-formRow">
                                 <label className="le-label">Coverage Duration</label>
