@@ -7,6 +7,26 @@ import "./AgentAddPaymentRecord.css";
 
 const API_BASE = "http://localhost:5000";
 const PAYMENT_METHODS = ["Credit Card / Debit Card", "Mobile Wallet / GCash", "Dated Check", "Bills Payments"];
+function getDataUrlMimeType(dataUrl) {
+  const match = String(dataUrl || "").match(/^data:([^;,]+)[;,]/i);
+  return match?.[1] || "";
+}
+
+function isSupportedProofFile(file) {
+  const mimeType = String(file?.type || "");
+  const fileName = String(file?.name || "");
+  return /^(image\/(jpeg|png)|application\/pdf)$/i.test(mimeType) || /\.(jpe?g|png|pdf)$/i.test(fileName);
+}
+
+function getProofFileMimeType(file, dataUrl = "") {
+  const mimeType = String(file?.type || "");
+  if (/^(image\/(jpeg|png)|application\/pdf)$/i.test(mimeType)) return mimeType;
+  const fileName = String(file?.name || "").toLowerCase();
+  if (fileName.endsWith(".pdf")) return "application/pdf";
+  if (fileName.endsWith(".png")) return "image/png";
+  if (fileName.endsWith(".jpg") || fileName.endsWith(".jpeg")) return "image/jpeg";
+  return getDataUrlMimeType(dataUrl);
+}
 
 function addMonthsPreservingDay(date, months) {
   const next = new Date(date);
@@ -21,8 +41,8 @@ function formatPeriodDate(date) {
   return date.toLocaleDateString("en-US", { month: "short", day: "2-digit", year: "numeric" });
 }
 
-function derivePaymentPeriodLabel(paymentDate, frequency) {
-  const startDate = paymentDate ? new Date(paymentDate) : null;
+function derivePaymentPeriodLabel(paymentPeriodStartDate, frequency) {
+  const startDate = paymentPeriodStartDate ? new Date(paymentPeriodStartDate) : null;
   if (!startDate || Number.isNaN(startDate.getTime())) return "";
   const intervals = { Monthly: 1, Quarterly: 3, "Half-yearly": 6, Yearly: 12 };
   const months = intervals[String(frequency || "").trim()] || 0;
@@ -30,6 +50,20 @@ function derivePaymentPeriodLabel(paymentDate, frequency) {
   const endDate = addMonthsPreservingDay(startDate, months);
   endDate.setDate(endDate.getDate() - 1);
   return `${formatPeriodDate(startDate)} - ${formatPeriodDate(endDate)}`;
+}
+
+function toDateInputValue(date) {
+  if (!date || Number.isNaN(date.getTime())) return "";
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function addDays(date, days) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
 }
 
 function AgentAddPaymentRecord() {
@@ -50,6 +84,8 @@ function AgentAddPaymentRecord() {
   const [apiError, setApiError] = useState("");
   const [details, setDetails] = useState(null);
   const [fieldErrors, setFieldErrors] = useState({});
+  const [paymentDateBounds, setPaymentDateBounds] = useState({ min: "", max: toDateInputValue(new Date()) });
+  const [paymentPeriodStartDate, setPaymentPeriodStartDate] = useState("");
   const [activePreview, setActivePreview] = useState(null);
   const [activeStage, setActiveStage] = useState("transfer");
   const [savedPaymentId, setSavedPaymentId] = useState("");
@@ -117,18 +153,30 @@ function AgentAddPaymentRecord() {
           .filter((date) => date && !Number.isNaN(date.getTime()))
           .sort((a, b) => b.getTime() - a.getTime())[0];
         const fallbackStartDate = annual?.annualPaymentPeriod?.startDate ? new Date(annual.annualPaymentPeriod.startDate) : new Date();
-        const nextPaymentDate = latestEndDate ? new Date(latestEndDate) : fallbackStartDate;
-        if (latestEndDate) nextPaymentDate.setDate(nextPaymentDate.getDate() + 1);
+        const nextPaymentPeriodStart = latestEndDate ? addDays(latestEndDate, 1) : fallbackStartDate;
+        const latestPaymentDate = records
+          .map((payment) => payment?.paymentDate ? new Date(payment.paymentDate) : null)
+          .filter((date) => date && !Number.isNaN(date.getTime()))
+          .sort((a, b) => b.getTime() - a.getTime())[0];
+        const policyholderLastPaidDate = data?.policyholder?.lastPaidDate ? new Date(data.policyholder.lastPaidDate) : null;
+        const lastActualPaymentDate = [latestPaymentDate, policyholderLastPaidDate]
+          .filter((date) => date && !Number.isNaN(date.getTime()))
+          .sort((a, b) => b.getTime() - a.getTime())[0] || null;
+        const minPaymentDate = lastActualPaymentDate ? toDateInputValue(addDays(lastActualPaymentDate, 1)) : "";
+        const maxPaymentDate = toDateInputValue(new Date());
+        const defaultPaymentDate = maxPaymentDate;
+        setPaymentDateBounds({ min: minPaymentDate, max: maxPaymentDate });
+        setPaymentPeriodStartDate(toDateInputValue(nextPaymentPeriodStart));
         const methodForRenewalPayment = String(data?.application?.methodForRenewalPayment || "");
         setForm((prev) => ({
           ...prev,
           totalPremiumPaidPhp: computedPremium || prev.totalPremiumPaidPhp,
-          paymentDate: !Number.isNaN(nextPaymentDate.getTime()) ? nextPaymentDate.toISOString().slice(0, 10) : prev.paymentDate,
+          paymentDate: defaultPaymentDate || prev.paymentDate,
           methodForPayment: methodForRenewalPayment || prev.methodForPayment,
         }));
         setEorForm((prev) => ({
           ...prev,
-          receiptDate: !Number.isNaN(nextPaymentDate.getTime()) ? nextPaymentDate.toISOString().slice(0, 10) : prev.receiptDate,
+          receiptDate: defaultPaymentDate || prev.receiptDate,
         }));
       } catch (err) {
         if (err.name !== "AbortError") {
@@ -180,17 +228,19 @@ function AgentAddPaymentRecord() {
   const handleFileChange = (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    if (!/^(image\/(jpeg|png)|application\/pdf)$/i.test(file.type)) {
+    if (!isSupportedProofFile(file)) {
       setFieldErrors((prev) => ({ ...prev, proofOfPaymentFileDataUrl: "Proof of payment must be a JPG, PNG, or PDF file." }));
+      event.target.value = "";
       return;
     }
     const reader = new FileReader();
     reader.onload = () => {
+      const dataUrl = String(reader.result || "");
       setForm((prev) => ({
         ...prev,
-        proofOfPaymentFileDataUrl: String(reader.result || ""),
+        proofOfPaymentFileDataUrl: dataUrl,
         proofOfPaymentFileName: file.name,
-        proofOfPaymentFileMimeType: file.type,
+        proofOfPaymentFileMimeType: getProofFileMimeType(file, dataUrl),
       }));
       setFieldErrors((prev) => ({ ...prev, proofOfPaymentFileDataUrl: "" }));
     };
@@ -224,6 +274,12 @@ function AgentAddPaymentRecord() {
     const amount = Number(form.totalPremiumPaidPhp);
     if (!Number.isFinite(amount) || amount <= 0) nextErrors.totalPremiumPaidPhp = "Total premium paid is required.";
     if (!form.paymentDate) nextErrors.paymentDate = "Payment date is required.";
+    if (form.paymentDate && paymentDateBounds.min && form.paymentDate < paymentDateBounds.min) {
+      nextErrors.paymentDate = "Payment date must be after the last payment date.";
+    }
+    if (form.paymentDate && paymentDateBounds.max && form.paymentDate > paymentDateBounds.max) {
+      nextErrors.paymentDate = "Payment date cannot be in the future.";
+    }
     if (!form.methodForPayment) nextErrors.methodForPayment = "Method of payment is required.";
     if (!form.proofOfPaymentFileDataUrl) nextErrors.proofOfPaymentFileDataUrl = "Proof of payment file is required.";
     setFieldErrors(nextErrors);
@@ -297,8 +353,10 @@ function AgentAddPaymentRecord() {
   const annualPayment = details?.annualPayment || {};
   const policySummary = details?.policySummary || {};
   const frequencyLabel = annualPayment.frequencyOfPayment === "Half-yearly" ? "Half-Yearly" : (annualPayment.frequencyOfPayment || "Payment");
-  const paymentPeriodLabel = derivePaymentPeriodLabel(form.paymentDate, annualPayment.frequencyOfPayment);
+  const paymentPeriodLabel = derivePaymentPeriodLabel(paymentPeriodStartDate, annualPayment.frequencyOfPayment);
   const policyNumber = policyholder.policyNumber || policySummary.policyNumber || "";
+  const proofMimeType = form.proofOfPaymentFileMimeType || getDataUrlMimeType(form.proofOfPaymentFileDataUrl);
+  const isProofImage = String(proofMimeType || "").startsWith("image/");
   const preview = activePreview === "policy"
     ? {
         title: "Policy Summary Preview",
@@ -311,7 +369,7 @@ function AgentAddPaymentRecord() {
           title: "Proof of Payment Preview",
           fileName: form.proofOfPaymentFileName,
           dataUrl: form.proofOfPaymentFileDataUrl,
-          mimeType: form.proofOfPaymentFileMimeType,
+          mimeType: proofMimeType,
         }
       : activePreview === "eor"
         ? {
@@ -326,7 +384,8 @@ function AgentAddPaymentRecord() {
     if (!preview?.dataUrl) {
       return <div className="ph-previewEmpty"><p>No file is available for preview.</p></div>;
     }
-    if (String(preview.mimeType || "").startsWith("image/")) {
+    const mimeType = preview.mimeType || getDataUrlMimeType(preview.dataUrl);
+    if (String(mimeType || "").startsWith("image/")) {
       return <img src={preview.dataUrl} alt={preview.fileName || preview.title} className="pay-previewImage" />;
     }
     return <iframe title={preview.title} src={preview.dataUrl} className="ph-previewFrame" />;
@@ -439,7 +498,10 @@ function AgentAddPaymentRecord() {
                     <input
                       type="date"
                       value={form.paymentDate}
-                      readOnly
+                      min={paymentDateBounds.min || undefined}
+                      max={paymentDateBounds.max || undefined}
+                      onChange={(event) => setForm((prev) => ({ ...prev, paymentDate: event.target.value }))}
+                      disabled={Boolean(savedPaymentId)}
                     />
                     {fieldErrors.paymentDate ? <small>{fieldErrors.paymentDate}</small> : null}
                   </label>
@@ -462,14 +524,26 @@ function AgentAddPaymentRecord() {
                     <span>Proof of Payment *</span>
                     <input type="file" accept="image/jpeg,image/png,application/pdf" disabled={Boolean(savedPaymentId)} onChange={handleFileChange} />
                     {form.proofOfPaymentFileName ? (
+                      <p className="addpay-fileName">Selected file: {form.proofOfPaymentFileName}</p>
+                    ) : null}
+                    {isProofImage && form.proofOfPaymentFileDataUrl ? (
+                      <div className="addpay-inlinePreview">
+                        <span>Preview</span>
+                        <img
+                          src={form.proofOfPaymentFileDataUrl}
+                          alt="Proof of payment preview"
+                          className="addpay-inlinePreviewImage"
+                        />
+                      </div>
+                    ) : form.proofOfPaymentFileDataUrl ? (
                       <button
                         type="button"
                         className="addpay-filePreview"
                         onMouseDown={(event) => event.stopPropagation()}
                         onClick={(event) => handlePreviewButtonClick(event, "proof")}
-                        title="Preview proof of payment"
+                        title="Preview proof of payment PDF"
                       >
-                        Selected file: {form.proofOfPaymentFileName}
+                        Preview PDF
                       </button>
                     ) : null}
                     {fieldErrors.proofOfPaymentFileDataUrl ? <small>{fieldErrors.proofOfPaymentFileDataUrl}</small> : null}
