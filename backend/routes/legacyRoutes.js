@@ -5718,6 +5718,7 @@ app.get("/api/policyholders/:policyholderId/annual-payments/:annualPaymentId", a
         policyholderCode: policyholder.policyholderCode,
         policyNumber,
         status: policyholder.status,
+        lastPaidDate: policyholder.lastPaidDate || null,
         nextPaymentDate: policyholder.nextPaymentDate || null,
       },
       policySummary: {
@@ -5986,7 +5987,7 @@ app.post("/api/policyholders/:policyholderId/annual-payments/:annualPaymentId/pa
     const policyholder = await Policyholder.findOne({
       _id: policyholderObjectId,
       assignedToUserId: userObjectId,
-    }).select("leadEngagementId annualPaymentRecords");
+    }).select("leadEngagementId lastPaidDate annualPaymentRecords");
 
     if (!policyholder) return res.status(404).json({ message: "Policyholder not found." });
 
@@ -6015,9 +6016,35 @@ app.post("/api/policyholders/:policyholderId/annual-payments/:annualPaymentId/pa
       return res.status(400).json({ message: "Total premium paid cannot be derived from the annual payment record." });
     }
 
+    const submittedPaymentDate = paymentDate ? new Date(`${String(paymentDate).slice(0, 10)}T00:00:00`) : null;
+    if (!submittedPaymentDate || Number.isNaN(submittedPaymentDate.getTime())) {
+      return res.status(400).json({ message: "Payment date is required." });
+    }
+    const todayEnd = new Date();
+    todayEnd.setHours(23, 59, 59, 999);
+    if (submittedPaymentDate > todayEnd) {
+      return res.status(400).json({ message: "Payment date cannot be in the future." });
+    }
+
     const existingPayments = await Payment.find({ annualPaymentId: annualPayment._id })
-      .select("recordPremiumPaymentTransfer.paymentPeriod")
+      .select("recordPremiumPaymentTransfer.paymentDate recordPremiumPaymentTransfer.paymentPeriod")
       .lean();
+    const latestActualPaymentDate = existingPayments
+      .map((payment) => payment?.recordPremiumPaymentTransfer?.paymentDate ? new Date(payment.recordPremiumPaymentTransfer.paymentDate) : null)
+      .filter((date) => date && !Number.isNaN(date.getTime()))
+      .sort((a, b) => b.getTime() - a.getTime())[0] || null;
+    const policyholderLastPaidDate = policyholder.lastPaidDate ? new Date(policyholder.lastPaidDate) : null;
+    const lastActualPaymentDate = [latestActualPaymentDate, policyholderLastPaidDate]
+      .filter((date) => date && !Number.isNaN(date.getTime()))
+      .sort((a, b) => b.getTime() - a.getTime())[0] || null;
+    if (lastActualPaymentDate) {
+      const minimumPaymentDate = new Date(lastActualPaymentDate);
+      minimumPaymentDate.setHours(0, 0, 0, 0);
+      if (submittedPaymentDate <= minimumPaymentDate) {
+        return res.status(400).json({ message: "Payment date must be after the last payment date." });
+      }
+    }
+
     const latestPaymentPeriodEndDate = existingPayments
       .map((payment) => payment?.recordPremiumPaymentTransfer?.paymentPeriod?.endDate ? new Date(payment.recordPremiumPaymentTransfer.paymentPeriod.endDate) : null)
       .filter((date) => date && !Number.isNaN(date.getTime()))
@@ -6025,16 +6052,15 @@ app.post("/api/policyholders/:policyholderId/annual-payments/:annualPaymentId/pa
     const annualStartDate = annualPayment.annualPaymentPeriod?.startDate
       ? new Date(annualPayment.annualPaymentPeriod.startDate)
       : null;
-    const fallbackPaymentDate = paymentDate ? new Date(paymentDate) : null;
-    const paymentDateValue = latestPaymentPeriodEndDate
+    const paymentPeriodStartDate = latestPaymentPeriodEndDate
       ? new Date(latestPaymentPeriodEndDate)
-      : annualStartDate || fallbackPaymentDate;
-    if (latestPaymentPeriodEndDate) paymentDateValue.setDate(paymentDateValue.getDate() + 1);
-    if (!paymentDateValue || Number.isNaN(paymentDateValue.getTime())) {
-      return res.status(400).json({ message: "Payment date cannot be derived for this annual payment record." });
+      : annualStartDate;
+    if (latestPaymentPeriodEndDate) paymentPeriodStartDate.setDate(paymentPeriodStartDate.getDate() + 1);
+    if (!paymentPeriodStartDate || Number.isNaN(paymentPeriodStartDate.getTime())) {
+      return res.status(400).json({ message: "Payment period cannot be derived for this annual payment record." });
     }
 
-    const paymentPeriod = derivePaymentPeriod(paymentDateValue, annualPayment.frequencyOfPayment);
+    const paymentPeriod = derivePaymentPeriod(paymentPeriodStartDate, annualPayment.frequencyOfPayment);
     const now = new Date();
     const paymentDoc = await Payment.create({
       leadEngagementId: policyholder.leadEngagementId,
@@ -6043,7 +6069,7 @@ app.post("/api/policyholders/:policyholderId/annual-payments/:annualPaymentId/pa
       recordPremiumPaymentTransfer: {
         totalPremiumPaidPhp: expectedAmount,
         frequencyOfPremiumPayment: annualPayment.frequencyOfPayment || "",
-        paymentDate: paymentDateValue,
+        paymentDate: submittedPaymentDate,
         paymentPeriod,
         methodForPayment: paymentMethod,
         proofOfPaymentFileName: proofFileName,
