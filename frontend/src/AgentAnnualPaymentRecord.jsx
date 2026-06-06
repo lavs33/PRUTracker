@@ -136,10 +136,12 @@ function AgentAnnualPaymentRecord() {
   const progressLabel = annualPayment?.paymentProgress?.label || "0/0";
   const annualStatus = String(annualPayment?.status || "Not Started");
   const isAnnualPaymentCompleted = annualStatus.toLowerCase() === "completed";
+  const paidCount = Number(annualPayment?.paymentProgress?.paidCount || 0);
+  const totalCount = Number(annualPayment?.paymentProgress?.totalCount || 0);
   const policyNumber = policyholder.policyNumber || policySummary.policyNumber || "";
   const policySummaryFileDataUrl = String(policySummary.fileDataUrl || "").trim();
   const frequencyLabel = annualPayment.frequencyOfPayment === "Half-yearly" ? "Half-Yearly" : (annualPayment.frequencyOfPayment || "Payment");
-  const canAddPaymentRecord = ["Not Started", "Ongoing"].includes(annualStatus);
+  const canAddPaymentRecord = ["Not Started", "Ongoing"].includes(annualStatus) && (!totalCount || paidCount < totalCount);
 
   return (
     <div className="ph-shell">
@@ -230,7 +232,7 @@ function AgentAnnualPaymentRecord() {
                   {!isAnnualPaymentCompleted ? (
                     <div className="ph-summaryTile">
                       <span>Next Payment Date</span>
-                      <strong>{formatDateOnly(policyholder.nextPaymentDate)}</strong>
+                      <strong>{formatDateOnly(annualPayment.nextPaymentDate)}</strong>
                     </div>
                   ) : null}
                 </section>

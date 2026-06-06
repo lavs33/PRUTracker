@@ -26,7 +26,7 @@ function TopNav({
 
     try {
       const res = await fetch(
-        `${API_BASE}/api/notifications/unread-count?userId=${user.id}&entityType=Task`,
+        `${API_BASE}/api/notifications/unread-count?userId=${user.id}`,
         signal ? { signal } : undefined
       );
 
