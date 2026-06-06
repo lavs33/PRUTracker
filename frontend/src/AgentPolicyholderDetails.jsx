@@ -191,7 +191,7 @@ function AgentPolicyholderDetails() {
     },
   ];
 
-  const statusClass = policyholder.status === "Active" ? "active" : "dropped";
+  const statusClass = policyholder.status === "Active" ? "active" : (policyholder.status === "At Risk" ? "wrong" : "dropped");
 
   return (
     <div className="ph-shell">

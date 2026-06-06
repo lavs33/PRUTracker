@@ -5,7 +5,7 @@ import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
 import "./AgentNotifications.css";
 
-const NOTIF_TYPES = ["TASK_ADDED", "TASK_DUE_TODAY", "TASK_MISSED"];
+const NOTIF_TYPES = ["TASK_ADDED", "TASK_DUE_TODAY", "TASK_MISSED", "PAYMENT_TRANSFER_REMINDER", "PAYMENT_EOR_REMINDER", "PAYMENT_MISSED_TRANSFER"];
 
 function AgentNotifications() {
   const navigate = useNavigate();
@@ -113,7 +113,6 @@ function AgentNotifications() {
 
       const qs = new URLSearchParams({
         userId: user.id,
-        entityType: "Task",
       });
       if (typeFilter) qs.set("type", typeFilter);
 
@@ -143,7 +142,6 @@ function AgentNotifications() {
       const qs = new URLSearchParams({
         userId: user.id,
         status,
-        entityType: "Task",
         includeRefs: "1",
       });
 
@@ -193,6 +191,7 @@ function AgentNotifications() {
     if (t === "TASK_ADDED") return "notif-pill added";
     if (t === "TASK_DUE_TODAY") return "notif-pill due";
     if (t === "TASK_MISSED") return "notif-pill missed";
+    if (t === "PAYMENT_TRANSFER_REMINDER" || t === "PAYMENT_EOR_REMINDER" || t === "PAYMENT_MISSED_TRANSFER") return "notif-pill payment";
     return "notif-pill";
   };
 
@@ -219,7 +218,6 @@ function AgentNotifications() {
     try {
       const qs = new URLSearchParams({
         userId: user.id,
-        entityType: "Task",
       });
       if (typeFilter) qs.set("type", typeFilter);
 
@@ -237,6 +235,18 @@ function AgentNotifications() {
   };
 
   const openNotif = async (n) => {
+    const policyholderId = n?.metadata?.policyholderId || (n.entityType === "Policyholder" ? n.entityId : "");
+    const annualPaymentId = n?.metadata?.annualPaymentId || "";
+    if (policyholderId && annualPaymentId) {
+      navigate(`/agent/${username}/policyholders/${policyholderId}/annual-payments/${annualPaymentId}`);
+      return;
+    }
+
+    if (policyholderId) {
+      navigate(`/agent/${username}/policyholders/${policyholderId}`);
+      return;
+    }
+
     if (n.prospectId && n.leadId) {
       navigate(`/agent/${username}/prospects/${n.prospectId}/leads/${n.leadId}/engage`);
       return;

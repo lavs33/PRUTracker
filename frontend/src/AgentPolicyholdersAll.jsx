@@ -212,8 +212,8 @@ function AgentPolicyholdersAll() {
                 <option value="ageDesc">Age (High → Low)</option>
                 <option value="lastPaidDateAsc">Last Paid Date (Oldest → Newest)</option>
                 <option value="lastPaidDateDesc">Last Paid Date (Newest → Oldest)</option>
-                <option value="nextPaymentDateAsc">Next Payment Date (Oldest → Newest)</option>
-                <option value="nextPaymentDateDesc">Next Payment Date (Newest → Oldest)</option>
+                <option value="nextPaymentDateAsc">Next Payment Date (Earliest → Latest)</option>
+                <option value="nextPaymentDateDesc">Next Payment Date (Latest → Earliest)</option>
                 <option value="dateCreatedAsc">Date Created (Oldest → Newest)</option>
                 <option value="dateCreatedDesc">Date Created (Newest → Oldest)</option>
               </select>
@@ -229,6 +229,7 @@ function AgentPolicyholdersAll() {
                 <select className="allpol-select" value={status} onChange={(e) => setStatus(e.target.value)}>
                   <option value="">All Statuses</option>
                   <option value="Active">Active</option>
+                  <option value="At Risk">At Risk</option>
                   <option value="Lapsed">Lapsed</option>
                   <option value="Cancelled">Cancelled</option>
                 </select>
@@ -291,7 +292,7 @@ function AgentPolicyholdersAll() {
                         <td>{p.productName || "—"}</td>
                         <td className="allpol-mono allpol-cell-nowrap">{p.policyNumber || "—"}</td>
                         <td className="allpol-cell-nowrap">
-                          <span className={`allpol-status ${p.status === "Active" ? "active" : "nurture"}`}>{p.status || "—"}</span>
+                          <span className={`allpol-status ${p.status === "Active" ? "active" : (p.status === "At Risk" ? "at-risk" : "nurture")}`}>{p.status || "—"}</span>
                         </td>
                         <td className="allpol-cell-date">{formatDateOnly(p.lastPaidDate)}</td>
                         <td className="allpol-cell-date">{formatDateOnly(p.nextPaymentDate)}</td>

@@ -179,6 +179,11 @@
   color: #374151;
 }
 
+.allpol-status.at-risk {
+  background-color: #fef3c7;
+  color: #92400e;
+}
+
 .allpol-pagination {
   display: flex;
   justify-content: space-between;
