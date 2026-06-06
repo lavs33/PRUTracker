@@ -26,9 +26,10 @@ const NOTIF_TYPES = [
   "TASK_ADDED",
   "TASK_DUE_TODAY",
   "TASK_MISSED",
+  "PAYMENT_TRANSFER_REMINDER",
+  "PAYMENT_EOR_REMINDER",
 
   // future
-  // "POLICY_PAYMENT_REMINDER",
   // "POLICY_LAPSED",
 ];
 
@@ -206,6 +207,16 @@ const notificationSchema = new mongoose.Schema(
      * - multiple documents can have dedupeKey = null without violating uniqueness
      */
     dedupeKey: { type: String, default: null, index: true, unique: true, sparse: true },
+
+    /**
+     * metadata (Mixed)
+     * ----------------
+     * Optional structured routing/context payload for non-task notifications.
+     */
+    metadata: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
+    },
     /**
      * Soft-delete metadata
      * --------------------

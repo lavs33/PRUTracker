@@ -7,6 +7,26 @@ import "./AgentAddPaymentRecord.css";
 
 const API_BASE = "http://localhost:5000";
 const PAYMENT_METHODS = ["Credit Card / Debit Card", "Mobile Wallet / GCash", "Dated Check", "Bills Payments"];
+function getDataUrlMimeType(dataUrl) {
+  const match = String(dataUrl || "").match(/^data:([^;,]+)[;,]/i);
+  return match?.[1] || "";
+}
+
+function isSupportedProofFile(file) {
+  const mimeType = String(file?.type || "");
+  const fileName = String(file?.name || "");
+  return /^(image\/(jpeg|png)|application\/pdf)$/i.test(mimeType) || /\.(jpe?g|png|pdf)$/i.test(fileName);
+}
+
+function getProofFileMimeType(file, dataUrl = "") {
+  const mimeType = String(file?.type || "");
+  if (/^(image\/(jpeg|png)|application\/pdf)$/i.test(mimeType)) return mimeType;
+  const fileName = String(file?.name || "").toLowerCase();
+  if (fileName.endsWith(".pdf")) return "application/pdf";
+  if (fileName.endsWith(".png")) return "image/png";
+  if (fileName.endsWith(".jpg") || fileName.endsWith(".jpeg")) return "image/jpeg";
+  return getDataUrlMimeType(dataUrl);
+}
 
 function addMonthsPreservingDay(date, months) {
   const next = new Date(date);
@@ -21,8 +41,8 @@ function formatPeriodDate(date) {
   return date.toLocaleDateString("en-US", { month: "short", day: "2-digit", year: "numeric" });
 }
 
-function derivePaymentPeriodLabel(paymentDate, frequency) {
-  const startDate = paymentDate ? new Date(paymentDate) : null;
+function derivePaymentPeriodLabel(paymentPeriodStartDate, frequency) {
+  const startDate = paymentPeriodStartDate ? new Date(paymentPeriodStartDate) : null;
   if (!startDate || Number.isNaN(startDate.getTime())) return "";
   const intervals = { Monthly: 1, Quarterly: 3, "Half-yearly": 6, Yearly: 12 };
   const months = intervals[String(frequency || "").trim()] || 0;
@@ -30,6 +50,37 @@ function derivePaymentPeriodLabel(paymentDate, frequency) {
   const endDate = addMonthsPreservingDay(startDate, months);
   endDate.setDate(endDate.getDate() - 1);
   return `${formatPeriodDate(startDate)} - ${formatPeriodDate(endDate)}`;
+}
+
+function toDateInputValue(date) {
+  if (!date || Number.isNaN(date.getTime())) return "";
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function addDays(date, days) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function normalizeTransferForm(form = {}) {
+  return {
+    totalPremiumPaidPhp: String(form.totalPremiumPaidPhp || ""),
+    paymentDate: String(form.paymentDate || ""),
+    methodForPayment: String(form.methodForPayment || ""),
+    proofOfPaymentFileDataUrl: String(form.proofOfPaymentFileDataUrl || ""),
+    proofOfPaymentFileName: String(form.proofOfPaymentFileName || ""),
+    proofOfPaymentFileMimeType: String(form.proofOfPaymentFileMimeType || ""),
+  };
+}
+
+function areTransferFormsEqual(left, right) {
+  const a = normalizeTransferForm(left);
+  const b = normalizeTransferForm(right);
+  return Object.keys(a).every((key) => a[key] === b[key]);
 }
 
 function AgentAddPaymentRecord() {
@@ -50,9 +101,14 @@ function AgentAddPaymentRecord() {
   const [apiError, setApiError] = useState("");
   const [details, setDetails] = useState(null);
   const [fieldErrors, setFieldErrors] = useState({});
+  const [paymentDateBounds, setPaymentDateBounds] = useState({ min: "", max: toDateInputValue(new Date()) });
+  const [paymentPeriodStartDate, setPaymentPeriodStartDate] = useState("");
   const [activePreview, setActivePreview] = useState(null);
   const [activeStage, setActiveStage] = useState("transfer");
   const [savedPaymentId, setSavedPaymentId] = useState("");
+  const [savedTransferForm, setSavedTransferForm] = useState(null);
+  const [isEorConfirmOpen, setIsEorConfirmOpen] = useState(false);
+  const [isPendingTransferConfirmOpen, setIsPendingTransferConfirmOpen] = useState(false);
   const [eorFieldErrors, setEorFieldErrors] = useState({});
   const [eorForm, setEorForm] = useState({
     eorNumber: "",
@@ -107,6 +163,9 @@ function AgentAddPaymentRecord() {
         setDetails(data);
         setActiveStage("transfer");
         setSavedPaymentId("");
+        setSavedTransferForm(null);
+        setIsEorConfirmOpen(false);
+        setIsPendingTransferConfirmOpen(false);
         const annual = data?.annualPayment || {};
         const records = Array.isArray(data?.payments) ? data.payments : [];
         const totalCount = Number(annual?.paymentProgress?.totalCount || 0);
@@ -117,18 +176,30 @@ function AgentAddPaymentRecord() {
           .filter((date) => date && !Number.isNaN(date.getTime()))
           .sort((a, b) => b.getTime() - a.getTime())[0];
         const fallbackStartDate = annual?.annualPaymentPeriod?.startDate ? new Date(annual.annualPaymentPeriod.startDate) : new Date();
-        const nextPaymentDate = latestEndDate ? new Date(latestEndDate) : fallbackStartDate;
-        if (latestEndDate) nextPaymentDate.setDate(nextPaymentDate.getDate() + 1);
+        const nextPaymentPeriodStart = latestEndDate ? addDays(latestEndDate, 1) : fallbackStartDate;
+        const latestPaymentDate = records
+          .map((payment) => payment?.paymentDate ? new Date(payment.paymentDate) : null)
+          .filter((date) => date && !Number.isNaN(date.getTime()))
+          .sort((a, b) => b.getTime() - a.getTime())[0];
+        const policyholderLastPaidDate = data?.policyholder?.lastPaidDate ? new Date(data.policyholder.lastPaidDate) : null;
+        const lastActualPaymentDate = [latestPaymentDate, policyholderLastPaidDate]
+          .filter((date) => date && !Number.isNaN(date.getTime()))
+          .sort((a, b) => b.getTime() - a.getTime())[0] || null;
+        const minPaymentDate = lastActualPaymentDate ? toDateInputValue(addDays(lastActualPaymentDate, 1)) : "";
+        const maxPaymentDate = toDateInputValue(new Date());
+        const defaultPaymentDate = maxPaymentDate;
+        setPaymentDateBounds({ min: minPaymentDate, max: maxPaymentDate });
+        setPaymentPeriodStartDate(toDateInputValue(nextPaymentPeriodStart));
         const methodForRenewalPayment = String(data?.application?.methodForRenewalPayment || "");
         setForm((prev) => ({
           ...prev,
           totalPremiumPaidPhp: computedPremium || prev.totalPremiumPaidPhp,
-          paymentDate: !Number.isNaN(nextPaymentDate.getTime()) ? nextPaymentDate.toISOString().slice(0, 10) : prev.paymentDate,
+          paymentDate: defaultPaymentDate || prev.paymentDate,
           methodForPayment: methodForRenewalPayment || prev.methodForPayment,
         }));
         setEorForm((prev) => ({
           ...prev,
-          receiptDate: !Number.isNaN(nextPaymentDate.getTime()) ? nextPaymentDate.toISOString().slice(0, 10) : prev.receiptDate,
+          receiptDate: defaultPaymentDate || prev.receiptDate,
         }));
       } catch (err) {
         if (err.name !== "AbortError") {
@@ -180,17 +251,19 @@ function AgentAddPaymentRecord() {
   const handleFileChange = (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    if (!/^(image\/(jpeg|png)|application\/pdf)$/i.test(file.type)) {
+    if (!isSupportedProofFile(file)) {
       setFieldErrors((prev) => ({ ...prev, proofOfPaymentFileDataUrl: "Proof of payment must be a JPG, PNG, or PDF file." }));
+      event.target.value = "";
       return;
     }
     const reader = new FileReader();
     reader.onload = () => {
+      const dataUrl = String(reader.result || "");
       setForm((prev) => ({
         ...prev,
-        proofOfPaymentFileDataUrl: String(reader.result || ""),
+        proofOfPaymentFileDataUrl: dataUrl,
         proofOfPaymentFileName: file.name,
-        proofOfPaymentFileMimeType: file.type,
+        proofOfPaymentFileMimeType: getProofFileMimeType(file, dataUrl),
       }));
       setFieldErrors((prev) => ({ ...prev, proofOfPaymentFileDataUrl: "" }));
     };
@@ -201,8 +274,9 @@ function AgentAddPaymentRecord() {
   const handleEorFileChange = (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    if (!/^application\/pdf$/i.test(file.type)) {
+    if (!/^application\/pdf$/i.test(file.type) && !/\.pdf$/i.test(file.name || "")) {
       setEorFieldErrors((prev) => ({ ...prev, eorFileDataUrl: "eOR file must be a PDF." }));
+      event.target.value = "";
       return;
     }
     const reader = new FileReader();
@@ -211,7 +285,7 @@ function AgentAddPaymentRecord() {
         ...prev,
         eorFileDataUrl: String(reader.result || ""),
         eorFileName: file.name,
-        eorFileMimeType: file.type,
+        eorFileMimeType: file.type || "application/pdf",
       }));
       setEorFieldErrors((prev) => ({ ...prev, eorFileDataUrl: "" }));
     };
@@ -224,6 +298,12 @@ function AgentAddPaymentRecord() {
     const amount = Number(form.totalPremiumPaidPhp);
     if (!Number.isFinite(amount) || amount <= 0) nextErrors.totalPremiumPaidPhp = "Total premium paid is required.";
     if (!form.paymentDate) nextErrors.paymentDate = "Payment date is required.";
+    if (form.paymentDate && paymentDateBounds.min && form.paymentDate < paymentDateBounds.min) {
+      nextErrors.paymentDate = "Payment date must be after the last payment date.";
+    }
+    if (form.paymentDate && paymentDateBounds.max && form.paymentDate > paymentDateBounds.max) {
+      nextErrors.paymentDate = "Payment date cannot be in the future.";
+    }
     if (!form.methodForPayment) nextErrors.methodForPayment = "Method of payment is required.";
     if (!form.proofOfPaymentFileDataUrl) nextErrors.proofOfPaymentFileDataUrl = "Proof of payment file is required.";
     setFieldErrors(nextErrors);
@@ -233,20 +313,31 @@ function AgentAddPaymentRecord() {
   const handleSubmit = async (event) => {
     event.preventDefault();
     if (!validate() || !user?.id) return;
+    const isUpdatingTransfer = Boolean(savedPaymentId);
+    if (isUpdatingTransfer && areTransferFormsEqual(form, savedTransferForm)) return;
     try {
       setSaving(true);
       setApiError("");
-      const res = await fetch(`${API_BASE}/api/policyholders/${policyholderId}/annual-payments/${annualPaymentId}/payments?userId=${user.id}`, {
-        method: "POST",
+      const url = isUpdatingTransfer
+        ? `${API_BASE}/api/policyholders/${policyholderId}/annual-payments/${annualPaymentId}/payments/${savedPaymentId}/transfer?userId=${user.id}`
+        : `${API_BASE}/api/policyholders/${policyholderId}/annual-payments/${annualPaymentId}/payments?userId=${user.id}`;
+      const res = await fetch(url, {
+        method: isUpdatingTransfer ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(form),
       });
       const data = await res.json();
       if (!res.ok) {
-        setApiError(data.message || "Failed to add payment record.");
+        setApiError(data.message || (isUpdatingTransfer ? "Failed to update payment transfer." : "Failed to add payment record."));
         return;
       }
-      setSavedPaymentId(String(data.paymentId || ""));
+      const nextPaymentId = String(data.paymentId || savedPaymentId || "");
+      setSavedPaymentId(nextPaymentId);
+      setSavedTransferForm(normalizeTransferForm(form));
+      setEorForm((prev) => ({
+        ...prev,
+        receiptDate: prev.receiptDate && prev.receiptDate >= form.paymentDate ? prev.receiptDate : form.paymentDate,
+      }));
       setActiveStage("eor");
       setApiError("");
     } catch {
@@ -260,6 +351,12 @@ function AgentAddPaymentRecord() {
     const nextErrors = {};
     if (!String(eorForm.eorNumber || "").trim()) nextErrors.eorNumber = "eOR number is required.";
     if (!eorForm.receiptDate) nextErrors.receiptDate = "Receipt date is required.";
+    if (eorForm.receiptDate && form.paymentDate && eorForm.receiptDate < form.paymentDate) {
+      nextErrors.receiptDate = "Receipt date cannot be before the payment date.";
+    }
+    if (eorForm.receiptDate && paymentDateBounds.max && eorForm.receiptDate > paymentDateBounds.max) {
+      nextErrors.receiptDate = "Receipt date cannot be in the future.";
+    }
     if (!eorForm.eorFileDataUrl) nextErrors.eorFileDataUrl = "eOR PDF file is required.";
     setEorFieldErrors(nextErrors);
     return Object.keys(nextErrors).length === 0;
@@ -268,6 +365,11 @@ function AgentAddPaymentRecord() {
   const handleEorSubmit = async (event) => {
     event.preventDefault();
     if (!savedPaymentId || !validateEor() || !user?.id) return;
+    setIsEorConfirmOpen(true);
+  };
+
+  const handleConfirmEorSave = async () => {
+    if (!savedPaymentId || !user?.id) return;
     try {
       setSaving(true);
       setApiError("");
@@ -278,15 +380,56 @@ function AgentAddPaymentRecord() {
       });
       const data = await res.json();
       if (!res.ok) {
+        setIsEorConfirmOpen(false);
+        setIsPendingTransferConfirmOpen(false);
         setApiError(data.message || "Failed to upload premium payment eOR.");
         return;
       }
       navigate(`/agent/${user.username}/policyholders/${policyholderId}/annual-payments/${annualPaymentId}/payments/${savedPaymentId}`);
     } catch {
+      setIsEorConfirmOpen(false);
       setApiError("Cannot connect to server. Is backend running?");
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleEorUnavailable = () => {
+    if (!savedPaymentId) return;
+    setIsPendingTransferConfirmOpen(true);
+  };
+
+  const handleConfirmPendingTransfer = async () => {
+    if (!savedPaymentId || !user?.id) return;
+    try {
+      setSaving(true);
+      setApiError("");
+      const res = await fetch(`${API_BASE}/api/policyholders/${policyholderId}/annual-payments/${annualPaymentId}/payments/${savedPaymentId}/eor-reminder?userId=${user.id}`, {
+        method: "POST",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setIsPendingTransferConfirmOpen(false);
+        setApiError(data.message || "Failed to save transfer-only payment status.");
+        return;
+      }
+      navigate(`/agent/${user.username}/policyholders/${policyholderId}/annual-payments/${annualPaymentId}/payments/${savedPaymentId}`);
+    } catch {
+      setIsPendingTransferConfirmOpen(false);
+      setApiError("Cannot connect to server. Is backend running?");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleCancelTransferEdits = () => {
+    if (!savedPaymentId || !savedTransferForm) {
+      navigate(`/agent/${user.username}/policyholders/${policyholderId}/annual-payments/${annualPaymentId}`);
+      return;
+    }
+    setForm(savedTransferForm);
+    setFieldErrors({});
+    setActiveStage("eor");
   };
 
   if (!isReady) return null;
@@ -297,8 +440,13 @@ function AgentAddPaymentRecord() {
   const annualPayment = details?.annualPayment || {};
   const policySummary = details?.policySummary || {};
   const frequencyLabel = annualPayment.frequencyOfPayment === "Half-yearly" ? "Half-Yearly" : (annualPayment.frequencyOfPayment || "Payment");
-  const paymentPeriodLabel = derivePaymentPeriodLabel(form.paymentDate, annualPayment.frequencyOfPayment);
+  const paymentPeriodLabel = derivePaymentPeriodLabel(paymentPeriodStartDate, annualPayment.frequencyOfPayment);
   const policyNumber = policyholder.policyNumber || policySummary.policyNumber || "";
+  const proofMimeType = form.proofOfPaymentFileMimeType || getDataUrlMimeType(form.proofOfPaymentFileDataUrl);
+  const isProofImage = String(proofMimeType || "").startsWith("image/");
+  const isTransferDirty = savedPaymentId ? !areTransferFormsEqual(form, savedTransferForm) : true;
+  const eorReceiptDateMin = form.paymentDate || "";
+  const eorReceiptDateMax = paymentDateBounds.max || toDateInputValue(new Date());
   const preview = activePreview === "policy"
     ? {
         title: "Policy Summary Preview",
@@ -311,7 +459,7 @@ function AgentAddPaymentRecord() {
           title: "Proof of Payment Preview",
           fileName: form.proofOfPaymentFileName,
           dataUrl: form.proofOfPaymentFileDataUrl,
-          mimeType: form.proofOfPaymentFileMimeType,
+          mimeType: proofMimeType,
         }
       : activePreview === "eor"
         ? {
@@ -326,7 +474,8 @@ function AgentAddPaymentRecord() {
     if (!preview?.dataUrl) {
       return <div className="ph-previewEmpty"><p>No file is available for preview.</p></div>;
     }
-    if (String(preview.mimeType || "").startsWith("image/")) {
+    const mimeType = preview.mimeType || getDataUrlMimeType(preview.dataUrl);
+    if (String(mimeType || "").startsWith("image/")) {
       return <img src={preview.dataUrl} alt={preview.fileName || preview.title} className="pay-previewImage" />;
     }
     return <iframe title={preview.title} src={preview.dataUrl} className="ph-previewFrame" />;
@@ -439,7 +588,9 @@ function AgentAddPaymentRecord() {
                     <input
                       type="date"
                       value={form.paymentDate}
-                      readOnly
+                      min={paymentDateBounds.min || undefined}
+                      max={paymentDateBounds.max || undefined}
+                      onChange={(event) => setForm((prev) => ({ ...prev, paymentDate: event.target.value }))}
                     />
                     {fieldErrors.paymentDate ? <small>{fieldErrors.paymentDate}</small> : null}
                   </label>
@@ -451,7 +602,7 @@ function AgentAddPaymentRecord() {
 
                   <label className="addpay-field">
                     <span>Method of Payment *</span>
-                    <select value={form.methodForPayment} disabled={Boolean(savedPaymentId)} onChange={(event) => setForm((prev) => ({ ...prev, methodForPayment: event.target.value }))}>
+                    <select value={form.methodForPayment} onChange={(event) => setForm((prev) => ({ ...prev, methodForPayment: event.target.value }))}>
                       <option value="">Select method</option>
                       {PAYMENT_METHODS.map((method) => <option key={method} value={method}>{method}</option>)}
                     </select>
@@ -460,36 +611,44 @@ function AgentAddPaymentRecord() {
 
                   <div className="addpay-field addpay-fileField">
                     <span>Proof of Payment *</span>
-                    <input type="file" accept="image/jpeg,image/png,application/pdf" disabled={Boolean(savedPaymentId)} onChange={handleFileChange} />
+                    <input type="file" accept="image/jpeg,image/png,application/pdf" onChange={handleFileChange} />
                     {form.proofOfPaymentFileName ? (
+                      <p className="addpay-fileName">Selected file: {form.proofOfPaymentFileName}</p>
+                    ) : null}
+                    {isProofImage && form.proofOfPaymentFileDataUrl ? (
+                      <div className="addpay-inlinePreview">
+                        <span>Preview</span>
+                        <img
+                          src={form.proofOfPaymentFileDataUrl}
+                          alt="Proof of payment preview"
+                          className="addpay-inlinePreviewImage"
+                        />
+                      </div>
+                    ) : form.proofOfPaymentFileDataUrl ? (
                       <button
                         type="button"
                         className="addpay-filePreview"
                         onMouseDown={(event) => event.stopPropagation()}
                         onClick={(event) => handlePreviewButtonClick(event, "proof")}
-                        title="Preview proof of payment"
+                        title="Preview proof of payment PDF"
                       >
-                        Selected file: {form.proofOfPaymentFileName}
+                        Preview PDF
                       </button>
                     ) : null}
                     {fieldErrors.proofOfPaymentFileDataUrl ? <small>{fieldErrors.proofOfPaymentFileDataUrl}</small> : null}
                   </div>
 
                   <div className="addpay-actions">
-                    <button type="button" className="addpay-secondary" onClick={() => navigate(`/agent/${user.username}/policyholders/${policyholderId}/annual-payments/${annualPaymentId}`)}>
-                      Cancel
+                    <button type="button" className="addpay-secondary" onClick={handleCancelTransferEdits} disabled={Boolean(savedPaymentId) && !isTransferDirty}>
+                      {savedPaymentId ? "Cancel Edits" : "Cancel"}
                     </button>
-                    <button type="submit" className="addpay-primary" disabled={saving || Boolean(savedPaymentId)}>
-                      {savedPaymentId ? "Premium Payment Transfer Saved" : (saving ? "Saving..." : "Save Premium Payment Transfer")}
+                    <button type="submit" className="addpay-primary" disabled={saving || (Boolean(savedPaymentId) && !isTransferDirty)}>
+                      {saving ? "Saving..." : (savedPaymentId ? "Save Transfer Edits" : "Save Premium Payment Transfer")}
                     </button>
                   </div>
                 </form>
                 ) : (
                 <form className="addpay-form" onSubmit={handleEorSubmit}>
-                  <div className="addpay-stageNotice">
-                    <strong>Premium payment transfer saved.</strong> Upload the eOR to finish this {frequencyLabel} payment record.
-                  </div>
-
                   <div className="addpay-transferSummary">
                     <div>
                       <span>Payment Date</span>
@@ -535,6 +694,8 @@ function AgentAddPaymentRecord() {
                     <input
                       type="date"
                       value={eorForm.receiptDate}
+                      min={eorReceiptDateMin || undefined}
+                      max={eorReceiptDateMax || undefined}
                       onChange={(event) => setEorForm((prev) => ({ ...prev, receiptDate: event.target.value }))}
                     />
                     {eorFieldErrors.receiptDate ? <small>{eorFieldErrors.receiptDate}</small> : null}
@@ -544,29 +705,101 @@ function AgentAddPaymentRecord() {
                     <span>eOR File (PDF) *</span>
                     <input type="file" accept="application/pdf" onChange={handleEorFileChange} />
                     {eorForm.eorFileName ? (
-                      <button
-                        type="button"
-                        className="addpay-filePreview"
-                        onMouseDown={(event) => event.stopPropagation()}
-                        onClick={(event) => handlePreviewButtonClick(event, "eor")}
-                        title="Preview eOR file"
-                      >
-                        Selected file: {eorForm.eorFileName}
-                      </button>
+                      <>
+                        <p className="addpay-fileName">Selected file: {eorForm.eorFileName}</p>
+                        {eorForm.eorFileDataUrl ? (
+                          <div className="addpay-inlinePreview">
+                            <span>Preview</span>
+                            <iframe title="Selected eOR preview" src={eorForm.eorFileDataUrl} className="addpay-inlinePreviewFrame" />
+                            <button
+                              type="button"
+                              className="addpay-filePreview"
+                              onMouseDown={(event) => event.stopPropagation()}
+                              onClick={(event) => handlePreviewButtonClick(event, "eor")}
+                              title="Open selected eOR preview"
+                            >
+                              Open full preview
+                            </button>
+                          </div>
+                        ) : null}
+                      </>
                     ) : null}
                     {eorFieldErrors.eorFileDataUrl ? <small>{eorFieldErrors.eorFileDataUrl}</small> : null}
                   </div>
 
                   <div className="addpay-actions">
-                    <button type="button" className="addpay-secondary" onClick={() => setActiveStage("transfer")}>
-                      Back
+                    <button type="button" className="addpay-secondary" onClick={handleEorUnavailable} disabled={saving}>
+                      eOR Not Available Yet
                     </button>
                     <button type="submit" className="addpay-primary" disabled={saving}>
-                      {saving ? "Saving..." : "Save Premium Payment eOR"}
+                      {saving ? "Saving..." : "Save eOR"}
                     </button>
                   </div>
                 </form>
                 )}
+
+                {isPendingTransferConfirmOpen ? (
+                  <div className="addpay-confirmOverlay" role="dialog" aria-modal="true" aria-labelledby="addpay-transfer-confirm-title">
+                    <div className="addpay-confirmModal">
+                      <button
+                        type="button"
+                        className="addpay-confirmClose"
+                        onClick={() => setIsPendingTransferConfirmOpen(false)}
+                        aria-label="Close transfer confirmation"
+                        title="Close"
+                      >
+                        ×
+                      </button>
+                      <h2 id="addpay-transfer-confirm-title">Save Transfer Details for Now?</h2>
+                      <p>The premium payment transfer details will remain saved with pending status until the eOR is uploaded.</p>
+                      <div className="addpay-confirmGrid">
+                        <div><span>Total Premium Paid</span><strong>Php {form.totalPremiumPaidPhp || "—"}</strong></div>
+                        <div><span>Frequency</span><strong>{annualPayment.frequencyOfPayment || "—"}</strong></div>
+                        <div><span>Payment Date</span><strong>{form.paymentDate || "—"}</strong></div>
+                        <div><span>Payment Period Covered</span><strong>{paymentPeriodLabel || "—"}</strong></div>
+                        <div><span>Method of Payment</span><strong>{form.methodForPayment || "—"}</strong></div>
+                        <div><span>Proof of Payment</span><strong>{form.proofOfPaymentFileName || "—"}</strong></div>
+                      </div>
+                      <div className="addpay-confirmActions">
+                        <button type="button" className="addpay-secondary" onClick={() => setIsPendingTransferConfirmOpen(false)} disabled={saving}>Cancel</button>
+                        <button type="button" className="addpay-primary" onClick={handleConfirmPendingTransfer} disabled={saving}>{saving ? "Saving..." : "Confirm"}</button>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+
+                {isEorConfirmOpen ? (
+                  <div className="addpay-confirmOverlay" role="dialog" aria-modal="true" aria-labelledby="addpay-eor-confirm-title">
+                    <div className="addpay-confirmModal">
+                      <button
+                        type="button"
+                        className="addpay-confirmClose"
+                        onClick={() => setIsEorConfirmOpen(false)}
+                        aria-label="Close eOR confirmation"
+                        title="Close"
+                      >
+                        ×
+                      </button>
+                      <h2 id="addpay-eor-confirm-title">Confirm Premium Payment eOR</h2>
+                      <p>Once confirmed, these eOR details will be saved and can no longer be edited thereafter.</p>
+                      <div className="addpay-confirmGrid">
+                        <div><span>Total Premium Paid</span><strong>Php {form.totalPremiumPaidPhp || "—"}</strong></div>
+                        <div><span>Frequency</span><strong>{annualPayment.frequencyOfPayment || "—"}</strong></div>
+                        <div><span>Payment Date</span><strong>{form.paymentDate || "—"}</strong></div>
+                        <div><span>Payment Period Covered</span><strong>{paymentPeriodLabel || "—"}</strong></div>
+                        <div><span>Method of Payment</span><strong>{form.methodForPayment || "—"}</strong></div>
+                        <div><span>Proof of Payment</span><strong>{form.proofOfPaymentFileName || "—"}</strong></div>
+                        <div><span>eOR Number</span><strong>{eorForm.eorNumber || "—"}</strong></div>
+                        <div><span>Receipt Date</span><strong>{eorForm.receiptDate || "—"}</strong></div>
+                        <div><span>eOR File</span><strong>{eorForm.eorFileName || "—"}</strong></div>
+                      </div>
+                      <div className="addpay-confirmActions">
+                        <button type="button" className="addpay-secondary" onClick={() => setIsEorConfirmOpen(false)} disabled={saving}>Cancel</button>
+                        <button type="button" className="addpay-primary" onClick={handleConfirmEorSave} disabled={saving}>{saving ? "Saving..." : "Confirm"}</button>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
 
                 {preview ? (
                   <div className="ph-previewOverlay" role="dialog" aria-modal="true" aria-labelledby="add-payment-preview-title">
