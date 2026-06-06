@@ -1,9 +1,30 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import TopNav from "./components/TopNav";
 import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
 import "./AgentPaymentRecordDetails.css";
+
+const API_BASE = "http://localhost:5000";
+
+function toDateInputValue(value) {
+  const date = value ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) return new Date().toISOString().slice(0, 10);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function getInitialEorForm(payment = {}) {
+  return {
+    eorNumber: "",
+    receiptDate: toDateInputValue(payment.receiptDate || payment.paymentDate || new Date()),
+    eorFileDataUrl: "",
+    eorFileName: "",
+    eorFileMimeType: "",
+  };
+}
 
 function AgentPaymentRecordDetails() {
   const navigate = useNavigate();
@@ -22,6 +43,11 @@ function AgentPaymentRecordDetails() {
   const [apiError, setApiError] = useState("");
   const [details, setDetails] = useState(null);
   const [activePreview, setActivePreview] = useState(null);
+  const [isEditingEor, setIsEditingEor] = useState(false);
+  const [savingEor, setSavingEor] = useState(false);
+  const [isEorConfirmOpen, setIsEorConfirmOpen] = useState(false);
+  const [eorFieldErrors, setEorFieldErrors] = useState({});
+  const [eorForm, setEorForm] = useState(() => getInitialEorForm());
 
   useEffect(() => {
     if (!user || user.username !== username) {
@@ -40,42 +66,44 @@ function AgentPaymentRecordDetails() {
     document.title = `${user.username} | ${frequency} Payment Record Details`;
   }, [details?.annualPayment?.frequencyOfPayment, details?.payment?.frequencyOfPremiumPayment, user]);
 
+  const loadDetails = useCallback(async (signal, { showLoading = true } = {}) => {
+    if (!user?.id) return;
+    try {
+      if (showLoading) setLoading(true);
+      setApiError("");
+
+      const res = await fetch(
+        `${API_BASE}/api/policyholders/${policyholderId}/annual-payments/${annualPaymentId}/payments/${paymentId}?userId=${user.id}`,
+        signal ? { signal } : undefined
+      );
+      const data = await res.json();
+
+      if (!res.ok) {
+        setApiError(data.message || "Failed to fetch payment record details.");
+        setDetails(null);
+        return;
+      }
+
+      setDetails(data);
+      setEorForm(getInitialEorForm(data?.payment));
+      setIsEorConfirmOpen(false);
+    } catch (err) {
+      if (err.name !== "AbortError") {
+        setApiError("Cannot connect to server. Is backend running?");
+        setDetails(null);
+      }
+    } finally {
+      if (showLoading) setLoading(false);
+    }
+  }, [annualPaymentId, paymentId, policyholderId, user?.id]);
+
   useEffect(() => {
     if (!isReady || !user?.id) return;
 
     const controller = new AbortController();
-
-    const run = async () => {
-      try {
-        setLoading(true);
-        setApiError("");
-
-        const res = await fetch(
-          `http://localhost:5000/api/policyholders/${policyholderId}/annual-payments/${annualPaymentId}/payments/${paymentId}?userId=${user.id}`,
-          { signal: controller.signal }
-        );
-        const data = await res.json();
-
-        if (!res.ok) {
-          setApiError(data.message || "Failed to fetch payment record details.");
-          setDetails(null);
-          return;
-        }
-
-        setDetails(data);
-      } catch (err) {
-        if (err.name !== "AbortError") {
-          setApiError("Cannot connect to server. Is backend running?");
-          setDetails(null);
-        }
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    run();
+    loadDetails(controller.signal);
     return () => controller.abort();
-  }, [isReady, user?.id, policyholderId, annualPaymentId, paymentId]);
+  }, [isReady, user?.id, loadDetails]);
 
   const formatDateOnly = (value) => {
     if (!value) return "—";
@@ -128,6 +156,80 @@ function AgentPaymentRecordDetails() {
     }
   };
 
+  const handleEorFileChange = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!/^application\/pdf$/i.test(file.type)) {
+      setEorFieldErrors((prev) => ({ ...prev, eorFileDataUrl: "eOR file must be a PDF." }));
+      event.target.value = "";
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setEorForm((prev) => ({
+        ...prev,
+        eorFileDataUrl: String(reader.result || ""),
+        eorFileName: file.name,
+        eorFileMimeType: file.type || "application/pdf",
+      }));
+      setEorFieldErrors((prev) => ({ ...prev, eorFileDataUrl: "" }));
+    };
+    reader.onerror = () => setEorFieldErrors((prev) => ({ ...prev, eorFileDataUrl: "Failed to read eOR file." }));
+    reader.readAsDataURL(file);
+  };
+
+  const validateEor = () => {
+    const nextErrors = {};
+    const paymentDateValue = details?.payment?.paymentDate ? toDateInputValue(details.payment.paymentDate) : "";
+    const todayValue = toDateInputValue(new Date());
+    if (!String(eorForm.eorNumber || "").trim()) nextErrors.eorNumber = "eOR number is required.";
+    if (!eorForm.receiptDate) nextErrors.receiptDate = "Receipt date is required.";
+    if (eorForm.receiptDate && paymentDateValue && eorForm.receiptDate < paymentDateValue) {
+      nextErrors.receiptDate = "Receipt date cannot be before the payment date.";
+    }
+    if (eorForm.receiptDate && todayValue && eorForm.receiptDate > todayValue) {
+      nextErrors.receiptDate = "Receipt date cannot be in the future.";
+    }
+    if (!eorForm.eorFileDataUrl) nextErrors.eorFileDataUrl = "eOR PDF file is required.";
+    setEorFieldErrors(nextErrors);
+    return Object.keys(nextErrors).length === 0;
+  };
+
+  const handleEorSubmit = async (event) => {
+    event.preventDefault();
+    if (!validateEor() || !user?.id) return;
+    setIsEorConfirmOpen(true);
+  };
+
+  const handleConfirmEorSave = async () => {
+    if (!user?.id) return;
+    try {
+      setSavingEor(true);
+      setApiError("");
+      const res = await fetch(`${API_BASE}/api/policyholders/${policyholderId}/annual-payments/${annualPaymentId}/payments/${paymentId}/eor?userId=${user.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(eorForm),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setIsEorConfirmOpen(false);
+        setApiError(data.message || "Failed to upload premium payment eOR.");
+        return;
+      }
+      setIsEorConfirmOpen(false);
+      setIsEditingEor(false);
+      setEorFieldErrors({});
+      setEorForm(getInitialEorForm(data.payment));
+      await loadDetails(undefined, { showLoading: false });
+    } catch {
+      setIsEorConfirmOpen(false);
+      setApiError("Cannot connect to server. Is backend running?");
+    } finally {
+      setSavingEor(false);
+    }
+  };
+
   if (!isReady) return null;
 
   const policyholder = details?.policyholder || {};
@@ -137,6 +239,10 @@ function AgentPaymentRecordDetails() {
   const payment = details?.payment || {};
   const policySummary = details?.policySummary || {};
   const paymentStatus = String(payment.status || "Pending");
+  const hasUploadedEor = Boolean(payment.eorNumber || payment.eorFileDataUrl || payment.uploadedAt || paymentStatus === "Processed");
+  const canEditEor = Boolean(payment._id && !hasUploadedEor);
+  const receiptDateMin = payment.paymentDate ? toDateInputValue(payment.paymentDate) : "";
+  const receiptDateMax = toDateInputValue(new Date());
   const paymentNumber = payment.paymentNumber ? `#${payment.paymentNumber}` : "—";
   const frequencyLabel = (payment.frequencyOfPremiumPayment || annualPayment.frequencyOfPayment) === "Half-yearly"
     ? "Half-Yearly"
@@ -159,6 +265,20 @@ function AgentPaymentRecordDetails() {
     ["Uploaded At", formatDateOnly(payment.uploadedAt)],
   ];
 
+  const handleStartEorEdit = () => {
+    setEorFieldErrors({});
+    setEorForm(getInitialEorForm(payment));
+    setIsEditingEor(true);
+  };
+
+  const handleCancelEorEdit = () => {
+    setIsEditingEor(false);
+    setEorFieldErrors({});
+    setActivePreview((current) => (current === "eor" ? null : current));
+    setIsEorConfirmOpen(false);
+    setEorForm(getInitialEorForm(payment));
+  };
+
   const preview = activePreview === "proof"
     ? {
         title: "Proof of Payment Preview",
@@ -169,9 +289,10 @@ function AgentPaymentRecordDetails() {
     : activePreview === "eor"
       ? {
           title: "eOR File Preview",
-          fileName: payment.eorFileName,
-          dataUrl: payment.eorFileDataUrl,
-          mimeType: payment.eorFileMimeType,
+          fileName: payment.eorFileName || eorForm.eorFileName,
+          dataUrl: payment.eorFileDataUrl || eorForm.eorFileDataUrl,
+          mimeType: payment.eorFileMimeType || eorForm.eorFileMimeType || "application/pdf",
+          receiptDate: payment.receiptDate || eorForm.receiptDate,
         }
       : activePreview === "policy"
         ? {
@@ -322,34 +443,134 @@ function AgentPaymentRecordDetails() {
                   <section className="pay-detailCard">
                     <div className="pay-detailCardHeader">
                       <h2>Premium Payment eOR</h2>
+                      {canEditEor && !isEditingEor ? (
+                        <button
+                          type="button"
+                          className="pay-editButton"
+                          onClick={handleStartEorEdit}
+                        >
+                          Edit
+                        </button>
+                      ) : null}
                     </div>
-                    <div className="pay-detailRows">
-                      {eorRows.map(([label, value]) => (
-                        <div key={label} className="pay-detailRow">
-                          <span>{label}</span>
-                          <strong>{value}</strong>
+                    {isEditingEor && canEditEor ? (
+                      <form className="pay-eorForm" onSubmit={handleEorSubmit}>
+                        <label className="pay-eorField">
+                          <span>eOR Number *</span>
+                          <input
+                            type="text"
+                            value={eorForm.eorNumber}
+                            onChange={(event) => setEorForm((prev) => ({ ...prev, eorNumber: event.target.value }))}
+                            disabled={savingEor}
+                          />
+                          {eorFieldErrors.eorNumber ? <small>{eorFieldErrors.eorNumber}</small> : null}
+                        </label>
+                        <label className="pay-eorField">
+                          <span>Receipt Date *</span>
+                          <input
+                            type="date"
+                            value={eorForm.receiptDate}
+                            min={receiptDateMin || undefined}
+                            max={receiptDateMax || undefined}
+                            onChange={(event) => setEorForm((prev) => ({ ...prev, receiptDate: event.target.value }))}
+                            disabled={savingEor}
+                          />
+                          {eorFieldErrors.receiptDate ? <small>{eorFieldErrors.receiptDate}</small> : null}
+                        </label>
+                        <div className="pay-eorField">
+                          <span>eOR File (PDF) *</span>
+                          <input type="file" accept="application/pdf" onChange={handleEorFileChange} disabled={savingEor} />
+                          {eorForm.eorFileName ? (
+                            <>
+                              <p className="pay-selectedFile">Selected file: {eorForm.eorFileName}</p>
+                              {eorForm.eorFileDataUrl ? (
+                                <div className="pay-inlinePreview">
+                                  <span>Preview</span>
+                                  <iframe
+                                    title="Selected eOR preview"
+                                    src={eorForm.eorFileDataUrl}
+                                    className="pay-inlinePreviewFrame"
+                                  />
+                                  <button type="button" className="pay-fileLink" onClick={() => setActivePreview("eor")} title="Open selected eOR preview">
+                                    Open full preview
+                                  </button>
+                                </div>
+                              ) : null}
+                            </>
+                          ) : null}
+                          {eorFieldErrors.eorFileDataUrl ? <small>{eorFieldErrors.eorFileDataUrl}</small> : null}
                         </div>
-                      ))}
-                      <div className="pay-detailRow">
-                        <span>eOR File</span>
-                        <strong>
-                          {payment.eorFileDataUrl ? (
-                            <button
-                              type="button"
-                              className="pay-fileLink"
-                              onClick={() => setActivePreview("eor")}
-                              title="Preview eOR file"
-                            >
-                              {payment.eorFileName || "eOR file"}
-                            </button>
-                          ) : (
-                            payment.eorFileName || "—"
-                          )}
-                        </strong>
+                        <div className="pay-eorActions">
+                          <button type="button" className="pay-formAction pay-formAction--secondary" onClick={handleCancelEorEdit} disabled={savingEor}>
+                            Cancel
+                          </button>
+                          <button type="submit" className="pay-formAction pay-formAction--primary" disabled={savingEor}>
+                            {savingEor ? "Saving..." : "Save eOR"}
+                          </button>
+                        </div>
+                      </form>
+                    ) : (
+                      <div className="pay-detailRows">
+                        {eorRows.map(([label, value]) => (
+                          <div key={label} className="pay-detailRow">
+                            <span>{label}</span>
+                            <strong>{value}</strong>
+                          </div>
+                        ))}
+                        <div className="pay-detailRow">
+                          <span>eOR File</span>
+                          <strong>
+                            {payment.eorFileDataUrl ? (
+                              <button
+                                type="button"
+                                className="pay-fileLink"
+                                onClick={() => setActivePreview("eor")}
+                                title="Preview eOR file"
+                              >
+                                {payment.eorFileName || "eOR file"}
+                              </button>
+                            ) : (
+                              payment.eorFileName || "—"
+                            )}
+                          </strong>
+                        </div>
                       </div>
-                    </div>
+                    )}
                   </section>
                 </div>
+
+                {isEorConfirmOpen ? (
+                  <div className="pay-confirmOverlay" role="dialog" aria-modal="true" aria-labelledby="pay-eor-confirm-title">
+                    <div className="pay-confirmModal">
+                      <button
+                        type="button"
+                        className="pay-confirmClose"
+                        onClick={() => setIsEorConfirmOpen(false)}
+                        aria-label="Close eOR confirmation"
+                        title="Close"
+                      >
+                        ×
+                      </button>
+                      <h2 id="pay-eor-confirm-title">Confirm Premium Payment eOR</h2>
+                      <p>Once confirmed, these eOR details will be saved and can no longer be edited thereafter.</p>
+                      <div className="pay-confirmGrid">
+                        <div><span>Total Premium Paid</span><strong>{formatAmount(payment.totalPremiumPaidPhp)}</strong></div>
+                        <div><span>Frequency</span><strong>{payment.frequencyOfPremiumPayment || annualPayment.frequencyOfPayment || "—"}</strong></div>
+                        <div><span>Payment Date</span><strong>{formatDateOnly(payment.paymentDate)}</strong></div>
+                        <div><span>Payment Period Covered</span><strong>{payment.paymentPeriodLabel || "—"}</strong></div>
+                        <div><span>Method of Payment</span><strong>{payment.methodForPayment || "—"}</strong></div>
+                        <div><span>Proof of Payment</span><strong>{payment.proofOfPaymentFileName || "—"}</strong></div>
+                        <div><span>eOR Number</span><strong>{eorForm.eorNumber || "—"}</strong></div>
+                        <div><span>Receipt Date</span><strong>{formatDateOnly(eorForm.receiptDate)}</strong></div>
+                        <div><span>eOR File</span><strong>{eorForm.eorFileName || "—"}</strong></div>
+                      </div>
+                      <div className="pay-confirmActions">
+                        <button type="button" className="pay-formAction pay-formAction--secondary" onClick={() => setIsEorConfirmOpen(false)} disabled={savingEor}>Cancel</button>
+                        <button type="button" className="pay-formAction pay-formAction--primary" onClick={handleConfirmEorSave} disabled={savingEor}>{savingEor ? "Saving..." : "Confirm"}</button>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
 
                 {preview ? (
                   <div className="ph-previewOverlay" role="dialog" aria-modal="true" aria-labelledby="payment-file-preview-title">
@@ -395,7 +616,7 @@ function AgentPaymentRecordDetails() {
                             <div className="ph-previewMetaGrid">
                               <div className="ph-previewMetaItem">
                                 <span className="ph-previewMetaLabel">Receipt Date</span>
-                                <strong className="ph-previewMetaValue">{formatDateOnly(payment.receiptDate)}</strong>
+                                <strong className="ph-previewMetaValue">{formatDateOnly(preview.receiptDate)}</strong>
                               </div>
                               <div className="ph-previewMetaItem">
                                 <span className="ph-previewMetaLabel">File Name</span>
