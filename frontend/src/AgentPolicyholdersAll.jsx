@@ -212,8 +212,8 @@ function AgentPolicyholdersAll() {
                 <option value="ageDesc">Age (High → Low)</option>
                 <option value="lastPaidDateAsc">Last Paid Date (Oldest → Newest)</option>
                 <option value="lastPaidDateDesc">Last Paid Date (Newest → Oldest)</option>
-                <option value="nextPaymentDateAsc">Next Payment Date (Oldest → Newest)</option>
-                <option value="nextPaymentDateDesc">Next Payment Date (Newest → Oldest)</option>
+                <option value="nextPaymentDateAsc">Next Payment Date (Earliest → Latest)</option>
+                <option value="nextPaymentDateDesc">Next Payment Date (Latest → Earliest)</option>
                 <option value="dateCreatedAsc">Date Created (Oldest → Newest)</option>
                 <option value="dateCreatedDesc">Date Created (Newest → Oldest)</option>
               </select>
