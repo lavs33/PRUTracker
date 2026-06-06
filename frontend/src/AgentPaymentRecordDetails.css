@@ -138,3 +138,132 @@
     flex-direction: column;
   }
 }
+
+.pay-editButton {
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 12px;
+  background: #ffffff;
+  color: #373a36;
+  cursor: pointer;
+  font-family: "FSAlbertArabic", sans-serif;
+  font-size: 14px;
+  font-weight: 900;
+  min-height: 44px;
+  padding: 11px 16px;
+  transition: filter 0.15s ease, background 0.15s ease;
+}
+
+.pay-editButton:hover:not(:disabled),
+.pay-editButton:focus-visible:not(:disabled) {
+  background: rgba(218, 41, 28, 0.08);
+  outline: none;
+}
+
+.pay-eorForm {
+  display: grid;
+  gap: 14px;
+}
+
+.pay-eorField {
+  display: grid;
+  gap: 8px;
+}
+
+.pay-eorField span {
+  color: #6b6e6a;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.pay-eorField input {
+  border: 1px solid #d8dcdf;
+  border-radius: 12px;
+  color: #373A36;
+  font-family: "FSAlbertArabic", sans-serif;
+  font-size: 15px;
+  font-weight: 800;
+  padding: 12px 14px;
+}
+
+.pay-eorField small {
+  color: #DA291C;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.pay-eorActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.pay-formAction {
+  border-radius: 999px;
+  cursor: pointer;
+  font-family: "FSAlbertArabic", sans-serif;
+  font-size: 14px;
+  font-weight: 900;
+  padding: 11px 18px;
+}
+
+.pay-formAction--primary {
+  border: 1px solid #DA291C;
+  background: rgba(218, 41, 28, 0.813);
+  color: #ffffff;
+}
+
+.pay-formAction--primary:hover:not(:disabled),
+.pay-formAction--primary:focus-visible:not(:disabled) {
+  filter: brightness(0.9);
+  outline: none;
+}
+
+.pay-formAction--secondary {
+  border: 1px solid #d8dcdf;
+  background: #ffffff;
+  color: #373A36;
+}
+
+.pay-formAction--secondary:hover:not(:disabled),
+.pay-formAction--secondary:focus-visible:not(:disabled) {
+  background: rgba(218, 41, 28, 0.08);
+  outline: none;
+}
+
+.pay-editButton:disabled,
+.pay-formAction:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.pay-selectedFile {
+  color: #6b6e6a;
+  font-family: "FSAlbertArabic", sans-serif;
+  font-size: 13px;
+  font-weight: 800;
+  margin: 0;
+  word-break: break-word;
+}
+
+.pay-inlinePreview {
+  display: grid;
+  gap: 8px;
+}
+
+.pay-inlinePreview span {
+  color: #6b6e6a;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.pay-inlinePreviewFrame {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  height: 280px;
+  max-width: 420px;
+  width: 100%;
+}

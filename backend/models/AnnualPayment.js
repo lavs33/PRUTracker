@@ -15,7 +15,6 @@ const annualPaymentSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "LeadEngagement",
       required: true,
-      unique: true,
       index: true,
     },
 
