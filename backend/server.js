@@ -1166,6 +1166,10 @@ app.use(
     LeadEngagement,
     Prospect,
     Lead,
+    Policyholder,
+    AnnualPayment,
+    Payment,
+    Product,
     mongoose,
   })
 );
