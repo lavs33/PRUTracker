@@ -1,9 +1,118 @@
+const PAYMENT_NOTIFICATION_TYPES = ["PAYMENT_TRANSFER_REMINDER", "PAYMENT_EOR_REMINDER"];
+const TASK_NOTIFICATION_TYPES = ["TASK_ADDED", "TASK_DUE_TODAY", "TASK_MISSED"];
+const NOTIFICATION_TYPES = [...TASK_NOTIFICATION_TYPES, ...PAYMENT_NOTIFICATION_TYPES];
+const NOTIFICATION_ENTITY_TYPES = ["Task", "Policyholder"];
+
+function dateKeyInTZ(date, timeZone = "Asia/Manila") {
+  if (!date) return "";
+  const d = new Date(date);
+  if (Number.isNaN(d.getTime())) return "";
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(d);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function dayNumberFromDateKey(dateKey) {
+  const [year, month, day] = String(dateKey || "").split("-").map(Number);
+  if (!year || !month || !day) return null;
+  return Math.floor(Date.UTC(year, month - 1, day) / 86400000);
+}
+
+function formatDateInManila(date) {
+  if (!date) return "—";
+  const d = new Date(date);
+  if (Number.isNaN(d.getTime())) return "—";
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Manila",
+    month: "short",
+    day: "2-digit",
+    year: "numeric",
+  }).format(d);
+}
+
+function fullName(prospect) {
+  return `${prospect?.firstName || ""}${prospect?.middleName ? ` ${prospect.middleName}` : ""} ${prospect?.lastName || ""}`.trim();
+}
+
+function paymentHasTransfer(payment) {
+  const transfer = payment?.recordPremiumPaymentTransfer || {};
+  return Boolean(
+    transfer.savedAt
+      || transfer.paymentDate
+      || String(transfer.proofOfPaymentFileDataUrl || "").trim()
+      || String(transfer.proofOfPaymentFileName || "").trim()
+  );
+}
+
+function paymentHasEor(payment) {
+  const eor = payment?.uploadPremiumPaymentEor || {};
+  return Boolean(
+    String(payment?.status || "") === "Processed"
+      || eor.uploadedAt
+      || String(eor.eorNumber || "").trim()
+      || String(eor.eorFileDataUrl || "").trim()
+  );
+}
+
+function isPaymentNotification(notification) {
+  return PAYMENT_NOTIFICATION_TYPES.includes(String(notification?.type || "").toUpperCase());
+}
+
+function notificationTime(notification) {
+  const date = new Date(notification?.updatedAt || notification?.createdAt || 0);
+  return Number.isNaN(date.getTime()) ? 0 : date.getTime();
+}
+
+function withoutPaymentReminderActionText(message) {
+  return String(message || "")
+    .replace(/\s*Please record the premium payment transfer details\./gi, "")
+    .replace(/\s*Please upload the premium payment eOR\./gi, "")
+    .trim();
+}
+
+function normalizeNotificationForDisplay(notification) {
+  if (!isPaymentNotification(notification)) return notification;
+  return {
+    ...notification,
+    message: withoutPaymentReminderActionText(notification?.message),
+  };
+}
+
+function sortNotificationsForDisplay(notifications) {
+  return [...notifications].sort((a, b) => {
+    const aIsPayment = isPaymentNotification(a);
+    const bIsPayment = isPaymentNotification(b);
+    if (aIsPayment && bIsPayment && a?.status === "Unread" && b?.status === "Unread") {
+      const aDeadline = String(a?.metadata?.nextPaymentDateKey || "");
+      const bDeadline = String(b?.metadata?.nextPaymentDateKey || "");
+      if (aDeadline && aDeadline === bDeadline) {
+        const codeCompare = String(b?.metadata?.policyholderCode || "").localeCompare(
+          String(a?.metadata?.policyholderCode || ""),
+          undefined,
+          { numeric: true, sensitivity: "base" }
+        );
+        if (codeCompare !== 0) return codeCompare;
+      }
+    }
+    return notificationTime(b) - notificationTime(a);
+  });
+}
+
 function createNotificationsController({
   Notification,
   Task,
   LeadEngagement,
   Prospect,
   Lead,
+  Policyholder,
+  AnnualPayment,
+  Payment,
+  Product,
   mongoose,
   ensureTaskMissedNotificationsForUser,
   toValidObjectIdString,
@@ -27,6 +136,166 @@ function createNotificationsController({
       ? uniqueValidObjectIdStrings
       : (values = []) => [...new Set(values.map((value) => toValidId(value)).filter(Boolean))];
 
+  const ensurePaymentReminders = async (uid) => {
+    if (!Policyholder || !AnnualPayment || !Payment || !Product) return;
+
+    const todayKey = dateKeyInTZ(new Date());
+    const todayDay = dayNumberFromDateKey(todayKey);
+    if (todayDay === null) return;
+
+    const policyholders = await Policyholder.find({
+      assignedToUserId: uid,
+      status: "Active",
+      nextPaymentDate: { $ne: null },
+    })
+      .select("policyholderCode policyNumber productId leadEngagementId nextPaymentDate annualPaymentRecords")
+      .sort({ nextPaymentDate: 1, policyholderCode: -1 })
+      .lean();
+
+    if (!policyholders.length) return;
+
+    const annualPaymentIds = uniqueValidIds(
+      policyholders.flatMap((policyholder) => (policyholder.annualPaymentRecords || []).map((record) => record?.annualPaymentId))
+    );
+    const leadEngagementIds = uniqueValidIds(policyholders.map((policyholder) => policyholder.leadEngagementId));
+    const productIds = uniqueValidIds(policyholders.map((policyholder) => policyholder.productId));
+
+    const [annualPayments, payments, products, engagements] = await Promise.all([
+      annualPaymentIds.length
+        ? AnnualPayment.find({ _id: { $in: annualPaymentIds } })
+            .select("leadEngagementId status paymentProgress annualPaymentPeriod frequencyOfPayment createdAt updatedAt")
+            .lean()
+        : [],
+      annualPaymentIds.length
+        ? Payment.find({ annualPaymentId: { $in: annualPaymentIds } })
+            .select("annualPaymentId status recordPremiumPaymentTransfer uploadPremiumPaymentEor createdAt updatedAt")
+            .lean()
+        : [],
+      productIds.length ? Product.find({ _id: { $in: productIds } }).select("productName").lean() : [],
+      leadEngagementIds.length ? LeadEngagement.find({ _id: { $in: leadEngagementIds } }).select("leadId").lean() : [],
+    ]);
+
+    const annualPaymentById = new Map(annualPayments.map((annualPayment) => [String(annualPayment._id), annualPayment]));
+    const paymentsByAnnualPaymentId = new Map();
+    for (const payment of payments) {
+      const key = String(payment?.annualPaymentId || "");
+      if (!key) continue;
+      if (!paymentsByAnnualPaymentId.has(key)) paymentsByAnnualPaymentId.set(key, []);
+      paymentsByAnnualPaymentId.get(key).push(payment);
+    }
+    const productNameById = new Map(products.map((product) => [String(product._id), product.productName || "—"]));
+    const engagementById = new Map(engagements.map((engagement) => [String(engagement._id), engagement]));
+
+    const leadIds = uniqueValidIds(engagements.map((engagement) => engagement.leadId));
+    const leads = leadIds.length ? await Lead.find({ _id: { $in: leadIds } }).select("prospectId").lean() : [];
+    const leadById = new Map(leads.map((lead) => [String(lead._id), lead]));
+    const prospectIds = uniqueValidIds(leads.map((lead) => lead.prospectId));
+    const prospects = prospectIds.length
+      ? await Prospect.find({ _id: { $in: prospectIds } }).select("firstName middleName lastName").lean()
+      : [];
+    const prospectById = new Map(prospects.map((prospect) => [String(prospect._id), prospect]));
+
+    const writes = [];
+
+    for (const policyholder of policyholders) {
+      const paymentDateKey = dateKeyInTZ(policyholder.nextPaymentDate);
+      const paymentDay = dayNumberFromDateKey(paymentDateKey);
+      if (paymentDay === null) continue;
+
+      const daysUntilPayment = paymentDay - todayDay;
+      if (daysUntilPayment > 7) continue;
+
+      const linkedAnnualPaymentIds = (policyholder.annualPaymentRecords || [])
+        .map((record) => toValidId(record?.annualPaymentId))
+        .filter(Boolean);
+      const annualPayment = linkedAnnualPaymentIds
+        .map((id) => annualPaymentById.get(id))
+        .filter(Boolean)
+        .filter((record) => ["Not Started", "Ongoing"].includes(String(record?.status || "")))
+        .sort((a, b) => new Date(b?.updatedAt || b?.createdAt || 0) - new Date(a?.updatedAt || a?.createdAt || 0))[0]
+        || linkedAnnualPaymentIds.map((id) => annualPaymentById.get(id)).filter(Boolean)[0];
+      if (!annualPayment) continue;
+
+      const annualPaymentId = String(annualPayment._id);
+      const annualPayments = paymentsByAnnualPaymentId.get(annualPaymentId) || [];
+      const pendingPayment = annualPayments
+        .filter((payment) => paymentHasTransfer(payment) && !paymentHasEor(payment) && payment?.recordPremiumPaymentTransfer?.eorReminderEnabled === true)
+        .sort((a, b) => new Date(b?.recordPremiumPaymentTransfer?.paymentDate || b?.createdAt || 0) - new Date(a?.recordPremiumPaymentTransfer?.paymentDate || a?.createdAt || 0))[0];
+
+      let notificationType = "";
+      let title = "";
+      let actionMessage = "";
+      let paymentId = null;
+
+      if (pendingPayment) {
+        notificationType = "PAYMENT_EOR_REMINDER";
+        title = "Upload premium payment eOR";
+        actionMessage = "The premium payment transfer has been recorded, but the eOR has not been uploaded yet.";
+        paymentId = pendingPayment._id;
+      } else if (daysUntilPayment >= 0) {
+        const paymentAlreadyProcessedForDate = annualPayments.some((payment) => {
+          const loggedPaymentDateKey = dateKeyInTZ(payment?.recordPremiumPaymentTransfer?.paymentDate);
+          return loggedPaymentDateKey === paymentDateKey && paymentHasEor(payment);
+        });
+        const transferAlreadyLoggedForDate = annualPayments.some((payment) => {
+          const loggedPaymentDateKey = dateKeyInTZ(payment?.recordPremiumPaymentTransfer?.paymentDate);
+          return loggedPaymentDateKey === paymentDateKey && paymentHasTransfer(payment);
+        });
+        if (paymentAlreadyProcessedForDate || transferAlreadyLoggedForDate) continue;
+        notificationType = "PAYMENT_TRANSFER_REMINDER";
+        title = "Record premium payment transfer";
+        actionMessage = `The premium payment deadline is ${formatDateInManila(policyholder.nextPaymentDate)}.`;
+      } else {
+        continue;
+      }
+
+      const engagement = engagementById.get(String(policyholder.leadEngagementId || ""));
+      const lead = engagement?.leadId ? leadById.get(String(engagement.leadId)) : null;
+      const prospect = lead?.prospectId ? prospectById.get(String(lead.prospectId)) : null;
+      const policyholderName = fullName(prospect) || "—";
+      const policyName = productNameById.get(String(policyholder.productId || "")) || "—";
+      const policyNumber = policyholder.policyNumber || "—";
+      const policyholderCode = policyholder.policyholderCode || "—";
+      const message = `${actionMessage} Policyholder Code: ${policyholderCode}. Policyholder Name: ${policyholderName}. Policy Name: ${policyName}. Policy Number: ${policyNumber}.`;
+      const dedupeKey = `PAYMENT_REMINDER:${policyholder._id}:${annualPaymentId}:${todayKey}`;
+
+      writes.push({
+        updateOne: {
+          filter: { assignedToUserId: uid, dedupeKey },
+          update: {
+            $set: {
+              type: notificationType,
+              title,
+              message,
+              entityType: "Policyholder",
+              entityId: policyholder._id,
+              metadata: {
+                policyholderId: String(policyholder._id),
+                annualPaymentId,
+                paymentId: paymentId ? String(paymentId) : "",
+                nextPaymentDate: policyholder.nextPaymentDate,
+                nextPaymentDateKey: paymentDateKey,
+                policyholderCode,
+                reminderDateKey: todayKey,
+              },
+            },
+            $setOnInsert: {
+              assignedToUserId: uid,
+              dedupeKey,
+              status: "Unread",
+              readAt: null,
+            },
+          },
+          upsert: true,
+        },
+      });
+    }
+
+    if (writes.length) {
+      await Notification.bulkWrite(writes, { ordered: false });
+    }
+  };
+
   const listNotifications = async (req, res) => {
     try {
       const { userId, status, type, entityType, includeRefs } = req.query;
@@ -35,18 +304,16 @@ function createNotificationsController({
       if (!mongoose.isValidObjectId(userId)) return res.status(400).json({ message: "Invalid userId." });
 
       const uid = new mongoose.Types.ObjectId(userId);
-      await ensureTaskMissed(uid);
+      await Promise.all([ensureTaskMissed(uid), ensurePaymentReminders(uid)]);
 
       const query = { assignedToUserId: uid, softDeletedAt: null };
 
       if (entityType) {
         const e = String(entityType).trim();
-        if (!["Task"].includes(e)) {
+        if (!NOTIFICATION_ENTITY_TYPES.includes(e)) {
           return res.status(400).json({ message: `Invalid entityType '${entityType}'.` });
         }
         query.entityType = e;
-      } else {
-        query.entityType = "Task";
       }
 
       if (status) {
@@ -56,8 +323,7 @@ function createNotificationsController({
 
       if (type) {
         const t = String(type).toUpperCase().trim();
-        const ALLOWED = ["TASK_ADDED", "TASK_DUE_TODAY", "TASK_MISSED"];
-        if (!ALLOWED.includes(t)) {
+        if (!NOTIFICATION_TYPES.includes(t)) {
           return res.status(400).json({ message: `Invalid notification type '${type}'.` });
         }
         query.type = t;
@@ -65,7 +331,7 @@ function createNotificationsController({
 
       let notifs = await Notification.find(query)
         .sort({ updatedAt: -1, createdAt: -1 })
-        .select("assignedToUserId type title message status readAt entityType entityId createdAt updatedAt")
+        .select("assignedToUserId type title message status readAt entityType entityId metadata createdAt updatedAt")
         .lean();
 
       if (String(includeRefs) === "1" && notifs.length) {
@@ -132,7 +398,7 @@ function createNotificationsController({
         });
       }
 
-      return res.json({ notifications: notifs });
+      return res.json({ notifications: sortNotificationsForDisplay(notifs.map(normalizeNotificationForDisplay)) });
     } catch (err) {
       console.error("List notifications error:", err);
       return res.status(500).json({ message: "Server error." });
@@ -177,7 +443,7 @@ function createNotificationsController({
       if (!mongoose.isValidObjectId(userId)) return res.status(400).json({ message: "Invalid userId." });
 
       const uid = new mongoose.Types.ObjectId(userId);
-      await ensureTaskMissed(uid);
+      await Promise.all([ensureTaskMissed(uid), ensurePaymentReminders(uid)]);
 
       const query = {
         assignedToUserId: uid,
@@ -185,14 +451,15 @@ function createNotificationsController({
         softDeletedAt: null,
       };
 
-      const e = entityType ? String(entityType).trim() : "Task";
-      if (!["Task"].includes(e)) return res.status(400).json({ message: "Invalid entityType." });
-      query.entityType = e;
+      const e = entityType ? String(entityType).trim() : "";
+      if (e) {
+        if (!NOTIFICATION_ENTITY_TYPES.includes(e)) return res.status(400).json({ message: "Invalid entityType." });
+        query.entityType = e;
+      }
 
       if (type) {
         const t = String(type).toUpperCase().trim();
-        const ALLOWED = ["TASK_ADDED", "TASK_DUE_TODAY", "TASK_MISSED"];
-        if (!ALLOWED.includes(t)) {
+        if (!NOTIFICATION_TYPES.includes(t)) {
           return res.status(400).json({ message: `Invalid notification type '${type}'.` });
         }
         query.type = t;
@@ -217,16 +484,22 @@ function createNotificationsController({
       if (!mongoose.isValidObjectId(userId)) return res.status(400).json({ message: "Invalid userId." });
 
       const uid = new mongoose.Types.ObjectId(userId);
-      await ensureTaskMissed(uid);
+      await Promise.all([ensureTaskMissed(uid), ensurePaymentReminders(uid)]);
 
       const q = { assignedToUserId: uid, status: "Unread", softDeletedAt: null };
 
       if (entityType) {
         const e = String(entityType).trim();
-        if (!["Task"].includes(e)) return res.status(400).json({ message: "Invalid entityType." });
+        if (!NOTIFICATION_ENTITY_TYPES.includes(e)) return res.status(400).json({ message: "Invalid entityType." });
         q.entityType = e;
-      } else {
-        q.entityType = "Task";
+      }
+
+      if (type) {
+        const t = String(type).toUpperCase().trim();
+        if (!NOTIFICATION_TYPES.includes(t)) {
+          return res.status(400).json({ message: `Invalid notification type '${type}'.` });
+        }
+        q.type = t;
       }
 
       const count = await Notification.countDocuments(q);
@@ -245,18 +518,19 @@ function createNotificationsController({
       if (!mongoose.isValidObjectId(userId)) return res.status(400).json({ message: "Invalid userId." });
 
       const uid = new mongoose.Types.ObjectId(userId);
-      await ensureTaskMissed(uid);
+      await Promise.all([ensureTaskMissed(uid), ensurePaymentReminders(uid)]);
 
       const qBase = { assignedToUserId: uid, softDeletedAt: null };
 
-      const e = entityType ? String(entityType).trim() : "Task";
-      if (!["Task"].includes(e)) return res.status(400).json({ message: "Invalid entityType." });
-      qBase.entityType = e;
+      const e = entityType ? String(entityType).trim() : "";
+      if (e) {
+        if (!NOTIFICATION_ENTITY_TYPES.includes(e)) return res.status(400).json({ message: "Invalid entityType." });
+        qBase.entityType = e;
+      }
 
       if (type) {
         const t = String(type).toUpperCase().trim();
-        const ALLOWED = ["TASK_ADDED", "TASK_DUE_TODAY", "TASK_MISSED"];
-        if (!ALLOWED.includes(t)) {
+        if (!NOTIFICATION_TYPES.includes(t)) {
           return res.status(400).json({ message: `Invalid notification type '${type}'.` });
         }
         qBase.type = t;
