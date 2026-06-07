@@ -45,6 +45,18 @@ const paymentSchema = new mongoose.Schema(
         type: Number,
         default: null,
       },
+      overdueFeePhp: {
+        type: Number,
+        default: 0,
+      },
+      paymentCountCovered: {
+        type: Number,
+        default: 1,
+      },
+      isMissedPaymentRecord: {
+        type: Boolean,
+        default: false,
+      },
       frequencyOfPremiumPayment: {
         type: String,
         enum: [...PREMIUM_PAYMENT_FREQUENCIES, ""],
@@ -93,6 +105,10 @@ const paymentSchema = new mongoose.Schema(
       savedAt: {
         type: Date,
         default: null,
+      },
+      eorReminderEnabled: {
+        type: Boolean,
+        default: false,
       },
     },
 
