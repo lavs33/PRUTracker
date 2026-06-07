@@ -94,6 +94,10 @@ const paymentSchema = new mongoose.Schema(
         type: Date,
         default: null,
       },
+      eorReminderEnabled: {
+        type: Boolean,
+        default: false,
+      },
     },
 
     /** Fields captured during Policy Issuance > Upload Premium Payment eOR. */
