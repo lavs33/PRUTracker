@@ -256,6 +256,9 @@ function AgentLeadEngagement() {
   const [applicationPremiumPaymentError, setApplicationPremiumPaymentError] = useState("");
   const [applicationPremiumPaymentSaving, setApplicationPremiumPaymentSaving] = useState(false);
   const [applicationPremiumPaymentFieldErrors, setApplicationPremiumPaymentFieldErrors] = useState({});
+  const [applicationAnnualPremiumManuallyEdited, setApplicationAnnualPremiumManuallyEdited] = useState(false);
+  const [applicationPremiumPaymentEditMode, setApplicationPremiumPaymentEditMode] = useState(false);
+  const [applicationPremiumPaymentEditSnapshot, setApplicationPremiumPaymentEditSnapshot] = useState(null);
   const [applicationPaymentProofInputKey, setApplicationPaymentProofInputKey] = useState(0);
   const [applicationNeedsPaymentSelection, setApplicationNeedsPaymentSelection] = useState({
     requestedFrequency: "",
@@ -652,6 +655,9 @@ function AgentLeadEngagement() {
       });
       setApplicationPremiumPaymentError("");
       setApplicationPremiumPaymentFieldErrors({});
+      setApplicationAnnualPremiumManuallyEdited(false);
+      setApplicationPremiumPaymentEditMode(false);
+      setApplicationPremiumPaymentEditSnapshot(null);
       setApplicationNeedsPaymentSelection({
         requestedFrequency: String(appNeedsSelection?.requestedFrequency || ""),
       });
@@ -845,6 +851,12 @@ function AgentLeadEngagement() {
         meetingPlace: String(latestProposalMeeting?.place || ""),
       });
 
+      const needsPrefill = data?.needsAssessmentPrefill || null;
+      const needsPrefillPriorities = needsPrefill?.needsPriorities || {};
+      const usePriorNeedsPrefill = Boolean(needsPrefill) && !hasSavedNeedsAnalysisDetails;
+      const currentNeedsPriorities = usePriorNeedsPrefill ? needsPrefillPriorities : (data?.needsAssessment?.needsPriorities || {});
+      const currentNeedsDependents = usePriorNeedsPrefill ? needsPrefill?.dependents : data?.needsAssessment?.dependents;
+
       const serverNeedsForm = {
         attendanceChoice: Boolean(data?.needsAssessment?.attendanceConfirmed) ? "YES" : "",
         attendanceProofImageDataUrl: String(data?.needsAssessment?.attendanceProofImageDataUrl || ""),
@@ -865,8 +877,8 @@ function AgentLeadEngagement() {
           zipCode: String(profile.address?.zipCode || ""),
           country: "Philippines",
         },
-        dependents: Array.isArray(data?.needsAssessment?.dependents)
-          ? data.needsAssessment.dependents.map((d) => ({
+        dependents: Array.isArray(currentNeedsDependents)
+          ? currentNeedsDependents.map((d) => ({
               name: String(d?.name || ""),
               age: d?.age ?? "",
               gender: String(d?.gender || ""),
@@ -874,62 +886,62 @@ function AgentLeadEngagement() {
             }))
           : [],
         needsPriorities: {
-          currentPriority: String(data?.needsAssessment?.needsPriorities?.currentPriority || ""),
-          monthlyIncomeBand: String(data?.needsAssessment?.needsPriorities?.monthlyIncomeBand || ""),
-          monthlyIncomeAmount: data?.needsAssessment?.needsPriorities?.monthlyIncomeAmount ?? "",
-          minPremium: data?.needsAssessment?.needsPriorities?.minPremium ?? "",
-          maxPremium: data?.needsAssessment?.needsPriorities?.maxPremium ?? "",
+          currentPriority: String(currentNeedsPriorities?.currentPriority || ""),
+          monthlyIncomeBand: String(currentNeedsPriorities?.monthlyIncomeBand || ""),
+          monthlyIncomeAmount: currentNeedsPriorities?.monthlyIncomeAmount ?? "",
+          minPremium: currentNeedsPriorities?.minPremium ?? "",
+          maxPremium: currentNeedsPriorities?.maxPremium ?? "",
           productSelection: {
-            selectedProductId: String(data?.needsAssessment?.needsPriorities?.productSelection?.selectedProductId || ""),
-            requestedPremiumPayment: data?.needsAssessment?.needsPriorities?.productSelection?.requestedPremiumPayment ?? "",
-            requestedFrequency: String(data?.needsAssessment?.needsPriorities?.productSelection?.requestedFrequency || "Monthly") || "Monthly",
+            selectedProductId: String(currentNeedsPriorities?.productSelection?.selectedProductId || ""),
+            requestedPremiumPayment: currentNeedsPriorities?.productSelection?.requestedPremiumPayment ?? "",
+            requestedFrequency: String(currentNeedsPriorities?.productSelection?.requestedFrequency || "Monthly") || "Monthly",
           },
-          optionalRiders: Array.isArray(data?.needsAssessment?.needsPriorities?.optionalRiders)
-            ? data.needsAssessment.needsPriorities.optionalRiders.map((r) => ({
+          optionalRiders: Array.isArray(currentNeedsPriorities?.optionalRiders)
+            ? currentNeedsPriorities.optionalRiders.map((r) => ({
                 riderKey: String(r?.riderKey || ""),
                 riderName: String(r?.riderName || ""),
                 enabled: Boolean(r?.enabled),
               }))
             : [],
-          productRidersNotes: String(data?.needsAssessment?.needsPriorities?.productRidersNotes || ""),
+          productRidersNotes: String(currentNeedsPriorities?.productRidersNotes || ""),
           protection: {
-            monthlySpend: data?.needsAssessment?.needsPriorities?.protection?.monthlySpend ?? "",
-            numberOfDependents: data?.needsAssessment?.needsPriorities?.protection?.numberOfDependents ?? "",
-            yearsToProtectIncome: data?.needsAssessment?.needsPriorities?.protection?.yearsToProtectIncome ?? "",
-            savingsForProtection: data?.needsAssessment?.needsPriorities?.protection?.savingsForProtection ?? "",
-            protectionGap: data?.needsAssessment?.needsPriorities?.protection?.protectionGap ?? "",
+            monthlySpend: currentNeedsPriorities?.protection?.monthlySpend ?? "",
+            numberOfDependents: currentNeedsPriorities?.protection?.numberOfDependents ?? "",
+            yearsToProtectIncome: currentNeedsPriorities?.protection?.yearsToProtectIncome ?? "",
+            savingsForProtection: currentNeedsPriorities?.protection?.savingsForProtection ?? "",
+            protectionGap: currentNeedsPriorities?.protection?.protectionGap ?? "",
           },
           health: {
-            amountToCoverCriticalIllness: data?.needsAssessment?.needsPriorities?.health?.amountToCoverCriticalIllness ?? "",
-            savingsForCriticalIllness: data?.needsAssessment?.needsPriorities?.health?.savingsForCriticalIllness ?? "",
-            criticalIllnessGap: data?.needsAssessment?.needsPriorities?.health?.criticalIllnessGap ?? "",
+            amountToCoverCriticalIllness: currentNeedsPriorities?.health?.amountToCoverCriticalIllness ?? "",
+            savingsForCriticalIllness: currentNeedsPriorities?.health?.savingsForCriticalIllness ?? "",
+            criticalIllnessGap: currentNeedsPriorities?.health?.criticalIllnessGap ?? "",
           },
           investment: {
-            savingsPlan: String(data?.needsAssessment?.needsPriorities?.investment?.savingsPlan || ""),
-            savingsPlanOther: String(data?.needsAssessment?.needsPriorities?.investment?.savingsPlanOther || ""),
-            targetSavingsAmount: data?.needsAssessment?.needsPriorities?.investment?.targetSavingsAmount ?? "",
-            targetUtilizationYear: data?.needsAssessment?.needsPriorities?.investment?.targetUtilizationYear ?? "",
-            savingsForInvestment: data?.needsAssessment?.needsPriorities?.investment?.savingsForInvestment ?? "",
-            savingsGap: data?.needsAssessment?.needsPriorities?.investment?.savingsGap ?? "",
+            savingsPlan: String(currentNeedsPriorities?.investment?.savingsPlan || ""),
+            savingsPlanOther: String(currentNeedsPriorities?.investment?.savingsPlanOther || ""),
+            targetSavingsAmount: currentNeedsPriorities?.investment?.targetSavingsAmount ?? "",
+            targetUtilizationYear: currentNeedsPriorities?.investment?.targetUtilizationYear ?? "",
+            savingsForInvestment: currentNeedsPriorities?.investment?.savingsForInvestment ?? "",
+            savingsGap: currentNeedsPriorities?.investment?.savingsGap ?? "",
             riskProfiler: {
-              investmentHorizon: String(data?.needsAssessment?.needsPriorities?.investment?.riskProfiler?.investmentHorizon || ""),
-              investmentGoal: String(data?.needsAssessment?.needsPriorities?.investment?.riskProfiler?.investmentGoal || ""),
-              marketExperience: String(data?.needsAssessment?.needsPriorities?.investment?.riskProfiler?.marketExperience || ""),
-              volatilityReaction: String(data?.needsAssessment?.needsPriorities?.investment?.riskProfiler?.volatilityReaction || ""),
-              capitalLossAffordability: String(data?.needsAssessment?.needsPriorities?.investment?.riskProfiler?.capitalLossAffordability || ""),
-              riskReturnTradeoff: String(data?.needsAssessment?.needsPriorities?.investment?.riskProfiler?.riskReturnTradeoff || ""),
-              riskProfileScore: data?.needsAssessment?.needsPriorities?.investment?.riskProfiler?.riskProfileScore ?? "",
-              riskProfileCategory: String(data?.needsAssessment?.needsPriorities?.investment?.riskProfiler?.riskProfileCategory || ""),
+              investmentHorizon: String(currentNeedsPriorities?.investment?.riskProfiler?.investmentHorizon || ""),
+              investmentGoal: String(currentNeedsPriorities?.investment?.riskProfiler?.investmentGoal || ""),
+              marketExperience: String(currentNeedsPriorities?.investment?.riskProfiler?.marketExperience || ""),
+              volatilityReaction: String(currentNeedsPriorities?.investment?.riskProfiler?.volatilityReaction || ""),
+              capitalLossAffordability: String(currentNeedsPriorities?.investment?.riskProfiler?.capitalLossAffordability || ""),
+              riskReturnTradeoff: String(currentNeedsPriorities?.investment?.riskProfiler?.riskReturnTradeoff || ""),
+              riskProfileScore: currentNeedsPriorities?.investment?.riskProfiler?.riskProfileScore ?? "",
+              riskProfileCategory: String(currentNeedsPriorities?.investment?.riskProfiler?.riskProfileCategory || ""),
             },
             fundChoice: {
-              allocations: Array.isArray(data?.needsAssessment?.needsPriorities?.investment?.fundChoice?.selectedFunds)
-                ? data.needsAssessment.needsPriorities.investment.fundChoice.selectedFunds.reduce((acc, item) => {
+              allocations: Array.isArray(currentNeedsPriorities?.investment?.fundChoice?.selectedFunds)
+                ? currentNeedsPriorities.investment.fundChoice.selectedFunds.reduce((acc, item) => {
                     const k = String(item?.fundKey || "").trim();
                     if (k) acc[k] = item?.allocationPercent ?? "";
                     return acc;
                   }, {})
                 : {},
-              mismatchReason: String(data?.needsAssessment?.needsPriorities?.investment?.fundChoice?.mismatchReason || ""),
+              mismatchReason: String(currentNeedsPriorities?.investment?.fundChoice?.mismatchReason || ""),
             },
           },
         },
@@ -2106,6 +2118,12 @@ function AgentLeadEngagement() {
     () => attempts.find((a) => Number(a?.attemptCycle || 1) === currentAttemptCycle) || null,
     [attempts, currentAttemptCycle]
   );
+  const priorCycleInterestPrefill = useMemo(() => (
+    attempts.find((a) => {
+      const attemptCycle = Number(a?.attemptCycle || 1);
+      return attemptCycle < currentAttemptCycle && String(a?.preferredChannel || "").trim();
+    }) || null
+  ), [attempts, currentAttemptCycle]);
   const proposalDeliveryConfirmationText = useMemo(() => {
     const prospectEmail = String(prospect?.email || "").trim();
     if (prospectEmail) return `prospect's email (${prospectEmail})`;
@@ -2900,6 +2918,20 @@ function AgentLeadEngagement() {
     rescheduleFollowUpNeedsMeetingMode ||
     contactingRescheduleMode;
 
+  useEffect(() => {
+    if (!isAssessInterestEditable) return;
+    const prefillChannel = String(priorCycleInterestPrefill?.preferredChannel || "").trim();
+    if (!prefillChannel) return;
+    setInterestForm((form) => {
+      if (String(form.preferredChannel || "").trim()) return form;
+      return {
+        ...form,
+        preferredChannel: prefillChannel,
+        preferredChannelOther: String(priorCycleInterestPrefill?.preferredChannelOther || ""),
+      };
+    });
+  }, [isAssessInterestEditable, priorCycleInterestPrefill?.preferredChannel, priorCycleInterestPrefill?.preferredChannelOther]);
+
   const isNeedsAssessmentCurrentViewEditable =
     isNeedsAssessmentEditableNow &&
     (needsAssessmentViewedActivityKey === needsActivityKeyRaw ||
@@ -3073,6 +3105,45 @@ function AgentLeadEngagement() {
     () => (availableProducts || []).find((p) => String(p?._id || "") === String(proposalGenerateForm?.chosenProductId || "")) || null,
     [availableProducts, proposalGenerateForm?.chosenProductId]
   );
+
+  const selectedProductMinimumAnnualPremiumAmount = useMemo(() => {
+    const minimumAnnualPremium = selectedProposalProduct?.minimumAnnualPremium || null;
+    if (!minimumAnnualPremium || minimumAnnualPremium.hasStandard === false) return null;
+
+    const prospectAge = Number(needsAssessmentForm?.basicInformation?.age || computeAgeFromBirthday(needsAssessmentForm?.basicInformation?.birthday));
+    const tiers = Array.isArray(minimumAnnualPremium?.tiers) ? minimumAnnualPremium.tiers : [];
+    if (tiers.length && Number.isFinite(prospectAge)) {
+      const matchingTier = tiers.find((tier) => {
+        const minAge = Number.isFinite(Number(tier?.minAge)) ? Number(tier.minAge) : -Infinity;
+        const maxAge = Number.isFinite(Number(tier?.maxAge)) ? Number(tier.maxAge) : Infinity;
+        return prospectAge >= minAge && prospectAge <= maxAge;
+      });
+      const tierAmount = Number(matchingTier?.amount);
+      return Number.isFinite(tierAmount) && tierAmount > 0 ? tierAmount : null;
+    }
+
+    const standardAmount = Number(minimumAnnualPremium?.amount);
+    return Number.isFinite(standardAmount) && standardAmount > 0 ? standardAmount : null;
+  }, [needsAssessmentForm?.basicInformation?.age, needsAssessmentForm?.basicInformation?.birthday, selectedProposalProduct]);
+
+  useEffect(() => {
+    if (!Number.isFinite(selectedProductMinimumAnnualPremiumAmount) || selectedProductMinimumAnnualPremiumAmount <= 0) return;
+    if (applicationAnnualPremiumManuallyEdited) return;
+    if (hasSavedApplicationPremiumPaymentTransfer) return;
+    if (String(applicationPremiumPaymentForm.totalAnnualPremiumPhp || "").trim()) return;
+
+    setApplicationPremiumPaymentForm((form) => ({
+      ...form,
+      totalAnnualPremiumPhp: String(selectedProductMinimumAnnualPremiumAmount),
+      totalFrequencyPremiumPhp: "",
+    }));
+    setApplicationPremiumPaymentFieldErrors((prev) => ({ ...prev, totalAnnualPremiumPhp: "", totalFrequencyPremiumPhp: "" }));
+  }, [
+    applicationAnnualPremiumManuallyEdited,
+    applicationPremiumPaymentForm.totalAnnualPremiumPhp,
+    hasSavedApplicationPremiumPaymentTransfer,
+    selectedProductMinimumAnnualPremiumAmount,
+  ]);
   const proposalMeetingMinimumDate = useMemo(() => {
     const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
     const fallback = toDateInputValue(tomorrow);
@@ -3210,6 +3281,16 @@ function AgentLeadEngagement() {
     applicationActiveViewedActivityKey === "Record Prospect Attendance" &&
     hasSavedApplicationAttendance &&
     Boolean(String(applicationAttendanceForm.attendanceProofImageDataUrl || "").trim());
+  const canRequestApplicationPremiumPaymentEdit =
+    !isHistoryView &&
+    !applicationPremiumPaymentEditMode &&
+    showApplicationPanel &&
+    isViewingCurrentStage &&
+    stage === "Application" &&
+    !isLeadClosed &&
+    !isLeadDropped &&
+    applicationActiveViewedActivityKey === "Record Premium Payment Transfer" &&
+    hasSavedApplicationPremiumPaymentTransfer;
   const isApplicationAttendanceProofEditable = applicationAttendanceProofEditMode;
   const isPolicyStatusViewed = policyViewedActivityKey === "Record Policy Application Status";
   const isPolicyInitialEorViewed = policyViewedActivityKey === "Upload Initial Premium eOR";
@@ -4767,6 +4848,8 @@ function AgentLeadEngagement() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to save premium payment transfer.");
 
+      setApplicationPremiumPaymentEditMode(false);
+      setApplicationPremiumPaymentEditSnapshot(null);
       await refreshCurrentProgressView();
       setApplicationViewedActivityKey(data?.currentActivityKey || "Record Application Submission");
     } catch (err) {
@@ -6218,7 +6301,27 @@ function AgentLeadEngagement() {
                       ) : null}
                       {isApplicationPremiumViewed && (!isHistoryView ? hasSavedApplicationAttendance : displayedHasSavedApplicationPremiumPaymentTransfer) ? (
                         <div className="le-block">
-                          <h4 className="le-blockTitle">{displayedHasSavedApplicationPremiumPaymentTransfer ? "Premium Payment Transfer Details" : "Record Premium Payment Transfer"}</h4>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+                            <h4 className="le-blockTitle" style={{ margin: 0 }}>{displayedHasSavedApplicationPremiumPaymentTransfer && !applicationPremiumPaymentEditMode ? "Premium Payment Transfer Details" : "Record Premium Payment Transfer"}</h4>
+                            {canRequestApplicationPremiumPaymentEdit ? (
+                              <button
+                                type="button"
+                                className="le-btn secondary"
+                                style={{ padding: "4px 8px" }}
+                                onClick={() => {
+                                  setApplicationPremiumPaymentEditSnapshot(applicationPremiumPaymentForm);
+                                  setApplicationPremiumPaymentEditMode(true);
+                                  setApplicationPremiumPaymentError("");
+                                  setApplicationPremiumPaymentFieldErrors({});
+                                }}
+                                disabled={applicationPremiumPaymentSaving}
+                                title="Edit premium payment transfer details"
+                              >
+                                <FaEdit style={{ marginRight: 6 }} />
+                                Edit
+                              </button>
+                            ) : null}
+                          </div>
                           <div className="le-formRow" style={{ marginTop: 10 }}>
                             <label className="le-label">Application Submission Link</label>
                             <p className="le-smallNote">
@@ -6226,7 +6329,7 @@ function AgentLeadEngagement() {
                             </p>
                           </div>
 
-                          {displayedHasSavedApplicationPremiumPaymentTransfer ? (
+                          {displayedHasSavedApplicationPremiumPaymentTransfer && !applicationPremiumPaymentEditMode ? (
                             <>
                               <div className="le-formRow">
                                 <label className="le-label">Frequency of Premium Payment</label>
@@ -6332,6 +6435,7 @@ function AgentLeadEngagement() {
                                   inputMode="decimal"
                                   value={applicationPremiumPaymentForm.totalAnnualPremiumPhp}
                                   onChange={(e) => {
+                                    setApplicationAnnualPremiumManuallyEdited(true);
                                     setApplicationPremiumPaymentForm((f) => ({ ...f, totalAnnualPremiumPhp: e.target.value }));
                                     setApplicationPremiumPaymentFieldErrors((prev) => ({ ...prev, totalAnnualPremiumPhp: "", totalFrequencyPremiumPhp: "" }));
                                   }}
@@ -6439,6 +6543,12 @@ function AgentLeadEngagement() {
                                   onClick={() => {
                                     setApplicationPremiumPaymentError("");
                                     setApplicationPremiumPaymentFieldErrors({});
+                                    if (applicationPremiumPaymentEditMode) {
+                                      if (applicationPremiumPaymentEditSnapshot) setApplicationPremiumPaymentForm(applicationPremiumPaymentEditSnapshot);
+                                      setApplicationPremiumPaymentEditMode(false);
+                                      setApplicationPremiumPaymentEditSnapshot(null);
+                                      return;
+                                    }
                                     setApplicationPremiumPaymentForm((f) => ({
                                       ...f,
                                       paymentId: "",
@@ -6459,7 +6569,7 @@ function AgentLeadEngagement() {
                                   }}
                                   disabled={applicationPremiumPaymentSaving}
                                 >
-                                  Clear
+                                  {applicationPremiumPaymentEditMode ? "Cancel" : "Clear"}
                                 </button>
                                 <button
                                   type="button"
@@ -6467,7 +6577,7 @@ function AgentLeadEngagement() {
                                   onClick={submitApplicationPremiumPaymentTransfer}
                                   disabled={applicationPremiumPaymentSaving}
                                 >
-                                  {applicationPremiumPaymentSaving ? "Saving..." : "Save Premium Payment Transfer"}
+                                  {applicationPremiumPaymentSaving ? "Saving..." : applicationPremiumPaymentEditMode ? "Save Changes" : "Save Premium Payment Transfer"}
                                 </button>
                               </div>
                             </>
@@ -7474,11 +7584,12 @@ function AgentLeadEngagement() {
                                   value={interestForm.interestLevel}
                                   onChange={(e) =>
                                     {
+                                      const nextInterestLevel = e.target.value;
                                       setInterestForm((f) => ({
                                         ...f,
-                                        interestLevel: e.target.value,
-                                        preferredChannel: "",
-                                        preferredChannelOther: "",
+                                        interestLevel: nextInterestLevel,
+                                        preferredChannel: nextInterestLevel === "INTERESTED" ? f.preferredChannel : "",
+                                        preferredChannelOther: nextInterestLevel === "INTERESTED" ? f.preferredChannelOther : "",
                                       }));
                                       setInterestFieldErrors((prev) => ({
                                         ...prev,
