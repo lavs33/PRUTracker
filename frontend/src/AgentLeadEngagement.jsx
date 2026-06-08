@@ -256,6 +256,7 @@ function AgentLeadEngagement() {
   const [applicationPremiumPaymentError, setApplicationPremiumPaymentError] = useState("");
   const [applicationPremiumPaymentSaving, setApplicationPremiumPaymentSaving] = useState(false);
   const [applicationPremiumPaymentFieldErrors, setApplicationPremiumPaymentFieldErrors] = useState({});
+  const [applicationAnnualPremiumManuallyEdited, setApplicationAnnualPremiumManuallyEdited] = useState(false);
   const [applicationPaymentProofInputKey, setApplicationPaymentProofInputKey] = useState(0);
   const [applicationNeedsPaymentSelection, setApplicationNeedsPaymentSelection] = useState({
     requestedFrequency: "",
@@ -652,6 +653,7 @@ function AgentLeadEngagement() {
       });
       setApplicationPremiumPaymentError("");
       setApplicationPremiumPaymentFieldErrors({});
+      setApplicationAnnualPremiumManuallyEdited(false);
       setApplicationNeedsPaymentSelection({
         requestedFrequency: String(appNeedsSelection?.requestedFrequency || ""),
       });
@@ -3073,6 +3075,45 @@ function AgentLeadEngagement() {
     () => (availableProducts || []).find((p) => String(p?._id || "") === String(proposalGenerateForm?.chosenProductId || "")) || null,
     [availableProducts, proposalGenerateForm?.chosenProductId]
   );
+
+  const selectedProductMinimumAnnualPremiumAmount = useMemo(() => {
+    const minimumAnnualPremium = selectedProposalProduct?.minimumAnnualPremium || null;
+    if (!minimumAnnualPremium || minimumAnnualPremium.hasStandard === false) return null;
+
+    const prospectAge = Number(needsAssessmentForm?.basicInformation?.age || computeAgeFromBirthday(needsAssessmentForm?.basicInformation?.birthday));
+    const tiers = Array.isArray(minimumAnnualPremium?.tiers) ? minimumAnnualPremium.tiers : [];
+    if (tiers.length && Number.isFinite(prospectAge)) {
+      const matchingTier = tiers.find((tier) => {
+        const minAge = Number.isFinite(Number(tier?.minAge)) ? Number(tier.minAge) : -Infinity;
+        const maxAge = Number.isFinite(Number(tier?.maxAge)) ? Number(tier.maxAge) : Infinity;
+        return prospectAge >= minAge && prospectAge <= maxAge;
+      });
+      const tierAmount = Number(matchingTier?.amount);
+      return Number.isFinite(tierAmount) && tierAmount > 0 ? tierAmount : null;
+    }
+
+    const standardAmount = Number(minimumAnnualPremium?.amount);
+    return Number.isFinite(standardAmount) && standardAmount > 0 ? standardAmount : null;
+  }, [needsAssessmentForm?.basicInformation?.age, needsAssessmentForm?.basicInformation?.birthday, selectedProposalProduct]);
+
+  useEffect(() => {
+    if (!Number.isFinite(selectedProductMinimumAnnualPremiumAmount) || selectedProductMinimumAnnualPremiumAmount <= 0) return;
+    if (applicationAnnualPremiumManuallyEdited) return;
+    if (hasSavedApplicationPremiumPaymentTransfer) return;
+    if (String(applicationPremiumPaymentForm.totalAnnualPremiumPhp || "").trim()) return;
+
+    setApplicationPremiumPaymentForm((form) => ({
+      ...form,
+      totalAnnualPremiumPhp: String(selectedProductMinimumAnnualPremiumAmount),
+      totalFrequencyPremiumPhp: "",
+    }));
+    setApplicationPremiumPaymentFieldErrors((prev) => ({ ...prev, totalAnnualPremiumPhp: "", totalFrequencyPremiumPhp: "" }));
+  }, [
+    applicationAnnualPremiumManuallyEdited,
+    applicationPremiumPaymentForm.totalAnnualPremiumPhp,
+    hasSavedApplicationPremiumPaymentTransfer,
+    selectedProductMinimumAnnualPremiumAmount,
+  ]);
   const proposalMeetingMinimumDate = useMemo(() => {
     const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
     const fallback = toDateInputValue(tomorrow);
@@ -6332,6 +6373,7 @@ function AgentLeadEngagement() {
                                   inputMode="decimal"
                                   value={applicationPremiumPaymentForm.totalAnnualPremiumPhp}
                                   onChange={(e) => {
+                                    setApplicationAnnualPremiumManuallyEdited(true);
                                     setApplicationPremiumPaymentForm((f) => ({ ...f, totalAnnualPremiumPhp: e.target.value }));
                                     setApplicationPremiumPaymentFieldErrors((prev) => ({ ...prev, totalAnnualPremiumPhp: "", totalFrequencyPremiumPhp: "" }));
                                   }}
