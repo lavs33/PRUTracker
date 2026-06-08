@@ -11,6 +11,7 @@
 
 .addpay-form {
   margin-top: 20px;
+  align-items: start;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
@@ -18,6 +19,7 @@
 }
 
 .addpay-field {
+  align-self: start;
   display: grid;
   gap: 8px;
 }
@@ -271,5 +273,168 @@
 @media (max-width: 760px) {
   .addpay-transferSummary {
     grid-template-columns: 1fr;
+  }
+}
+
+.addpay-fileName {
+  color: #6b6e6a;
+  font-family: "FSAlbertArabic", sans-serif;
+  font-size: 13px;
+  font-weight: 800;
+  margin: 0;
+  word-break: break-word;
+}
+
+.addpay-inlinePreview {
+  display: grid;
+  gap: 8px;
+}
+
+.addpay-inlinePreview span {
+  color: #6b6e6a;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.addpay-inlinePreviewImage {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  max-width: 260px;
+  width: 100%;
+}
+
+.addpay-inlinePreviewFrame {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  height: 280px;
+  max-width: 420px;
+  width: 100%;
+}
+
+.addpay-secondary:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.addpay-confirmOverlay {
+  align-items: center;
+  background: rgba(0, 0, 0, 0.42);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 24px;
+  position: fixed;
+  z-index: 1200;
+}
+
+.addpay-confirmModal {
+  background: #ffffff;
+  border-radius: 18px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.24);
+  color: #373A36;
+  font-family: "FSAlbertArabic", sans-serif;
+  max-width: 560px;
+  padding: 22px;
+  position: relative;
+  width: min(560px, 100%);
+}
+
+.addpay-confirmClose {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #d8dcdf;
+  border-radius: 50%;
+  color: #373A36;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 22px;
+  font-weight: 900;
+  height: 36px;
+  justify-content: center;
+  line-height: 1;
+  position: absolute;
+  right: 16px;
+  top: 16px;
+  width: 36px;
+}
+
+.addpay-confirmClose:hover,
+.addpay-confirmClose:focus-visible {
+  background: rgba(218, 41, 28, 0.08);
+  outline: none;
+}
+
+.addpay-confirmModal h2 {
+  font-size: 21px;
+  font-weight: 900;
+  margin: 0 38px 6px 0;
+}
+
+.addpay-confirmModal p {
+  color: #6b6e6a;
+  font-size: 13px;
+  font-weight: 800;
+  margin: 0 0 14px;
+}
+
+.addpay-confirmGrid {
+  border: 1px solid #eef0f2;
+  border-radius: 12px;
+  display: grid;
+  gap: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  overflow: hidden;
+}
+
+.addpay-confirmGrid div {
+  border-bottom: 1px solid #eef0f2;
+  display: grid;
+  gap: 5px;
+  padding: 9px 12px;
+}
+
+.addpay-confirmGrid div:nth-child(odd) {
+  border-right: 1px solid #eef0f2;
+}
+
+.addpay-confirmGrid div:nth-last-child(-n + 1) {
+  border-bottom: 0;
+}
+
+.addpay-confirmGrid span {
+  color: #6b6e6a;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.addpay-confirmGrid strong {
+  color: #373A36;
+  font-size: 13px;
+  font-weight: 900;
+  word-break: break-word;
+}
+
+.addpay-confirmActions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+@media (max-width: 760px) {
+  .addpay-confirmGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .addpay-confirmGrid div:nth-child(odd) {
+    border-right: 0;
+  }
+
+  .addpay-confirmActions {
+    flex-direction: column-reverse;
   }
 }
