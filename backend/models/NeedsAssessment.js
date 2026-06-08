@@ -56,6 +56,14 @@ const needsAssessmentSchema = new mongoose.Schema(
       required: true,
     },
 
+    /** Engagement attempt cycle this needs-assessment payload belongs to. */
+    attemptCycle: {
+      type: Number,
+      default: 1,
+      min: 1,
+      index: true,
+    },
+
     /** Latest completed subactivity saved in this document. */
     outcomeActivity: {
       type: String,
