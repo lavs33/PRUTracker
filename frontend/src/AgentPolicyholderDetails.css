@@ -255,6 +255,16 @@
   color: #92400e;
 }
 
+.status-pill.at-risk {
+  background-color: #ffedd5;
+  color: #c2410c;
+}
+
+.status-pill.lapsed {
+  background-color: #fee2e2;
+  color: #b91c1c;
+}
+
 .status-pill.dropped {
   background-color: #e5e7eb;
   color: #374151;
