@@ -144,7 +144,7 @@ const policyholderSchema = new mongoose.Schema(
      */
     status: {
       type: String,
-      enum: ["Active", "Lapsed", "Cancelled"],
+      enum: ["Active", "At Risk", "Lapsed", "Cancelled"],
       default: "Active",
       index: true,
     },
