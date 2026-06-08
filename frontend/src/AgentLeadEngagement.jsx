@@ -256,6 +256,9 @@ function AgentLeadEngagement() {
   const [applicationPremiumPaymentError, setApplicationPremiumPaymentError] = useState("");
   const [applicationPremiumPaymentSaving, setApplicationPremiumPaymentSaving] = useState(false);
   const [applicationPremiumPaymentFieldErrors, setApplicationPremiumPaymentFieldErrors] = useState({});
+  const [applicationAnnualPremiumManuallyEdited, setApplicationAnnualPremiumManuallyEdited] = useState(false);
+  const [applicationPremiumPaymentEditMode, setApplicationPremiumPaymentEditMode] = useState(false);
+  const [applicationPremiumPaymentEditSnapshot, setApplicationPremiumPaymentEditSnapshot] = useState(null);
   const [applicationPaymentProofInputKey, setApplicationPaymentProofInputKey] = useState(0);
   const [applicationNeedsPaymentSelection, setApplicationNeedsPaymentSelection] = useState({
     requestedFrequency: "",
@@ -652,6 +655,9 @@ function AgentLeadEngagement() {
       });
       setApplicationPremiumPaymentError("");
       setApplicationPremiumPaymentFieldErrors({});
+      setApplicationAnnualPremiumManuallyEdited(false);
+      setApplicationPremiumPaymentEditMode(false);
+      setApplicationPremiumPaymentEditSnapshot(null);
       setApplicationNeedsPaymentSelection({
         requestedFrequency: String(appNeedsSelection?.requestedFrequency || ""),
       });
@@ -3073,6 +3079,45 @@ function AgentLeadEngagement() {
     () => (availableProducts || []).find((p) => String(p?._id || "") === String(proposalGenerateForm?.chosenProductId || "")) || null,
     [availableProducts, proposalGenerateForm?.chosenProductId]
   );
+
+  const selectedProductMinimumAnnualPremiumAmount = useMemo(() => {
+    const minimumAnnualPremium = selectedProposalProduct?.minimumAnnualPremium || null;
+    if (!minimumAnnualPremium || minimumAnnualPremium.hasStandard === false) return null;
+
+    const prospectAge = Number(needsAssessmentForm?.basicInformation?.age || computeAgeFromBirthday(needsAssessmentForm?.basicInformation?.birthday));
+    const tiers = Array.isArray(minimumAnnualPremium?.tiers) ? minimumAnnualPremium.tiers : [];
+    if (tiers.length && Number.isFinite(prospectAge)) {
+      const matchingTier = tiers.find((tier) => {
+        const minAge = Number.isFinite(Number(tier?.minAge)) ? Number(tier.minAge) : -Infinity;
+        const maxAge = Number.isFinite(Number(tier?.maxAge)) ? Number(tier.maxAge) : Infinity;
+        return prospectAge >= minAge && prospectAge <= maxAge;
+      });
+      const tierAmount = Number(matchingTier?.amount);
+      return Number.isFinite(tierAmount) && tierAmount > 0 ? tierAmount : null;
+    }
+
+    const standardAmount = Number(minimumAnnualPremium?.amount);
+    return Number.isFinite(standardAmount) && standardAmount > 0 ? standardAmount : null;
+  }, [needsAssessmentForm?.basicInformation?.age, needsAssessmentForm?.basicInformation?.birthday, selectedProposalProduct]);
+
+  useEffect(() => {
+    if (!Number.isFinite(selectedProductMinimumAnnualPremiumAmount) || selectedProductMinimumAnnualPremiumAmount <= 0) return;
+    if (applicationAnnualPremiumManuallyEdited) return;
+    if (hasSavedApplicationPremiumPaymentTransfer) return;
+    if (String(applicationPremiumPaymentForm.totalAnnualPremiumPhp || "").trim()) return;
+
+    setApplicationPremiumPaymentForm((form) => ({
+      ...form,
+      totalAnnualPremiumPhp: String(selectedProductMinimumAnnualPremiumAmount),
+      totalFrequencyPremiumPhp: "",
+    }));
+    setApplicationPremiumPaymentFieldErrors((prev) => ({ ...prev, totalAnnualPremiumPhp: "", totalFrequencyPremiumPhp: "" }));
+  }, [
+    applicationAnnualPremiumManuallyEdited,
+    applicationPremiumPaymentForm.totalAnnualPremiumPhp,
+    hasSavedApplicationPremiumPaymentTransfer,
+    selectedProductMinimumAnnualPremiumAmount,
+  ]);
   const proposalMeetingMinimumDate = useMemo(() => {
     const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
     const fallback = toDateInputValue(tomorrow);
@@ -3210,6 +3255,16 @@ function AgentLeadEngagement() {
     applicationActiveViewedActivityKey === "Record Prospect Attendance" &&
     hasSavedApplicationAttendance &&
     Boolean(String(applicationAttendanceForm.attendanceProofImageDataUrl || "").trim());
+  const canRequestApplicationPremiumPaymentEdit =
+    !isHistoryView &&
+    !applicationPremiumPaymentEditMode &&
+    showApplicationPanel &&
+    isViewingCurrentStage &&
+    stage === "Application" &&
+    !isLeadClosed &&
+    !isLeadDropped &&
+    applicationActiveViewedActivityKey === "Record Premium Payment Transfer" &&
+    hasSavedApplicationPremiumPaymentTransfer;
   const isApplicationAttendanceProofEditable = applicationAttendanceProofEditMode;
   const isPolicyStatusViewed = policyViewedActivityKey === "Record Policy Application Status";
   const isPolicyInitialEorViewed = policyViewedActivityKey === "Upload Initial Premium eOR";
@@ -4767,6 +4822,8 @@ function AgentLeadEngagement() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to save premium payment transfer.");
 
+      setApplicationPremiumPaymentEditMode(false);
+      setApplicationPremiumPaymentEditSnapshot(null);
       await refreshCurrentProgressView();
       setApplicationViewedActivityKey(data?.currentActivityKey || "Record Application Submission");
     } catch (err) {
@@ -6218,7 +6275,27 @@ function AgentLeadEngagement() {
                       ) : null}
                       {isApplicationPremiumViewed && (!isHistoryView ? hasSavedApplicationAttendance : displayedHasSavedApplicationPremiumPaymentTransfer) ? (
                         <div className="le-block">
-                          <h4 className="le-blockTitle">{displayedHasSavedApplicationPremiumPaymentTransfer ? "Premium Payment Transfer Details" : "Record Premium Payment Transfer"}</h4>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+                            <h4 className="le-blockTitle" style={{ margin: 0 }}>{displayedHasSavedApplicationPremiumPaymentTransfer && !applicationPremiumPaymentEditMode ? "Premium Payment Transfer Details" : "Record Premium Payment Transfer"}</h4>
+                            {canRequestApplicationPremiumPaymentEdit ? (
+                              <button
+                                type="button"
+                                className="le-btn secondary"
+                                style={{ padding: "4px 8px" }}
+                                onClick={() => {
+                                  setApplicationPremiumPaymentEditSnapshot(applicationPremiumPaymentForm);
+                                  setApplicationPremiumPaymentEditMode(true);
+                                  setApplicationPremiumPaymentError("");
+                                  setApplicationPremiumPaymentFieldErrors({});
+                                }}
+                                disabled={applicationPremiumPaymentSaving}
+                                title="Edit premium payment transfer details"
+                              >
+                                <FaEdit style={{ marginRight: 6 }} />
+                                Edit
+                              </button>
+                            ) : null}
+                          </div>
                           <div className="le-formRow" style={{ marginTop: 10 }}>
                             <label className="le-label">Application Submission Link</label>
                             <p className="le-smallNote">
@@ -6226,7 +6303,7 @@ function AgentLeadEngagement() {
                             </p>
                           </div>
 
-                          {displayedHasSavedApplicationPremiumPaymentTransfer ? (
+                          {displayedHasSavedApplicationPremiumPaymentTransfer && !applicationPremiumPaymentEditMode ? (
                             <>
                               <div className="le-formRow">
                                 <label className="le-label">Frequency of Premium Payment</label>
@@ -6332,6 +6409,7 @@ function AgentLeadEngagement() {
                                   inputMode="decimal"
                                   value={applicationPremiumPaymentForm.totalAnnualPremiumPhp}
                                   onChange={(e) => {
+                                    setApplicationAnnualPremiumManuallyEdited(true);
                                     setApplicationPremiumPaymentForm((f) => ({ ...f, totalAnnualPremiumPhp: e.target.value }));
                                     setApplicationPremiumPaymentFieldErrors((prev) => ({ ...prev, totalAnnualPremiumPhp: "", totalFrequencyPremiumPhp: "" }));
                                   }}
@@ -6439,6 +6517,12 @@ function AgentLeadEngagement() {
                                   onClick={() => {
                                     setApplicationPremiumPaymentError("");
                                     setApplicationPremiumPaymentFieldErrors({});
+                                    if (applicationPremiumPaymentEditMode) {
+                                      if (applicationPremiumPaymentEditSnapshot) setApplicationPremiumPaymentForm(applicationPremiumPaymentEditSnapshot);
+                                      setApplicationPremiumPaymentEditMode(false);
+                                      setApplicationPremiumPaymentEditSnapshot(null);
+                                      return;
+                                    }
                                     setApplicationPremiumPaymentForm((f) => ({
                                       ...f,
                                       paymentId: "",
@@ -6459,7 +6543,7 @@ function AgentLeadEngagement() {
                                   }}
                                   disabled={applicationPremiumPaymentSaving}
                                 >
-                                  Clear
+                                  {applicationPremiumPaymentEditMode ? "Cancel" : "Clear"}
                                 </button>
                                 <button
                                   type="button"
@@ -6467,7 +6551,7 @@ function AgentLeadEngagement() {
                                   onClick={submitApplicationPremiumPaymentTransfer}
                                   disabled={applicationPremiumPaymentSaving}
                                 >
-                                  {applicationPremiumPaymentSaving ? "Saving..." : "Save Premium Payment Transfer"}
+                                  {applicationPremiumPaymentSaving ? "Saving..." : applicationPremiumPaymentEditMode ? "Save Changes" : "Save Premium Payment Transfer"}
                                 </button>
                               </div>
                             </>

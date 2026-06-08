@@ -15,7 +15,14 @@ const annualPaymentSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "LeadEngagement",
       required: true,
-      unique: true,
+      index: true,
+    },
+
+    /** Lead engagement attempt cycle this annual payment was created in. */
+    attemptCycle: {
+      type: Number,
+      default: 1,
+      min: 1,
       index: true,
     },
 
