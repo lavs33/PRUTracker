@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "backfill:payment-attempt-cycles": "node scripts/backfill-payment-attempt-cycles.js"
   },
   "keywords": [],
   "author": "",
