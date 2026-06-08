@@ -39,11 +39,31 @@ const paymentSchema = new mongoose.Schema(
       index: true,
     },
 
+    /** Lead engagement attempt cycle this payment was captured in. */
+    attemptCycle: {
+      type: Number,
+      default: 1,
+      min: 1,
+      index: true,
+    },
+
     /** Fields captured during Application > Record Premium Payment Transfer. */
     recordPremiumPaymentTransfer: {
       totalPremiumPaidPhp: {
         type: Number,
         default: null,
+      },
+      overdueFeePhp: {
+        type: Number,
+        default: 0,
+      },
+      paymentCountCovered: {
+        type: Number,
+        default: 1,
+      },
+      isMissedPaymentRecord: {
+        type: Boolean,
+        default: false,
       },
       frequencyOfPremiumPayment: {
         type: String,
@@ -93,6 +113,10 @@ const paymentSchema = new mongoose.Schema(
       savedAt: {
         type: Date,
         default: null,
+      },
+      eorReminderEnabled: {
+        type: Boolean,
+        default: false,
       },
     },
 
