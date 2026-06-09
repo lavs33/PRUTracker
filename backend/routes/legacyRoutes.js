@@ -9806,6 +9806,8 @@ app.get("/api/prospects/:prospectId/leads/:leadId/needs-assessment", async (req,
       .sort({ productCategory: 1, productName: 1 })
       .lean();
 
+    await ensureScheduledMeetingAttemptCycleBackfill();
+
     const proposalMeetingQuery = {
       leadEngagementId: engagement._id,
       meetingType: "Proposal Presentation",
@@ -9825,9 +9827,13 @@ app.get("/api/prospects/:prospectId/leads/:leadId/needs-assessment", async (req,
     const engagementActivity = String(engagement.currentActivityKey || "").trim();
     const naOutcome = String(needsAssessment.outcomeActivity || "").trim();
 
+    const hasProposalPresentationMeeting = Array.isArray(proposalMeetings) && proposalMeetings.length > 0;
+
     let effectiveNeedsActivityKey;
     if (isHistoryCycleRequest) {
-      if (!needsAssessment.attendanceConfirmed) {
+      if (hasProposalPresentationMeeting) {
+        effectiveNeedsActivityKey = "Schedule Proposal Presentation";
+      } else if (!needsAssessment.attendanceConfirmed) {
         effectiveNeedsActivityKey = "Record Prospect Attendance";
       } else if (["Perform Needs Analysis", "Schedule Proposal Presentation"].includes(naOutcome)) {
         effectiveNeedsActivityKey = naOutcome;
@@ -9868,8 +9874,8 @@ app.get("/api/prospects/:prospectId/leads/:leadId/needs-assessment", async (req,
         attendedAt: needsAssessment.attendedAt || null,
         attendanceProofImageDataUrl: String(needsAssessment.attendanceProofImageDataUrl || ""),
         attendanceProofFileName: String(needsAssessment.attendanceProofFileName || ""),
-        outcomeActivity: needsAssessment.outcomeActivity || "",
-        followUpNeedsAssessmentRequired: String(needsAssessment.followUpNeedsAssessmentRequired || ""),
+        outcomeActivity: hasProposalPresentationMeeting && !needsAssessment.outcomeActivity ? "Schedule Proposal Presentation" : (needsAssessment.outcomeActivity || ""),
+        followUpNeedsAssessmentRequired: String(needsAssessment.followUpNeedsAssessmentRequired || (hasProposalPresentationMeeting ? "NO" : "")),
         followUpNeedsAssessmentDecidedAt: needsAssessment.followUpNeedsAssessmentDecidedAt || null,
         dependents: Array.isArray(needsAssessment.dependents) ? needsAssessment.dependents : [],
         needsPriorities: needsAssessment.needsPriorities || {},

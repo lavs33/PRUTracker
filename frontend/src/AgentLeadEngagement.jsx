@@ -869,17 +869,7 @@ function AgentLeadEngagement() {
       const outcomeNAActivity = hasSavedNeedsAnalysisDetails && rawOutcomeNAActivity === "Record Prospect Attendance"
         ? "Perform Needs Analysis"
         : rawOutcomeNAActivity;
-      const followUpRequired = String(data?.needsAssessment?.followUpNeedsAssessmentRequired || "").trim().toUpperCase();
-      setNeedsAssessmentCurrentActivityKey(currentNAActivity);
-      setNeedsAssessmentOutcomeActivity(outcomeNAActivity);
-      setNeedsFollowUpRequired(["YES", "NO"].includes(followUpRequired) ? followUpRequired : "");
-      setSavedNeedsFollowUpRequired(["YES", "NO"].includes(followUpRequired) ? followUpRequired : "");
-      setNeedsFollowUpDecisionSaved(["YES", "NO"].includes(followUpRequired));
-      setNeedsFollowUpDecisionDecidedAt(data?.needsAssessment?.followUpNeedsAssessmentDecidedAt || null);
-      setNeedsFollowUpDecisionEditMode(!["YES", "NO"].includes(followUpRequired));
-      setNeedsFollowUpDecisionDismissed(false);
-      setNeedsAnalysisDetailsSaved(hasSavedNeedsAnalysisDetails);
-      setNeedsAnalysisEditMode(isNeedsHistoryRequest ? false : !hasSavedNeedsAnalysisDetails);
+      const rawFollowUpRequired = String(data?.needsAssessment?.followUpNeedsAssessmentRequired || "").trim().toUpperCase();
       setAvailableProducts(Array.isArray(data?.products) ? data.products : []);
 
       const proposalMeeting = data?.proposalMeeting || null;
@@ -895,6 +885,29 @@ function AgentLeadEngagement() {
         return new Date(b?.createdAt || 0).getTime() - new Date(a?.createdAt || 0).getTime();
       });
       const latestProposalMeeting = sortedProposalMeetings[0] || proposalMeeting || null;
+      const hasSavedProposalMeeting = Boolean(latestProposalMeeting?.startAt);
+      const effectiveFollowUpRequired = ["YES", "NO"].includes(rawFollowUpRequired)
+        ? rawFollowUpRequired
+        : hasSavedProposalMeeting
+        ? "NO"
+        : "";
+      const effectiveCurrentNAActivity = hasSavedProposalMeeting && isNeedsHistoryRequest
+        ? "Schedule Proposal Presentation"
+        : currentNAActivity;
+      const effectiveOutcomeNAActivity = hasSavedProposalMeeting && !outcomeNAActivity
+        ? "Schedule Proposal Presentation"
+        : outcomeNAActivity;
+
+      setNeedsAssessmentCurrentActivityKey(effectiveCurrentNAActivity);
+      setNeedsAssessmentOutcomeActivity(effectiveOutcomeNAActivity);
+      setNeedsFollowUpRequired(effectiveFollowUpRequired);
+      setSavedNeedsFollowUpRequired(effectiveFollowUpRequired);
+      setNeedsFollowUpDecisionSaved(["YES", "NO"].includes(effectiveFollowUpRequired));
+      setNeedsFollowUpDecisionDecidedAt(data?.needsAssessment?.followUpNeedsAssessmentDecidedAt || null);
+      setNeedsFollowUpDecisionEditMode(!["YES", "NO"].includes(effectiveFollowUpRequired));
+      setNeedsFollowUpDecisionDismissed(false);
+      setNeedsAnalysisDetailsSaved(hasSavedNeedsAnalysisDetails);
+      setNeedsAnalysisEditMode(isNeedsHistoryRequest ? false : !hasSavedNeedsAnalysisDetails);
       setProposalMeetingHistory(sortedProposalMeetings);
       setProposalMeetingSaved(latestProposalMeeting);
       setProposalMeetingRescheduleOriginal(null);
