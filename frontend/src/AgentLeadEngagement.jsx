@@ -548,8 +548,12 @@ function AgentLeadEngagement() {
     async (signal) => {
       const options = signal ? { signal } : undefined;
 
+      const engagementParams = new URLSearchParams({ userId: String(user.id) });
+      const requestedHistoryCycle = historyStageView ? String(selectedHistoryCycle || "").trim() : "";
+      if (requestedHistoryCycle) engagementParams.set("historyCycle", requestedHistoryCycle);
+
       const res = await fetch(
-        `${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/engagement?userId=${user.id}`,
+        `${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/engagement?${engagementParams.toString()}`,
         options
       );
       const data = await res.json();
@@ -613,14 +617,21 @@ function AgentLeadEngagement() {
         proposalAccepted: String(presentation?.proposalAccepted || ""),
         initialQuotationNotes: String(presentation?.initialQuotationNotes || ""),
       });
-      const engagementProposalMeetings = Array.isArray(proposal?.proposalPresentationMeetings)
-        ? [...proposal.proposalPresentationMeetings].sort((a, b) => {
-            const bEnd = new Date(b?.endAt || b?.startAt || b?.createdAt || 0).getTime();
-            const aEnd = new Date(a?.endAt || a?.startAt || a?.createdAt || 0).getTime();
-            if (Number.isFinite(bEnd) && Number.isFinite(aEnd) && bEnd !== aEnd) return bEnd - aEnd;
-            return new Date(b?.createdAt || 0).getTime() - new Date(a?.createdAt || 0).getTime();
-          })
+      const allProposalMeetings = Array.isArray(proposal?.proposalPresentationMeetings)
+        ? proposal.proposalPresentationMeetings
         : [];
+      const selectedHistoryCycleNo = Number(requestedHistoryCycle || 0);
+      const currentCycleNo = Number(data?.engagement?.contactAttemptCycle || 0);
+      const proposalCycleNo = Number(proposal?.attemptCycle || (requestedHistoryCycle ? selectedHistoryCycleNo : currentCycleNo));
+      const proposalMeetingsForViewedCycle = Number.isFinite(proposalCycleNo) && proposalCycleNo > 0
+        ? allProposalMeetings.filter((meeting) => Number(meeting?.attemptCycle || 0) === proposalCycleNo)
+        : allProposalMeetings;
+      const engagementProposalMeetings = [...proposalMeetingsForViewedCycle].sort((a, b) => {
+        const bEnd = new Date(b?.endAt || b?.startAt || b?.createdAt || 0).getTime();
+        const aEnd = new Date(a?.endAt || a?.startAt || a?.createdAt || 0).getTime();
+        if (Number.isFinite(bEnd) && Number.isFinite(aEnd) && bEnd !== aEnd) return bEnd - aEnd;
+        return new Date(b?.createdAt || 0).getTime() - new Date(a?.createdAt || 0).getTime();
+      });
       setProposalMeetingHistory(engagementProposalMeetings);
       setProposalMeetingSaved(engagementProposalMeetings[0] || null);
       setApplicationMeetingSaved(applicationSubmissionMeeting);
@@ -752,7 +763,7 @@ function AgentLeadEngagement() {
       });
       setApplicationMeetingPrefillKey("");
     },
-    [API_BASE, prospectId, leadId, user?.id]
+    [API_BASE, historyStageView, leadId, prospectId, selectedHistoryCycle, user?.id]
   );
 
 
@@ -3150,13 +3161,13 @@ function AgentLeadEngagement() {
     (Array.isArray(needsAssessmentForm?.dependents) && needsAssessmentForm.dependents.length > 0)
   );
   const hasNeedsScheduleSaved = Boolean(proposalMeetingSaved?.startAt);
-  const hasProposalGenerateSaved = !isHistoryView && Boolean(
+  const hasProposalGenerateSaved = Boolean(
     String(proposalGenerateForm?.uploadedAt || "").trim() ||
     String(proposalGenerateForm?.proposalFileName || "").trim() ||
     String(proposalGenerateForm?.proposalFileDataUrl || "").trim()
   );
-  const hasProposalAttendanceSaved = !isHistoryView && ["YES", "NO"].includes(String(proposalAttendanceForm?.attendanceChoice || "").trim().toUpperCase());
-  const hasProposalPresentationSaved = !isHistoryView && Boolean(
+  const hasProposalAttendanceSaved = ["YES", "NO"].includes(String(proposalAttendanceForm?.attendanceChoice || "").trim().toUpperCase());
+  const hasProposalPresentationSaved = Boolean(
     String(proposalPresentationForm?.initialQuotationNotes || "").trim() ||
     String(proposalPresentationForm?.proposalAccepted || "").trim()
   );
