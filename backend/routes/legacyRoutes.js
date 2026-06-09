@@ -111,6 +111,43 @@ function registerLegacyRoutes(app, deps) {
     }
   }
 
+  let applicationAttemptCycleIndexEnsured = false;
+  async function ensureApplicationAttemptCycleIndex() {
+    if (applicationAttemptCycleIndexEnsured) return;
+    try {
+      const collection = Application.collection;
+      const indexes = await collection.indexes();
+      const legacyUniqueIndex = indexes.find((index) => {
+        const key = index?.key || {};
+        return index?.name === "leadEngagementId_1"
+          && index?.unique === true
+          && Object.keys(key).length === 1
+          && Number(key.leadEngagementId) === 1;
+      });
+      if (legacyUniqueIndex) {
+        await collection.dropIndex("leadEngagementId_1");
+      }
+      const refreshedIndexes = legacyUniqueIndex ? await collection.indexes() : indexes;
+      const hasCycleIndex = refreshedIndexes.some((index) => {
+        const key = index?.key || {};
+        return index?.name === "leadEngagementId_1_attemptCycle_1"
+          && index?.unique === true
+          && Number(key.leadEngagementId) === 1
+          && Number(key.attemptCycle) === 1;
+      });
+      if (!hasCycleIndex) {
+        await collection.createIndex(
+          { leadEngagementId: 1, attemptCycle: 1 },
+          { name: "leadEngagementId_1_attemptCycle_1", unique: true, background: true }
+        );
+      }
+      applicationAttemptCycleIndexEnsured = true;
+    } catch (err) {
+      if (err?.codeName !== "IndexNotFound") throw err;
+      applicationAttemptCycleIndexEnsured = true;
+    }
+  }
+
   let proposalAttemptCycleIndexEnsured = false;
   async function ensureProposalAttemptCycleIndex() {
     if (proposalAttemptCycleIndexEnsured) return;
@@ -160,6 +197,101 @@ function registerLegacyRoutes(app, deps) {
           outcomeActivity,
         },
       },
+      { upsert: true, new: true, setDefaultsOnInsert: true, session }
+    );
+  }
+
+
+  function applicationSavedCycleDate(application = {}) {
+    const candidates = [
+      application.recordApplicationSubmission?.savedAt,
+      application.recordProspectAttendance?.attendedAt,
+      application.createdAt,
+    ];
+    return candidates
+      .map((value) => (value ? new Date(value) : null))
+      .filter((date) => date && !Number.isNaN(date.getTime()))
+      .sort((left, right) => right.getTime() - left.getTime())[0] || null;
+  }
+
+  function latestReopenStartedAt(engagement = {}) {
+    const reopenEntries = (Array.isArray(engagement.stageHistory) ? engagement.stageHistory : [])
+      .filter((entry) => {
+        const reason = String(entry?.reason || "").toLowerCase();
+        return reason.includes("re-opened") || reason.includes("reopened");
+      })
+      .map((entry) => (entry?.startedAt ? new Date(entry.startedAt) : null))
+      .filter((date) => date && !Number.isNaN(date.getTime()))
+      .sort((left, right) => right.getTime() - left.getTime());
+    return reopenEntries[0] || null;
+  }
+
+  function freshApplicationSet(chosenProductId = null) {
+    return {
+      outcomeActivity: "Record Prospect Attendance",
+      chosenProductId: chosenProductId || null,
+      recordProspectAttendance: {
+        attended: false,
+        attendedAt: null,
+        attendanceProofImageDataUrl: "",
+        attendanceProofFileName: "",
+      },
+      recordPremiumPaymentTransfer: {
+        paymentId: null,
+        methodForRenewalPayment: "",
+      },
+      recordApplicationSubmission: {
+        pruOneTransactionId: "",
+        submissionScreenshotImageDataUrl: "",
+        submissionScreenshotFileName: "",
+        savedAt: null,
+      },
+    };
+  }
+
+  async function prepareFreshApplicationForCurrentAttemptCycle(engagement, attemptCycle, { session, chosenProductId = null } = {}) {
+    await ensureApplicationAttemptCycleIndex();
+    const normalizedAttemptCycle = normalizeAttemptCycle(attemptCycle);
+    const reopenStartedAt = normalizedAttemptCycle > 1 ? latestReopenStartedAt(engagement) : null;
+    const existingCurrentApplication = await Application.findOne({
+      leadEngagementId: engagement._id,
+      attemptCycle: normalizedAttemptCycle,
+    }).session(session);
+
+    if (existingCurrentApplication && reopenStartedAt) {
+      const savedDate = applicationSavedCycleDate(existingCurrentApplication);
+      const isStaleHistoricalApplication = savedDate && savedDate.getTime() < reopenStartedAt.getTime();
+      if (isStaleHistoricalApplication) {
+        const priorCycle = Math.max(1, normalizedAttemptCycle - 1);
+        const existingPriorApplication = await Application.findOne({
+          leadEngagementId: engagement._id,
+          attemptCycle: priorCycle,
+          _id: { $ne: existingCurrentApplication._id },
+        }).select("_id").session(session).lean();
+
+        if (!existingPriorApplication) {
+          existingCurrentApplication.attemptCycle = priorCycle;
+          await existingCurrentApplication.save({ session });
+        } else {
+          await Application.updateOne(
+            { _id: existingCurrentApplication._id },
+            { $set: freshApplicationSet(chosenProductId) },
+            { session }
+          );
+          return Application.findById(existingCurrentApplication._id).session(session);
+        }
+      }
+    }
+
+    const setOnInsert = {
+      leadEngagementId: engagement._id,
+      attemptCycle: normalizedAttemptCycle,
+      ...freshApplicationSet(chosenProductId),
+    };
+
+    return Application.findOneAndUpdate(
+      { leadEngagementId: engagement._id, attemptCycle: normalizedAttemptCycle },
+      { $setOnInsert: setOnInsert },
       { upsert: true, new: true, setDefaultsOnInsert: true, session }
     );
   }
@@ -6077,7 +6209,8 @@ app.get("/api/policyholders/:policyholderId/annual-payments/:annualPaymentId", a
         .select("uploadPolicySummary recordCoverageDurationDetails")
         .lean(),
       Application.findOne({ leadEngagementId: policyholder.leadEngagementId })
-        .select("recordPremiumPaymentTransfer.methodForRenewalPayment")
+        .sort({ attemptCycle: -1, updatedAt: -1, createdAt: -1 })
+        .select("attemptCycle recordPremiumPaymentTransfer.methodForRenewalPayment")
         .lean(),
       Payment.find({ annualPaymentId: annualPaymentObjectId })
         .select("status recordPremiumPaymentTransfer uploadPremiumPaymentEor createdAt updatedAt")
@@ -7713,8 +7846,12 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
       .select("attemptCycle outcomeActivity chosenProductId generateProposal recordProspectAttendance presentProposal")
       .lean();
 
-    const applicationDoc = await Application.findOne({ leadEngagementId: engagement._id })
-      .select("outcomeActivity chosenProductId recordProspectAttendance recordPremiumPaymentTransfer recordApplicationSubmission")
+    await ensureApplicationAttemptCycleIndex();
+    const applicationDoc = await Application.findOne({
+      leadEngagementId: engagement._id,
+      attemptCycle: targetAttemptCycle,
+    })
+      .select("attemptCycle outcomeActivity chosenProductId recordProspectAttendance recordPremiumPaymentTransfer recordApplicationSubmission")
       .lean();
 
     const policyDoc = await Policy.findOne({ leadEngagementId: engagement._id })
@@ -7725,9 +7862,9 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
     const applicationPaymentId = applicationDoc?.recordPremiumPaymentTransfer?.paymentId || null;
     const policyPaymentId = policyDoc?.uploadInitialPremiumEor?.paymentId || null;
     const paymentFilters = [];
-    if (applicationPaymentId) paymentFilters.push({ _id: applicationPaymentId, ...attemptCycleFilterForCycle(currentAttemptCycle) });
-    if (policyPaymentId) paymentFilters.push({ _id: policyPaymentId, ...attemptCycleFilterForCycle(currentAttemptCycle) });
-    paymentFilters.push({ leadEngagementId: engagement._id, ...attemptCycleFilterForCycle(currentAttemptCycle) });
+    if (applicationPaymentId) paymentFilters.push({ _id: applicationPaymentId, ...attemptCycleFilterForCycle(targetAttemptCycle) });
+    if (policyPaymentId) paymentFilters.push({ _id: policyPaymentId, ...attemptCycleFilterForCycle(targetAttemptCycle) });
+    paymentFilters.push({ leadEngagementId: engagement._id, ...attemptCycleFilterForCycle(targetAttemptCycle) });
     const paymentDoc = await Payment.findOne({ $or: paymentFilters })
       .sort({ attemptCycle: -1, "recordPremiumPaymentTransfer.savedAt": -1, createdAt: -1 })
       .select("annualPaymentId attemptCycle recordPremiumPaymentTransfer uploadPremiumPaymentEor")
@@ -7735,7 +7872,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
 
     const annualPaymentFilter = paymentDoc?.annualPaymentId
       ? { _id: paymentDoc.annualPaymentId }
-      : { leadEngagementId: engagement._id, ...attemptCycleFilterForCycle(currentAttemptCycle) };
+      : { leadEngagementId: engagement._id, ...attemptCycleFilterForCycle(targetAttemptCycle) };
     const annualPaymentDoc = await AnnualPayment.findOne(annualPaymentFilter)
       .select("annualPaymentPeriod totalAnnualPremiumPhp amountPaidSoFarPhp remainingBalancePhp frequencyOfPayment paymentProgress status attemptCycle")
       .lean();
@@ -8030,6 +8167,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
         tasks: Array.isArray(tasks) ? tasks : [],
 
         application: {
+          attemptCycle: applicationDoc?.attemptCycle || targetAttemptCycle,
           currentActivityKey: applicationCurrentActivityKey,
           chosenProductId: applicationDoc?.chosenProductId || null,
           chosenProduct: applicationDoc?.chosenProductId || selectedProduct
@@ -11509,7 +11647,12 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/attendance", asyn
         throw Object.assign(new Error("Lead is not in Application stage."), { status: 409 });
       }
 
-      const existingApplicationDoc = await Application.findOne({ leadEngagementId: engagement._id }).session(session);
+      await ensureApplicationAttemptCycleIndex();
+      const currentAttemptCycle = normalizeAttemptCycle(engagement.contactAttemptCycle);
+      const existingApplicationDoc = await Application.findOne({
+        leadEngagementId: engagement._id,
+        attemptCycle: currentAttemptCycle,
+      }).session(session);
       const currentApplicationActivity = String(engagement.currentActivityKey || "").trim();
       const isAttendanceStep = currentApplicationActivity === "Record Prospect Attendance";
       const isFutureProofEdit =
@@ -11530,9 +11673,9 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/attendance", asyn
         : "Record Premium Payment Transfer";
 
       await Application.updateOne(
-        { leadEngagementId: engagement._id },
+        { leadEngagementId: engagement._id, attemptCycle: currentAttemptCycle },
         {
-          $setOnInsert: { leadEngagementId: engagement._id },
+          $setOnInsert: { leadEngagementId: engagement._id, attemptCycle: currentAttemptCycle },
           $set: {
             outcomeActivity: nextOutcomeActivity,
             recordProspectAttendance: {
@@ -11728,10 +11871,11 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/premium-payment-t
         { upsert: true, new: true, session }
       );
 
+      await ensureApplicationAttemptCycleIndex();
       await Application.updateOne(
-        { leadEngagementId: engagement._id },
+        { leadEngagementId: engagement._id, attemptCycle: currentAttemptCycle },
         {
-          $setOnInsert: { leadEngagementId: engagement._id },
+          $setOnInsert: { leadEngagementId: engagement._id, attemptCycle: currentAttemptCycle },
           $set: {
             outcomeActivity: "Record Application Submission",
             recordPremiumPaymentTransfer: {
@@ -11823,13 +11967,17 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/submission", asyn
         throw Object.assign(new Error("PRUOnePH Transaction ID already exists."), { status: 409 });
       }
 
-      const existingApplication = await Application.findOne({ leadEngagementId: engagement._id })
+      await ensureApplicationAttemptCycleIndex();
+      const currentAttemptCycle = normalizeAttemptCycle(engagement.contactAttemptCycle);
+      const existingApplication = await Application.findOne({
+        leadEngagementId: engagement._id,
+        attemptCycle: currentAttemptCycle,
+      })
         .select("chosenProductId")
         .session(session);
 
       await ensureNeedsAssessmentAttemptCycleIndex();
       await ensureProposalAttemptCycleIndex();
-      const currentAttemptCycle = normalizeAttemptCycle(engagement.contactAttemptCycle);
       const proposal = await Proposal.findOne({
         leadEngagementId: engagement._id,
         attemptCycle: currentAttemptCycle,
@@ -11852,9 +12000,9 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/submission", asyn
         : null;
 
       await Application.updateOne(
-        { leadEngagementId: engagement._id },
+        { leadEngagementId: engagement._id, attemptCycle: currentAttemptCycle },
         {
-          $setOnInsert: { leadEngagementId: engagement._id },
+          $setOnInsert: { leadEngagementId: engagement._id, attemptCycle: currentAttemptCycle },
           $set: {
             outcomeActivity: "Record Application Submission",
             ...(chosenProductId ? { chosenProductId } : {}),
@@ -12011,7 +12159,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/status", asyn
     const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).select("_id").lean();
     if (!lead) return res.status(404).json({ message: "Lead not found." });
 
-    const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).select("_id currentStage");
+    const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).select("_id currentStage contactAttemptCycle");
     if (!engagement) return res.status(404).json({ message: "Lead engagement not found." });
     if (engagement.currentStage !== "Policy Issuance") {
       return res.status(409).json({ message: "Lead is not in Policy Issuance stage." });
@@ -12021,13 +12169,17 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/status", asyn
       .select("chosenProductId")
       .lean();
 
-    const applicationDoc = await Application.findOne({ leadEngagementId: engagement._id })
+    await ensureApplicationAttemptCycleIndex();
+    const currentAttemptCycle = normalizeAttemptCycle(engagement.contactAttemptCycle);
+    const applicationDoc = await Application.findOne({
+      leadEngagementId: engagement._id,
+      attemptCycle: currentAttemptCycle,
+    })
       .select("chosenProductId recordApplicationSubmission.savedAt")
       .lean();
 
     await ensureNeedsAssessmentAttemptCycleIndex();
     await ensureProposalAttemptCycleIndex();
-    const currentAttemptCycle = normalizeAttemptCycle(engagement.contactAttemptCycle);
     const proposalDoc = await Proposal.findOne({
       leadEngagementId: engagement._id,
       attemptCycle: currentAttemptCycle,
@@ -12149,13 +12301,18 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/initial-premi
     const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).select("_id").lean();
     if (!lead) return res.status(404).json({ message: "Lead not found." });
 
-    const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).select("_id currentStage");
+    const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).select("_id currentStage contactAttemptCycle");
     if (!engagement) return res.status(404).json({ message: "Lead engagement not found." });
     if (engagement.currentStage !== "Policy Issuance") {
       return res.status(409).json({ message: "Lead is not in Policy Issuance stage." });
     }
 
-    const applicationDoc = await Application.findOne({ leadEngagementId: engagement._id })
+    await ensureApplicationAttemptCycleIndex();
+    const currentAttemptCycle = normalizeAttemptCycle(engagement.contactAttemptCycle);
+    const applicationDoc = await Application.findOne({
+      leadEngagementId: engagement._id,
+      attemptCycle: currentAttemptCycle,
+    })
       .select("recordApplicationSubmission.savedAt recordPremiumPaymentTransfer.paymentId")
       .lean();
     const policyDoc = await Policy.findOne({ leadEngagementId: engagement._id })
@@ -12192,7 +12349,6 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/initial-premi
       return res.status(409).json({ message: "Record Premium Payment Transfer must be completed before uploading Initial Premium eOR." });
     }
 
-    const currentAttemptCycle = Number(engagement.contactAttemptCycle || 1);
     const paymentDoc = await Payment.findOne({ _id: applicationPaymentId, leadEngagementId: engagement._id, ...attemptCycleFilterForCycle(currentAttemptCycle) });
     if (!paymentDoc || !paymentHasCompletedPremiumTransfer(paymentDoc)) {
       return res.status(409).json({ message: "Record Premium Payment Transfer must be completed before uploading Initial Premium eOR." });
@@ -12991,6 +13147,32 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/schedule-application
         },
         { upsert: true, session }
       );
+
+      const applicationProposal = await Proposal.findOne({
+        leadEngagementId: engagement._id,
+        attemptCycle: currentAttemptCycle,
+      })
+        .select("chosenProductId")
+        .session(session)
+        .lean();
+      await ensureNeedsAssessmentAttemptCycleIndex();
+      const applicationNeedsAssessment = await NeedsAssessment.findOne({
+        leadEngagementId: engagement._id,
+        attemptCycle: currentAttemptCycle,
+      })
+        .select("needsPriorities.productSelection.selectedProductId")
+        .session(session)
+        .lean();
+      const applicationChosenProductIdRaw = applicationProposal?.chosenProductId
+        || applicationNeedsAssessment?.needsPriorities?.productSelection?.selectedProductId
+        || null;
+      const applicationChosenProductId = applicationChosenProductIdRaw && mongoose.isValidObjectId(applicationChosenProductIdRaw)
+        ? new mongoose.Types.ObjectId(applicationChosenProductIdRaw)
+        : null;
+      await prepareFreshApplicationForCurrentAttemptCycle(engagement, currentAttemptCycle, {
+        session,
+        chosenProductId: applicationChosenProductId,
+      });
     });
     await ensureTaskMissedNotificationsForUser(userObjectId, { forceUnread: true, taskIds: [applicationTaskIdForNotif] });
 
