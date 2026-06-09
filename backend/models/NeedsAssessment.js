@@ -2,7 +2,7 @@
 /**
  * NeedsAssessment Model
  * ---------------------
- * Persists the Needs Assessment stage data for one LeadEngagement.
+ * Persists the Needs Assessment stage data for one LeadEngagement attempt cycle.
  *
  * This document captures:
  * - attendance confirmation/evidence
@@ -49,11 +49,25 @@ const RISK_PROFILE_CATEGORY = ["NOT_RECOMMENDED", "CONSERVATIVE", "MODERATE", "A
  */
 const needsAssessmentSchema = new mongoose.Schema(
   {
-    /** Owning LeadEngagement for this one-to-one needs assessment record. */
+    /** Owning LeadEngagement for this needs assessment cycle record. */
     leadEngagementId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "LeadEngagement",
       required: true,
+    },
+
+    /** Engagement attempt cycle this needs-assessment payload belongs to. */
+    attemptCycle: {
+      type: Number,
+      default: 1,
+      min: 1,
+      index: true,
+    },
+
+    /** Archived per-cycle snapshots for reopened lead history display. */
+    attemptCycleHistory: {
+      type: [mongoose.Schema.Types.Mixed],
+      default: [],
     },
 
     /** Latest completed subactivity saved in this document. */
@@ -206,6 +220,6 @@ const needsAssessmentSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-needsAssessmentSchema.index({ leadEngagementId: 1 }, { unique: true });
+needsAssessmentSchema.index({ leadEngagementId: 1, attemptCycle: 1 }, { unique: true });
 
 module.exports = mongoose.model("NeedsAssessment", needsAssessmentSchema);
