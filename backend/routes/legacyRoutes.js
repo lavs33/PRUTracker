@@ -116,17 +116,6 @@ function registerLegacyRoutes(app, deps) {
     if (proposalAttemptCycleIndexEnsured) return;
     try {
       const collection = Proposal.collection;
-      await collection.updateMany(
-        {
-          $or: [
-            { attemptCycle: { $exists: false } },
-            { attemptCycle: null },
-            { attemptCycle: { $lt: 1 } },
-          ],
-        },
-        { $set: { attemptCycle: 1 } }
-      );
-
       const indexes = await collection.indexes();
       const legacyUniqueIndex = indexes.find((index) => {
         const key = index?.key || {};
@@ -157,6 +146,22 @@ function registerLegacyRoutes(app, deps) {
       if (err?.codeName !== "IndexNotFound") throw err;
       proposalAttemptCycleIndexEnsured = true;
     }
+  }
+
+
+  async function ensureProposalForCurrentAttemptCycle(leadEngagementId, attemptCycle, { session, outcomeActivity = "Generate Proposal" } = {}) {
+    const normalizedAttemptCycle = normalizeAttemptCycle(attemptCycle);
+    return Proposal.findOneAndUpdate(
+      { leadEngagementId, attemptCycle: normalizedAttemptCycle },
+      {
+        $setOnInsert: {
+          leadEngagementId,
+          attemptCycle: normalizedAttemptCycle,
+          outcomeActivity,
+        },
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true, session }
+    );
   }
 
   let scheduledMeetingAttemptCycleBackfilled = false;
@@ -7534,7 +7539,7 @@ app.put("/api/prospects/:prospectId/leads/:leadId", async (req, res) => {
 app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) => {
   try {
     const { prospectId, leadId } = req.params;
-    const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
+    const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL", historyCycle } = req.query;
 
     // Validate required IDs
     if (!userId) return res.status(400).json({ message: "Missing userId." });
@@ -7688,10 +7693,14 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
       .lean();
 
     const currentAttemptCycle = normalizeAttemptCycle(engagement.contactAttemptCycle);
+    const requestedHistoryCycle = Number(historyCycle || 0);
+    const isHistoryCycleRequest = Number.isInteger(requestedHistoryCycle) && requestedHistoryCycle > 0;
+    const targetAttemptCycle = isHistoryCycleRequest ? requestedHistoryCycle : currentAttemptCycle;
+
     await ensureNeedsAssessmentAttemptCycleIndex();
     const needsAssessment = await NeedsAssessment.findOne({
       leadEngagementId: engagement._id,
-      attemptCycle: currentAttemptCycle,
+      attemptCycle: targetAttemptCycle,
     })
       .select("attemptCycle needsPriorities.productSelection.selectedProductId needsPriorities.productSelection.requestedFrequency")
       .lean();
@@ -7699,7 +7708,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
     await ensureProposalAttemptCycleIndex();
     const proposalDoc = await Proposal.findOne({
       leadEngagementId: engagement._id,
-      attemptCycle: currentAttemptCycle,
+      attemptCycle: targetAttemptCycle,
     })
       .select("attemptCycle outcomeActivity chosenProductId generateProposal recordProspectAttendance presentProposal")
       .lean();
@@ -7762,7 +7771,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
 
     const applicationSubmissionMeeting = await ScheduledMeeting.findOne({
       leadEngagementId: engagement._id,
-      attemptCycle: Number(engagement.contactAttemptCycle || 1),
+      attemptCycle: targetAttemptCycle,
       meetingType: "Application Submission",
     })
       .sort({ startAt: -1, createdAt: -1 })
@@ -7777,10 +7786,13 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
       .select("meetingType attemptCycle startAt endAt durationMin mode platform platformOther link inviteSent place status createdAt updatedAt")
       .lean();
 
-    const proposalPresentationMeetings = await ScheduledMeeting.find({
+    const proposalPresentationMeetingQuery = {
       leadEngagementId: engagement._id,
       meetingType: "Proposal Presentation",
-    })
+    };
+    if (isHistoryCycleRequest) proposalPresentationMeetingQuery.attemptCycle = targetAttemptCycle;
+
+    const proposalPresentationMeetings = await ScheduledMeeting.find(proposalPresentationMeetingQuery)
       .sort({ endAt: -1, startAt: -1, createdAt: -1 })
       .select("meetingType attemptCycle startAt endAt durationMin mode platform platformOther link inviteSent place status createdAt updatedAt")
       .lean();
@@ -8128,7 +8140,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
         },
 
         proposal: {
-          attemptCycle: proposalDoc?.attemptCycle || currentAttemptCycle,
+          attemptCycle: proposalDoc?.attemptCycle || targetAttemptCycle,
           currentActivityKey: proposalCurrentActivityKey,
           chosenProduct: proposalDoc?.chosenProductId || selectedProduct
             ? {
@@ -11126,19 +11138,10 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/schedule-pro
         engagement.stageStartedAt = now;
         await engagement.save({ session });
 
-        await Proposal.updateOne(
-          { leadEngagementId: engagement._id, attemptCycle: currentAttemptCycle },
-          {
-            $setOnInsert: {
-              leadEngagementId: engagement._id,
-              attemptCycle: currentAttemptCycle,
-            },
-            $set: {
-              outcomeActivity: "Generate Proposal",
-            },
-          },
-          { upsert: true, session }
-        );
+        await ensureProposalForCurrentAttemptCycle(engagement._id, currentAttemptCycle, {
+          session,
+          outcomeActivity: "Generate Proposal",
+        });
       }
     });
     await ensureTaskMissedNotificationsForUser(userObjectId, { forceUnread: true, taskIds: [presentationTaskIdForNotif] });
