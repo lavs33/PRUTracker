@@ -111,6 +111,54 @@ function registerLegacyRoutes(app, deps) {
     }
   }
 
+  let proposalAttemptCycleIndexEnsured = false;
+  async function ensureProposalAttemptCycleIndex() {
+    if (proposalAttemptCycleIndexEnsured) return;
+    try {
+      const collection = Proposal.collection;
+      await collection.updateMany(
+        {
+          $or: [
+            { attemptCycle: { $exists: false } },
+            { attemptCycle: null },
+            { attemptCycle: { $lt: 1 } },
+          ],
+        },
+        { $set: { attemptCycle: 1 } }
+      );
+
+      const indexes = await collection.indexes();
+      const legacyUniqueIndex = indexes.find((index) => {
+        const key = index?.key || {};
+        return index?.name === "leadEngagementId_1"
+          && index?.unique === true
+          && Object.keys(key).length === 1
+          && Number(key.leadEngagementId) === 1;
+      });
+      if (legacyUniqueIndex) {
+        await collection.dropIndex("leadEngagementId_1");
+      }
+      const refreshedIndexes = legacyUniqueIndex ? await collection.indexes() : indexes;
+      const hasCycleIndex = refreshedIndexes.some((index) => {
+        const key = index?.key || {};
+        return index?.name === "leadEngagementId_1_attemptCycle_1"
+          && index?.unique === true
+          && Number(key.leadEngagementId) === 1
+          && Number(key.attemptCycle) === 1;
+      });
+      if (!hasCycleIndex) {
+        await collection.createIndex(
+          { leadEngagementId: 1, attemptCycle: 1 },
+          { name: "leadEngagementId_1_attemptCycle_1", unique: true, background: true }
+        );
+      }
+      proposalAttemptCycleIndexEnsured = true;
+    } catch (err) {
+      if (err?.codeName !== "IndexNotFound") throw err;
+      proposalAttemptCycleIndexEnsured = true;
+    }
+  }
+
   let scheduledMeetingAttemptCycleBackfilled = false;
   let annualPaymentLeadEngagementIndexEnsured = false;
   async function ensureAnnualPaymentLeadEngagementIndex() {
@@ -7648,8 +7696,12 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
       .select("attemptCycle needsPriorities.productSelection.selectedProductId needsPriorities.productSelection.requestedFrequency")
       .lean();
 
-    const proposalDoc = await Proposal.findOne({ leadEngagementId: engagement._id })
-      .select("outcomeActivity chosenProductId generateProposal recordProspectAttendance presentProposal")
+    await ensureProposalAttemptCycleIndex();
+    const proposalDoc = await Proposal.findOne({
+      leadEngagementId: engagement._id,
+      attemptCycle: currentAttemptCycle,
+    })
+      .select("attemptCycle outcomeActivity chosenProductId generateProposal recordProspectAttendance presentProposal")
       .lean();
 
     const applicationDoc = await Application.findOne({ leadEngagementId: engagement._id })
@@ -8076,6 +8128,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
         },
 
         proposal: {
+          attemptCycle: proposalDoc?.attemptCycle || currentAttemptCycle,
           currentActivityKey: proposalCurrentActivityKey,
           chosenProduct: proposalDoc?.chosenProductId || selectedProduct
             ? {
@@ -9806,6 +9859,8 @@ app.get("/api/prospects/:prospectId/leads/:leadId/needs-assessment", async (req,
       .sort({ productCategory: 1, productName: 1 })
       .lean();
 
+    await ensureScheduledMeetingAttemptCycleBackfill();
+
     const proposalMeetingQuery = {
       leadEngagementId: engagement._id,
       meetingType: "Proposal Presentation",
@@ -9825,9 +9880,13 @@ app.get("/api/prospects/:prospectId/leads/:leadId/needs-assessment", async (req,
     const engagementActivity = String(engagement.currentActivityKey || "").trim();
     const naOutcome = String(needsAssessment.outcomeActivity || "").trim();
 
+    const hasProposalPresentationMeeting = Array.isArray(proposalMeetings) && proposalMeetings.length > 0;
+
     let effectiveNeedsActivityKey;
     if (isHistoryCycleRequest) {
-      if (!needsAssessment.attendanceConfirmed) {
+      if (hasProposalPresentationMeeting) {
+        effectiveNeedsActivityKey = "Schedule Proposal Presentation";
+      } else if (!needsAssessment.attendanceConfirmed) {
         effectiveNeedsActivityKey = "Record Prospect Attendance";
       } else if (["Perform Needs Analysis", "Schedule Proposal Presentation"].includes(naOutcome)) {
         effectiveNeedsActivityKey = naOutcome;
@@ -9868,8 +9927,8 @@ app.get("/api/prospects/:prospectId/leads/:leadId/needs-assessment", async (req,
         attendedAt: needsAssessment.attendedAt || null,
         attendanceProofImageDataUrl: String(needsAssessment.attendanceProofImageDataUrl || ""),
         attendanceProofFileName: String(needsAssessment.attendanceProofFileName || ""),
-        outcomeActivity: needsAssessment.outcomeActivity || "",
-        followUpNeedsAssessmentRequired: String(needsAssessment.followUpNeedsAssessmentRequired || ""),
+        outcomeActivity: hasProposalPresentationMeeting && !needsAssessment.outcomeActivity ? "Schedule Proposal Presentation" : (needsAssessment.outcomeActivity || ""),
+        followUpNeedsAssessmentRequired: String(needsAssessment.followUpNeedsAssessmentRequired || (hasProposalPresentationMeeting ? "NO" : "")),
         followUpNeedsAssessmentDecidedAt: needsAssessment.followUpNeedsAssessmentDecidedAt || null,
         dependents: Array.isArray(needsAssessment.dependents) ? needsAssessment.dependents : [],
         needsPriorities: needsAssessment.needsPriorities || {},
@@ -10549,7 +10608,11 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/schedule-pro
         leadEngagementId: engagement._id,
         attemptCycle: currentAttemptCycle,
       }).session(session);
-      const proposalDocForReschedule = await Proposal.findOne({ leadEngagementId: engagement._id }).session(session);
+      await ensureProposalAttemptCycleIndex();
+      const proposalDocForReschedule = await Proposal.findOne({
+        leadEngagementId: engagement._id,
+        attemptCycle: currentAttemptCycle,
+      }).session(session);
       const isProposalAttendanceReschedule =
         engagement.currentStage === "Proposal" &&
         engagement.currentActivityKey === "Record Prospect Attendance" &&
@@ -11020,9 +11083,9 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/schedule-pro
         await engagement.save({ session });
 
         await Proposal.updateOne(
-          { leadEngagementId: engagement._id },
+          { leadEngagementId: engagement._id, attemptCycle: currentAttemptCycle },
           {
-            $setOnInsert: { leadEngagementId: engagement._id },
+            $setOnInsert: { leadEngagementId: engagement._id, attemptCycle: currentAttemptCycle },
             $set: {
               outcomeActivity: (isProposalPresentationRetry || isProposalPresentationExistingReschedule) ? "Present Proposal" : "Record Prospect Attendance",
               ...(isProposalPresentationRetry || isProposalPresentationExistingReschedule
@@ -11064,10 +11127,11 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/schedule-pro
         await engagement.save({ session });
 
         await Proposal.updateOne(
-          { leadEngagementId: engagement._id },
+          { leadEngagementId: engagement._id, attemptCycle: currentAttemptCycle },
           {
             $setOnInsert: {
               leadEngagementId: engagement._id,
+              attemptCycle: currentAttemptCycle,
             },
             $set: {
               outcomeActivity: "Generate Proposal",
@@ -11197,7 +11261,12 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/generate", async (re
         throw Object.assign(new Error("Lead is not in Proposal/Application stage."), { status: 409 });
       }
 
-      const proposalDoc = await Proposal.findOne({ leadEngagementId: engagement._id })
+      await ensureProposalAttemptCycleIndex();
+      const currentAttemptCycle = normalizeAttemptCycle(engagement.contactAttemptCycle);
+      const proposalDoc = await Proposal.findOne({
+        leadEngagementId: engagement._id,
+        attemptCycle: currentAttemptCycle,
+      })
         .select("outcomeActivity")
         .session(session)
         .lean();
@@ -11231,7 +11300,6 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/generate", async (re
       }
 
       await ensureNeedsAssessmentAttemptCycleIndex();
-      const currentAttemptCycle = normalizeAttemptCycle(engagement.contactAttemptCycle);
       const needsAssessment = await NeedsAssessment.findOne({
         leadEngagementId: engagement._id,
         attemptCycle: currentAttemptCycle,
@@ -11249,9 +11317,9 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/generate", async (re
       await engagement.save({ session });
 
       await Proposal.updateOne(
-        { leadEngagementId: engagement._id },
+        { leadEngagementId: engagement._id, attemptCycle: currentAttemptCycle },
         {
-          $setOnInsert: { leadEngagementId: engagement._id },
+          $setOnInsert: { leadEngagementId: engagement._id, attemptCycle: currentAttemptCycle },
           $set: {
             outcomeActivity: nextActivity,
             chosenProductId: selectedProduct?._id || (mongoose.isValidObjectId(selectedProductId) ? new mongoose.Types.ObjectId(selectedProductId) : null),
@@ -11328,7 +11396,12 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/attendance", async (
         throw Object.assign(new Error("Lead is not in Proposal stage."), { status: 409 });
       }
 
-      const existingProposalDoc = await Proposal.findOne({ leadEngagementId: engagement._id }).session(session);
+      await ensureProposalAttemptCycleIndex();
+      const currentAttemptCycle = normalizeAttemptCycle(engagement.contactAttemptCycle);
+      const existingProposalDoc = await Proposal.findOne({
+        leadEngagementId: engagement._id,
+        attemptCycle: currentAttemptCycle,
+      }).session(session);
       const currentProposalActivity = String(engagement.currentActivityKey || "").trim();
       const isAttendanceStep = currentProposalActivity === "Record Prospect Attendance";
       const isFutureProofEdit =
@@ -11359,9 +11432,9 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/attendance", async (
         : "Record Prospect Attendance";
 
       await Proposal.updateOne(
-        { leadEngagementId: engagement._id },
+        { leadEngagementId: engagement._id, attemptCycle: currentAttemptCycle },
         {
-          $setOnInsert: { leadEngagementId: engagement._id },
+          $setOnInsert: { leadEngagementId: engagement._id, attemptCycle: currentAttemptCycle },
           $set: {
             outcomeActivity: nextOutcomeActivity,
             recordProspectAttendance: {
@@ -11753,11 +11826,15 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/submission", asyn
         .select("chosenProductId")
         .session(session);
 
-      const proposal = await Proposal.findOne({ leadEngagementId: engagement._id })
+      await ensureNeedsAssessmentAttemptCycleIndex();
+      await ensureProposalAttemptCycleIndex();
+      const currentAttemptCycle = normalizeAttemptCycle(engagement.contactAttemptCycle);
+      const proposal = await Proposal.findOne({
+        leadEngagementId: engagement._id,
+        attemptCycle: currentAttemptCycle,
+      })
         .select("chosenProductId")
         .session(session);
-      await ensureNeedsAssessmentAttemptCycleIndex();
-      const currentAttemptCycle = normalizeAttemptCycle(engagement.contactAttemptCycle);
       const needsAssessment = await NeedsAssessment.findOne({
         leadEngagementId: engagement._id,
         attemptCycle: currentAttemptCycle,
@@ -11947,12 +12024,15 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/status", asyn
       .select("chosenProductId recordApplicationSubmission.savedAt")
       .lean();
 
-    const proposalDoc = await Proposal.findOne({ leadEngagementId: engagement._id })
+    await ensureNeedsAssessmentAttemptCycleIndex();
+    await ensureProposalAttemptCycleIndex();
+    const currentAttemptCycle = normalizeAttemptCycle(engagement.contactAttemptCycle);
+    const proposalDoc = await Proposal.findOne({
+      leadEngagementId: engagement._id,
+      attemptCycle: currentAttemptCycle,
+    })
       .select("chosenProductId")
       .lean();
-
-    await ensureNeedsAssessmentAttemptCycleIndex();
-    const currentAttemptCycle = normalizeAttemptCycle(engagement.contactAttemptCycle);
     const needsAssessmentDoc = await NeedsAssessment.findOne({
       leadEngagementId: engagement._id,
       attemptCycle: currentAttemptCycle,
@@ -12665,7 +12745,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/schedule-application
 
       const activityNow = String(engagement.currentActivityKey || "").trim();
       const meetingType = "Application Submission";
-      const currentAttemptCycle = Number(engagement.contactAttemptCycle || 1);
+      const currentAttemptCycle = normalizeAttemptCycle(engagement.contactAttemptCycle);
       const existingMeeting = await ScheduledMeeting.findOne({
         leadEngagementId: engagement._id,
         attemptCycle: currentAttemptCycle,
@@ -12699,6 +12779,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/schedule-application
 
       const latestProposalPresentationMeeting = await ScheduledMeeting.findOne({
         leadEngagementId: engagement._id,
+        attemptCycle: currentAttemptCycle,
         meetingType: "Proposal Presentation",
       })
         .sort({ endAt: -1, startAt: -1, createdAt: -1 })
@@ -12900,10 +12981,11 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/schedule-application
       engagement.stageStartedAt = now;
       await engagement.save({ session });
 
+      await ensureProposalAttemptCycleIndex();
       await Proposal.updateOne(
-        { leadEngagementId: engagement._id },
+        { leadEngagementId: engagement._id, attemptCycle: currentAttemptCycle },
         {
-          $setOnInsert: { leadEngagementId: engagement._id },
+          $setOnInsert: { leadEngagementId: engagement._id, attemptCycle: currentAttemptCycle },
           $set: { outcomeActivity: "Schedule Application Submission" },
         },
         { upsert: true, session }
@@ -12979,6 +13061,9 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/presentation", async
         await engagement.save({ session });
       }
 
+      await ensureProposalAttemptCycleIndex();
+      const currentAttemptCycle = normalizeAttemptCycle(engagement.contactAttemptCycle);
+
       const proposalSet = hasDecision
         ? {
             outcomeActivity: currentActivityKey,
@@ -12991,9 +13076,9 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/presentation", async
           };
 
       await Proposal.updateOne(
-        { leadEngagementId: engagement._id },
+        { leadEngagementId: engagement._id, attemptCycle: currentAttemptCycle },
         {
-          $setOnInsert: { leadEngagementId: engagement._id },
+          $setOnInsert: { leadEngagementId: engagement._id, attemptCycle: currentAttemptCycle },
           $set: proposalSet,
         },
         { upsert: true, session }

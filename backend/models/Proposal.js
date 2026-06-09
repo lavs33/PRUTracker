@@ -25,12 +25,20 @@ const PROPOSAL_ACTIVITY = [
  */
 const proposalSchema = new mongoose.Schema(
   {
-    /** One-to-one relationship back to the owning LeadEngagement. */
+    /** Relationship back to the owning LeadEngagement. */
     leadEngagementId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "LeadEngagement",
       required: true,
-      unique: true,
+      index: true,
+    },
+
+    /** Engagement attempt cycle this proposal payload belongs to. */
+    attemptCycle: {
+      type: Number,
+      required: true,
+      default: 1,
+      min: 1,
       index: true,
     },
 
@@ -138,5 +146,7 @@ const proposalSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+proposalSchema.index({ leadEngagementId: 1, attemptCycle: 1 }, { unique: true });
 
 module.exports = mongoose.model("Proposal", proposalSchema);
