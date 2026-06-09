@@ -2,7 +2,7 @@
 /**
  * Application Model
  * -----------------
- * Captures the Application-stage artifacts for a single LeadEngagement.
+ * Captures the Application-stage artifacts for a single LeadEngagement attempt cycle.
  *
  * The detailed stage pointer still lives on LeadEngagement.currentActivityKey;
  * this document stores the saved data produced by each application subactivity.
@@ -37,13 +37,21 @@ const applicationSchema = new mongoose.Schema(
     /**
      * leadEngagementId
      * ----------------
-     * One-to-one link back to the engagement this Application record belongs to.
+     * Link back to the engagement this Application cycle record belongs to.
      */
     leadEngagementId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "LeadEngagement",
       required: true,
-      unique: true,
+      index: true,
+    },
+
+    /** Engagement attempt cycle this application payload belongs to. */
+    attemptCycle: {
+      type: Number,
+      required: true,
+      default: 1,
+      min: 1,
       index: true,
     },
 
@@ -123,6 +131,9 @@ const applicationSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+/** One Application record is allowed per engagement attempt cycle. */
+applicationSchema.index({ leadEngagementId: 1, attemptCycle: 1 }, { unique: true });
 
 /**
  * Unique PRUOne transaction IDs
