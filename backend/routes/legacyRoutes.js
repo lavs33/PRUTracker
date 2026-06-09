@@ -116,17 +116,6 @@ function registerLegacyRoutes(app, deps) {
     if (proposalAttemptCycleIndexEnsured) return;
     try {
       const collection = Proposal.collection;
-      await collection.updateMany(
-        {
-          $or: [
-            { attemptCycle: { $exists: false } },
-            { attemptCycle: null },
-            { attemptCycle: { $lt: 1 } },
-          ],
-        },
-        { $set: { attemptCycle: 1 } }
-      );
-
       const indexes = await collection.indexes();
       const legacyUniqueIndex = indexes.find((index) => {
         const key = index?.key || {};
@@ -157,6 +146,22 @@ function registerLegacyRoutes(app, deps) {
       if (err?.codeName !== "IndexNotFound") throw err;
       proposalAttemptCycleIndexEnsured = true;
     }
+  }
+
+
+  async function ensureProposalForCurrentAttemptCycle(leadEngagementId, attemptCycle, { session, outcomeActivity = "Generate Proposal" } = {}) {
+    const normalizedAttemptCycle = normalizeAttemptCycle(attemptCycle);
+    return Proposal.findOneAndUpdate(
+      { leadEngagementId, attemptCycle: normalizedAttemptCycle },
+      {
+        $setOnInsert: {
+          leadEngagementId,
+          attemptCycle: normalizedAttemptCycle,
+          outcomeActivity,
+        },
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true, session }
+    );
   }
 
   let scheduledMeetingAttemptCycleBackfilled = false;
@@ -11126,19 +11131,10 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/schedule-pro
         engagement.stageStartedAt = now;
         await engagement.save({ session });
 
-        await Proposal.updateOne(
-          { leadEngagementId: engagement._id, attemptCycle: currentAttemptCycle },
-          {
-            $setOnInsert: {
-              leadEngagementId: engagement._id,
-              attemptCycle: currentAttemptCycle,
-            },
-            $set: {
-              outcomeActivity: "Generate Proposal",
-            },
-          },
-          { upsert: true, session }
-        );
+        await ensureProposalForCurrentAttemptCycle(engagement._id, currentAttemptCycle, {
+          session,
+          outcomeActivity: "Generate Proposal",
+        });
       }
     });
     await ensureTaskMissedNotificationsForUser(userObjectId, { forceUnread: true, taskIds: [presentationTaskIdForNotif] });
