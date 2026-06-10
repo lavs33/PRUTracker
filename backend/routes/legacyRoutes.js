@@ -269,10 +269,7 @@ function registerLegacyRoutes(app, deps) {
 
     return Policy.findOneAndUpdate(
       { leadEngagementId, ...attemptCycleFilterForCycle(normalizedAttemptCycle) },
-      {
-        $setOnInsert: setOnInsert,
-        $set: { attemptCycle: normalizedAttemptCycle },
-      },
+      { $setOnInsert: setOnInsert },
       { upsert: true, new: true, setDefaultsOnInsert: true, session }
     );
   }
@@ -7297,6 +7294,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/policyholders/:policyholderId/
    - Status is NOT freely editable.
    - Dropped leads cannot be edited (must reopen first).
    - Closed leads cannot be dropped.
+   - Leads with submitted applications cannot be dropped.
    - Drop is only allowed from New/In Progress.
    - Reopen is only allowed from Dropped and restores statusBeforeDrop.
    - Source rules depend on prospect.source:
@@ -7398,7 +7396,13 @@ app.put("/api/prospects/:prospectId/leads/:leadId", async (req, res) => {
       existing.dropNotes = n;
       existing.droppedAt = existing.droppedAt || new Date();
 
-      const engagement = await LeadEngagement.findOne({ leadId: existing._id }).select("_id").lean();
+      const engagement = await LeadEngagement.findOne({ leadId: existing._id }).select("_id currentStage").lean();
+      if (engagement?.currentStage === "Policy Issuance") {
+        return res.status(409).json({
+          code: "LEAD_DROP_APPLICATION_SUBMITTED",
+          message: "Cannot drop this lead because an application has already been submitted.",
+        });
+      }
       let meetingsCancelledCount = 0;
       let tasksSoftDeletedCount = 0;
       let notificationsDeletedCount = 0;
@@ -7816,6 +7820,11 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
     const requestedHistoryCycle = Number(historyCycle || 0);
     const isHistoryCycleRequest = Number.isInteger(requestedHistoryCycle) && requestedHistoryCycle > 0;
     const targetAttemptCycle = isHistoryCycleRequest ? requestedHistoryCycle : currentAttemptCycle;
+    // History views must stay pinned to the selected prior attempt cycle so
+    // current-cycle policy/payment records cannot bleed into saved history.
+    const targetAttemptCycleFilter = isHistoryCycleRequest
+      ? { attemptCycle: targetAttemptCycle }
+      : attemptCycleFilterForCycle(targetAttemptCycle);
 
     await ensureNeedsAssessmentAttemptCycleIndex();
     const needsAssessment = await NeedsAssessment.findOne({
@@ -7844,7 +7853,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
     await ensurePolicyAttemptCycleIndex();
     const policyDoc = await Policy.findOne({
       leadEngagementId: engagement._id,
-      ...attemptCycleFilterForCycle(targetAttemptCycle),
+      ...targetAttemptCycleFilter,
     })
       .select("attemptCycle chosenProductId outcomeActivity recordPolicyApplicationStatus uploadInitialPremiumEor uploadPolicySummary recordCoverageDurationDetails")
       .lean();
@@ -7853,9 +7862,9 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
     const applicationPaymentId = applicationDoc?.recordPremiumPaymentTransfer?.paymentId || null;
     const policyPaymentId = policyDoc?.uploadInitialPremiumEor?.paymentId || null;
     const paymentFilters = [];
-    if (applicationPaymentId) paymentFilters.push({ _id: applicationPaymentId, ...attemptCycleFilterForCycle(targetAttemptCycle) });
-    if (policyPaymentId) paymentFilters.push({ _id: policyPaymentId, ...attemptCycleFilterForCycle(targetAttemptCycle) });
-    paymentFilters.push({ leadEngagementId: engagement._id, ...attemptCycleFilterForCycle(targetAttemptCycle) });
+    if (applicationPaymentId) paymentFilters.push({ _id: applicationPaymentId, ...targetAttemptCycleFilter });
+    if (policyPaymentId) paymentFilters.push({ _id: policyPaymentId, ...targetAttemptCycleFilter });
+    paymentFilters.push({ leadEngagementId: engagement._id, ...targetAttemptCycleFilter });
     const paymentDoc = await Payment.findOne({ $or: paymentFilters })
       .sort({ attemptCycle: -1, "recordPremiumPaymentTransfer.savedAt": -1, createdAt: -1 })
       .select("annualPaymentId attemptCycle recordPremiumPaymentTransfer uploadPremiumPaymentEor")
@@ -7863,7 +7872,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
 
     const annualPaymentFilter = paymentDoc?.annualPaymentId
       ? { _id: paymentDoc.annualPaymentId }
-      : { leadEngagementId: engagement._id, ...attemptCycleFilterForCycle(targetAttemptCycle) };
+      : { leadEngagementId: engagement._id, ...targetAttemptCycleFilter };
     const annualPaymentDoc = await AnnualPayment.findOne(annualPaymentFilter)
       .select("annualPaymentPeriod totalAnnualPremiumPhp amountPaidSoFarPhp remainingBalancePhp frequencyOfPayment paymentProgress status attemptCycle")
       .lean();
@@ -8230,6 +8239,8 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
           recordPolicyApplicationStatus: {
             status: policyDoc?.recordPolicyApplicationStatus?.status || "",
             issuanceDate: policyDoc?.recordPolicyApplicationStatus?.issuanceDate || null,
+            declinedDate: policyDoc?.recordPolicyApplicationStatus?.declinedDate || null,
+            declineReason: policyDoc?.recordPolicyApplicationStatus?.declineReason || "",
             notes: policyDoc?.recordPolicyApplicationStatus?.notes || "",
             savedAt: policyDoc?.recordPolicyApplicationStatus?.savedAt || null,
           },
@@ -12119,7 +12130,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/status", asyn
   try {
     const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
-    const { status, issuanceDate, notes } = req.body || {};
+    const { status, issuanceDate, declinedDate, declineReason, notes } = req.body || {};
     if (!userId) return res.status(400).json({ message: "Missing userId." });
     if (!mongoose.isValidObjectId(userId) || !mongoose.isValidObjectId(prospectId) || !mongoose.isValidObjectId(leadId)) {
       return res.status(400).json({ message: "Invalid id(s)." });
@@ -12191,7 +12202,16 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/status", asyn
       ? new Date(applicationDoc.recordApplicationSubmission.savedAt)
       : null;
 
+    const today = new Date();
+    today.setHours(23, 59, 59, 999);
+    const applicationSubmittedDateStart = applicationSubmittedAt
+      ? new Date(new Date(applicationSubmittedAt).setHours(0, 0, 0, 0))
+      : null;
+
     let issuanceDateValue = null;
+    let declinedDateValue = null;
+    const declineReasonText = String(declineReason || "").trim();
+
     if (normalizedStatus === "Issued") {
       const issuanceDateRaw = String(issuanceDate || "").trim();
       if (!issuanceDateRaw) {
@@ -12201,13 +12221,31 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/status", asyn
       if (Number.isNaN(issuanceDateValue.getTime())) {
         return res.status(400).json({ message: "Issuance date is invalid." });
       }
-      const today = new Date();
-      today.setHours(23, 59, 59, 999);
       if (issuanceDateValue > today) {
         return res.status(400).json({ message: "Issuance date cannot be in the future." });
       }
-      if (applicationSubmittedAt && issuanceDateValue < new Date(new Date(applicationSubmittedAt).setHours(0, 0, 0, 0))) {
+      if (applicationSubmittedDateStart && issuanceDateValue < applicationSubmittedDateStart) {
         return res.status(400).json({ message: "Issuance date cannot be earlier than application submission date." });
+      }
+    }
+
+    if (normalizedStatus === "Declined") {
+      const declinedDateRaw = String(declinedDate || "").trim();
+      if (!declinedDateRaw) {
+        return res.status(400).json({ message: "Date declined is required when status is Declined." });
+      }
+      if (!declineReasonText) {
+        return res.status(400).json({ message: "Reason for decline is required when status is Declined." });
+      }
+      declinedDateValue = new Date(`${declinedDateRaw}T00:00:00`);
+      if (Number.isNaN(declinedDateValue.getTime())) {
+        return res.status(400).json({ message: "Date declined is invalid." });
+      }
+      if (declinedDateValue > today) {
+        return res.status(400).json({ message: "Date declined cannot be in the future." });
+      }
+      if (applicationSubmittedDateStart && declinedDateValue < applicationSubmittedDateStart) {
+        return res.status(400).json({ message: "Date declined cannot be earlier than application submission date." });
       }
     }
 
@@ -12218,12 +12256,13 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/status", asyn
       {
         $setOnInsert: { leadEngagementId: engagement._id, attemptCycle: currentAttemptCycle },
         $set: {
-          attemptCycle: currentAttemptCycle,
           outcomeActivity: nextActivityKey,
           ...(fallbackChosenProductId ? { chosenProductId: fallbackChosenProductId } : {}),
           recordPolicyApplicationStatus: {
             status: normalizedStatus,
-            issuanceDate: issuanceDateValue,
+            issuanceDate: normalizedStatus === "Issued" ? issuanceDateValue : null,
+            declinedDate: normalizedStatus === "Declined" ? declinedDateValue : null,
+            declineReason: normalizedStatus === "Declined" ? declineReasonText : "",
             notes: String(notes || "").trim(),
             savedAt: new Date(),
           },
