@@ -1,7 +1,7 @@
 /**
  * Policy Model
  * ------------
- * Stores Policy Issuance-stage records for a single LeadEngagement.
+ * Stores Policy Issuance-stage records for a single LeadEngagement attempt cycle.
  *
  * The document tracks application-status outcomes, uploaded policy artifacts,
  * and coverage-duration selections used to finalize a converted case.
@@ -19,16 +19,23 @@ const POLICY_ISSUANCE_ACTIVITY = [
 /**
  * policySchema
  * ------------
- * Persists policy-issuance outputs for one lead engagement.
+ * Persists policy-issuance outputs for one lead engagement attempt cycle.
  */
 const policySchema = new mongoose.Schema(
   {
-    /** One-to-one reference back to the originating LeadEngagement. */
+    /** Reference back to the originating LeadEngagement. */
     leadEngagementId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "LeadEngagement",
       required: true,
-      unique: true,
+      index: true,
+    },
+    /** Engagement attempt cycle this policy-issuance payload belongs to. */
+    attemptCycle: {
+      type: Number,
+      required: true,
+      default: 1,
+      min: 1,
       index: true,
     },
     /** Product reference carried forward into issuance/final policy creation. */
@@ -168,6 +175,9 @@ const policySchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+
+/** One Policy record is allowed per engagement attempt cycle. */
+policySchema.index({ leadEngagementId: 1, attemptCycle: 1 }, { unique: true });
 
 policySchema.index(
   { "uploadPolicySummary.policyNumber": 1 },
