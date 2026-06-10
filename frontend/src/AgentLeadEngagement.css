@@ -926,6 +926,32 @@
   flex-wrap: wrap;
 }
 
+.le-modalCard.le-applicationSubmissionConfirmModal{
+  width: min(420px, calc(100% - 40px));
+  padding: 16px;
+}
+
+.le-applicationSubmissionConfirmModal .le-modalTitle{
+  font-size: 17px;
+  margin-bottom: 8px;
+}
+
+.le-applicationSubmissionConfirmModal .le-modalText{
+  margin-bottom: 12px;
+}
+
+.le-applicationSubmissionConfirmModal .le-formRow{
+  margin-bottom: 10px;
+}
+
+.le-applicationSubmissionConfirmPreview{
+  display: block;
+  max-width: 180px;
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+}
+
 .le-modalCard {
   position: relative; 
   padding-top: 22px; 

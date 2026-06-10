@@ -269,10 +269,7 @@ function registerLegacyRoutes(app, deps) {
 
     return Policy.findOneAndUpdate(
       { leadEngagementId, ...attemptCycleFilterForCycle(normalizedAttemptCycle) },
-      {
-        $setOnInsert: setOnInsert,
-        $set: { attemptCycle: normalizedAttemptCycle },
-      },
+      { $setOnInsert: setOnInsert },
       { upsert: true, new: true, setDefaultsOnInsert: true, session }
     );
   }
