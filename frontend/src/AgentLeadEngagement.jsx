@@ -6810,7 +6810,11 @@ function AgentLeadEngagement() {
 
                   {showPolicyIssuancePanel && (
                     <>
-                      {isPolicyStatusViewed && (
+                      {isPolicyStatusViewed && isHistoryView && !hasSavedPolicyApplicationStatus ? (
+                        <div className="le-block"><p className="le-muted" style={{ marginTop: 8 }}>No details were saved for this subactivity in the selected engagement cycle.</p></div>
+                      ) : null}
+
+                      {isPolicyStatusViewed && (!isHistoryView || hasSavedPolicyApplicationStatus) && (
                         <div className="le-block">
                           <h4 className="le-blockTitle">{hasSavedPolicyApplicationStatus ? "Policy Application Status Details" : "Record Policy Application Status"}</h4>
 
@@ -6913,7 +6917,11 @@ function AgentLeadEngagement() {
                         </div>
                       )}
 
-                      {isPolicyInitialEorViewed && hasSavedPolicyApplicationStatus && policyStatusForm.status === "Issued" ? (
+                      {isPolicyInitialEorViewed && isHistoryView && !hasSavedPolicyInitialPremiumEor ? (
+                        <div className="le-block"><p className="le-muted" style={{ marginTop: 8 }}>No details were saved for this subactivity in the selected engagement cycle.</p></div>
+                      ) : null}
+
+                      {isPolicyInitialEorViewed && ((isHistoryView && hasSavedPolicyInitialPremiumEor) || (!isHistoryView && hasSavedPolicyApplicationStatus && policyStatusForm.status === "Issued")) ? (
                         <div className="le-block">
                           <h4 className="le-blockTitle">{hasSavedPolicyInitialPremiumEor ? "Initial Premium eOR Details" : "Upload Initial Premium eOR"}</h4>
 
@@ -7040,7 +7048,11 @@ function AgentLeadEngagement() {
                       ) : null}
 
 
-                      {isPolicySummaryViewed && hasSavedPolicyInitialPremiumEor ? (
+                      {isPolicySummaryViewed && isHistoryView && !hasSavedPolicySummary ? (
+                        <div className="le-block"><p className="le-muted" style={{ marginTop: 8 }}>No details were saved for this subactivity in the selected engagement cycle.</p></div>
+                      ) : null}
+
+                      {isPolicySummaryViewed && ((isHistoryView && hasSavedPolicySummary) || (!isHistoryView && hasSavedPolicyInitialPremiumEor)) ? (
                         <div className="le-block">
                           <h4 className="le-blockTitle">{hasSavedPolicySummary ? "Policy Summary Details" : "Upload Policy Summary"}</h4>
 
@@ -7140,7 +7152,11 @@ function AgentLeadEngagement() {
                       ) : null}
 
 
-                      {isPolicyCoverageViewed && hasSavedPolicySummary ? (
+                      {isPolicyCoverageViewed && isHistoryView && !hasSavedPolicyCoverageDetails ? (
+                        <div className="le-block"><p className="le-muted" style={{ marginTop: 8 }}>No details were saved for this subactivity in the selected engagement cycle.</p></div>
+                      ) : null}
+
+                      {isPolicyCoverageViewed && ((isHistoryView && hasSavedPolicyCoverageDetails) || (!isHistoryView && hasSavedPolicySummary)) ? (
                         <div className="le-block">
                           <h4 className="le-blockTitle">{hasSavedPolicyCoverageDetails ? "Coverage Duration Details" : "Record Coverage Duration Details"}</h4>
 
@@ -10649,7 +10665,7 @@ function AgentLeadEngagement() {
 
       {applicationSubmissionConfirmOpen ? (
         <div className="le-modalOverlay" role="dialog" aria-modal="true" aria-labelledby="le-application-submission-confirm-title">
-          <div className="le-modalCard">
+          <div className="le-modalCard le-applicationSubmissionConfirmModal">
             <button
               type="button"
               className="le-modalClose"
@@ -10675,7 +10691,7 @@ function AgentLeadEngagement() {
                 <img
                   src={applicationSubmissionForm.submissionScreenshotImageDataUrl}
                   alt="Application submission screenshot confirmation preview"
-                  style={{ maxWidth: 260, width: "100%", borderRadius: 8, border: "1px solid #e5e7eb" }}
+                  className="le-applicationSubmissionConfirmPreview"
                 />
               </div>
             ) : null}

@@ -269,10 +269,7 @@ function registerLegacyRoutes(app, deps) {
 
     return Policy.findOneAndUpdate(
       { leadEngagementId, ...attemptCycleFilterForCycle(normalizedAttemptCycle) },
-      {
-        $setOnInsert: setOnInsert,
-        $set: { attemptCycle: normalizedAttemptCycle },
-      },
+      { $setOnInsert: setOnInsert },
       { upsert: true, new: true, setDefaultsOnInsert: true, session }
     );
   }
@@ -7816,6 +7813,11 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
     const requestedHistoryCycle = Number(historyCycle || 0);
     const isHistoryCycleRequest = Number.isInteger(requestedHistoryCycle) && requestedHistoryCycle > 0;
     const targetAttemptCycle = isHistoryCycleRequest ? requestedHistoryCycle : currentAttemptCycle;
+    // History views must stay pinned to the selected prior attempt cycle so
+    // current-cycle policy/payment records cannot bleed into saved history.
+    const targetAttemptCycleFilter = isHistoryCycleRequest
+      ? { attemptCycle: targetAttemptCycle }
+      : attemptCycleFilterForCycle(targetAttemptCycle);
 
     await ensureNeedsAssessmentAttemptCycleIndex();
     const needsAssessment = await NeedsAssessment.findOne({
@@ -7844,7 +7846,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
     await ensurePolicyAttemptCycleIndex();
     const policyDoc = await Policy.findOne({
       leadEngagementId: engagement._id,
-      ...attemptCycleFilterForCycle(targetAttemptCycle),
+      ...targetAttemptCycleFilter,
     })
       .select("attemptCycle chosenProductId outcomeActivity recordPolicyApplicationStatus uploadInitialPremiumEor uploadPolicySummary recordCoverageDurationDetails")
       .lean();
@@ -7853,9 +7855,9 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
     const applicationPaymentId = applicationDoc?.recordPremiumPaymentTransfer?.paymentId || null;
     const policyPaymentId = policyDoc?.uploadInitialPremiumEor?.paymentId || null;
     const paymentFilters = [];
-    if (applicationPaymentId) paymentFilters.push({ _id: applicationPaymentId, ...attemptCycleFilterForCycle(targetAttemptCycle) });
-    if (policyPaymentId) paymentFilters.push({ _id: policyPaymentId, ...attemptCycleFilterForCycle(targetAttemptCycle) });
-    paymentFilters.push({ leadEngagementId: engagement._id, ...attemptCycleFilterForCycle(targetAttemptCycle) });
+    if (applicationPaymentId) paymentFilters.push({ _id: applicationPaymentId, ...targetAttemptCycleFilter });
+    if (policyPaymentId) paymentFilters.push({ _id: policyPaymentId, ...targetAttemptCycleFilter });
+    paymentFilters.push({ leadEngagementId: engagement._id, ...targetAttemptCycleFilter });
     const paymentDoc = await Payment.findOne({ $or: paymentFilters })
       .sort({ attemptCycle: -1, "recordPremiumPaymentTransfer.savedAt": -1, createdAt: -1 })
       .select("annualPaymentId attemptCycle recordPremiumPaymentTransfer uploadPremiumPaymentEor")
@@ -7863,7 +7865,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
 
     const annualPaymentFilter = paymentDoc?.annualPaymentId
       ? { _id: paymentDoc.annualPaymentId }
-      : { leadEngagementId: engagement._id, ...attemptCycleFilterForCycle(targetAttemptCycle) };
+      : { leadEngagementId: engagement._id, ...targetAttemptCycleFilter };
     const annualPaymentDoc = await AnnualPayment.findOne(annualPaymentFilter)
       .select("annualPaymentPeriod totalAnnualPremiumPhp amountPaidSoFarPhp remainingBalancePhp frequencyOfPayment paymentProgress status attemptCycle")
       .lean();
