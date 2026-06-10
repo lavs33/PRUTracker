@@ -274,6 +274,7 @@ function AgentLeadEngagement() {
   const [applicationSubmissionSaving, setApplicationSubmissionSaving] = useState(false);
   const [applicationSubmissionError, setApplicationSubmissionError] = useState("");
   const [applicationSubmissionScreenshotInputKey, setApplicationSubmissionScreenshotInputKey] = useState(0);
+  const [applicationSubmissionConfirmOpen, setApplicationSubmissionConfirmOpen] = useState(false);
   const [applicationViewedActivityKey, setApplicationViewedActivityKey] = useState("");
   const [policyCurrentActivityKey, setPolicyCurrentActivityKey] = useState("Record Policy Application Status");
   const [policyViewedActivityKey, setPolicyViewedActivityKey] = useState("");
@@ -4977,23 +4978,36 @@ function AgentLeadEngagement() {
     }
   };
 
+  const validateApplicationSubmissionForm = () => {
+    setApplicationSubmissionError("");
+    setApplicationSubmissionFieldErrors({});
+
+    const txId = String(applicationSubmissionForm.pruOneTransactionId || "").trim();
+    const screenshotDataUrl = String(applicationSubmissionForm.submissionScreenshotImageDataUrl || "").trim();
+
+    if (!txId) {
+      setApplicationSubmissionFieldErrors({ pruOneTransactionId: "PRUOnePH Transaction ID is required." });
+      return false;
+    }
+    if (!screenshotDataUrl) {
+      setApplicationSubmissionFieldErrors({ submissionScreenshotImageDataUrl: "Submission screenshot is required." });
+      return false;
+    }
+    return true;
+  };
+
+  const openApplicationSubmissionConfirmation = () => {
+    if (!validateApplicationSubmissionForm()) return;
+    setApplicationSubmissionConfirmOpen(true);
+  };
+
   const submitApplicationSubmission = async () => {
     try {
-      setApplicationSubmissionError("");
-      setApplicationSubmissionFieldErrors({});
+      if (!validateApplicationSubmissionForm()) return;
 
       const txId = String(applicationSubmissionForm.pruOneTransactionId || "").trim();
       const screenshotDataUrl = String(applicationSubmissionForm.submissionScreenshotImageDataUrl || "").trim();
       const screenshotFileName = String(applicationSubmissionForm.submissionScreenshotFileName || "").trim();
-
-      if (!txId) {
-        setApplicationSubmissionFieldErrors({ pruOneTransactionId: "PRUOnePH Transaction ID is required." });
-        return;
-      }
-      if (!screenshotDataUrl) {
-        setApplicationSubmissionFieldErrors({ submissionScreenshotImageDataUrl: "Submission screenshot is required." });
-        return;
-      }
 
       setApplicationSubmissionSaving(true);
       const res = await fetch(`${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/application/submission?userId=${user.id}`, {
@@ -5008,6 +5022,7 @@ function AgentLeadEngagement() {
 
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to save application submission.");
+      setApplicationSubmissionConfirmOpen(false);
       await refreshCurrentProgressView();
     } catch (err) {
       const msg = String(err?.message || "Failed to save application submission.");
@@ -6762,6 +6777,7 @@ function AgentLeadEngagement() {
                                   onClick={() => {
                                     setApplicationSubmissionError("");
                                     setApplicationSubmissionFieldErrors({});
+                                    setApplicationSubmissionConfirmOpen(false);
                                     setApplicationSubmissionForm({
                                       pruOneTransactionId: "",
                                       submissionScreenshotImageDataUrl: "",
@@ -6772,12 +6788,12 @@ function AgentLeadEngagement() {
                                   }}
                                   disabled={applicationSubmissionSaving}
                                 >
-                                  Cancel
+                                  Clear
                                 </button>
                                 <button
                                   type="button"
                                   className="le-btn primary"
-                                  onClick={submitApplicationSubmission}
+                                  onClick={openApplicationSubmissionConfirmation}
                                   disabled={applicationSubmissionSaving}
                                 >
                                   {applicationSubmissionSaving ? "Saving..." : "Save Application Submission"}
@@ -10629,6 +10645,61 @@ function AgentLeadEngagement() {
           )}
         </main>
       </div>
+
+
+      {applicationSubmissionConfirmOpen ? (
+        <div className="le-modalOverlay" role="dialog" aria-modal="true" aria-labelledby="le-application-submission-confirm-title">
+          <div className="le-modalCard">
+            <button
+              type="button"
+              className="le-modalClose"
+              aria-label="Close application submission confirmation"
+              onClick={() => setApplicationSubmissionConfirmOpen(false)}
+              disabled={applicationSubmissionSaving}
+            >
+              ×
+            </button>
+            <h3 className="le-modalTitle" id="le-application-submission-confirm-title">Confirm Application Submission</h3>
+            <p className="le-modalText">Please confirm the recorded application submission details before moving this lead engagement to Policy Issuance.</p>
+            <div className="le-formRow">
+              <label className="le-label">PRUOnePH Transaction ID</label>
+              <p className="le-smallNote">{String(applicationSubmissionForm.pruOneTransactionId || "").trim() || "—"}</p>
+            </div>
+            <div className="le-formRow">
+              <label className="le-label">Submission Screenshot</label>
+              <p className="le-smallNote">{applicationSubmissionForm.submissionScreenshotFileName || "Uploaded image"}</p>
+            </div>
+            {String(applicationSubmissionForm.submissionScreenshotImageDataUrl || "").trim() ? (
+              <div className="le-formRow">
+                <label className="le-label">Preview</label>
+                <img
+                  src={applicationSubmissionForm.submissionScreenshotImageDataUrl}
+                  alt="Application submission screenshot confirmation preview"
+                  style={{ maxWidth: 260, width: "100%", borderRadius: 8, border: "1px solid #e5e7eb" }}
+                />
+              </div>
+            ) : null}
+            <div className="le-modalActions">
+              <button
+                type="button"
+                className="le-btn secondary"
+                onClick={() => setApplicationSubmissionConfirmOpen(false)}
+                disabled={applicationSubmissionSaving}
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                className="le-btn primary"
+                onClick={submitApplicationSubmission}
+                disabled={applicationSubmissionSaving}
+              >
+                {applicationSubmissionSaving ? "Saving..." : "Confirm"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {confirmNotInterestedModalOpen ? (
         <div className="le-modalOverlay" role="dialog" aria-modal="true" aria-labelledby="le-confirm-drop-title">
