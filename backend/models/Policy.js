@@ -64,6 +64,15 @@ const policySchema = new mongoose.Schema(
         type: Date,
         default: null,
       },
+      declinedDate: {
+        type: Date,
+        default: null,
+      },
+      declineReason: {
+        type: String,
+        default: "",
+        trim: true,
+      },
       notes: {
         type: String,
         default: "",

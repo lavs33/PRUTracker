@@ -181,6 +181,19 @@
   color: #f3b4b4;
 }
 
+.ld-iconBtn:disabled{
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.ld-iconBtn:disabled:hover{
+  transform: none;
+  border-color: #e7e7ef;
+  box-shadow: none;
+}
+
 .ld-actionBtn {
   background: rgba(218, 41, 28, 0.813);
   border: none;

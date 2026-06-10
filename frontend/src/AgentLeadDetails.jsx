@@ -204,6 +204,13 @@ function AgentLeadDetails() {
 
   const isDropped = String(lead?.status || "") === "Dropped";
   const isClosed = String(lead?.status || "") === "Closed";
+  const hasSubmittedApplication = String(leadEngagement?.currentStage || "") === "Policy Issuance";
+  const dropDisabledReason = isClosed
+    ? "Closed leads cannot be dropped"
+    : hasSubmittedApplication
+      ? "Leads with submitted applications cannot be dropped"
+      : "";
+  const isDropDisabled = Boolean(dropDisabledReason);
   const isSystemAssigned = String(prospectSourceType || "") === "System-Assigned";
 
   const displaySource = useMemo(() => {
@@ -367,15 +374,7 @@ const handleSideNav = (key) => {
 
   // DROP / REOPEN
   const onDropClick = () => {
-    if (isClosed) {
-      openDropModal({
-        type: "blocked",
-        title: "Cannot Drop Lead",
-        message:
-          "This lead is already Closed. Closed leads cannot be dropped because the sale was successful.",
-      });
-      return;
-    }
+    if (isDropDisabled) return;
 
     openDropModal({
       type: "confirm",
@@ -724,15 +723,17 @@ const handleSideNav = (key) => {
                   {!isEditing && (
                     <>
                       {!isDropped ? (
-                        <button
-                          type="button"
-                          className="ld-iconBtn danger"
-                          title={isClosed ? "Closed leads cannot be dropped" : "Drop Lead"}
-                          onClick={onDropClick}
-                          disabled={dropBusy}
-                        >
-                          ⛔
-                        </button>
+                        <span title={dropDisabledReason || "Drop Lead"}>
+                          <button
+                            type="button"
+                            className="ld-iconBtn danger"
+                            title={dropDisabledReason || "Drop Lead"}
+                            onClick={onDropClick}
+                            disabled={dropBusy || isDropDisabled}
+                          >
+                            ⛔
+                          </button>
+                        </span>
                       ) : (
                         <button
                           type="button"

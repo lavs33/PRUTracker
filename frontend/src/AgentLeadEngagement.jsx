@@ -281,6 +281,8 @@ function AgentLeadEngagement() {
   const [policyStatusForm, setPolicyStatusForm] = useState({
     status: "",
     issuanceDate: "",
+    declinedDate: "",
+    declineReason: "",
     notes: "",
     savedAt: "",
   });
@@ -688,6 +690,10 @@ function AgentLeadEngagement() {
         issuanceDate: policyStage?.recordPolicyApplicationStatus?.issuanceDate
           ? toDateInputValue(policyStage.recordPolicyApplicationStatus.issuanceDate)
           : "",
+        declinedDate: policyStage?.recordPolicyApplicationStatus?.declinedDate
+          ? toDateInputValue(policyStage.recordPolicyApplicationStatus.declinedDate)
+          : "",
+        declineReason: String(policyStage?.recordPolicyApplicationStatus?.declineReason || ""),
         notes: String(policyStage?.recordPolicyApplicationStatus?.notes || ""),
         savedAt: policyStage?.recordPolicyApplicationStatus?.savedAt || "",
       });
@@ -5055,8 +5061,12 @@ function AgentLeadEngagement() {
     if (!["Issued", "Declined"].includes(status)) return false;
     if (!String(policyStatusForm.savedAt || "").trim()) return false;
     if (status === "Issued" && !String(policyStatusForm.issuanceDate || "").trim()) return false;
+    if (status === "Declined") {
+      if (!String(policyStatusForm.declinedDate || "").trim()) return false;
+      if (!String(policyStatusForm.declineReason || "").trim()) return false;
+    }
     return true;
-  }, [policyStatusForm.status, policyStatusForm.issuanceDate, policyStatusForm.savedAt]);
+  }, [policyStatusForm.status, policyStatusForm.issuanceDate, policyStatusForm.declinedDate, policyStatusForm.declineReason, policyStatusForm.savedAt]);
 
   const submitPolicyApplicationStatus = async () => {
     try {
@@ -5065,6 +5075,8 @@ function AgentLeadEngagement() {
 
       const status = String(policyStatusForm.status || "").trim();
       const issuanceDate = String(policyStatusForm.issuanceDate || "").trim();
+      const declinedDate = String(policyStatusForm.declinedDate || "").trim();
+      const declineReason = String(policyStatusForm.declineReason || "").trim();
       const notes = String(policyStatusForm.notes || "").trim();
 
       if (!["Issued", "Declined"].includes(status)) {
@@ -5087,6 +5099,25 @@ function AgentLeadEngagement() {
         }
       }
 
+      if (status === "Declined") {
+        if (!declinedDate) {
+          setPolicyStatusFieldErrors({ declinedDate: "Date declined is required for Declined status." });
+          return;
+        }
+        if (applicationSubmissionSavedDateInput && declinedDate < applicationSubmissionSavedDateInput) {
+          setPolicyStatusFieldErrors({ declinedDate: "Date declined cannot be earlier than application submission date." });
+          return;
+        }
+        if (declinedDate > todayDateInput) {
+          setPolicyStatusFieldErrors({ declinedDate: "Date declined cannot be in the future." });
+          return;
+        }
+        if (!declineReason) {
+          setPolicyStatusFieldErrors({ declineReason: "Reason for decline is required." });
+          return;
+        }
+      }
+
       setPolicyStatusSaving(true);
       const res = await fetch(`${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/policy-issuance/status?userId=${user.id}`, {
         method: "POST",
@@ -5094,6 +5125,8 @@ function AgentLeadEngagement() {
         body: JSON.stringify({
           status,
           issuanceDate: status === "Issued" ? issuanceDate : "",
+          declinedDate: status === "Declined" ? declinedDate : "",
+          declineReason: status === "Declined" ? declineReason : "",
           notes,
         }),
       });
@@ -5106,6 +5139,10 @@ function AgentLeadEngagement() {
         setPolicyStatusFieldErrors({ status: "Please select policy application status." });
       } else if (msg.includes("Issuance date")) {
         setPolicyStatusFieldErrors({ issuanceDate: msg });
+      } else if (msg.includes("Date declined")) {
+        setPolicyStatusFieldErrors({ declinedDate: msg });
+      } else if (msg.includes("Reason for decline")) {
+        setPolicyStatusFieldErrors({ declineReason: msg });
       } else {
         setPolicyStatusError(msg);
       }
@@ -6810,7 +6847,11 @@ function AgentLeadEngagement() {
 
                   {showPolicyIssuancePanel && (
                     <>
-                      {isPolicyStatusViewed && (
+                      {isPolicyStatusViewed && isHistoryView && !hasSavedPolicyApplicationStatus ? (
+                        <div className="le-block"><p className="le-muted" style={{ marginTop: 8 }}>No details were saved for this subactivity in the selected engagement cycle.</p></div>
+                      ) : null}
+
+                      {isPolicyStatusViewed && (!isHistoryView || hasSavedPolicyApplicationStatus) && (
                         <div className="le-block">
                           <h4 className="le-blockTitle">{hasSavedPolicyApplicationStatus ? "Policy Application Status Details" : "Record Policy Application Status"}</h4>
 
@@ -6825,6 +6866,18 @@ function AgentLeadEngagement() {
                                   <label className="le-label">Issuance Date</label>
                                   <p className="le-smallNote">{policyStatusForm.issuanceDate || "—"}</p>
                                 </div>
+                              ) : null}
+                              {policyStatusForm.status === "Declined" ? (
+                                <>
+                                  <div className="le-formRow">
+                                    <label className="le-label">Date Declined</label>
+                                    <p className="le-smallNote">{policyStatusForm.declinedDate || "—"}</p>
+                                  </div>
+                                  <div className="le-formRow">
+                                    <label className="le-label">Reason for Decline</label>
+                                    <p className="le-smallNote">{policyStatusForm.declineReason || "—"}</p>
+                                  </div>
+                                </>
                               ) : null}
                               {String(policyStatusForm.notes || "").trim() ? (
                                 <div className="le-formRow">
@@ -6842,8 +6895,14 @@ function AgentLeadEngagement() {
                                   value={policyStatusForm.status}
                                   onChange={(e) => {
                                     const v = e.target.value;
-                                    setPolicyStatusForm((f) => ({ ...f, status: v, issuanceDate: v === "Issued" ? f.issuanceDate : "" }));
-                                    setPolicyStatusFieldErrors((prev) => ({ ...prev, status: "", issuanceDate: "" }));
+                                    setPolicyStatusForm((f) => ({
+                                      ...f,
+                                      status: v,
+                                      issuanceDate: v === "Issued" ? f.issuanceDate : "",
+                                      declinedDate: v === "Declined" ? f.declinedDate : "",
+                                      declineReason: v === "Declined" ? f.declineReason : "",
+                                    }));
+                                    setPolicyStatusFieldErrors((prev) => ({ ...prev, status: "", issuanceDate: "", declinedDate: "", declineReason: "" }));
                                   }}
                                   disabled={policyStatusSaving}
                                 >
@@ -6873,6 +6932,42 @@ function AgentLeadEngagement() {
                                 </div>
                               ) : null}
 
+                              {policyStatusForm.status === "Declined" ? (
+                                <>
+                                  <div className="le-formRow">
+                                    <label className="le-label">Date Declined *</label>
+                                    <input
+                                      type="date"
+                                      className={`le-input ${policyStatusFieldErrors.declinedDate ? "error" : ""}`}
+                                      value={policyStatusForm.declinedDate}
+                                      onChange={(e) => {
+                                        setPolicyStatusForm((f) => ({ ...f, declinedDate: e.target.value }));
+                                        setPolicyStatusFieldErrors((prev) => ({ ...prev, declinedDate: "" }));
+                                      }}
+                                      min={applicationSubmissionSavedDateInput || undefined}
+                                      max={todayDateInput}
+                                      disabled={policyStatusSaving}
+                                    />
+                                    {policyStatusFieldErrors.declinedDate ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyStatusFieldErrors.declinedDate}</p> : null}
+                                  </div>
+
+                                  <div className="le-formRow">
+                                    <label className="le-label">Reason for Decline *</label>
+                                    <textarea
+                                      className={`le-input ${policyStatusFieldErrors.declineReason ? "error" : ""}`}
+                                      rows={3}
+                                      value={policyStatusForm.declineReason}
+                                      onChange={(e) => {
+                                        setPolicyStatusForm((f) => ({ ...f, declineReason: e.target.value }));
+                                        setPolicyStatusFieldErrors((prev) => ({ ...prev, declineReason: "" }));
+                                      }}
+                                      disabled={policyStatusSaving}
+                                    />
+                                    {policyStatusFieldErrors.declineReason ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyStatusFieldErrors.declineReason}</p> : null}
+                                  </div>
+                                </>
+                              ) : null}
+
                               <div className="le-formRow">
                                 <label className="le-label">Notes (Optional)</label>
                                 <textarea
@@ -6893,11 +6988,11 @@ function AgentLeadEngagement() {
                                   onClick={() => {
                                     setPolicyStatusError("");
                                     setPolicyStatusFieldErrors({});
-                                    setPolicyStatusForm({ status: "", issuanceDate: "", notes: "", savedAt: "" });
+                                    setPolicyStatusForm({ status: "", issuanceDate: "", declinedDate: "", declineReason: "", notes: "", savedAt: "" });
                                   }}
                                   disabled={policyStatusSaving}
                                 >
-                                  Cancel
+                                  Clear
                                 </button>
                                 <button
                                   type="button"
@@ -6913,7 +7008,11 @@ function AgentLeadEngagement() {
                         </div>
                       )}
 
-                      {isPolicyInitialEorViewed && hasSavedPolicyApplicationStatus && policyStatusForm.status === "Issued" ? (
+                      {isPolicyInitialEorViewed && isHistoryView && !hasSavedPolicyInitialPremiumEor ? (
+                        <div className="le-block"><p className="le-muted" style={{ marginTop: 8 }}>No details were saved for this subactivity in the selected engagement cycle.</p></div>
+                      ) : null}
+
+                      {isPolicyInitialEorViewed && ((isHistoryView && hasSavedPolicyInitialPremiumEor) || (!isHistoryView && hasSavedPolicyApplicationStatus && policyStatusForm.status === "Issued")) ? (
                         <div className="le-block">
                           <h4 className="le-blockTitle">{hasSavedPolicyInitialPremiumEor ? "Initial Premium eOR Details" : "Upload Initial Premium eOR"}</h4>
 
@@ -7040,7 +7139,11 @@ function AgentLeadEngagement() {
                       ) : null}
 
 
-                      {isPolicySummaryViewed && hasSavedPolicyInitialPremiumEor ? (
+                      {isPolicySummaryViewed && isHistoryView && !hasSavedPolicySummary ? (
+                        <div className="le-block"><p className="le-muted" style={{ marginTop: 8 }}>No details were saved for this subactivity in the selected engagement cycle.</p></div>
+                      ) : null}
+
+                      {isPolicySummaryViewed && ((isHistoryView && hasSavedPolicySummary) || (!isHistoryView && hasSavedPolicyInitialPremiumEor)) ? (
                         <div className="le-block">
                           <h4 className="le-blockTitle">{hasSavedPolicySummary ? "Policy Summary Details" : "Upload Policy Summary"}</h4>
 
@@ -7140,7 +7243,11 @@ function AgentLeadEngagement() {
                       ) : null}
 
 
-                      {isPolicyCoverageViewed && hasSavedPolicySummary ? (
+                      {isPolicyCoverageViewed && isHistoryView && !hasSavedPolicyCoverageDetails ? (
+                        <div className="le-block"><p className="le-muted" style={{ marginTop: 8 }}>No details were saved for this subactivity in the selected engagement cycle.</p></div>
+                      ) : null}
+
+                      {isPolicyCoverageViewed && ((isHistoryView && hasSavedPolicyCoverageDetails) || (!isHistoryView && hasSavedPolicySummary)) ? (
                         <div className="le-block">
                           <h4 className="le-blockTitle">{hasSavedPolicyCoverageDetails ? "Coverage Duration Details" : "Record Coverage Duration Details"}</h4>
 
@@ -10649,7 +10756,7 @@ function AgentLeadEngagement() {
 
       {applicationSubmissionConfirmOpen ? (
         <div className="le-modalOverlay" role="dialog" aria-modal="true" aria-labelledby="le-application-submission-confirm-title">
-          <div className="le-modalCard">
+          <div className="le-modalCard le-applicationSubmissionConfirmModal">
             <button
               type="button"
               className="le-modalClose"
@@ -10675,7 +10782,7 @@ function AgentLeadEngagement() {
                 <img
                   src={applicationSubmissionForm.submissionScreenshotImageDataUrl}
                   alt="Application submission screenshot confirmation preview"
-                  style={{ maxWidth: 260, width: "100%", borderRadius: 8, border: "1px solid #e5e7eb" }}
+                  className="le-applicationSubmissionConfirmPreview"
                 />
               </div>
             ) : null}
