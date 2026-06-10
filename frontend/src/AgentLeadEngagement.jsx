@@ -10649,7 +10649,7 @@ function AgentLeadEngagement() {
 
       {applicationSubmissionConfirmOpen ? (
         <div className="le-modalOverlay" role="dialog" aria-modal="true" aria-labelledby="le-application-submission-confirm-title">
-          <div className="le-modalCard">
+          <div className="le-modalCard le-applicationSubmissionConfirmModal">
             <button
               type="button"
               className="le-modalClose"
@@ -10675,7 +10675,7 @@ function AgentLeadEngagement() {
                 <img
                   src={applicationSubmissionForm.submissionScreenshotImageDataUrl}
                   alt="Application submission screenshot confirmation preview"
-                  style={{ maxWidth: 260, width: "100%", borderRadius: 8, border: "1px solid #e5e7eb" }}
+                  className="le-applicationSubmissionConfirmPreview"
                 />
               </div>
             ) : null}
