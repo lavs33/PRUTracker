@@ -276,7 +276,7 @@ function AgentLeadEngagement() {
   const [applicationSubmissionScreenshotInputKey, setApplicationSubmissionScreenshotInputKey] = useState(0);
   const [applicationSubmissionConfirmOpen, setApplicationSubmissionConfirmOpen] = useState(false);
   const [applicationViewedActivityKey, setApplicationViewedActivityKey] = useState("");
-  const [policyCurrentActivityKey, setPolicyCurrentActivityKey] = useState("Record Policy Application Status");
+  const [policyCurrentActivityKey, setPolicyCurrentActivityKey] = useState("Upload Initial Premium eOR");
   const [policyViewedActivityKey, setPolicyViewedActivityKey] = useState("");
   const [policyStatusForm, setPolicyStatusForm] = useState({
     status: "",
@@ -300,6 +300,8 @@ function AgentLeadEngagement() {
   const [policyInitialEorSaving, setPolicyInitialEorSaving] = useState(false);
   const [policyInitialEorError, setPolicyInitialEorError] = useState("");
   const [policyInitialEorInputKey, setPolicyInitialEorInputKey] = useState(0);
+  const [policyInitialEorEditMode, setPolicyInitialEorEditMode] = useState(false);
+  const [policyInitialEorEditSnapshot, setPolicyInitialEorEditSnapshot] = useState(null);
   const [policySummaryForm, setPolicySummaryForm] = useState({
     policyNumber: "",
     policySummaryFileDataUrl: "",
@@ -684,7 +686,7 @@ function AgentLeadEngagement() {
       });
       setApplicationSubmissionFieldErrors({});
       setApplicationSubmissionError("");
-      setPolicyCurrentActivityKey(String(policyStage?.currentActivityKey || "Record Policy Application Status").trim() || "Record Policy Application Status");
+      setPolicyCurrentActivityKey(String(policyStage?.currentActivityKey || "Upload Initial Premium eOR").trim() || "Upload Initial Premium eOR");
       setPolicyStatusForm({
         status: String(policyStage?.recordPolicyApplicationStatus?.status || ""),
         issuanceDate: policyStage?.recordPolicyApplicationStatus?.issuanceDate
@@ -708,6 +710,8 @@ function AgentLeadEngagement() {
       });
       setPolicyInitialEorFieldErrors({});
       setPolicyInitialEorError("");
+      setPolicyInitialEorEditMode(false);
+      setPolicyInitialEorEditSnapshot(null);
       setPolicySummaryForm({
         policyNumber: String(policyStage?.uploadPolicySummary?.policyNumber || ""),
         policySummaryFileDataUrl: String(policyStage?.uploadPolicySummary?.policySummaryFileDataUrl || ""),
@@ -1697,8 +1701,8 @@ function AgentLeadEngagement() {
 
   const POLICY_ISSUANCE_STEPS_UI = useMemo(
     () => [
-      { key: "Record Policy Application Status", label: "Record Policy Application Status" },
       { key: "Upload Initial Premium eOR", label: "Upload Initial Premium eOR" },
+      { key: "Record Policy Application Status", label: "Record Policy Application Status" },
       { key: "Upload Policy Summary", label: "Upload Policy Summary" },
       { key: "Record Coverage Duration Details", label: "Record Coverage Duration Details" },
     ],
@@ -2490,6 +2494,8 @@ function AgentLeadEngagement() {
   const stage = rawStage === "Not Started" && attempts.length > 0 ? "Contacting" : rawStage;
   const isLeadClosed = String(lead?.status || "").trim().toLowerCase() === "closed";
   const isLeadDropped = String(lead?.status || "").trim().toLowerCase() === "dropped";
+  const isLeadPolicyDeclined = String(lead?.status || "").trim().toLowerCase() === "policy declined";
+  const isLeadTerminal = isLeadClosed || isLeadDropped || isLeadPolicyDeclined;
   const isLeadInProgress = String(lead?.status || "").trim().toLowerCase() === "in progress";
 
   // Not Started => no active pipeline step
@@ -2523,20 +2529,17 @@ function AgentLeadEngagement() {
       (isViewingCurrentStage && stage === "Needs Assessment") ||
       (!isHistoryView && stage === "Proposal" && isViewingPastStage)
     ) &&
-    !isLeadClosed &&
-    !isLeadDropped;
+    !isLeadTerminal;
   const isNeedsAssessmentCurrentStageEditable =
     showNeedsAssessmentPanel &&
     isViewingCurrentStage &&
     stage === "Needs Assessment" &&
-    !isLeadClosed &&
-    !isLeadDropped;
+    !isLeadTerminal;
   const isProposalEditableNow =
     showProposalPanel &&
     isViewingCurrentStage &&
     stage === "Proposal" &&
-    !isLeadClosed &&
-    !isLeadDropped;
+    !isLeadTerminal;
 
   // Editable when viewing Contacting while current stage is Contacting,
   // or when current stage is Not Started and user moved into Contacting view
@@ -2544,8 +2547,7 @@ function AgentLeadEngagement() {
   const isContactingEditableNow =
     showContactingPanel &&
     (stage === "Contacting" || stage === "Not Started") &&
-    !isLeadClosed &&
-    !isLeadDropped;
+    !isLeadTerminal;
   const isContactingReadOnly = !isContactingEditableNow;
 
   // Activity tracker only relevant when Contacting panel is shown
@@ -2696,8 +2698,7 @@ function AgentLeadEngagement() {
     showProposalPanel &&
     isViewingCurrentStage &&
     stage === "Proposal" &&
-    !isLeadClosed &&
-    !isLeadDropped &&
+    !isLeadTerminal &&
     proposalViewedActivityKey === "Record Prospect Attendance" &&
     proposalUiActivityKey === "Record Prospect Attendance" &&
     proposalAttendanceForm.attendanceChoice === "YES";
@@ -2706,8 +2707,7 @@ function AgentLeadEngagement() {
     showProposalPanel &&
     isViewingCurrentStage &&
     stage === "Proposal" &&
-    !isLeadClosed &&
-    !isLeadDropped &&
+    !isLeadTerminal &&
     proposalViewedActivityKey === "Record Prospect Attendance" &&
     ["Present Proposal", "Schedule Application Submission"].includes(proposalUiActivityKey) &&
     proposalAttendanceForm.attendanceChoice === "YES" &&
@@ -2721,7 +2721,7 @@ function AgentLeadEngagement() {
   }, [engagement?.application?.currentActivityKey, engagement?.currentActivityKey, APPLICATION_STEPS_UI]);
 
   const policyIssuanceUiActivityKey = useMemo(() => {
-    const fallback = "Record Policy Application Status";
+    const fallback = "Upload Initial Premium eOR";
     const raw = String(engagement?.policy?.currentActivityKey || policyCurrentActivityKey || engagement?.currentActivityKey || fallback).trim();
     return POLICY_ISSUANCE_STEPS_UI.some((s) => s.key === raw) ? raw : fallback;
   }, [engagement?.policy?.currentActivityKey, policyCurrentActivityKey, engagement?.currentActivityKey, POLICY_ISSUANCE_STEPS_UI]);
@@ -3040,8 +3040,7 @@ function AgentLeadEngagement() {
     showNeedsAssessmentPanel &&
     isViewingCurrentStage &&
     stage === "Needs Assessment" &&
-    !isLeadClosed &&
-    !isLeadDropped &&
+    !isLeadTerminal &&
     needsAssessmentViewedActivityKey === "Record Prospect Attendance" &&
     needsAssessmentForm.attendanceChoice === "YES";
   const canRequestNeedsAttendanceProofEdit =
@@ -3376,8 +3375,7 @@ function AgentLeadEngagement() {
     showApplicationPanel &&
     isViewingCurrentStage &&
     stage === "Application" &&
-    !isLeadClosed &&
-    !isLeadDropped &&
+    !isLeadTerminal &&
     applicationActiveViewedActivityKey === "Record Prospect Attendance" &&
     hasSavedApplicationAttendance &&
     Boolean(String(applicationAttendanceForm.attendanceProofImageDataUrl || "").trim());
@@ -3387,8 +3385,7 @@ function AgentLeadEngagement() {
     showApplicationPanel &&
     isViewingCurrentStage &&
     stage === "Application" &&
-    !isLeadClosed &&
-    !isLeadDropped &&
+    !isLeadTerminal &&
     applicationActiveViewedActivityKey === "Record Premium Payment Transfer" &&
     hasSavedApplicationPremiumPaymentTransfer;
   const isApplicationAttendanceProofEditable = applicationAttendanceProofEditMode;
@@ -3671,29 +3668,29 @@ function AgentLeadEngagement() {
       ? policyIssuanceUiActivityKey
       : "";
 
-  const showCurrentSubactivityStatus = isViewingCurrentStage && !isHistoryView && !isLeadClosed && !isLeadDropped;
+  const showCurrentSubactivityStatus = isViewingCurrentStage && !isHistoryView && !isLeadTerminal;
   const closedLeadSubactivityHelperText = "";
 
   const setStageViewIfAllowed = useCallback(
     (nextStage) => {
       if (needsAttendanceRescheduleLock && nextStage !== "Contacting") return;
-      if (isLeadDropped || isLeadInProgress) {
+      if (isLeadDropped || isLeadPolicyDeclined || isLeadInProgress) {
         const nextIndex = PIPELINE_STEPS.indexOf(nextStage);
         if (nextIndex > safeIndex) return;
       }
       setSelectedStageView(nextStage);
     },
-    [needsAttendanceRescheduleLock, isLeadDropped, isLeadInProgress, PIPELINE_STEPS, safeIndex]
+    [needsAttendanceRescheduleLock, isLeadDropped, isLeadPolicyDeclined, isLeadInProgress, PIPELINE_STEPS, safeIndex]
   );
 
   useEffect(() => {
-    if (!isLeadDropped && !isLeadInProgress) return;
+    if (!isLeadDropped && !isLeadPolicyDeclined && !isLeadInProgress) return;
     if (selectedStageView === "CURRENT") return;
     const selectedIndex = PIPELINE_STEPS.indexOf(selectedStageView);
     if (selectedIndex > safeIndex) {
       setSelectedStageView("CURRENT");
     }
-  }, [isLeadDropped, isLeadInProgress, selectedStageView, PIPELINE_STEPS, safeIndex]);
+  }, [isLeadDropped, isLeadPolicyDeclined, isLeadInProgress, selectedStageView, PIPELINE_STEPS, safeIndex]);
 
   const mainTitle = effectiveViewStage === "Not Started" ? "Not Started" : effectiveViewStage || "—";
 
@@ -3786,7 +3783,7 @@ function AgentLeadEngagement() {
 
   const onOpenEditAttempt = (attempt) => {
     if (isContactingReadOnly) return;
-    if (isLeadClosed || isLeadDropped) return;
+    if (isLeadTerminal) return;
     const attemptId = String(attempt?.attemptId || "").trim();
     if (!attemptId) return;
 
@@ -5032,7 +5029,9 @@ function AgentLeadEngagement() {
       await refreshCurrentProgressView();
     } catch (err) {
       const msg = String(err?.message || "Failed to save application submission.");
-      if (msg.includes("Transaction ID")) {
+      if (msg.includes("already exists")) {
+        setApplicationSubmissionFieldErrors({ pruOneTransactionId: "Record already exists for this Transaction ID." });
+      } else if (msg.includes("Transaction ID")) {
         setApplicationSubmissionFieldErrors({ pruOneTransactionId: "PRUOnePH Transaction ID is required." });
       } else if (msg.includes("screenshot")) {
         setApplicationSubmissionFieldErrors({ submissionScreenshotImageDataUrl: "Submission screenshot is required." });
@@ -5079,43 +5078,37 @@ function AgentLeadEngagement() {
       const declineReason = String(policyStatusForm.declineReason || "").trim();
       const notes = String(policyStatusForm.notes || "").trim();
 
+      const nextFieldErrors = {};
       if (!["Issued", "Declined"].includes(status)) {
-        setPolicyStatusFieldErrors({ status: "Please select policy application status." });
-        return;
+        nextFieldErrors.status = "Please select policy application status.";
       }
 
       if (status === "Issued") {
         if (!issuanceDate) {
-          setPolicyStatusFieldErrors({ issuanceDate: "Issuance date is required for Issued status." });
-          return;
-        }
-        if (applicationSubmissionSavedDateInput && issuanceDate < applicationSubmissionSavedDateInput) {
-          setPolicyStatusFieldErrors({ issuanceDate: "Issuance date cannot be earlier than application submission date." });
-          return;
-        }
-        if (issuanceDate > todayDateInput) {
-          setPolicyStatusFieldErrors({ issuanceDate: "Issuance date cannot be in the future." });
-          return;
+          nextFieldErrors.issuanceDate = "Issuance date is required for Issued status.";
+        } else if (applicationSubmissionSavedDateInput && issuanceDate < applicationSubmissionSavedDateInput) {
+          nextFieldErrors.issuanceDate = "Issuance date cannot be earlier than application submission date.";
+        } else if (issuanceDate > todayDateInput) {
+          nextFieldErrors.issuanceDate = "Issuance date cannot be in the future.";
         }
       }
 
       if (status === "Declined") {
         if (!declinedDate) {
-          setPolicyStatusFieldErrors({ declinedDate: "Date declined is required for Declined status." });
-          return;
-        }
-        if (applicationSubmissionSavedDateInput && declinedDate < applicationSubmissionSavedDateInput) {
-          setPolicyStatusFieldErrors({ declinedDate: "Date declined cannot be earlier than application submission date." });
-          return;
-        }
-        if (declinedDate > todayDateInput) {
-          setPolicyStatusFieldErrors({ declinedDate: "Date declined cannot be in the future." });
-          return;
+          nextFieldErrors.declinedDate = "Date declined is required for Declined status.";
+        } else if (applicationSubmissionSavedDateInput && declinedDate < applicationSubmissionSavedDateInput) {
+          nextFieldErrors.declinedDate = "Date declined cannot be earlier than application submission date.";
+        } else if (declinedDate > todayDateInput) {
+          nextFieldErrors.declinedDate = "Date declined cannot be in the future.";
         }
         if (!declineReason) {
-          setPolicyStatusFieldErrors({ declineReason: "Reason for decline is required." });
-          return;
+          nextFieldErrors.declineReason = "Reason for decline is required.";
         }
+      }
+
+      if (Object.keys(nextFieldErrors).length > 0) {
+        setPolicyStatusFieldErrors(nextFieldErrors);
+        return;
       }
 
       setPolicyStatusSaving(true);
@@ -5131,7 +5124,13 @@ function AgentLeadEngagement() {
         }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data?.message || "Failed to save policy application status.");
+      if (!res.ok) {
+        if (data?.fieldErrors && Object.keys(data.fieldErrors).length > 0) {
+          setPolicyStatusFieldErrors(data.fieldErrors);
+          return;
+        }
+        throw new Error(data?.message || "Failed to save policy application status.");
+      }
       await refreshCurrentProgressView();
     } catch (err) {
       const msg = String(err?.message || "Failed to save policy application status.");
@@ -5158,6 +5157,35 @@ function AgentLeadEngagement() {
     const hasSaved = Boolean(String(policyInitialEorForm.uploadedAt || "").trim());
     return hasNo && hasDate && hasFile && hasSaved;
   }, [policyInitialEorForm.eorNumber, policyInitialEorForm.receiptDate, policyInitialEorForm.eorFileDataUrl, policyInitialEorForm.uploadedAt]);
+
+  const policyInitialEorReceiptDateMinInput = applicationPremiumPaymentForm.paymentDate || "";
+  const policyInitialEorReceiptDateMaxInput = todayDateInput;
+  const isPolicyInitialEorFormEditable = !hasSavedPolicyInitialPremiumEor || policyInitialEorEditMode;
+
+  const clearPolicyInitialEorForm = useCallback(() => {
+    setPolicyInitialEorError("");
+    setPolicyInitialEorFieldErrors({});
+    setPolicyInitialEorForm({ eorNumber: "", receiptDate: "", eorFileDataUrl: "", eorFileName: "", uploadedAt: "" });
+    setPolicyInitialEorInputKey((k) => k + 1);
+  }, []);
+
+  const startPolicyInitialEorEdit = useCallback(() => {
+    setPolicyInitialEorError("");
+    setPolicyInitialEorFieldErrors({});
+    setPolicyInitialEorEditSnapshot({ ...policyInitialEorForm });
+    setPolicyInitialEorEditMode(true);
+  }, [policyInitialEorForm]);
+
+  const cancelPolicyInitialEorEdit = useCallback(() => {
+    setPolicyInitialEorError("");
+    setPolicyInitialEorFieldErrors({});
+    if (policyInitialEorEditSnapshot) {
+      setPolicyInitialEorForm(policyInitialEorEditSnapshot);
+    }
+    setPolicyInitialEorEditSnapshot(null);
+    setPolicyInitialEorEditMode(false);
+    setPolicyInitialEorInputKey((k) => k + 1);
+  }, [policyInitialEorEditSnapshot]);
 
   const onPolicyInitialEorPicked = (file) => {
     if (!file) {
@@ -5193,17 +5221,23 @@ function AgentLeadEngagement() {
         return;
       }
 
+      const nextFieldErrors = {};
       if (!eorNumber) {
-        setPolicyInitialEorFieldErrors({ eorNumber: "eOR number is required." });
-        return;
+        nextFieldErrors.eorNumber = "eOR number is required.";
       }
       if (!receiptDate) {
-        setPolicyInitialEorFieldErrors({ receiptDate: "Receipt date is required." });
-        return;
+        nextFieldErrors.receiptDate = "Receipt date is required.";
+      } else if (policyInitialEorReceiptDateMinInput && receiptDate < policyInitialEorReceiptDateMinInput) {
+        nextFieldErrors.receiptDate = "Receipt date cannot be earlier than payment date.";
+      } else if (receiptDate > policyInitialEorReceiptDateMaxInput) {
+        nextFieldErrors.receiptDate = "Receipt date cannot be in the future.";
       }
       if (!eorFileDataUrl) {
-        setPolicyInitialEorFieldErrors({ eorFileDataUrl: "eOR PDF file is required." });
-        return;
+        nextFieldErrors.eorFileDataUrl = "eOR PDF file is required.";
+      }
+      if (Object.keys(nextFieldErrors).length > 0) {
+        setPolicyInitialEorFieldErrors(nextFieldErrors);
+        if (!eorNumber) return;
       }
 
       setPolicyInitialEorSaving(true);
@@ -5213,12 +5247,22 @@ function AgentLeadEngagement() {
         body: JSON.stringify({ eorNumber, receiptDate, eorFileDataUrl, eorFileName }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data?.message || "Failed to save Initial Premium eOR.");
+      if (!res.ok) {
+        const combinedFieldErrors = { ...nextFieldErrors, ...(data?.fieldErrors || {}) };
+        if (Object.keys(combinedFieldErrors).length > 0) {
+          setPolicyInitialEorFieldErrors(combinedFieldErrors);
+          return;
+        }
+        throw new Error(data?.message || "Failed to save Initial Premium eOR.");
+      }
+      setPolicyInitialEorEditMode(false);
+      setPolicyInitialEorEditSnapshot(null);
       await refreshCurrentProgressView();
     } catch (err) {
       const msg = String(err?.message || "Failed to save Initial Premium eOR.");
-      if (msg.includes("eOR number")) setPolicyInitialEorFieldErrors({ eorNumber: "eOR number is required." });
-      else if (msg.includes("Receipt date")) setPolicyInitialEorFieldErrors({ receiptDate: msg });
+      if (msg.includes("already exists")) setPolicyInitialEorFieldErrors({ eorNumber: "Record already exists for this eOR number." });
+      else if (msg.includes("eOR number")) setPolicyInitialEorFieldErrors({ eorNumber: "eOR number is required." });
+      else if (msg.includes("Receipt date") || msg.includes("Payment date")) setPolicyInitialEorFieldErrors({ receiptDate: msg });
       else if (msg.includes("PDF")) setPolicyInitialEorFieldErrors({ eorFileDataUrl: msg });
       else setPolicyInitialEorError(msg);
     } finally {
@@ -5354,8 +5398,7 @@ function AgentLeadEngagement() {
   ]);
 
   const shouldShowStageActivityBadge =
-    !isLeadClosed &&
-    !isLeadDropped &&
+    !isLeadTerminal &&
     !isViewedStageFullyFinished &&
     String(stageActivityBadge || "").trim() &&
     stageActivityBadge !== "—";
@@ -5876,6 +5919,8 @@ function AgentLeadEngagement() {
                             ? "closed"
                             : lead.status === "Dropped"
                             ? "dropped"
+                            : lead.status === "Policy Declined"
+                            ? "policydeclined"
                             : "unknown"
                         }`}
                       >
@@ -5907,7 +5952,7 @@ function AgentLeadEngagement() {
                   const isActive = safeIndex === i;
                   const isDone = safeIndex > i;
                   const stageDisabledForFuture =
-                    (isLeadDropped && i > safeIndex) || (isLeadInProgress && i > safeIndex);
+                    ((isLeadDropped || isLeadPolicyDeclined) && i > safeIndex) || (isLeadInProgress && i > safeIndex);
 
                   return (
                     <div
@@ -6005,13 +6050,13 @@ function AgentLeadEngagement() {
                     </p>
                   )}
 
-                  {(isLeadClosed || isLeadDropped) && (
+                  {(isLeadTerminal) && (
                     <p className="le-muted" style={{ marginTop: 8, marginBottom: 10 }}>
-                      This lead is closed or dropped. Subactivities are view-only.
+                      This lead is closed, dropped, or policy declined. Subactivities are view-only.
                     </p>
                   )}
 
-                  {!isHistoryView && !isViewingCurrentStage && !(isLeadClosed || isLeadDropped) && (
+                  {!isHistoryView && !isViewingCurrentStage && !(isLeadTerminal) && (
                     <p className="le-muted" style={{ marginTop: 8, marginBottom: 10 }}>
                       You are viewing a non-current stage. This section is read-only.
                     </p>
@@ -6031,7 +6076,7 @@ function AgentLeadEngagement() {
                         )
                       }
                       helperText={
-                        isLeadClosed || isLeadDropped
+                        isLeadTerminal
                           ? closedLeadSubactivityHelperText
                           : contactingViewedStepIndex < contactingCurrentStepIndex
                           ? previouslySavedSubactivityHelperText
@@ -6075,7 +6120,7 @@ function AgentLeadEngagement() {
                           ? isViewingFutureStage
                             ? futureStageSubactivityHelperText
                             : ""
-                          : isLeadClosed || isLeadDropped
+                          : isLeadTerminal
                           ? closedLeadSubactivityHelperText
                           : needsViewedStepIndex < needsCurrentStepIndex
                           ? previouslySavedSubactivityHelperText
@@ -6108,7 +6153,7 @@ function AgentLeadEngagement() {
                           ? isViewingFutureStage
                             ? futureStageSubactivityHelperText
                             : ""
-                          : isLeadClosed || isLeadDropped
+                          : isLeadTerminal
                           ? closedLeadSubactivityHelperText
                           : proposalViewedStepIndex < proposalCurrentStepIndex
                           ? previouslySavedSubactivityHelperText
@@ -6141,7 +6186,7 @@ function AgentLeadEngagement() {
                           ? isViewingFutureStage
                             ? futureStageSubactivityHelperText
                             : ""
-                          : isLeadClosed || isLeadDropped
+                          : isLeadTerminal
                           ? closedLeadSubactivityHelperText
                           : applicationViewedStepIndex < applicationCurrentStepIndex
                           ? previouslySavedSubactivityHelperText
@@ -6174,7 +6219,7 @@ function AgentLeadEngagement() {
                           ? isViewingFutureStage
                             ? futureStageSubactivityHelperText
                             : ""
-                          : isLeadClosed || isLeadDropped
+                          : isLeadTerminal
                           ? closedLeadSubactivityHelperText
                           : policyViewedStepIndex < policyCurrentStepIndex
                           ? previouslySavedSubactivityHelperText
@@ -7012,9 +7057,20 @@ function AgentLeadEngagement() {
                         <div className="le-block"><p className="le-muted" style={{ marginTop: 8 }}>No details were saved for this subactivity in the selected engagement cycle.</p></div>
                       ) : null}
 
-                      {isPolicyInitialEorViewed && ((isHistoryView && hasSavedPolicyInitialPremiumEor) || (!isHistoryView && hasSavedPolicyApplicationStatus && policyStatusForm.status === "Issued")) ? (
+                      {isPolicyInitialEorViewed && ((isHistoryView && hasSavedPolicyInitialPremiumEor) || !isHistoryView) ? (
                         <div className="le-block">
-                          <h4 className="le-blockTitle">{hasSavedPolicyInitialPremiumEor ? "Initial Premium eOR Details" : "Upload Initial Premium eOR"}</h4>
+                          <div className="le-inlineActionRow" style={{ alignItems: "center", marginBottom: 10 }}>
+                            <h4 className="le-blockTitle">{hasSavedPolicyInitialPremiumEor ? "Initial Premium eOR Details" : "Upload Initial Premium eOR"}</h4>
+                            {hasSavedPolicyInitialPremiumEor && !isPolicyInitialEorFormEditable && !isHistoryView ? (
+                              <button
+                                type="button"
+                                className="le-btn secondary"
+                                onClick={startPolicyInitialEorEdit}
+                              >
+                                Edit
+                              </button>
+                            ) : null}
+                          </div>
 
                           <div className="le-formRow">
                             <label className="le-label">Method of Initial Payment</label>
@@ -7025,7 +7081,7 @@ function AgentLeadEngagement() {
                             <p className="le-smallNote">{applicationPremiumPaymentForm.totalFrequencyPremiumPhp || "—"}</p>
                           </div>
 
-                          {hasSavedPolicyInitialPremiumEor ? (
+                          {!isPolicyInitialEorFormEditable ? (
                             <>
                               <div className="le-formRow">
                                 <label className="le-label">eOR Number</label>
@@ -7076,8 +7132,8 @@ function AgentLeadEngagement() {
                                     setPolicyInitialEorForm((f) => ({ ...f, receiptDate: e.target.value }));
                                     setPolicyInitialEorFieldErrors((prev) => ({ ...prev, receiptDate: "" }));
                                   }}
-                                  min={applicationSubmissionSavedDateInput || undefined}
-                                  max={policyStatusForm.issuanceDate || todayDateInput}
+                                  min={policyInitialEorReceiptDateMinInput || undefined}
+                                  max={policyInitialEorReceiptDateMaxInput}
                                   disabled={policyInitialEorSaving}
                                 />
                                 {policyInitialEorFieldErrors.receiptDate ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyInitialEorFieldErrors.receiptDate}</p> : null}
@@ -7114,15 +7170,10 @@ function AgentLeadEngagement() {
                                 <button
                                   type="button"
                                   className="le-btn secondary"
-                                  onClick={() => {
-                                    setPolicyInitialEorError("");
-                                    setPolicyInitialEorFieldErrors({});
-                                    setPolicyInitialEorForm({ eorNumber: "", receiptDate: "", eorFileDataUrl: "", eorFileName: "", uploadedAt: "" });
-                                    setPolicyInitialEorInputKey((k) => k + 1);
-                                  }}
+                                  onClick={policyInitialEorEditMode ? cancelPolicyInitialEorEdit : clearPolicyInitialEorForm}
                                   disabled={policyInitialEorSaving}
                                 >
-                                  Cancel
+                                  {policyInitialEorEditMode ? "Cancel" : "Clear"}
                                 </button>
                                 <button
                                   type="button"
@@ -7611,8 +7662,7 @@ function AgentLeadEngagement() {
                                     <span className="le-attemptDate">{formatDateTime(a.attemptedAt)}</span>
                                     {!isHistoryView &&
                                     !isContactingReadOnly &&
-                                    !isLeadClosed &&
-                                    !isLeadDropped &&
+                                    !isLeadTerminal &&
                                     String(a.attemptId || "").trim() &&
                                     String(displayedLastAttempt?.attemptId || "") === String(a.attemptId || "") ? (
                                       <button
@@ -7757,8 +7807,7 @@ function AgentLeadEngagement() {
                                 isValidateContactEditable &&
                                 !validatingContact &&
                                 !isEngagementBlocked &&
-                                !isLeadClosed &&
-                                !isLeadDropped ? (
+                                !isLeadTerminal ? (
                                   <button
                                     type="button"
                                     className="le-btn secondary"
@@ -7911,8 +7960,7 @@ function AgentLeadEngagement() {
                                 isContactingCurrentViewEditable &&
                                 !savingInterest &&
                                 !isEngagementBlocked &&
-                                !isLeadClosed &&
-                                !isLeadDropped ? (
+                                !isLeadTerminal ? (
                                   <button
                                     type="button"
                                     className="le-btn secondary"
