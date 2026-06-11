@@ -276,19 +276,27 @@ function AgentLeadEngagement() {
   const [applicationSubmissionScreenshotInputKey, setApplicationSubmissionScreenshotInputKey] = useState(0);
   const [applicationSubmissionConfirmOpen, setApplicationSubmissionConfirmOpen] = useState(false);
   const [applicationViewedActivityKey, setApplicationViewedActivityKey] = useState("");
-  const [policyCurrentActivityKey, setPolicyCurrentActivityKey] = useState("Record Policy Application Status");
+  const [policyCurrentActivityKey, setPolicyCurrentActivityKey] = useState("Upload Initial Premium eOR");
   const [policyViewedActivityKey, setPolicyViewedActivityKey] = useState("");
   const [policyStatusForm, setPolicyStatusForm] = useState({
     status: "",
     issuanceDate: "",
     declinedDate: "",
+    declinationLetterFileDataUrl: "",
+    declinationLetterFileName: "",
+    declinationLetterFileMimeType: "",
     declineReason: "",
+    initialPremiumRefundProofImageDataUrl: "",
+    initialPremiumRefundProofFileName: "",
+    initialPremiumRefundProofFileMimeType: "",
     notes: "",
     savedAt: "",
   });
   const [policyStatusFieldErrors, setPolicyStatusFieldErrors] = useState({});
   const [policyStatusSaving, setPolicyStatusSaving] = useState(false);
   const [policyStatusError, setPolicyStatusError] = useState("");
+  const [policyDeclinationLetterInputKey, setPolicyDeclinationLetterInputKey] = useState(0);
+  const [policyRefundProofInputKey, setPolicyRefundProofInputKey] = useState(0);
   const [policyInitialEorForm, setPolicyInitialEorForm] = useState({
     eorNumber: "",
     receiptDate: "",
@@ -300,6 +308,8 @@ function AgentLeadEngagement() {
   const [policyInitialEorSaving, setPolicyInitialEorSaving] = useState(false);
   const [policyInitialEorError, setPolicyInitialEorError] = useState("");
   const [policyInitialEorInputKey, setPolicyInitialEorInputKey] = useState(0);
+  const [policyInitialEorEditMode, setPolicyInitialEorEditMode] = useState(false);
+  const [policyInitialEorEditSnapshot, setPolicyInitialEorEditSnapshot] = useState(null);
   const [policySummaryForm, setPolicySummaryForm] = useState({
     policyNumber: "",
     policySummaryFileDataUrl: "",
@@ -684,7 +694,7 @@ function AgentLeadEngagement() {
       });
       setApplicationSubmissionFieldErrors({});
       setApplicationSubmissionError("");
-      setPolicyCurrentActivityKey(String(policyStage?.currentActivityKey || "Record Policy Application Status").trim() || "Record Policy Application Status");
+      setPolicyCurrentActivityKey(String(policyStage?.currentActivityKey || "Upload Initial Premium eOR").trim() || "Upload Initial Premium eOR");
       setPolicyStatusForm({
         status: String(policyStage?.recordPolicyApplicationStatus?.status || ""),
         issuanceDate: policyStage?.recordPolicyApplicationStatus?.issuanceDate
@@ -693,7 +703,13 @@ function AgentLeadEngagement() {
         declinedDate: policyStage?.recordPolicyApplicationStatus?.declinedDate
           ? toDateInputValue(policyStage.recordPolicyApplicationStatus.declinedDate)
           : "",
+        declinationLetterFileDataUrl: String(policyStage?.recordPolicyApplicationStatus?.declinationLetterFileDataUrl || ""),
+        declinationLetterFileName: String(policyStage?.recordPolicyApplicationStatus?.declinationLetterFileName || ""),
+        declinationLetterFileMimeType: String(policyStage?.recordPolicyApplicationStatus?.declinationLetterFileMimeType || ""),
         declineReason: String(policyStage?.recordPolicyApplicationStatus?.declineReason || ""),
+        initialPremiumRefundProofImageDataUrl: String(policyStage?.recordPolicyApplicationStatus?.initialPremiumRefundProofImageDataUrl || ""),
+        initialPremiumRefundProofFileName: String(policyStage?.recordPolicyApplicationStatus?.initialPremiumRefundProofFileName || ""),
+        initialPremiumRefundProofFileMimeType: String(policyStage?.recordPolicyApplicationStatus?.initialPremiumRefundProofFileMimeType || ""),
         notes: String(policyStage?.recordPolicyApplicationStatus?.notes || ""),
         savedAt: policyStage?.recordPolicyApplicationStatus?.savedAt || "",
       });
@@ -708,6 +724,8 @@ function AgentLeadEngagement() {
       });
       setPolicyInitialEorFieldErrors({});
       setPolicyInitialEorError("");
+      setPolicyInitialEorEditMode(false);
+      setPolicyInitialEorEditSnapshot(null);
       setPolicySummaryForm({
         policyNumber: String(policyStage?.uploadPolicySummary?.policyNumber || ""),
         policySummaryFileDataUrl: String(policyStage?.uploadPolicySummary?.policySummaryFileDataUrl || ""),
@@ -1697,8 +1715,8 @@ function AgentLeadEngagement() {
 
   const POLICY_ISSUANCE_STEPS_UI = useMemo(
     () => [
-      { key: "Record Policy Application Status", label: "Record Policy Application Status" },
       { key: "Upload Initial Premium eOR", label: "Upload Initial Premium eOR" },
+      { key: "Record Policy Application Status", label: "Record Policy Application Status" },
       { key: "Upload Policy Summary", label: "Upload Policy Summary" },
       { key: "Record Coverage Duration Details", label: "Record Coverage Duration Details" },
     ],
@@ -2490,6 +2508,8 @@ function AgentLeadEngagement() {
   const stage = rawStage === "Not Started" && attempts.length > 0 ? "Contacting" : rawStage;
   const isLeadClosed = String(lead?.status || "").trim().toLowerCase() === "closed";
   const isLeadDropped = String(lead?.status || "").trim().toLowerCase() === "dropped";
+  const isLeadPolicyDeclined = String(lead?.status || "").trim().toLowerCase() === "policy declined";
+  const isLeadTerminal = isLeadClosed || isLeadDropped || isLeadPolicyDeclined;
   const isLeadInProgress = String(lead?.status || "").trim().toLowerCase() === "in progress";
 
   // Not Started => no active pipeline step
@@ -2523,20 +2543,17 @@ function AgentLeadEngagement() {
       (isViewingCurrentStage && stage === "Needs Assessment") ||
       (!isHistoryView && stage === "Proposal" && isViewingPastStage)
     ) &&
-    !isLeadClosed &&
-    !isLeadDropped;
+    !isLeadTerminal;
   const isNeedsAssessmentCurrentStageEditable =
     showNeedsAssessmentPanel &&
     isViewingCurrentStage &&
     stage === "Needs Assessment" &&
-    !isLeadClosed &&
-    !isLeadDropped;
+    !isLeadTerminal;
   const isProposalEditableNow =
     showProposalPanel &&
     isViewingCurrentStage &&
     stage === "Proposal" &&
-    !isLeadClosed &&
-    !isLeadDropped;
+    !isLeadTerminal;
 
   // Editable when viewing Contacting while current stage is Contacting,
   // or when current stage is Not Started and user moved into Contacting view
@@ -2544,8 +2561,7 @@ function AgentLeadEngagement() {
   const isContactingEditableNow =
     showContactingPanel &&
     (stage === "Contacting" || stage === "Not Started") &&
-    !isLeadClosed &&
-    !isLeadDropped;
+    !isLeadTerminal;
   const isContactingReadOnly = !isContactingEditableNow;
 
   // Activity tracker only relevant when Contacting panel is shown
@@ -2696,8 +2712,7 @@ function AgentLeadEngagement() {
     showProposalPanel &&
     isViewingCurrentStage &&
     stage === "Proposal" &&
-    !isLeadClosed &&
-    !isLeadDropped &&
+    !isLeadTerminal &&
     proposalViewedActivityKey === "Record Prospect Attendance" &&
     proposalUiActivityKey === "Record Prospect Attendance" &&
     proposalAttendanceForm.attendanceChoice === "YES";
@@ -2706,8 +2721,7 @@ function AgentLeadEngagement() {
     showProposalPanel &&
     isViewingCurrentStage &&
     stage === "Proposal" &&
-    !isLeadClosed &&
-    !isLeadDropped &&
+    !isLeadTerminal &&
     proposalViewedActivityKey === "Record Prospect Attendance" &&
     ["Present Proposal", "Schedule Application Submission"].includes(proposalUiActivityKey) &&
     proposalAttendanceForm.attendanceChoice === "YES" &&
@@ -2721,7 +2735,7 @@ function AgentLeadEngagement() {
   }, [engagement?.application?.currentActivityKey, engagement?.currentActivityKey, APPLICATION_STEPS_UI]);
 
   const policyIssuanceUiActivityKey = useMemo(() => {
-    const fallback = "Record Policy Application Status";
+    const fallback = "Upload Initial Premium eOR";
     const raw = String(engagement?.policy?.currentActivityKey || policyCurrentActivityKey || engagement?.currentActivityKey || fallback).trim();
     return POLICY_ISSUANCE_STEPS_UI.some((s) => s.key === raw) ? raw : fallback;
   }, [engagement?.policy?.currentActivityKey, policyCurrentActivityKey, engagement?.currentActivityKey, POLICY_ISSUANCE_STEPS_UI]);
@@ -3040,8 +3054,7 @@ function AgentLeadEngagement() {
     showNeedsAssessmentPanel &&
     isViewingCurrentStage &&
     stage === "Needs Assessment" &&
-    !isLeadClosed &&
-    !isLeadDropped &&
+    !isLeadTerminal &&
     needsAssessmentViewedActivityKey === "Record Prospect Attendance" &&
     needsAssessmentForm.attendanceChoice === "YES";
   const canRequestNeedsAttendanceProofEdit =
@@ -3376,8 +3389,7 @@ function AgentLeadEngagement() {
     showApplicationPanel &&
     isViewingCurrentStage &&
     stage === "Application" &&
-    !isLeadClosed &&
-    !isLeadDropped &&
+    !isLeadTerminal &&
     applicationActiveViewedActivityKey === "Record Prospect Attendance" &&
     hasSavedApplicationAttendance &&
     Boolean(String(applicationAttendanceForm.attendanceProofImageDataUrl || "").trim());
@@ -3387,8 +3399,7 @@ function AgentLeadEngagement() {
     showApplicationPanel &&
     isViewingCurrentStage &&
     stage === "Application" &&
-    !isLeadClosed &&
-    !isLeadDropped &&
+    !isLeadTerminal &&
     applicationActiveViewedActivityKey === "Record Premium Payment Transfer" &&
     hasSavedApplicationPremiumPaymentTransfer;
   const isApplicationAttendanceProofEditable = applicationAttendanceProofEditMode;
@@ -3671,29 +3682,29 @@ function AgentLeadEngagement() {
       ? policyIssuanceUiActivityKey
       : "";
 
-  const showCurrentSubactivityStatus = isViewingCurrentStage && !isHistoryView && !isLeadClosed && !isLeadDropped;
+  const showCurrentSubactivityStatus = isViewingCurrentStage && !isHistoryView && !isLeadTerminal;
   const closedLeadSubactivityHelperText = "";
 
   const setStageViewIfAllowed = useCallback(
     (nextStage) => {
       if (needsAttendanceRescheduleLock && nextStage !== "Contacting") return;
-      if (isLeadDropped || isLeadInProgress) {
+      if (isLeadDropped || isLeadPolicyDeclined || isLeadInProgress) {
         const nextIndex = PIPELINE_STEPS.indexOf(nextStage);
         if (nextIndex > safeIndex) return;
       }
       setSelectedStageView(nextStage);
     },
-    [needsAttendanceRescheduleLock, isLeadDropped, isLeadInProgress, PIPELINE_STEPS, safeIndex]
+    [needsAttendanceRescheduleLock, isLeadDropped, isLeadPolicyDeclined, isLeadInProgress, PIPELINE_STEPS, safeIndex]
   );
 
   useEffect(() => {
-    if (!isLeadDropped && !isLeadInProgress) return;
+    if (!isLeadDropped && !isLeadPolicyDeclined && !isLeadInProgress) return;
     if (selectedStageView === "CURRENT") return;
     const selectedIndex = PIPELINE_STEPS.indexOf(selectedStageView);
     if (selectedIndex > safeIndex) {
       setSelectedStageView("CURRENT");
     }
-  }, [isLeadDropped, isLeadInProgress, selectedStageView, PIPELINE_STEPS, safeIndex]);
+  }, [isLeadDropped, isLeadPolicyDeclined, isLeadInProgress, selectedStageView, PIPELINE_STEPS, safeIndex]);
 
   const mainTitle = effectiveViewStage === "Not Started" ? "Not Started" : effectiveViewStage || "—";
 
@@ -3786,7 +3797,7 @@ function AgentLeadEngagement() {
 
   const onOpenEditAttempt = (attempt) => {
     if (isContactingReadOnly) return;
-    if (isLeadClosed || isLeadDropped) return;
+    if (isLeadTerminal) return;
     const attemptId = String(attempt?.attemptId || "").trim();
     if (!attemptId) return;
 
@@ -5032,7 +5043,9 @@ function AgentLeadEngagement() {
       await refreshCurrentProgressView();
     } catch (err) {
       const msg = String(err?.message || "Failed to save application submission.");
-      if (msg.includes("Transaction ID")) {
+      if (msg.includes("already exists")) {
+        setApplicationSubmissionFieldErrors({ pruOneTransactionId: "Record already exists for this Transaction ID." });
+      } else if (msg.includes("Transaction ID")) {
         setApplicationSubmissionFieldErrors({ pruOneTransactionId: "PRUOnePH Transaction ID is required." });
       } else if (msg.includes("screenshot")) {
         setApplicationSubmissionFieldErrors({ submissionScreenshotImageDataUrl: "Submission screenshot is required." });
@@ -5044,17 +5057,80 @@ function AgentLeadEngagement() {
     }
   };
 
-  const applicationSubmissionSavedDateInput = useMemo(() => {
-    const raw = applicationSubmissionForm?.savedAt ? new Date(applicationSubmissionForm.savedAt) : null;
-    if (!raw || Number.isNaN(raw.getTime())) return "";
-    return toDateInputValue(raw);
-  }, [applicationSubmissionForm?.savedAt]);
-
   const todayDateInput = useMemo(() => toDateInputValue(new Date()), []);
+  const policyStatusDecisionDateMinInput = String(policyInitialEorForm.receiptDate || "").trim();
   const applicationPaymentDateMinInput = useMemo(
     () => (applicationMeetingSaved?.startAt ? toDateInputValue(applicationMeetingSaved.startAt) : ""),
     [applicationMeetingSaved?.startAt]
   );
+
+  const onPolicyDeclinationLetterPicked = (file) => {
+    if (!file) {
+      setPolicyStatusForm((f) => ({
+        ...f,
+        declinationLetterFileDataUrl: "",
+        declinationLetterFileName: "",
+        declinationLetterFileMimeType: "",
+      }));
+      return;
+    }
+    const looksPdf = String(file.type || "") === "application/pdf" || /\.pdf$/i.test(String(file.name || ""));
+    if (!looksPdf) {
+      setPolicyStatusError("");
+      setPolicyStatusFieldErrors((prev) => ({ ...prev, declinationLetterFileDataUrl: "Declination letter must be a PDF." }));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setPolicyStatusError("");
+      setPolicyStatusFieldErrors((prev) => ({ ...prev, declinationLetterFileDataUrl: "" }));
+      setPolicyStatusForm((f) => ({
+        ...f,
+        declinationLetterFileDataUrl: String(reader.result || ""),
+        declinationLetterFileName: String(file.name || ""),
+        declinationLetterFileMimeType: String(file.type || "application/pdf"),
+      }));
+    };
+    reader.onerror = () => {
+      setPolicyStatusError("");
+      setPolicyStatusFieldErrors((prev) => ({ ...prev, declinationLetterFileDataUrl: "Failed to read declination letter PDF." }));
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const onPolicyRefundProofPicked = (file) => {
+    if (!file) {
+      setPolicyStatusForm((f) => ({
+        ...f,
+        initialPremiumRefundProofImageDataUrl: "",
+        initialPremiumRefundProofFileName: "",
+        initialPremiumRefundProofFileMimeType: "",
+      }));
+      return;
+    }
+    const looksImage = /^image\/(jpeg|png)$/i.test(String(file.type || "")) || /\.(jpe?g|png)$/i.test(String(file.name || ""));
+    if (!looksImage) {
+      setPolicyStatusError("");
+      setPolicyStatusFieldErrors((prev) => ({ ...prev, initialPremiumRefundProofImageDataUrl: "Proof of initial premium refund must be a JPG, JPEG, or PNG image." }));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setPolicyStatusError("");
+      setPolicyStatusFieldErrors((prev) => ({ ...prev, initialPremiumRefundProofImageDataUrl: "" }));
+      setPolicyStatusForm((f) => ({
+        ...f,
+        initialPremiumRefundProofImageDataUrl: String(reader.result || ""),
+        initialPremiumRefundProofFileName: String(file.name || ""),
+        initialPremiumRefundProofFileMimeType: String(file.type || "image/jpeg"),
+      }));
+    };
+    reader.onerror = () => {
+      setPolicyStatusError("");
+      setPolicyStatusFieldErrors((prev) => ({ ...prev, initialPremiumRefundProofImageDataUrl: "Failed to read proof of initial premium refund image." }));
+    };
+    reader.readAsDataURL(file);
+  };
 
   const hasSavedPolicyApplicationStatus = useMemo(() => {
     const status = String(policyStatusForm.status || "").trim();
@@ -5063,10 +5139,20 @@ function AgentLeadEngagement() {
     if (status === "Issued" && !String(policyStatusForm.issuanceDate || "").trim()) return false;
     if (status === "Declined") {
       if (!String(policyStatusForm.declinedDate || "").trim()) return false;
+      if (!String(policyStatusForm.declinationLetterFileDataUrl || "").trim()) return false;
       if (!String(policyStatusForm.declineReason || "").trim()) return false;
+      if (!String(policyStatusForm.initialPremiumRefundProofImageDataUrl || "").trim()) return false;
     }
     return true;
-  }, [policyStatusForm.status, policyStatusForm.issuanceDate, policyStatusForm.declinedDate, policyStatusForm.declineReason, policyStatusForm.savedAt]);
+  }, [
+    policyStatusForm.status,
+    policyStatusForm.issuanceDate,
+    policyStatusForm.declinedDate,
+    policyStatusForm.declinationLetterFileDataUrl,
+    policyStatusForm.declineReason,
+    policyStatusForm.initialPremiumRefundProofImageDataUrl,
+    policyStatusForm.savedAt,
+  ]);
 
   const submitPolicyApplicationStatus = async () => {
     try {
@@ -5076,46 +5162,56 @@ function AgentLeadEngagement() {
       const status = String(policyStatusForm.status || "").trim();
       const issuanceDate = String(policyStatusForm.issuanceDate || "").trim();
       const declinedDate = String(policyStatusForm.declinedDate || "").trim();
+      const declinationLetterFileDataUrl = String(policyStatusForm.declinationLetterFileDataUrl || "").trim();
+      const declinationLetterFileName = String(policyStatusForm.declinationLetterFileName || "").trim();
+      const declinationLetterFileMimeType = String(policyStatusForm.declinationLetterFileMimeType || "").trim();
       const declineReason = String(policyStatusForm.declineReason || "").trim();
+      const initialPremiumRefundProofImageDataUrl = String(policyStatusForm.initialPremiumRefundProofImageDataUrl || "").trim();
+      const initialPremiumRefundProofFileName = String(policyStatusForm.initialPremiumRefundProofFileName || "").trim();
+      const initialPremiumRefundProofFileMimeType = String(policyStatusForm.initialPremiumRefundProofFileMimeType || "").trim();
       const notes = String(policyStatusForm.notes || "").trim();
 
+      const nextFieldErrors = {};
       if (!["Issued", "Declined"].includes(status)) {
-        setPolicyStatusFieldErrors({ status: "Please select policy application status." });
-        return;
+        nextFieldErrors.status = "Please select policy application status.";
       }
 
       if (status === "Issued") {
         if (!issuanceDate) {
-          setPolicyStatusFieldErrors({ issuanceDate: "Issuance date is required for Issued status." });
-          return;
-        }
-        if (applicationSubmissionSavedDateInput && issuanceDate < applicationSubmissionSavedDateInput) {
-          setPolicyStatusFieldErrors({ issuanceDate: "Issuance date cannot be earlier than application submission date." });
-          return;
-        }
-        if (issuanceDate > todayDateInput) {
-          setPolicyStatusFieldErrors({ issuanceDate: "Issuance date cannot be in the future." });
-          return;
+          nextFieldErrors.issuanceDate = "Issuance date is required for Issued status.";
+        } else if (policyStatusDecisionDateMinInput && issuanceDate < policyStatusDecisionDateMinInput) {
+          nextFieldErrors.issuanceDate = "Issuance date cannot be earlier than Initial Premium eOR receipt date.";
+        } else if (issuanceDate > todayDateInput) {
+          nextFieldErrors.issuanceDate = "Issuance date cannot be in the future.";
         }
       }
 
       if (status === "Declined") {
         if (!declinedDate) {
-          setPolicyStatusFieldErrors({ declinedDate: "Date declined is required for Declined status." });
-          return;
+          nextFieldErrors.declinedDate = "Date declined is required for Declined status.";
+        } else if (policyStatusDecisionDateMinInput && declinedDate < policyStatusDecisionDateMinInput) {
+          nextFieldErrors.declinedDate = "Date declined cannot be earlier than Initial Premium eOR receipt date.";
+        } else if (declinedDate > todayDateInput) {
+          nextFieldErrors.declinedDate = "Date declined cannot be in the future.";
         }
-        if (applicationSubmissionSavedDateInput && declinedDate < applicationSubmissionSavedDateInput) {
-          setPolicyStatusFieldErrors({ declinedDate: "Date declined cannot be earlier than application submission date." });
-          return;
-        }
-        if (declinedDate > todayDateInput) {
-          setPolicyStatusFieldErrors({ declinedDate: "Date declined cannot be in the future." });
-          return;
+        if (!declinationLetterFileDataUrl) {
+          nextFieldErrors.declinationLetterFileDataUrl = "Declination letter PDF is required.";
+        } else if (!/^data:application\/pdf;base64,/i.test(declinationLetterFileDataUrl)) {
+          nextFieldErrors.declinationLetterFileDataUrl = "Declination letter must be a PDF.";
         }
         if (!declineReason) {
-          setPolicyStatusFieldErrors({ declineReason: "Reason for decline is required." });
-          return;
+          nextFieldErrors.declineReason = "Reason for decline is required.";
         }
+        if (!initialPremiumRefundProofImageDataUrl) {
+          nextFieldErrors.initialPremiumRefundProofImageDataUrl = "Proof of initial premium refund is required.";
+        } else if (!/^data:image\/(?:jpeg|png);base64,/i.test(initialPremiumRefundProofImageDataUrl)) {
+          nextFieldErrors.initialPremiumRefundProofImageDataUrl = "Proof of initial premium refund must be a JPG, JPEG, or PNG image.";
+        }
+      }
+
+      if (Object.keys(nextFieldErrors).length > 0) {
+        setPolicyStatusFieldErrors(nextFieldErrors);
+        return;
       }
 
       setPolicyStatusSaving(true);
@@ -5126,12 +5222,24 @@ function AgentLeadEngagement() {
           status,
           issuanceDate: status === "Issued" ? issuanceDate : "",
           declinedDate: status === "Declined" ? declinedDate : "",
+          declinationLetterFileDataUrl: status === "Declined" ? declinationLetterFileDataUrl : "",
+          declinationLetterFileName: status === "Declined" ? declinationLetterFileName : "",
+          declinationLetterFileMimeType: status === "Declined" ? declinationLetterFileMimeType : "",
           declineReason: status === "Declined" ? declineReason : "",
+          initialPremiumRefundProofImageDataUrl: status === "Declined" ? initialPremiumRefundProofImageDataUrl : "",
+          initialPremiumRefundProofFileName: status === "Declined" ? initialPremiumRefundProofFileName : "",
+          initialPremiumRefundProofFileMimeType: status === "Declined" ? initialPremiumRefundProofFileMimeType : "",
           notes,
         }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data?.message || "Failed to save policy application status.");
+      if (!res.ok) {
+        if (data?.fieldErrors && Object.keys(data.fieldErrors).length > 0) {
+          setPolicyStatusFieldErrors(data.fieldErrors);
+          return;
+        }
+        throw new Error(data?.message || "Failed to save policy application status.");
+      }
       await refreshCurrentProgressView();
     } catch (err) {
       const msg = String(err?.message || "Failed to save policy application status.");
@@ -5141,6 +5249,10 @@ function AgentLeadEngagement() {
         setPolicyStatusFieldErrors({ issuanceDate: msg });
       } else if (msg.includes("Date declined")) {
         setPolicyStatusFieldErrors({ declinedDate: msg });
+      } else if (msg.includes("Declination letter")) {
+        setPolicyStatusFieldErrors({ declinationLetterFileDataUrl: msg });
+      } else if (msg.includes("Proof of initial premium refund")) {
+        setPolicyStatusFieldErrors({ initialPremiumRefundProofImageDataUrl: msg });
       } else if (msg.includes("Reason for decline")) {
         setPolicyStatusFieldErrors({ declineReason: msg });
       } else {
@@ -5158,6 +5270,35 @@ function AgentLeadEngagement() {
     const hasSaved = Boolean(String(policyInitialEorForm.uploadedAt || "").trim());
     return hasNo && hasDate && hasFile && hasSaved;
   }, [policyInitialEorForm.eorNumber, policyInitialEorForm.receiptDate, policyInitialEorForm.eorFileDataUrl, policyInitialEorForm.uploadedAt]);
+
+  const policyInitialEorReceiptDateMinInput = applicationPremiumPaymentForm.paymentDate || "";
+  const policyInitialEorReceiptDateMaxInput = todayDateInput;
+  const isPolicyInitialEorFormEditable = !hasSavedPolicyInitialPremiumEor || policyInitialEorEditMode;
+
+  const clearPolicyInitialEorForm = useCallback(() => {
+    setPolicyInitialEorError("");
+    setPolicyInitialEorFieldErrors({});
+    setPolicyInitialEorForm({ eorNumber: "", receiptDate: "", eorFileDataUrl: "", eorFileName: "", uploadedAt: "" });
+    setPolicyInitialEorInputKey((k) => k + 1);
+  }, []);
+
+  const startPolicyInitialEorEdit = useCallback(() => {
+    setPolicyInitialEorError("");
+    setPolicyInitialEorFieldErrors({});
+    setPolicyInitialEorEditSnapshot({ ...policyInitialEorForm });
+    setPolicyInitialEorEditMode(true);
+  }, [policyInitialEorForm]);
+
+  const cancelPolicyInitialEorEdit = useCallback(() => {
+    setPolicyInitialEorError("");
+    setPolicyInitialEorFieldErrors({});
+    if (policyInitialEorEditSnapshot) {
+      setPolicyInitialEorForm(policyInitialEorEditSnapshot);
+    }
+    setPolicyInitialEorEditSnapshot(null);
+    setPolicyInitialEorEditMode(false);
+    setPolicyInitialEorInputKey((k) => k + 1);
+  }, [policyInitialEorEditSnapshot]);
 
   const onPolicyInitialEorPicked = (file) => {
     if (!file) {
@@ -5193,17 +5334,23 @@ function AgentLeadEngagement() {
         return;
       }
 
+      const nextFieldErrors = {};
       if (!eorNumber) {
-        setPolicyInitialEorFieldErrors({ eorNumber: "eOR number is required." });
-        return;
+        nextFieldErrors.eorNumber = "eOR number is required.";
       }
       if (!receiptDate) {
-        setPolicyInitialEorFieldErrors({ receiptDate: "Receipt date is required." });
-        return;
+        nextFieldErrors.receiptDate = "Receipt date is required.";
+      } else if (policyInitialEorReceiptDateMinInput && receiptDate < policyInitialEorReceiptDateMinInput) {
+        nextFieldErrors.receiptDate = "Receipt date cannot be earlier than payment date.";
+      } else if (receiptDate > policyInitialEorReceiptDateMaxInput) {
+        nextFieldErrors.receiptDate = "Receipt date cannot be in the future.";
       }
       if (!eorFileDataUrl) {
-        setPolicyInitialEorFieldErrors({ eorFileDataUrl: "eOR PDF file is required." });
-        return;
+        nextFieldErrors.eorFileDataUrl = "eOR PDF file is required.";
+      }
+      if (Object.keys(nextFieldErrors).length > 0) {
+        setPolicyInitialEorFieldErrors(nextFieldErrors);
+        if (!eorNumber) return;
       }
 
       setPolicyInitialEorSaving(true);
@@ -5213,12 +5360,22 @@ function AgentLeadEngagement() {
         body: JSON.stringify({ eorNumber, receiptDate, eorFileDataUrl, eorFileName }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data?.message || "Failed to save Initial Premium eOR.");
+      if (!res.ok) {
+        const combinedFieldErrors = { ...nextFieldErrors, ...(data?.fieldErrors || {}) };
+        if (Object.keys(combinedFieldErrors).length > 0) {
+          setPolicyInitialEorFieldErrors(combinedFieldErrors);
+          return;
+        }
+        throw new Error(data?.message || "Failed to save Initial Premium eOR.");
+      }
+      setPolicyInitialEorEditMode(false);
+      setPolicyInitialEorEditSnapshot(null);
       await refreshCurrentProgressView();
     } catch (err) {
       const msg = String(err?.message || "Failed to save Initial Premium eOR.");
-      if (msg.includes("eOR number")) setPolicyInitialEorFieldErrors({ eorNumber: "eOR number is required." });
-      else if (msg.includes("Receipt date")) setPolicyInitialEorFieldErrors({ receiptDate: msg });
+      if (msg.includes("already exists")) setPolicyInitialEorFieldErrors({ eorNumber: "Record already exists for this eOR number." });
+      else if (msg.includes("eOR number")) setPolicyInitialEorFieldErrors({ eorNumber: "eOR number is required." });
+      else if (msg.includes("Receipt date") || msg.includes("Payment date")) setPolicyInitialEorFieldErrors({ receiptDate: msg });
       else if (msg.includes("PDF")) setPolicyInitialEorFieldErrors({ eorFileDataUrl: msg });
       else setPolicyInitialEorError(msg);
     } finally {
@@ -5354,8 +5511,7 @@ function AgentLeadEngagement() {
   ]);
 
   const shouldShowStageActivityBadge =
-    !isLeadClosed &&
-    !isLeadDropped &&
+    !isLeadTerminal &&
     !isViewedStageFullyFinished &&
     String(stageActivityBadge || "").trim() &&
     stageActivityBadge !== "—";
@@ -5876,6 +6032,8 @@ function AgentLeadEngagement() {
                             ? "closed"
                             : lead.status === "Dropped"
                             ? "dropped"
+                            : lead.status === "Policy Declined"
+                            ? "policydeclined"
                             : "unknown"
                         }`}
                       >
@@ -5907,7 +6065,7 @@ function AgentLeadEngagement() {
                   const isActive = safeIndex === i;
                   const isDone = safeIndex > i;
                   const stageDisabledForFuture =
-                    (isLeadDropped && i > safeIndex) || (isLeadInProgress && i > safeIndex);
+                    ((isLeadDropped || isLeadPolicyDeclined) && i > safeIndex) || (isLeadInProgress && i > safeIndex);
 
                   return (
                     <div
@@ -6005,13 +6163,13 @@ function AgentLeadEngagement() {
                     </p>
                   )}
 
-                  {(isLeadClosed || isLeadDropped) && (
+                  {(isLeadTerminal) && (
                     <p className="le-muted" style={{ marginTop: 8, marginBottom: 10 }}>
-                      This lead is closed or dropped. Subactivities are view-only.
+                      This lead is closed, dropped, or policy declined. Subactivities are view-only.
                     </p>
                   )}
 
-                  {!isHistoryView && !isViewingCurrentStage && !(isLeadClosed || isLeadDropped) && (
+                  {!isHistoryView && !isViewingCurrentStage && !(isLeadTerminal) && (
                     <p className="le-muted" style={{ marginTop: 8, marginBottom: 10 }}>
                       You are viewing a non-current stage. This section is read-only.
                     </p>
@@ -6031,7 +6189,7 @@ function AgentLeadEngagement() {
                         )
                       }
                       helperText={
-                        isLeadClosed || isLeadDropped
+                        isLeadTerminal
                           ? closedLeadSubactivityHelperText
                           : contactingViewedStepIndex < contactingCurrentStepIndex
                           ? previouslySavedSubactivityHelperText
@@ -6075,7 +6233,7 @@ function AgentLeadEngagement() {
                           ? isViewingFutureStage
                             ? futureStageSubactivityHelperText
                             : ""
-                          : isLeadClosed || isLeadDropped
+                          : isLeadTerminal
                           ? closedLeadSubactivityHelperText
                           : needsViewedStepIndex < needsCurrentStepIndex
                           ? previouslySavedSubactivityHelperText
@@ -6108,7 +6266,7 @@ function AgentLeadEngagement() {
                           ? isViewingFutureStage
                             ? futureStageSubactivityHelperText
                             : ""
-                          : isLeadClosed || isLeadDropped
+                          : isLeadTerminal
                           ? closedLeadSubactivityHelperText
                           : proposalViewedStepIndex < proposalCurrentStepIndex
                           ? previouslySavedSubactivityHelperText
@@ -6141,7 +6299,7 @@ function AgentLeadEngagement() {
                           ? isViewingFutureStage
                             ? futureStageSubactivityHelperText
                             : ""
-                          : isLeadClosed || isLeadDropped
+                          : isLeadTerminal
                           ? closedLeadSubactivityHelperText
                           : applicationViewedStepIndex < applicationCurrentStepIndex
                           ? previouslySavedSubactivityHelperText
@@ -6174,7 +6332,7 @@ function AgentLeadEngagement() {
                           ? isViewingFutureStage
                             ? futureStageSubactivityHelperText
                             : ""
-                          : isLeadClosed || isLeadDropped
+                          : isLeadTerminal
                           ? closedLeadSubactivityHelperText
                           : policyViewedStepIndex < policyCurrentStepIndex
                           ? previouslySavedSubactivityHelperText
@@ -6874,8 +7032,30 @@ function AgentLeadEngagement() {
                                     <p className="le-smallNote">{policyStatusForm.declinedDate || "—"}</p>
                                   </div>
                                   <div className="le-formRow">
+                                    <label className="le-label">Declination Letter</label>
+                                    <p className="le-smallNote">{policyStatusForm.declinationLetterFileName || "PDF uploaded"}</p>
+                                    {policyStatusForm.declinationLetterFileDataUrl ? (
+                                      <iframe
+                                        title="Declination Letter"
+                                        src={policyStatusForm.declinationLetterFileDataUrl}
+                                        style={{ width: "100%", minHeight: 320, border: "1px solid #e5e7eb", borderRadius: 10 }}
+                                      />
+                                    ) : null}
+                                  </div>
+                                  <div className="le-formRow">
                                     <label className="le-label">Reason for Decline</label>
                                     <p className="le-smallNote">{policyStatusForm.declineReason || "—"}</p>
+                                  </div>
+                                  <div className="le-formRow">
+                                    <label className="le-label">Proof of Initial Premium Refund</label>
+                                    <p className="le-smallNote">{policyStatusForm.initialPremiumRefundProofFileName || "Image uploaded"}</p>
+                                    {policyStatusForm.initialPremiumRefundProofImageDataUrl ? (
+                                      <img
+                                        src={policyStatusForm.initialPremiumRefundProofImageDataUrl}
+                                        alt="Proof of Initial Premium Refund"
+                                        style={{ maxWidth: "100%", borderRadius: 10, border: "1px solid #e5e7eb" }}
+                                      />
+                                    ) : null}
                                   </div>
                                 </>
                               ) : null}
@@ -6900,9 +7080,23 @@ function AgentLeadEngagement() {
                                       status: v,
                                       issuanceDate: v === "Issued" ? f.issuanceDate : "",
                                       declinedDate: v === "Declined" ? f.declinedDate : "",
+                                      declinationLetterFileDataUrl: v === "Declined" ? f.declinationLetterFileDataUrl : "",
+                                      declinationLetterFileName: v === "Declined" ? f.declinationLetterFileName : "",
+                                      declinationLetterFileMimeType: v === "Declined" ? f.declinationLetterFileMimeType : "",
                                       declineReason: v === "Declined" ? f.declineReason : "",
+                                      initialPremiumRefundProofImageDataUrl: v === "Declined" ? f.initialPremiumRefundProofImageDataUrl : "",
+                                      initialPremiumRefundProofFileName: v === "Declined" ? f.initialPremiumRefundProofFileName : "",
+                                      initialPremiumRefundProofFileMimeType: v === "Declined" ? f.initialPremiumRefundProofFileMimeType : "",
                                     }));
-                                    setPolicyStatusFieldErrors((prev) => ({ ...prev, status: "", issuanceDate: "", declinedDate: "", declineReason: "" }));
+                                    setPolicyStatusFieldErrors((prev) => ({
+                                      ...prev,
+                                      status: "",
+                                      issuanceDate: "",
+                                      declinedDate: "",
+                                      declinationLetterFileDataUrl: "",
+                                      declineReason: "",
+                                      initialPremiumRefundProofImageDataUrl: "",
+                                    }));
                                   }}
                                   disabled={policyStatusSaving}
                                 >
@@ -6924,7 +7118,7 @@ function AgentLeadEngagement() {
                                       setPolicyStatusForm((f) => ({ ...f, issuanceDate: e.target.value }));
                                       setPolicyStatusFieldErrors((prev) => ({ ...prev, issuanceDate: "" }));
                                     }}
-                                    min={applicationSubmissionSavedDateInput || undefined}
+                                    min={policyStatusDecisionDateMinInput || undefined}
                                     max={todayDateInput}
                                     disabled={policyStatusSaving}
                                   />
@@ -6944,11 +7138,36 @@ function AgentLeadEngagement() {
                                         setPolicyStatusForm((f) => ({ ...f, declinedDate: e.target.value }));
                                         setPolicyStatusFieldErrors((prev) => ({ ...prev, declinedDate: "" }));
                                       }}
-                                      min={applicationSubmissionSavedDateInput || undefined}
+                                      min={policyStatusDecisionDateMinInput || undefined}
                                       max={todayDateInput}
                                       disabled={policyStatusSaving}
                                     />
                                     {policyStatusFieldErrors.declinedDate ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyStatusFieldErrors.declinedDate}</p> : null}
+                                  </div>
+
+                                  <div className="le-formRow">
+                                    <label className="le-label">Declination Letter (PDF) *</label>
+                                    <input
+                                      key={policyDeclinationLetterInputKey}
+                                      type="file"
+                                      className={`le-input ${policyStatusFieldErrors.declinationLetterFileDataUrl ? "error" : ""}`}
+                                      accept="application/pdf,.pdf"
+                                      onChange={(e) => onPolicyDeclinationLetterPicked(e.target.files?.[0] || null)}
+                                      disabled={policyStatusSaving}
+                                    />
+                                    {policyStatusFieldErrors.declinationLetterFileDataUrl ? (
+                                      <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyStatusFieldErrors.declinationLetterFileDataUrl}</p>
+                                    ) : null}
+                                    {policyStatusForm.declinationLetterFileName ? (
+                                      <p className="le-smallNote">Selected file: {policyStatusForm.declinationLetterFileName}</p>
+                                    ) : null}
+                                    {policyStatusForm.declinationLetterFileDataUrl ? (
+                                      <iframe
+                                        title="Declination Letter Preview"
+                                        src={policyStatusForm.declinationLetterFileDataUrl}
+                                        style={{ width: "100%", minHeight: 260, border: "1px solid #e5e7eb", borderRadius: 10 }}
+                                      />
+                                    ) : null}
                                   </div>
 
                                   <div className="le-formRow">
@@ -6964,6 +7183,31 @@ function AgentLeadEngagement() {
                                       disabled={policyStatusSaving}
                                     />
                                     {policyStatusFieldErrors.declineReason ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyStatusFieldErrors.declineReason}</p> : null}
+                                  </div>
+
+                                  <div className="le-formRow">
+                                    <label className="le-label">Proof of Initial Premium Refund (JPG, JPEG, PNG) *</label>
+                                    <input
+                                      key={policyRefundProofInputKey}
+                                      type="file"
+                                      className={`le-input ${policyStatusFieldErrors.initialPremiumRefundProofImageDataUrl ? "error" : ""}`}
+                                      accept="image/jpeg,image/png,.jpg,.jpeg,.png"
+                                      onChange={(e) => onPolicyRefundProofPicked(e.target.files?.[0] || null)}
+                                      disabled={policyStatusSaving}
+                                    />
+                                    {policyStatusFieldErrors.initialPremiumRefundProofImageDataUrl ? (
+                                      <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyStatusFieldErrors.initialPremiumRefundProofImageDataUrl}</p>
+                                    ) : null}
+                                    {policyStatusForm.initialPremiumRefundProofFileName ? (
+                                      <p className="le-smallNote">Selected file: {policyStatusForm.initialPremiumRefundProofFileName}</p>
+                                    ) : null}
+                                    {policyStatusForm.initialPremiumRefundProofImageDataUrl ? (
+                                      <img
+                                        src={policyStatusForm.initialPremiumRefundProofImageDataUrl}
+                                        alt="Proof of Initial Premium Refund Preview"
+                                        style={{ maxWidth: "100%", borderRadius: 10, border: "1px solid #e5e7eb" }}
+                                      />
+                                    ) : null}
                                   </div>
                                 </>
                               ) : null}
@@ -6988,7 +7232,22 @@ function AgentLeadEngagement() {
                                   onClick={() => {
                                     setPolicyStatusError("");
                                     setPolicyStatusFieldErrors({});
-                                    setPolicyStatusForm({ status: "", issuanceDate: "", declinedDate: "", declineReason: "", notes: "", savedAt: "" });
+                                    setPolicyStatusForm({
+                                      status: "",
+                                      issuanceDate: "",
+                                      declinedDate: "",
+                                      declinationLetterFileDataUrl: "",
+                                      declinationLetterFileName: "",
+                                      declinationLetterFileMimeType: "",
+                                      declineReason: "",
+                                      initialPremiumRefundProofImageDataUrl: "",
+                                      initialPremiumRefundProofFileName: "",
+                                      initialPremiumRefundProofFileMimeType: "",
+                                      notes: "",
+                                      savedAt: "",
+                                    });
+                                    setPolicyDeclinationLetterInputKey((k) => k + 1);
+                                    setPolicyRefundProofInputKey((k) => k + 1);
                                   }}
                                   disabled={policyStatusSaving}
                                 >
@@ -7012,9 +7271,20 @@ function AgentLeadEngagement() {
                         <div className="le-block"><p className="le-muted" style={{ marginTop: 8 }}>No details were saved for this subactivity in the selected engagement cycle.</p></div>
                       ) : null}
 
-                      {isPolicyInitialEorViewed && ((isHistoryView && hasSavedPolicyInitialPremiumEor) || (!isHistoryView && hasSavedPolicyApplicationStatus && policyStatusForm.status === "Issued")) ? (
+                      {isPolicyInitialEorViewed && ((isHistoryView && hasSavedPolicyInitialPremiumEor) || !isHistoryView) ? (
                         <div className="le-block">
-                          <h4 className="le-blockTitle">{hasSavedPolicyInitialPremiumEor ? "Initial Premium eOR Details" : "Upload Initial Premium eOR"}</h4>
+                          <div className="le-inlineActionRow" style={{ alignItems: "center", marginBottom: 10 }}>
+                            <h4 className="le-blockTitle">{hasSavedPolicyInitialPremiumEor ? "Initial Premium eOR Details" : "Upload Initial Premium eOR"}</h4>
+                            {hasSavedPolicyInitialPremiumEor && !isPolicyInitialEorFormEditable && !isHistoryView ? (
+                              <button
+                                type="button"
+                                className="le-btn secondary"
+                                onClick={startPolicyInitialEorEdit}
+                              >
+                                Edit
+                              </button>
+                            ) : null}
+                          </div>
 
                           <div className="le-formRow">
                             <label className="le-label">Method of Initial Payment</label>
@@ -7025,7 +7295,7 @@ function AgentLeadEngagement() {
                             <p className="le-smallNote">{applicationPremiumPaymentForm.totalFrequencyPremiumPhp || "—"}</p>
                           </div>
 
-                          {hasSavedPolicyInitialPremiumEor ? (
+                          {!isPolicyInitialEorFormEditable ? (
                             <>
                               <div className="le-formRow">
                                 <label className="le-label">eOR Number</label>
@@ -7076,8 +7346,8 @@ function AgentLeadEngagement() {
                                     setPolicyInitialEorForm((f) => ({ ...f, receiptDate: e.target.value }));
                                     setPolicyInitialEorFieldErrors((prev) => ({ ...prev, receiptDate: "" }));
                                   }}
-                                  min={applicationSubmissionSavedDateInput || undefined}
-                                  max={policyStatusForm.issuanceDate || todayDateInput}
+                                  min={policyInitialEorReceiptDateMinInput || undefined}
+                                  max={policyInitialEorReceiptDateMaxInput}
                                   disabled={policyInitialEorSaving}
                                 />
                                 {policyInitialEorFieldErrors.receiptDate ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyInitialEorFieldErrors.receiptDate}</p> : null}
@@ -7114,15 +7384,10 @@ function AgentLeadEngagement() {
                                 <button
                                   type="button"
                                   className="le-btn secondary"
-                                  onClick={() => {
-                                    setPolicyInitialEorError("");
-                                    setPolicyInitialEorFieldErrors({});
-                                    setPolicyInitialEorForm({ eorNumber: "", receiptDate: "", eorFileDataUrl: "", eorFileName: "", uploadedAt: "" });
-                                    setPolicyInitialEorInputKey((k) => k + 1);
-                                  }}
+                                  onClick={policyInitialEorEditMode ? cancelPolicyInitialEorEdit : clearPolicyInitialEorForm}
                                   disabled={policyInitialEorSaving}
                                 >
-                                  Cancel
+                                  {policyInitialEorEditMode ? "Cancel" : "Clear"}
                                 </button>
                                 <button
                                   type="button"
@@ -7611,8 +7876,7 @@ function AgentLeadEngagement() {
                                     <span className="le-attemptDate">{formatDateTime(a.attemptedAt)}</span>
                                     {!isHistoryView &&
                                     !isContactingReadOnly &&
-                                    !isLeadClosed &&
-                                    !isLeadDropped &&
+                                    !isLeadTerminal &&
                                     String(a.attemptId || "").trim() &&
                                     String(displayedLastAttempt?.attemptId || "") === String(a.attemptId || "") ? (
                                       <button
@@ -7757,8 +8021,7 @@ function AgentLeadEngagement() {
                                 isValidateContactEditable &&
                                 !validatingContact &&
                                 !isEngagementBlocked &&
-                                !isLeadClosed &&
-                                !isLeadDropped ? (
+                                !isLeadTerminal ? (
                                   <button
                                     type="button"
                                     className="le-btn secondary"
@@ -7911,8 +8174,7 @@ function AgentLeadEngagement() {
                                 isContactingCurrentViewEditable &&
                                 !savingInterest &&
                                 !isEngagementBlocked &&
-                                !isLeadClosed &&
-                                !isLeadDropped ? (
+                                !isLeadTerminal ? (
                                   <button
                                     type="button"
                                     className="le-btn secondary"
