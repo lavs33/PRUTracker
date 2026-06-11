@@ -4049,8 +4049,8 @@ const ACTIVITY_BY_STAGE = {
     "Schedule Application Submission",
   ],
   "Policy Issuance": [
-    "Record Policy Application Status",
     "Upload Initial Premium eOR",
+    "Record Policy Application Status",
     "Upload Policy Summary",
     "Record Coverage Duration Details",
   ],
@@ -12148,7 +12148,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/status", asyn
     const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).select("_id").lean();
     if (!prospect) return res.status(404).json({ message: "Prospect not found." });
 
-    const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).select("_id").lean();
+    const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).select("_id status");
     if (!lead) return res.status(404).json({ message: "Lead not found." });
 
     const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).select("_id currentStage contactAttemptCycle");
@@ -12250,6 +12250,11 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/status", asyn
     }
 
     const nextActivityKey = normalizedStatus === "Issued" ? "Upload Initial Premium eOR" : "Record Policy Application Status";
+
+    if (normalizedStatus === "Declined") {
+      lead.status = "Policy Declined";
+      await lead.save();
+    }
 
     await Policy.updateOne(
       { leadEngagementId: engagement._id, ...attemptCycleFilterForCycle(currentAttemptCycle) },

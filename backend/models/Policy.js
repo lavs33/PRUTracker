@@ -10,8 +10,8 @@ const mongoose = require("mongoose");
 
 /** Activity enum for the Policy Issuance stage flow. */
 const POLICY_ISSUANCE_ACTIVITY = [
-  "Record Policy Application Status",
   "Upload Initial Premium eOR",
+  "Record Policy Application Status",
   "Upload Policy Summary",
   "Record Coverage Duration Details",
 ];

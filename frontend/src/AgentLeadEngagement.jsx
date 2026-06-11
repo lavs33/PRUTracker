@@ -276,7 +276,7 @@ function AgentLeadEngagement() {
   const [applicationSubmissionScreenshotInputKey, setApplicationSubmissionScreenshotInputKey] = useState(0);
   const [applicationSubmissionConfirmOpen, setApplicationSubmissionConfirmOpen] = useState(false);
   const [applicationViewedActivityKey, setApplicationViewedActivityKey] = useState("");
-  const [policyCurrentActivityKey, setPolicyCurrentActivityKey] = useState("Record Policy Application Status");
+  const [policyCurrentActivityKey, setPolicyCurrentActivityKey] = useState("Upload Initial Premium eOR");
   const [policyViewedActivityKey, setPolicyViewedActivityKey] = useState("");
   const [policyStatusForm, setPolicyStatusForm] = useState({
     status: "",
@@ -684,7 +684,7 @@ function AgentLeadEngagement() {
       });
       setApplicationSubmissionFieldErrors({});
       setApplicationSubmissionError("");
-      setPolicyCurrentActivityKey(String(policyStage?.currentActivityKey || "Record Policy Application Status").trim() || "Record Policy Application Status");
+      setPolicyCurrentActivityKey(String(policyStage?.currentActivityKey || "Upload Initial Premium eOR").trim() || "Upload Initial Premium eOR");
       setPolicyStatusForm({
         status: String(policyStage?.recordPolicyApplicationStatus?.status || ""),
         issuanceDate: policyStage?.recordPolicyApplicationStatus?.issuanceDate
@@ -1697,8 +1697,8 @@ function AgentLeadEngagement() {
 
   const POLICY_ISSUANCE_STEPS_UI = useMemo(
     () => [
-      { key: "Record Policy Application Status", label: "Record Policy Application Status" },
       { key: "Upload Initial Premium eOR", label: "Upload Initial Premium eOR" },
+      { key: "Record Policy Application Status", label: "Record Policy Application Status" },
       { key: "Upload Policy Summary", label: "Upload Policy Summary" },
       { key: "Record Coverage Duration Details", label: "Record Coverage Duration Details" },
     ],
@@ -2721,7 +2721,7 @@ function AgentLeadEngagement() {
   }, [engagement?.application?.currentActivityKey, engagement?.currentActivityKey, APPLICATION_STEPS_UI]);
 
   const policyIssuanceUiActivityKey = useMemo(() => {
-    const fallback = "Record Policy Application Status";
+    const fallback = "Upload Initial Premium eOR";
     const raw = String(engagement?.policy?.currentActivityKey || policyCurrentActivityKey || engagement?.currentActivityKey || fallback).trim();
     return POLICY_ISSUANCE_STEPS_UI.some((s) => s.key === raw) ? raw : fallback;
   }, [engagement?.policy?.currentActivityKey, policyCurrentActivityKey, engagement?.currentActivityKey, POLICY_ISSUANCE_STEPS_UI]);
@@ -5876,6 +5876,8 @@ function AgentLeadEngagement() {
                             ? "closed"
                             : lead.status === "Dropped"
                             ? "dropped"
+                            : lead.status === "Policy Declined"
+                            ? "policydeclined"
                             : "unknown"
                         }`}
                       >
