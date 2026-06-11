@@ -263,7 +263,7 @@ function registerLegacyRoutes(app, deps) {
     const setOnInsert = {
       leadEngagementId,
       attemptCycle: normalizedAttemptCycle,
-      outcomeActivity: "Record Policy Application Status",
+      outcomeActivity: "Upload Initial Premium eOR",
     };
     if (chosenProductId) setOnInsert.chosenProductId = chosenProductId;
 
@@ -4049,8 +4049,8 @@ const ACTIVITY_BY_STAGE = {
     "Schedule Application Submission",
   ],
   "Policy Issuance": [
-    "Record Policy Application Status",
     "Upload Initial Premium eOR",
+    "Record Policy Application Status",
     "Upload Policy Summary",
     "Record Coverage Duration Details",
   ],
@@ -7952,7 +7952,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
       return String(proposalDoc?.outcomeActivity || "Generate Proposal").trim() || "Generate Proposal";
     })();
     const applicationCurrentActivityKey = String(applicationDoc?.outcomeActivity || "Record Prospect Attendance").trim() || "Record Prospect Attendance";
-    const policyCurrentActivityKey = String(policyDoc?.outcomeActivity || "Record Policy Application Status").trim() || "Record Policy Application Status";
+    const policyCurrentActivityKey = String(policyDoc?.outcomeActivity || "Upload Initial Premium eOR").trim() || "Upload Initial Premium eOR";
 
     const issuedAtRaw = policyDoc?.recordPolicyApplicationStatus?.issuanceDate || null;
     const issuedAt = issuedAtRaw ? new Date(issuedAtRaw) : null;
@@ -12088,7 +12088,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/submission", asyn
       await ensurePolicyForCurrentAttemptCycle(engagement._id, currentAttemptCycle, { session, chosenProductId });
 
       engagement.currentStage = "Policy Issuance";
-      engagement.currentActivityKey = "Record Policy Application Status";
+      engagement.currentActivityKey = "Upload Initial Premium eOR";
       engagement.stageCompletedAt = now;
       engagement.stageHistory = Array.isArray(engagement.stageHistory) ? engagement.stageHistory : [];
 
@@ -12112,7 +12112,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/submission", asyn
 
     return res.json({
       message: "Application submission saved.",
-      currentActivityKey: "Record Policy Application Status",
+      currentActivityKey: "Upload Initial Premium eOR",
       currentStage: "Policy Issuance",
     });
   } catch (err) {
@@ -12148,7 +12148,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/status", asyn
     const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).select("_id").lean();
     if (!prospect) return res.status(404).json({ message: "Prospect not found." });
 
-    const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).select("_id").lean();
+    const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).select("_id status");
     if (!lead) return res.status(404).json({ message: "Lead not found." });
 
     const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).select("_id currentStage contactAttemptCycle");
@@ -12163,7 +12163,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/status", asyn
       leadEngagementId: engagement._id,
       ...attemptCycleFilterForCycle(currentAttemptCycle),
     })
-      .select("chosenProductId")
+      .select("chosenProductId uploadInitialPremiumEor.paymentId")
       .lean();
 
     await ensureApplicationAttemptCycleIndex();
@@ -12249,7 +12249,15 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/status", asyn
       }
     }
 
-    const nextActivityKey = normalizedStatus === "Issued" ? "Upload Initial Premium eOR" : "Record Policy Application Status";
+    const hasInitialPremiumEor = Boolean(existingPolicyDoc?.uploadInitialPremiumEor?.paymentId);
+    const nextActivityKey = normalizedStatus === "Issued"
+      ? (hasInitialPremiumEor ? "Upload Policy Summary" : "Upload Initial Premium eOR")
+      : "Record Policy Application Status";
+
+    if (normalizedStatus === "Declined") {
+      lead.status = "Policy Declined";
+      await lead.save();
+    }
 
     await Policy.updateOne(
       { leadEngagementId: engagement._id, ...attemptCycleFilterForCycle(currentAttemptCycle) },
@@ -12354,21 +12362,18 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/initial-premi
     const issuanceDate = policyDoc?.recordPolicyApplicationStatus?.issuanceDate
       ? new Date(policyDoc.recordPolicyApplicationStatus.issuanceDate)
       : null;
-    const status = String(policyDoc?.recordPolicyApplicationStatus?.status || "").trim();
-
-    if (status !== "Issued") {
-      return res.status(409).json({ message: "Policy application status must be Issued before uploading Initial Premium eOR." });
-    }
-    if (!applicationSubmittedAt || !issuanceDate) {
-      return res.status(409).json({ message: "Application submission date and policy issuance date are required before uploading Initial Premium eOR." });
+    if (!applicationSubmittedAt) {
+      return res.status(409).json({ message: "Application submission date is required before uploading Initial Premium eOR." });
     }
 
     const minDate = new Date(applicationSubmittedAt);
     minDate.setHours(0, 0, 0, 0);
-    const maxDate = new Date(issuanceDate);
+    const maxDate = issuanceDate ? new Date(issuanceDate) : new Date(todayEnd);
     maxDate.setHours(23, 59, 59, 999);
     if (receiptDateValue < minDate || receiptDateValue > maxDate) {
-      return res.status(400).json({ message: "Receipt date must be between application submission date and policy issuance date." });
+      return res.status(400).json({ message: issuanceDate
+        ? "Receipt date must be between application submission date and policy issuance date."
+        : "Receipt date cannot be earlier than application submission date." });
     }
 
     const uploadedAt = new Date();
@@ -12400,7 +12405,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/initial-premi
         $setOnInsert: { leadEngagementId: engagement._id, attemptCycle: currentAttemptCycle },
         $set: {
           attemptCycle: currentAttemptCycle,
-          outcomeActivity: "Upload Policy Summary",
+          outcomeActivity: "Record Policy Application Status",
           uploadInitialPremiumEor: {
             paymentId: paymentDoc._id,
           },
@@ -12411,10 +12416,10 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/initial-premi
 
     await LeadEngagement.updateOne(
       { _id: engagement._id },
-      { $set: { currentActivityKey: "Upload Policy Summary" } }
+      { $set: { currentActivityKey: "Record Policy Application Status" } }
     );
 
-    return res.json({ message: "Initial premium eOR uploaded.", currentActivityKey: "Upload Policy Summary" });
+    return res.json({ message: "Initial premium eOR uploaded.", currentActivityKey: "Record Policy Application Status" });
   } catch (err) {
     console.error("Policy issuance initial premium eOR save error:", err);
     if (err?.code === 11000 && /(?:uploadInitialPremiumEor|uploadPremiumPaymentEor)\.eorNumber/.test(String(err?.message || ""))) {
