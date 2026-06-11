@@ -204,10 +204,13 @@ function AgentLeadDetails() {
 
   const isDropped = String(lead?.status || "") === "Dropped";
   const isClosed = String(lead?.status || "") === "Closed";
+  const isPolicyDeclined = String(lead?.status || "") === "Policy Declined";
   const hasSubmittedApplication = String(leadEngagement?.currentStage || "") === "Policy Issuance";
   const dropDisabledReason = isClosed
     ? "Closed leads cannot be dropped"
-    : hasSubmittedApplication
+    : isPolicyDeclined
+      ? "Policy declined leads cannot be dropped"
+      : hasSubmittedApplication
       ? "Leads with submitted applications cannot be dropped"
       : "";
   const isDropDisabled = Boolean(dropDisabledReason);
@@ -781,7 +784,7 @@ const handleSideNav = (key) => {
                     <div className="ld-policyDate">{formatDateShort(leadEngagement?.updatedAt)}</div>
                   </div>
 
-                  {lead.status !== "Closed" && lead.status !== "Dropped" && (
+                  {lead.status !== "Closed" && lead.status !== "Dropped" && lead.status !== "Policy Declined" && (
                     <div className="ld-policyBottom">
                       <div className="ld-policyStatusRow">
                         <span className="ld-policyStatusLabel">Current Stage</span>
@@ -819,7 +822,7 @@ const handleSideNav = (key) => {
                     </div>
                   </button>
                 ) : (
-                  <p className="ld-descText">No policy attached yet.</p>
+                  <p className="ld-descText">No policy attached.</p>
                 )}
               </div>
             </div>
