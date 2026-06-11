@@ -276,7 +276,7 @@ function AgentLeadEngagement() {
   const [applicationSubmissionScreenshotInputKey, setApplicationSubmissionScreenshotInputKey] = useState(0);
   const [applicationSubmissionConfirmOpen, setApplicationSubmissionConfirmOpen] = useState(false);
   const [applicationViewedActivityKey, setApplicationViewedActivityKey] = useState("");
-  const [policyCurrentActivityKey, setPolicyCurrentActivityKey] = useState("Record Policy Application Status");
+  const [policyCurrentActivityKey, setPolicyCurrentActivityKey] = useState("Upload Initial Premium eOR");
   const [policyViewedActivityKey, setPolicyViewedActivityKey] = useState("");
   const [policyStatusForm, setPolicyStatusForm] = useState({
     status: "",
@@ -300,6 +300,7 @@ function AgentLeadEngagement() {
   const [policyInitialEorSaving, setPolicyInitialEorSaving] = useState(false);
   const [policyInitialEorError, setPolicyInitialEorError] = useState("");
   const [policyInitialEorInputKey, setPolicyInitialEorInputKey] = useState(0);
+  const [policyInitialEorEditMode, setPolicyInitialEorEditMode] = useState(false);
   const [policySummaryForm, setPolicySummaryForm] = useState({
     policyNumber: "",
     policySummaryFileDataUrl: "",
@@ -684,7 +685,7 @@ function AgentLeadEngagement() {
       });
       setApplicationSubmissionFieldErrors({});
       setApplicationSubmissionError("");
-      setPolicyCurrentActivityKey(String(policyStage?.currentActivityKey || "Record Policy Application Status").trim() || "Record Policy Application Status");
+      setPolicyCurrentActivityKey(String(policyStage?.currentActivityKey || "Upload Initial Premium eOR").trim() || "Upload Initial Premium eOR");
       setPolicyStatusForm({
         status: String(policyStage?.recordPolicyApplicationStatus?.status || ""),
         issuanceDate: policyStage?.recordPolicyApplicationStatus?.issuanceDate
@@ -708,6 +709,7 @@ function AgentLeadEngagement() {
       });
       setPolicyInitialEorFieldErrors({});
       setPolicyInitialEorError("");
+      setPolicyInitialEorEditMode(false);
       setPolicySummaryForm({
         policyNumber: String(policyStage?.uploadPolicySummary?.policyNumber || ""),
         policySummaryFileDataUrl: String(policyStage?.uploadPolicySummary?.policySummaryFileDataUrl || ""),
@@ -1697,8 +1699,8 @@ function AgentLeadEngagement() {
 
   const POLICY_ISSUANCE_STEPS_UI = useMemo(
     () => [
-      { key: "Record Policy Application Status", label: "Record Policy Application Status" },
       { key: "Upload Initial Premium eOR", label: "Upload Initial Premium eOR" },
+      { key: "Record Policy Application Status", label: "Record Policy Application Status" },
       { key: "Upload Policy Summary", label: "Upload Policy Summary" },
       { key: "Record Coverage Duration Details", label: "Record Coverage Duration Details" },
     ],
@@ -2721,7 +2723,7 @@ function AgentLeadEngagement() {
   }, [engagement?.application?.currentActivityKey, engagement?.currentActivityKey, APPLICATION_STEPS_UI]);
 
   const policyIssuanceUiActivityKey = useMemo(() => {
-    const fallback = "Record Policy Application Status";
+    const fallback = "Upload Initial Premium eOR";
     const raw = String(engagement?.policy?.currentActivityKey || policyCurrentActivityKey || engagement?.currentActivityKey || fallback).trim();
     return POLICY_ISSUANCE_STEPS_UI.some((s) => s.key === raw) ? raw : fallback;
   }, [engagement?.policy?.currentActivityKey, policyCurrentActivityKey, engagement?.currentActivityKey, POLICY_ISSUANCE_STEPS_UI]);
@@ -5159,6 +5161,17 @@ function AgentLeadEngagement() {
     return hasNo && hasDate && hasFile && hasSaved;
   }, [policyInitialEorForm.eorNumber, policyInitialEorForm.receiptDate, policyInitialEorForm.eorFileDataUrl, policyInitialEorForm.uploadedAt]);
 
+  const policyInitialEorReceiptDateMinInput = applicationPremiumPaymentForm.paymentDate || "";
+  const policyInitialEorReceiptDateMaxInput = todayDateInput;
+  const isPolicyInitialEorFormEditable = !hasSavedPolicyInitialPremiumEor || policyInitialEorEditMode;
+
+  const clearPolicyInitialEorForm = useCallback(() => {
+    setPolicyInitialEorError("");
+    setPolicyInitialEorFieldErrors({});
+    setPolicyInitialEorForm({ eorNumber: "", receiptDate: "", eorFileDataUrl: "", eorFileName: "", uploadedAt: "" });
+    setPolicyInitialEorInputKey((k) => k + 1);
+  }, []);
+
   const onPolicyInitialEorPicked = (file) => {
     if (!file) {
       setPolicyInitialEorForm((f) => ({ ...f, eorFileDataUrl: "", eorFileName: "" }));
@@ -5201,6 +5214,14 @@ function AgentLeadEngagement() {
         setPolicyInitialEorFieldErrors({ receiptDate: "Receipt date is required." });
         return;
       }
+      if (policyInitialEorReceiptDateMinInput && receiptDate < policyInitialEorReceiptDateMinInput) {
+        setPolicyInitialEorFieldErrors({ receiptDate: "Receipt date cannot be earlier than payment date." });
+        return;
+      }
+      if (receiptDate > policyInitialEorReceiptDateMaxInput) {
+        setPolicyInitialEorFieldErrors({ receiptDate: "Receipt date cannot be in the future." });
+        return;
+      }
       if (!eorFileDataUrl) {
         setPolicyInitialEorFieldErrors({ eorFileDataUrl: "eOR PDF file is required." });
         return;
@@ -5214,11 +5235,12 @@ function AgentLeadEngagement() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to save Initial Premium eOR.");
+      setPolicyInitialEorEditMode(false);
       await refreshCurrentProgressView();
     } catch (err) {
       const msg = String(err?.message || "Failed to save Initial Premium eOR.");
       if (msg.includes("eOR number")) setPolicyInitialEorFieldErrors({ eorNumber: "eOR number is required." });
-      else if (msg.includes("Receipt date")) setPolicyInitialEorFieldErrors({ receiptDate: msg });
+      else if (msg.includes("Receipt date") || msg.includes("Payment date")) setPolicyInitialEorFieldErrors({ receiptDate: msg });
       else if (msg.includes("PDF")) setPolicyInitialEorFieldErrors({ eorFileDataUrl: msg });
       else setPolicyInitialEorError(msg);
     } finally {
@@ -5876,6 +5898,8 @@ function AgentLeadEngagement() {
                             ? "closed"
                             : lead.status === "Dropped"
                             ? "dropped"
+                            : lead.status === "Policy Declined"
+                            ? "policydeclined"
                             : "unknown"
                         }`}
                       >
@@ -7012,7 +7036,7 @@ function AgentLeadEngagement() {
                         <div className="le-block"><p className="le-muted" style={{ marginTop: 8 }}>No details were saved for this subactivity in the selected engagement cycle.</p></div>
                       ) : null}
 
-                      {isPolicyInitialEorViewed && ((isHistoryView && hasSavedPolicyInitialPremiumEor) || (!isHistoryView && hasSavedPolicyApplicationStatus && policyStatusForm.status === "Issued")) ? (
+                      {isPolicyInitialEorViewed && ((isHistoryView && hasSavedPolicyInitialPremiumEor) || !isHistoryView) ? (
                         <div className="le-block">
                           <h4 className="le-blockTitle">{hasSavedPolicyInitialPremiumEor ? "Initial Premium eOR Details" : "Upload Initial Premium eOR"}</h4>
 
@@ -7025,7 +7049,7 @@ function AgentLeadEngagement() {
                             <p className="le-smallNote">{applicationPremiumPaymentForm.totalFrequencyPremiumPhp || "—"}</p>
                           </div>
 
-                          {hasSavedPolicyInitialPremiumEor ? (
+                          {!isPolicyInitialEorFormEditable ? (
                             <>
                               <div className="le-formRow">
                                 <label className="le-label">eOR Number</label>
@@ -7047,6 +7071,17 @@ function AgentLeadEngagement() {
                                     src={policyInitialEorForm.eorFileDataUrl}
                                     style={{ width: "100%", minHeight: 320, border: "1px solid #e5e7eb", borderRadius: 10 }}
                                   />
+                                </div>
+                              ) : null}
+                              {!isHistoryView ? (
+                                <div className="le-actions" style={{ marginTop: 10 }}>
+                                  <button
+                                    type="button"
+                                    className="le-btn secondary"
+                                    onClick={() => setPolicyInitialEorEditMode(true)}
+                                  >
+                                    Edit
+                                  </button>
                                 </div>
                               ) : null}
                             </>
@@ -7076,8 +7111,8 @@ function AgentLeadEngagement() {
                                     setPolicyInitialEorForm((f) => ({ ...f, receiptDate: e.target.value }));
                                     setPolicyInitialEorFieldErrors((prev) => ({ ...prev, receiptDate: "" }));
                                   }}
-                                  min={applicationSubmissionSavedDateInput || undefined}
-                                  max={policyStatusForm.issuanceDate || todayDateInput}
+                                  min={policyInitialEorReceiptDateMinInput || undefined}
+                                  max={policyInitialEorReceiptDateMaxInput}
                                   disabled={policyInitialEorSaving}
                                 />
                                 {policyInitialEorFieldErrors.receiptDate ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyInitialEorFieldErrors.receiptDate}</p> : null}
@@ -7114,15 +7149,10 @@ function AgentLeadEngagement() {
                                 <button
                                   type="button"
                                   className="le-btn secondary"
-                                  onClick={() => {
-                                    setPolicyInitialEorError("");
-                                    setPolicyInitialEorFieldErrors({});
-                                    setPolicyInitialEorForm({ eorNumber: "", receiptDate: "", eorFileDataUrl: "", eorFileName: "", uploadedAt: "" });
-                                    setPolicyInitialEorInputKey((k) => k + 1);
-                                  }}
+                                  onClick={clearPolicyInitialEorForm}
                                   disabled={policyInitialEorSaving}
                                 >
-                                  Cancel
+                                  Clear
                                 </button>
                                 <button
                                   type="button"
