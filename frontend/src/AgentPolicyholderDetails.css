@@ -423,6 +423,24 @@
   color: #a31f15;
 }
 
+
+.ph-inlineSep {
+  color: #6b6e6a;
+  margin: 0 4px;
+}
+
+.ph-cancelPolicyLink {
+  color: #DA291C;
+  font-weight: 900;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.ph-cancelPolicyLink:hover,
+.ph-cancelPolicyLink:focus-visible {
+  color: #a31f15;
+}
+
 .ph-previewOverlay {
   position: fixed;
   inset: 0;

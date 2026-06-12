@@ -258,6 +258,21 @@ function AgentPolicyholderDetails() {
                         ) : (
                           "—"
                         )}
+                        {policyholder.policyNumber && policyholder.status !== "Cancelled" ? (
+                          <>
+                            <span className="ph-inlineSep">•</span>
+                            <a
+                              href={`/agent/${user.username}/policyholders/${policyholder._id || policyholderId}/cancel`}
+                              className="ph-cancelPolicyLink"
+                              onClick={(event) => {
+                                event.preventDefault();
+                                navigate(`/agent/${user.username}/policyholders/${policyholder._id || policyholderId}/cancel`);
+                              }}
+                            >
+                              Cancel Policy
+                            </a>
+                          </>
+                        ) : null}
                       </span>
                     </div>
 
