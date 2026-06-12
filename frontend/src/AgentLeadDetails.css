@@ -524,3 +524,10 @@
   color: #DA291C;
   font-family: "FSAlbertArabic", sans-serif;
 }
+.ld-disabledHintWrap {
+  display: inline-flex;
+}
+
+.ld-disabledHintWrap > button:disabled {
+  pointer-events: none;
+}
