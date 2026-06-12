@@ -365,24 +365,24 @@ function AgentProspectDetails() {
 
                 {safeTab === "leads" ? (
                   <div className="pd-recordActions">
-                    {isDropped ? (
-                      <div className="pd-recordNotice pd-recordNotice--warning">
-                        This prospect is <b>Dropped</b>. You cannot create new leads.
-                      </div>
-                    ) : null}
-
-                    <button
-                      type="button"
-                      className="pd-actionBtn"
-                      disabled={isDropped}
-                      title={isDropped ? "Cannot add lead: prospect is Dropped" : "Add new lead"}
-                      onClick={() => {
-                        if (isDropped) return;
-                        navigate(`/agent/${user.username}/prospects/${prospectId}/leads/new`);
-                      }}
+                    <span
+                      className="pd-disabledHintWrap"
+                      data-tooltip={isDropped ? "This prospect is Dropped. You cannot create new leads." : ""}
+                      title={isDropped ? "This prospect is Dropped. You cannot create new leads." : "Add new lead"}
                     >
-                      + New Lead
-                    </button>
+                      <button
+                        type="button"
+                        className="pd-actionBtn"
+                        disabled={isDropped}
+                        aria-disabled={isDropped}
+                        onClick={() => {
+                          if (isDropped) return;
+                          navigate(`/agent/${user.username}/prospects/${prospectId}/leads/new`);
+                        }}
+                      >
+                        + New Lead
+                      </button>
+                    </span>
                   </div>
                 ) : null}
               </div>
