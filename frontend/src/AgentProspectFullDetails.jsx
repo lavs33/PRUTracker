@@ -453,9 +453,14 @@ const handleSideNav = (key) => {
   };
 
   // DROP LOGIC
+  const canDropProspectWithLeadStatus = (status) => {
+    const normalized = String(status || "").trim().toLowerCase();
+    return normalized === "dropped" || normalized === "policy declined";
+  };
+
   const getBlockingLeadsPreview = () => {
     const leads = Array.isArray(prospect?.leads) ? prospect.leads : [];
-    const blocking = leads.filter((l) => String(l?.status || "") !== "Dropped");
+    const blocking = leads.filter((l) => !canDropProspectWithLeadStatus(l?.status));
     return {
       count: blocking.length,
       preview: blocking.map((l) => ({
@@ -474,7 +479,7 @@ const handleSideNav = (key) => {
         type: "blocked",
         title: "Cannot Drop Prospect",
         message:
-          "This prospect cannot be dropped because there are existing lead record(s) that are not Dropped. Please drop those leads first.",
+          "This prospect cannot be dropped because all lead records must be Dropped or Policy Declined.",
         leadsPreview: preview,
         policyholder: null,
       });
@@ -514,7 +519,7 @@ const handleSideNav = (key) => {
           type: "blocked",
           title: "Cannot Drop Prospect",
           message:
-            "This prospect cannot be dropped because there are existing lead record(s) that are not Dropped. Please drop those leads first.",
+            "This prospect cannot be dropped because all lead records must be Dropped or Policy Declined.",
           leadsPreview: preview,
           policyholder: null,
         });
@@ -577,7 +582,7 @@ const handleSideNav = (key) => {
     openDeleteModal({
       type: "reopen",
       title: "Re-open Prospect?",
-      message: "This will change the prospect status from Dropped to Active. Do you want to continue?",
+      message: "This will restore the prospect status to what it was before dropping. Lead records will not be changed. Do you want to continue?",
       leadsPreview: null,
       policyholder: null,
     });
@@ -587,37 +592,9 @@ const handleSideNav = (key) => {
     try {
       setDeleteBusy(true);
 
-      // Keep required fields so PUT validation won’t fail
-      const payload = {
-        firstName: String(prospect.firstName || "").trim(),
-        middleName: String(prospect.middleName || "").trim(),
-        lastName: String(prospect.lastName || "").trim(),
-        phoneNumber: String(prospect.phoneNumber || "").trim(),
-        email: String(prospect.email ?? "").trim(),
-        sex: prospect.sex || "",
-        birthday: prospect.birthday ? toDateInputValue(prospect.birthday) : "",
-        age: prospect.age ?? "",
-        occupationCategory: prospect.occupationCategory || "Not Employed",
-        occupation: String(prospect.occupation || "").trim(),
-        address: {
-          line: String(prospect.address?.line || "").trim(),
-          barangay: String(prospect.address?.barangay || "").trim(),
-          city: String(prospect.address?.city || "").trim(),
-          region: String(prospect.address?.region || "").trim(),
-          zipCode: String(prospect.address?.zipCode || "").trim(),
-          country: "Philippines",
-        },
-        marketType: prospect.marketType,
-        prospectType: prospect.prospectType || "",
-        source: prospect.source,
-
-        // reopen
-        status: "Active",
-
-        // clear drop fields
-        dropReason: "",
-        dropNotes: "",
-      };
+      // Re-opening is status-only; the backend restores the previous prospect status.
+      // Lead records and prospect details are left unchanged.
+      const payload = { status: "Active" };
 
       const res = await fetch(`http://localhost:5000/api/prospects/${prospectId}?userId=${user.id}`, {
         method: "PUT",
