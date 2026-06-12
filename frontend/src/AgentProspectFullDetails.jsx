@@ -453,9 +453,14 @@ const handleSideNav = (key) => {
   };
 
   // DROP LOGIC
+  const canDropProspectWithLeadStatus = (status) => {
+    const normalized = String(status || "").trim().toLowerCase();
+    return normalized === "dropped" || normalized === "policy declined";
+  };
+
   const getBlockingLeadsPreview = () => {
     const leads = Array.isArray(prospect?.leads) ? prospect.leads : [];
-    const blocking = leads.filter((l) => String(l?.status || "") !== "Dropped");
+    const blocking = leads.filter((l) => !canDropProspectWithLeadStatus(l?.status));
     return {
       count: blocking.length,
       preview: blocking.map((l) => ({
@@ -474,7 +479,7 @@ const handleSideNav = (key) => {
         type: "blocked",
         title: "Cannot Drop Prospect",
         message:
-          "This prospect cannot be dropped because there are existing lead record(s) that are not Dropped. Please drop those leads first.",
+          "This prospect cannot be dropped because all lead records must be Dropped or Policy Declined.",
         leadsPreview: preview,
         policyholder: null,
       });
@@ -514,7 +519,7 @@ const handleSideNav = (key) => {
           type: "blocked",
           title: "Cannot Drop Prospect",
           message:
-            "This prospect cannot be dropped because there are existing lead record(s) that are not Dropped. Please drop those leads first.",
+            "This prospect cannot be dropped because all lead records must be Dropped or Policy Declined.",
           leadsPreview: preview,
           policyholder: null,
         });
