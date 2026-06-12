@@ -702,6 +702,11 @@
   pointer-events: none; 
 }
 
+
+.pd-disabledHintWrap {
+  display: inline-flex;
+}
+
 .pd-recordActions{
   display:flex;
   align-items:center;
