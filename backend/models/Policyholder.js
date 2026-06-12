@@ -149,6 +149,51 @@ const policyholderSchema = new mongoose.Schema(
       index: true,
     },
 
+
+    /** Policy cancellation details captured when an existing policy is cancelled. */
+    cancellationDetails: {
+      accomplishedPolicySurrenderFormFileName: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+      accomplishedPolicySurrenderFormFileMimeType: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+      accomplishedPolicySurrenderFormFileDataUrl: {
+        type: String,
+        default: "",
+      },
+      surrenderChargePhp: {
+        type: Number,
+        default: null,
+      },
+      approvedCancellationDate: {
+        type: Date,
+        default: null,
+      },
+      proofOfApprovedPolicySurrenderFileName: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+      proofOfApprovedPolicySurrenderFileMimeType: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+      proofOfApprovedPolicySurrenderImageDataUrl: {
+        type: String,
+        default: "",
+      },
+      cancelledAt: {
+        type: Date,
+        default: null,
+      },
+    },
+
     /** Annual payment records attached to this converted policyholder. */
     annualPaymentRecords: [
       {
