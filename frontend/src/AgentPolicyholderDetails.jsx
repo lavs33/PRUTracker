@@ -187,6 +187,17 @@ function AgentPolicyholderDetails() {
         ],
         ["Last Paid Date", formatDateOnly(policyholder.lastPaidDate)],
         ["Next Payment Date", formatDateOnly(policyholder.nextPaymentDate)],
+        ...(policyholder.status === "Cancelled" && policyholder.cancellationDetails ? [
+          ["Cancellation Date", formatDateOnly(policyholder.cancellationDetails.approvedCancellationDate)],
+          [
+            "Surrender Charge",
+            policyholder.cancellationDetails.surrenderChargePhp !== null && policyholder.cancellationDetails.surrenderChargePhp !== undefined
+              ? `PHP ${Number(policyholder.cancellationDetails.surrenderChargePhp).toLocaleString()}`
+              : "—",
+          ],
+          ["Accomplished Policy Surrender Form", policyholder.cancellationDetails.accomplishedPolicySurrenderFormFileName || "—"],
+          ["Proof of Approved Policy Surrender", policyholder.cancellationDetails.proofOfApprovedPolicySurrenderFileName || "—"],
+        ] : []),
       ],
     },
   ];
@@ -258,10 +269,25 @@ function AgentPolicyholderDetails() {
                         ) : (
                           "—"
                         )}
+
                       </span>
                     </div>
 
                     <div className="ph-detailSections">
+                      {policyholder.policyNumber && policyholder.status !== "Cancelled" ? (
+                        <div className="ph-cancelPolicyRow">
+                          <a
+                            href={`/agent/${user.username}/policyholders/${policyholder._id || policyholderId}/cancel`}
+                            className="ph-cancelPolicyLink"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              navigate(`/agent/${user.username}/policyholders/${policyholder._id || policyholderId}/cancel`);
+                            }}
+                          >
+                            Cancel Policy
+                          </a>
+                        </div>
+                      ) : null}
                       {detailSections.map((section) => (
                         <section key={section.title} className="ph-detailSection">
                           <h2 className="ph-detailSectionTitle">{section.title}</h2>

@@ -10,8 +10,8 @@ const mongoose = require("mongoose");
 
 /** Activity enum for the Policy Issuance stage flow. */
 const POLICY_ISSUANCE_ACTIVITY = [
-  "Record Policy Application Status",
   "Upload Initial Premium eOR",
+  "Record Policy Application Status",
   "Upload Policy Summary",
   "Record Coverage Duration Details",
 ];
@@ -48,7 +48,7 @@ const policySchema = new mongoose.Schema(
     outcomeActivity: {
       type: String,
       enum: POLICY_ISSUANCE_ACTIVITY,
-      default: "Record Policy Application Status",
+      default: "Upload Initial Premium eOR",
       required: true,
       index: true,
     },
@@ -68,10 +68,38 @@ const policySchema = new mongoose.Schema(
         type: Date,
         default: null,
       },
+      declinationLetterFileName: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+      declinationLetterFileMimeType: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+      declinationLetterFileDataUrl: {
+        type: String,
+        default: "",
+      },
       declineReason: {
         type: String,
         default: "",
         trim: true,
+      },
+      initialPremiumRefundProofFileName: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+      initialPremiumRefundProofFileMimeType: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+      initialPremiumRefundProofImageDataUrl: {
+        type: String,
+        default: "",
       },
       notes: {
         type: String,

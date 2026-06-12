@@ -423,6 +423,24 @@
   color: #a31f15;
 }
 
+
+.ph-cancelPolicyRow {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.ph-cancelPolicyLink {
+  color: #DA291C;
+  font-weight: 900;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.ph-cancelPolicyLink:hover,
+.ph-cancelPolicyLink:focus-visible {
+  color: #a31f15;
+}
+
 .ph-previewOverlay {
   position: fixed;
   inset: 0;

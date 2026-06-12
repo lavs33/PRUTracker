@@ -142,7 +142,8 @@ function AgentAnnualPaymentRecord() {
   const policySummaryFileDataUrl = String(policySummary.fileDataUrl || "").trim();
   const frequencyLabel = annualPayment.frequencyOfPayment === "Half-yearly" ? "Half-Yearly" : (annualPayment.frequencyOfPayment || "Payment");
   const isPolicyholderLapsed = String(policyholder.status || "") === "Lapsed";
-  const canAddPaymentRecord = ["Not Started", "Ongoing"].includes(annualStatus) && (!totalCount || paidCount < totalCount);
+  const isPolicyholderCancelled = String(policyholder.status || "") === "Cancelled";
+  const canAddPaymentRecord = !isPolicyholderCancelled && ["Not Started", "Ongoing"].includes(annualStatus) && (!totalCount || paidCount < totalCount);
 
   return (
     <div className="ph-shell">
