@@ -381,8 +381,8 @@ function createNotificationsController({
         notificationType = "PAYMENT_TRANSFER_REMINDER";
         title = "Record premium payment transfer";
         actionMessage = daysUntilPayment < 0
-          ? `The premium payment deadline was ${formatDateInManila(policyholder.nextPaymentDate)}.`
-          : `The premium payment deadline is ${formatDateInManila(policyholder.nextPaymentDate)}.`;
+          ? `The premium payment due was ${formatDateInManila(policyholder.nextPaymentDate)}.`
+          : `The premium payment due is ${formatDateInManila(policyholder.nextPaymentDate)}.`;
       }
 
       const engagement = engagementById.get(String(policyholder.leadEngagementId || ""));

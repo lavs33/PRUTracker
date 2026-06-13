@@ -825,6 +825,12 @@
   color: #DA291C;
 }
 
+.le-status-pill.policydeclined {
+  background: #fee2e2;
+  border-color: #fecaca;
+  color: #991b1b;
+}
+
 .le-status-pill.unknown {
   background: rgba(148, 163, 184, 0.18);
   border-color: rgba(148, 163, 184, 0.35);

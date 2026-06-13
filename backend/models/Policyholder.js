@@ -125,7 +125,7 @@ const policyholderSchema = new mongoose.Schema(
      * nextPaymentDate (Date|null)
      * ---------------------------
      * Next expected payment date for recurring premium schedules.
-     * Null means no next payment is expected/applicable (e.g., one-time/fully paid term).
+     * Null means no next payment due is expected/applicable (e.g., one-time/fully paid term).
      */
     nextPaymentDate: {
       type: Date,
@@ -147,6 +147,51 @@ const policyholderSchema = new mongoose.Schema(
       enum: ["Active", "At Risk", "Lapsed", "Cancelled"],
       default: "Active",
       index: true,
+    },
+
+
+    /** Policy cancellation details captured when an existing policy is cancelled. */
+    cancellationDetails: {
+      accomplishedPolicySurrenderFormFileName: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+      accomplishedPolicySurrenderFormFileMimeType: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+      accomplishedPolicySurrenderFormFileDataUrl: {
+        type: String,
+        default: "",
+      },
+      surrenderChargePhp: {
+        type: Number,
+        default: null,
+      },
+      approvedCancellationDate: {
+        type: Date,
+        default: null,
+      },
+      proofOfApprovedPolicySurrenderFileName: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+      proofOfApprovedPolicySurrenderFileMimeType: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+      proofOfApprovedPolicySurrenderImageDataUrl: {
+        type: String,
+        default: "",
+      },
+      cancelledAt: {
+        type: Date,
+        default: null,
+      },
     },
 
     /** Annual payment records attached to this converted policyholder. */
