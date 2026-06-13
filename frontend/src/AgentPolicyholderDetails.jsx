@@ -22,6 +22,7 @@ function AgentPolicyholderDetails() {
   const [apiError, setApiError] = useState("");
   const [details, setDetails] = useState(null);
   const [isPolicySummaryPreviewOpen, setIsPolicySummaryPreviewOpen] = useState(false);
+  const [cancellationPreview, setCancellationPreview] = useState(null);
 
   useEffect(() => {
     if (!user || user.username !== username) {
@@ -156,6 +157,7 @@ function AgentPolicyholderDetails() {
   const policySummary = details?.policySummary || {};
   const annualPaymentRecords = Array.isArray(details?.annualPaymentRecords) ? details.annualPaymentRecords : [];
   const policySummaryFileDataUrl = String(policySummary.fileDataUrl || "").trim();
+  const cancellationDetails = policyholder.cancellationDetails || {};
 
   const formatAge = (value) => {
     const age = Number(value);
@@ -186,12 +188,69 @@ function AgentPolicyholderDetails() {
           ),
         ],
         ["Last Paid Date", formatDateOnly(policyholder.lastPaidDate)],
-        ["Next Payment Date", formatDateOnly(policyholder.nextPaymentDate)],
+        ["Next Payment Due", formatDateOnly(policyholder.nextPaymentDate)],
       ],
     },
   ];
 
-  const statusClass = policyholder.status === "Active" ? "active" : (policyholder.status === "At Risk" ? "at-risk" : (policyholder.status === "Lapsed" ? "lapsed" : "dropped"));
+  const buildCancellationPreviewLink = ({ label, fileName, fileDataUrl, type }) => {
+    const displayName = fileName || "—";
+    if (!fileDataUrl) return displayName;
+
+    return (
+      <button
+        type="button"
+        className="ph-filePreviewLink"
+        onClick={() => setCancellationPreview({
+          title: `${label} Preview`,
+          fileName: displayName,
+          fileDataUrl,
+          type,
+        })}
+        title={`Preview ${displayName}`}
+      >
+        {displayName}
+      </button>
+    );
+  };
+
+  const cancellationSection = policyholder.status === "Cancelled" && policyholder.cancellationDetails
+    ? {
+        title: "Cancellation Details",
+        rows: [
+          ["Cancellation Date", formatDateOnly(cancellationDetails.approvedCancellationDate)],
+          ["Reason for Cancellation", cancellationDetails.cancellationReason || "—"],
+          [
+            "Surrender Charge",
+            cancellationDetails.surrenderChargePhp !== null && cancellationDetails.surrenderChargePhp !== undefined
+              ? `PHP ${Number(cancellationDetails.surrenderChargePhp).toLocaleString()}`
+              : "—",
+          ],
+          [
+            "Accomplished Policy Surrender Form",
+            buildCancellationPreviewLink({
+              label: "Accomplished Policy Surrender Form",
+              fileName: cancellationDetails.accomplishedPolicySurrenderFormFileName,
+              fileDataUrl: cancellationDetails.accomplishedPolicySurrenderFormFileDataUrl,
+              type: "pdf",
+            }),
+          ],
+          [
+            "Proof of Approved Policy Surrender",
+            buildCancellationPreviewLink({
+              label: "Proof of Approved Policy Surrender",
+              fileName: cancellationDetails.proofOfApprovedPolicySurrenderFileName,
+              fileDataUrl: cancellationDetails.proofOfApprovedPolicySurrenderImageDataUrl,
+              type: "image",
+            }),
+          ],
+        ],
+      }
+    : null;
+
+  const displaySections = cancellationSection ? [...detailSections, cancellationSection] : detailSections;
+
+  const statusClass = policyholder.status === "Active" ? "active" : (policyholder.status === "At Risk" ? "at-risk" : (policyholder.status === "Lapsed" ? "lapsed" : (policyholder.status === "Paid-Up" ? "paid-up" : (policyholder.status === "Matured" ? "matured" : "dropped"))));
 
   return (
     <div className="ph-shell">
@@ -258,11 +317,26 @@ function AgentPolicyholderDetails() {
                         ) : (
                           "—"
                         )}
+
                       </span>
                     </div>
 
                     <div className="ph-detailSections">
-                      {detailSections.map((section) => (
+                      {policyholder.policyNumber && !["Cancelled", "Paid-Up", "Matured"].includes(policyholder.status) ? (
+                        <div className="ph-cancelPolicyRow">
+                          <a
+                            href={`/agent/${user.username}/policyholders/${policyholder._id || policyholderId}/cancel`}
+                            className="ph-cancelPolicyLink"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              navigate(`/agent/${user.username}/policyholders/${policyholder._id || policyholderId}/cancel`);
+                            }}
+                          >
+                            Cancel Policy
+                          </a>
+                        </div>
+                      ) : null}
+                      {displaySections.map((section) => (
                         <section key={section.title} className="ph-detailSection">
                           <h2 className="ph-detailSectionTitle">{section.title}</h2>
                           <div className="ph-contacts">
@@ -338,6 +412,70 @@ function AgentPolicyholderDetails() {
                       ) : (
                         <div className="ph-previewEmpty">
                           <p className="ph-note">No policy summary file is available for this policyholder yet.</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : null}
+
+                {cancellationPreview ? (
+                  <div className="ph-previewOverlay" role="dialog" aria-modal="true" aria-labelledby="cancellation-file-preview-title">
+                    <div className="ph-previewModal">
+                      <div className="ph-previewHeader">
+                        <div className="ph-previewInfo">
+                          <h2 id="cancellation-file-preview-title" className="ph-previewTitle">{cancellationPreview.title}</h2>
+                          <div className="ph-previewMetaGrid">
+                            <div className="ph-previewMetaItem">
+                              <span className="ph-previewMetaLabel">Policyholder Code</span>
+                              <strong className="ph-previewMetaValue">{policyholder.policyholderCode || "—"}</strong>
+                            </div>
+                            <div className="ph-previewMetaItem">
+                              <span className="ph-previewMetaLabel">Policyholder Name</span>
+                              <strong className="ph-previewMetaValue">{prospect.fullName || "—"}</strong>
+                            </div>
+                            <div className="ph-previewMetaItem">
+                              <span className="ph-previewMetaLabel">Product Name</span>
+                              <strong className="ph-previewMetaValue">{product.productName || "—"}</strong>
+                            </div>
+                            <div className="ph-previewMetaItem">
+                              <span className="ph-previewMetaLabel">Policy Number</span>
+                              <strong className="ph-previewMetaValue">{policyholder.policyNumber || policySummary.policyNumber || "—"}</strong>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="ph-previewActions">
+                          <button
+                            type="button"
+                            className="ph-previewClose"
+                            onClick={() => setCancellationPreview(null)}
+                            aria-label="Close cancellation file preview"
+                            title="Close"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      </div>
+
+                      {cancellationPreview.fileDataUrl ? (
+                        cancellationPreview.type === "image" ? (
+                          <div className="ph-previewImageWrap">
+                            <img
+                              src={cancellationPreview.fileDataUrl}
+                              alt={`${cancellationPreview.fileName} preview`}
+                              className="ph-previewImage"
+                            />
+                          </div>
+                        ) : (
+                          <iframe
+                            title={cancellationPreview.title}
+                            src={cancellationPreview.fileDataUrl}
+                            className="ph-previewFrame"
+                          />
+                        )
+                      ) : (
+                        <div className="ph-previewEmpty">
+                          <p className="ph-note">No cancellation file is available for preview.</p>
                         </div>
                       )}
                     </div>
