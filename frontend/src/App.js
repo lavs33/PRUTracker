@@ -14,6 +14,7 @@ import AgentPolicyholdersAll from "./AgentPolicyholdersAll";
 import AgentPolicyholderDetails from "./AgentPolicyholderDetails";
 import AgentAnnualPaymentRecord from "./AgentAnnualPaymentRecord";
 import AgentPaymentRecordDetails from "./AgentPaymentRecordDetails";
+import AgentCancelPolicy from "./AgentCancelPolicy";
 import AgentAddPaymentRecord from "./AgentAddPaymentRecord";
 import AgentProspectDetails from "./AgentProspectDetails";
 import AgentProspectFullDetails from "./AgentProspectFullDetails";
@@ -56,6 +57,7 @@ function App() {
         <Route path="/agent/:username/prospects/:prospectId/leads/new" element={<AgentAddLead />}/>
         <Route path="/agent/:username/prospects/:prospectId/leads/:leadId" element={<AgentLeadDetails />} />
         <Route path="/agent/:username/policyholders/:policyholderId" element={<AgentPolicyholderDetails />} />
+        <Route path="/agent/:username/policyholders/:policyholderId/cancel" element={<AgentCancelPolicy />} />
         <Route path="/agent/:username/policyholders/:policyholderId/annual-payments/:annualPaymentId" element={<AgentAnnualPaymentRecord />} />
         <Route path="/agent/:username/policyholders/:policyholderId/annual-payments/:annualPaymentId/payments/new" element={<AgentAddPaymentRecord />} />
         <Route path="/agent/:username/policyholders/:policyholderId/annual-payments/:annualPaymentId/payments/:paymentId" element={<AgentPaymentRecordDetails />} />
