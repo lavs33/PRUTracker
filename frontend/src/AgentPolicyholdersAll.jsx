@@ -212,8 +212,8 @@ function AgentPolicyholdersAll() {
                 <option value="ageDesc">Age (High → Low)</option>
                 <option value="lastPaidDateAsc">Last Paid Date (Oldest → Newest)</option>
                 <option value="lastPaidDateDesc">Last Paid Date (Newest → Oldest)</option>
-                <option value="nextPaymentDateAsc">Next Payment Date (Earliest → Latest)</option>
-                <option value="nextPaymentDateDesc">Next Payment Date (Latest → Earliest)</option>
+                <option value="nextPaymentDateAsc">Next Payment Due (Earliest → Latest)</option>
+                <option value="nextPaymentDateDesc">Next Payment Due (Latest → Earliest)</option>
                 <option value="dateCreatedAsc">Date Created (Oldest → Newest)</option>
                 <option value="dateCreatedDesc">Date Created (Newest → Oldest)</option>
               </select>
@@ -231,6 +231,8 @@ function AgentPolicyholdersAll() {
                   <option value="Active">Active</option>
                   <option value="At Risk">At Risk</option>
                   <option value="Lapsed">Lapsed</option>
+                  <option value="Paid-Up">Paid-Up</option>
+                  <option value="Matured">Matured</option>
                   <option value="Cancelled">Cancelled</option>
                 </select>
 
@@ -257,7 +259,7 @@ function AgentPolicyholdersAll() {
                       <th>Policy Number</th>
                       <th>Status</th>
                       <th>Last Paid Date</th>
-                      <th>Next Payment Date</th>
+                      <th>Next Payment Due</th>
                       <th>Date Created</th>
                     </tr>
                   </thead>
@@ -292,7 +294,7 @@ function AgentPolicyholdersAll() {
                         <td>{p.productName || "—"}</td>
                         <td className="allpol-mono allpol-cell-nowrap">{p.policyNumber || "—"}</td>
                         <td className="allpol-cell-nowrap">
-                          <span className={`allpol-status ${p.status === "Active" ? "active" : (p.status === "At Risk" ? "at-risk" : (p.status === "Lapsed" ? "lapsed" : "nurture"))}`}>{p.status || "—"}</span>
+                          <span className={`allpol-status ${p.status === "Active" ? "active" : (p.status === "At Risk" ? "at-risk" : (p.status === "Lapsed" ? "lapsed" : (["Cancelled", "Paid-Up", "Matured"].includes(p.status) ? "cancelled" : "nurture")))}`}>{p.status || "—"}</span>
                         </td>
                         <td className="allpol-cell-date">{formatDateOnly(p.lastPaidDate)}</td>
                         <td className="allpol-cell-date">{formatDateOnly(p.nextPaymentDate)}</td>

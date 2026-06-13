@@ -168,7 +168,8 @@
   color: #b91c1c;
 }
 
-.status-pill.dropped {
+.status-pill.dropped,
+.status-pill.cancelled {
   background-color: #e5e7eb; 
   color: #374151;
 }

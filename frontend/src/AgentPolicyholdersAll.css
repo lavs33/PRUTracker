@@ -174,7 +174,8 @@
   color: #166534;
 }
 
-.allpol-status.nurture {
+.allpol-status.nurture,
+.allpol-status.cancelled {
   background-color: #e5e7eb;
   color: #374151;
 }
