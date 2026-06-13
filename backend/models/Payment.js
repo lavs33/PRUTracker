@@ -13,7 +13,7 @@ const PAYMENT_METHODS = [
   "Dated Check",
   "Bills Payments",
 ];
-const PAYMENT_STATUSES = ["Pending", "Processed"];
+const PAYMENT_STATUSES = ["Pending", "Processed", "Refunded"];
 
 const paymentSchema = new mongoose.Schema(
   {

@@ -1,6 +1,7 @@
 const PAYMENT_NOTIFICATION_TYPES = ["PAYMENT_TRANSFER_REMINDER", "PAYMENT_EOR_REMINDER", "PAYMENT_MISSED_TRANSFER", "PAYMENT_POLICY_LAPSED"];
+const POLICY_LIFECYCLE_NOTIFICATION_TYPES = ["POLICY_PAID_UP", "POLICY_MATURED", "POLICY_PAID_UP_MATURED", "POLICY_CANCELLED"];
 const TASK_NOTIFICATION_TYPES = ["TASK_ADDED", "TASK_DUE_TODAY", "TASK_MISSED"];
-const NOTIFICATION_TYPES = [...TASK_NOTIFICATION_TYPES, ...PAYMENT_NOTIFICATION_TYPES];
+const NOTIFICATION_TYPES = [...TASK_NOTIFICATION_TYPES, ...PAYMENT_NOTIFICATION_TYPES, ...POLICY_LIFECYCLE_NOTIFICATION_TYPES];
 const NOTIFICATION_ENTITY_TYPES = ["Task", "Policyholder"];
 
 function dateKeyInTZ(date, timeZone = "Asia/Manila") {
@@ -37,6 +38,21 @@ function formatDateInManila(date) {
 
 function fullName(prospect) {
   return `${prospect?.firstName || ""}${prospect?.middleName ? ` ${prospect.middleName}` : ""} ${prospect?.lastName || ""}`.trim();
+}
+
+function deriveCoverageEndDate(policy = {}) {
+  const coverage = policy?.recordCoverageDurationDetails || {};
+  const rawEndDate = coverage.policyEndDate || coverage.coverageEndDate || null;
+  const endDate = rawEndDate ? new Date(rawEndDate) : null;
+  if (!endDate || Number.isNaN(endDate.getTime())) return null;
+  endDate.setHours(0, 0, 0, 0);
+  return endDate;
+}
+
+function isReachedByToday(date, todayDay = dayNumberFromDateKey(dateKeyInTZ(new Date()))) {
+  if (!date || Number.isNaN(date.getTime()) || todayDay === null) return false;
+  const targetDay = dayNumberFromDateKey(dateKeyInTZ(date));
+  return targetDay !== null && targetDay <= todayDay;
 }
 
 function paymentHasTransfer(payment) {
@@ -113,6 +129,7 @@ function createNotificationsController({
   AnnualPayment,
   Payment,
   Product,
+  Policy,
   mongoose,
   ensureTaskMissedNotificationsForUser,
   toValidObjectIdString,
@@ -145,7 +162,7 @@ function createNotificationsController({
 
     const policyholders = await Policyholder.find({
       assignedToUserId: uid,
-      status: { $in: ["Active", "At Risk", "Lapsed"] },
+      status: { $in: ["Active", "At Risk", "Lapsed", "Paid-Up"] },
     })
       .select("policyholderCode policyNumber productId leadEngagementId nextPaymentDate status annualPaymentRecords")
       .sort({ nextPaymentDate: 1, policyholderCode: -1 })
@@ -159,7 +176,7 @@ function createNotificationsController({
     const leadEngagementIds = uniqueValidIds(policyholders.map((policyholder) => policyholder.leadEngagementId));
     const productIds = uniqueValidIds(policyholders.map((policyholder) => policyholder.productId));
 
-    const [annualPayments, payments, products, engagements] = await Promise.all([
+    const [annualPayments, payments, products, engagements, policies] = await Promise.all([
       annualPaymentIds.length
         ? AnnualPayment.find({ _id: { $in: annualPaymentIds } })
             .select("leadEngagementId status paymentProgress annualPaymentPeriod frequencyOfPayment createdAt updatedAt")
@@ -172,6 +189,12 @@ function createNotificationsController({
         : [],
       productIds.length ? Product.find({ _id: { $in: productIds } }).select("productName").lean() : [],
       leadEngagementIds.length ? LeadEngagement.find({ _id: { $in: leadEngagementIds } }).select("leadId").lean() : [],
+      Policy && leadEngagementIds.length
+        ? Policy.find({ leadEngagementId: { $in: leadEngagementIds } })
+            .sort({ attemptCycle: -1, updatedAt: -1, createdAt: -1 })
+            .select("leadEngagementId recordCoverageDurationDetails")
+            .lean()
+        : [],
     ]);
 
     const annualPaymentById = new Map(annualPayments.map((annualPayment) => [String(annualPayment._id), annualPayment]));
@@ -184,6 +207,11 @@ function createNotificationsController({
     }
     const productNameById = new Map(products.map((product) => [String(product._id), product.productName || "—"]));
     const engagementById = new Map(engagements.map((engagement) => [String(engagement._id), engagement]));
+    const policyByLeadEngagementId = new Map();
+    for (const policy of policies || []) {
+      const key = String(policy?.leadEngagementId || "");
+      if (key && !policyByLeadEngagementId.has(key)) policyByLeadEngagementId.set(key, policy);
+    }
 
     const leadIds = uniqueValidIds(engagements.map((engagement) => engagement.leadId));
     const leads = leadIds.length ? await Lead.find({ _id: { $in: leadIds } }).select("prospectId").lean() : [];
@@ -196,12 +224,126 @@ function createNotificationsController({
 
     const writes = [];
     const policyholderWrites = [];
+    const annualPaymentWrites = [];
+    const lifecycleWrites = [];
+    const paymentTrackingSoftDeleteWrites = [];
+
+    const buildLifecycleNotification = ({ policyholder, prospect, policyName, nextStatus, previousStatus, isPaidUp, isMatured }) => {
+      let type = "";
+      let title = "";
+      if (nextStatus === "Paid-Up") {
+        type = "POLICY_PAID_UP";
+        title = "Policy paid up";
+      } else if (nextStatus === "Matured" && !["Paid-Up", "Matured"].includes(previousStatus) && isPaidUp && isMatured) {
+        type = "POLICY_PAID_UP_MATURED";
+        title = "Policy paid up and matured";
+      } else if (nextStatus === "Matured") {
+        type = "POLICY_MATURED";
+        title = "Policy matured";
+      }
+      if (!type) return null;
+      const policyholderName = fullName(prospect) || "—";
+      const policyholderCode = policyholder.policyholderCode || "—";
+      const policyNumber = policyholder.policyNumber || "—";
+      return {
+        updateOne: {
+          filter: { assignedToUserId: uid, dedupeKey: `${type}:${policyholder._id}` },
+          update: {
+            $set: {
+              type,
+              title,
+              message: `${title}. Policyholder Code: ${policyholderCode}. Policyholder Name: ${policyholderName}. Policy Name: ${policyName}. Policy Number: ${policyNumber}.`,
+              entityType: "Policyholder",
+              entityId: policyholder._id,
+              metadata: {
+                policyholderId: String(policyholder._id),
+                policyholderCode,
+                policyholderName,
+                policyName,
+                policyNumber,
+                previousStatus,
+                nextStatus,
+              },
+              softDeletedAt: null,
+              softDeleteReason: "",
+              softDeletedByUserId: null,
+            },
+            $setOnInsert: {
+              assignedToUserId: uid,
+              dedupeKey: `${type}:${policyholder._id}`,
+              status: "Unread",
+              readAt: null,
+            },
+          },
+          upsert: true,
+        },
+      };
+    };
 
     for (const policyholder of policyholders) {
       const linkedAnnualPaymentIds = (policyholder.annualPaymentRecords || [])
         .map((record) => toValidId(record?.annualPaymentId))
         .filter(Boolean);
       if (!linkedAnnualPaymentIds.length) continue;
+
+      const linkedAnnualPayments = linkedAnnualPaymentIds.map((id) => annualPaymentById.get(id)).filter(Boolean);
+      const currentStatus = String(policyholder.status || "");
+      const policy = policyByLeadEngagementId.get(String(policyholder.leadEngagementId || ""));
+      const coverageReached = isReachedByToday(deriveCoverageEndDate(policy), todayDay);
+      const paymentTermComplete = linkedAnnualPayments.length > 0
+        && !linkedAnnualPayments.some((record) => ["Not Started", "Ongoing"].includes(String(record?.status || "")))
+        && !policyholder.nextPaymentDate;
+      const nextLifecycleStatus = coverageReached ? "Matured" : (paymentTermComplete ? "Paid-Up" : currentStatus);
+      if (["Paid-Up", "Matured"].includes(nextLifecycleStatus)) {
+        if (currentStatus !== nextLifecycleStatus || policyholder.nextPaymentDate) {
+          policyholderWrites.push({
+            updateOne: {
+              filter: { _id: policyholder._id, assignedToUserId: uid },
+              update: { $set: { status: nextLifecycleStatus, nextPaymentDate: null } },
+            },
+          });
+          if (nextLifecycleStatus === "Matured") {
+            annualPaymentWrites.push({
+              updateMany: {
+                filter: { leadEngagementId: policyholder.leadEngagementId, status: { $in: ["Not Started", "Ongoing"] } },
+                update: { $set: { status: "No Longer Pursued" } },
+              },
+            });
+          }
+          const engagement = engagementById.get(String(policyholder.leadEngagementId || ""));
+          const lead = engagement?.leadId ? leadById.get(String(engagement.leadId)) : null;
+          const prospect = lead?.prospectId ? prospectById.get(String(lead.prospectId)) : null;
+          const lifecycleNotification = buildLifecycleNotification({
+            policyholder,
+            prospect,
+            policyName: productNameById.get(String(policyholder.productId || "")) || "—",
+            nextStatus: nextLifecycleStatus,
+            previousStatus: currentStatus,
+            isPaidUp: paymentTermComplete,
+            isMatured: coverageReached,
+          });
+          if (lifecycleNotification) lifecycleWrites.push(lifecycleNotification);
+        }
+        paymentTrackingSoftDeleteWrites.push({
+          updateMany: {
+            filter: {
+              assignedToUserId: uid,
+              entityType: "Policyholder",
+              entityId: policyholder._id,
+              type: { $in: PAYMENT_NOTIFICATION_TYPES },
+              softDeletedAt: null,
+            },
+            update: {
+              $set: {
+                softDeletedAt: new Date(),
+                softDeleteReason: `Policy became ${nextLifecycleStatus}.`,
+                softDeletedByUserId: uid,
+              },
+            },
+          },
+        });
+        continue;
+      }
 
       const linkedPayments = linkedAnnualPaymentIds.flatMap((id) => paymentsByAnnualPaymentId.get(id) || []);
       const pendingPayment = linkedPayments
@@ -381,8 +523,8 @@ function createNotificationsController({
         notificationType = "PAYMENT_TRANSFER_REMINDER";
         title = "Record premium payment transfer";
         actionMessage = daysUntilPayment < 0
-          ? `The premium payment deadline was ${formatDateInManila(policyholder.nextPaymentDate)}.`
-          : `The premium payment deadline is ${formatDateInManila(policyholder.nextPaymentDate)}.`;
+          ? `The premium payment due was ${formatDateInManila(policyholder.nextPaymentDate)}.`
+          : `The premium payment due is ${formatDateInManila(policyholder.nextPaymentDate)}.`;
       }
 
       const engagement = engagementById.get(String(policyholder.leadEngagementId || ""));
@@ -428,8 +570,11 @@ function createNotificationsController({
     }
 
     await Promise.all([
-      writes.length ? Notification.bulkWrite(writes, { ordered: false }) : Promise.resolve(),
       policyholderWrites.length ? Policyholder.bulkWrite(policyholderWrites, { ordered: false }) : Promise.resolve(),
+      annualPaymentWrites.length ? AnnualPayment.bulkWrite(annualPaymentWrites, { ordered: false }) : Promise.resolve(),
+      paymentTrackingSoftDeleteWrites.length ? Notification.bulkWrite(paymentTrackingSoftDeleteWrites, { ordered: false }) : Promise.resolve(),
+      lifecycleWrites.length ? Notification.bulkWrite(lifecycleWrites, { ordered: false }) : Promise.resolve(),
+      writes.length ? Notification.bulkWrite(writes, { ordered: false }) : Promise.resolve(),
     ]);
   };
 
