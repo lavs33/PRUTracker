@@ -191,6 +191,25 @@ function AgentPolicyholderDetails() {
     },
   ];
 
+  const cancellationSection = policyholder.status === "Cancelled" && policyholder.cancellationDetails
+    ? {
+        title: "Cancellation Details",
+        rows: [
+          ["Cancellation Date", formatDateOnly(policyholder.cancellationDetails.approvedCancellationDate)],
+          [
+            "Surrender Charge",
+            policyholder.cancellationDetails.surrenderChargePhp !== null && policyholder.cancellationDetails.surrenderChargePhp !== undefined
+              ? `PHP ${Number(policyholder.cancellationDetails.surrenderChargePhp).toLocaleString()}`
+              : "—",
+          ],
+          ["Accomplished Policy Surrender Form", policyholder.cancellationDetails.accomplishedPolicySurrenderFormFileName || "—"],
+          ["Proof of Approved Policy Surrender", policyholder.cancellationDetails.proofOfApprovedPolicySurrenderFileName || "—"],
+        ],
+      }
+    : null;
+
+  const displaySections = cancellationSection ? [...detailSections, cancellationSection] : detailSections;
+
   const statusClass = policyholder.status === "Active" ? "active" : (policyholder.status === "At Risk" ? "at-risk" : (policyholder.status === "Lapsed" ? "lapsed" : "dropped"));
 
   return (
@@ -258,11 +277,26 @@ function AgentPolicyholderDetails() {
                         ) : (
                           "—"
                         )}
+
                       </span>
                     </div>
 
                     <div className="ph-detailSections">
-                      {detailSections.map((section) => (
+                      {policyholder.policyNumber && policyholder.status !== "Cancelled" ? (
+                        <div className="ph-cancelPolicyRow">
+                          <a
+                            href={`/agent/${user.username}/policyholders/${policyholder._id || policyholderId}/cancel`}
+                            className="ph-cancelPolicyLink"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              navigate(`/agent/${user.username}/policyholders/${policyholder._id || policyholderId}/cancel`);
+                            }}
+                          >
+                            Cancel Policy
+                          </a>
+                        </div>
+                      ) : null}
+                      {displaySections.map((section) => (
                         <section key={section.title} className="ph-detailSection">
                           <h2 className="ph-detailSectionTitle">{section.title}</h2>
                           <div className="ph-contacts">

@@ -415,7 +415,7 @@ const handleSideNav = (key) => {
                         <td className="mono">{c.policyNumber || "—"}</td>
                         <td>
                           <span
-                            className={`status-pill ${c.status === "Active" ? "active" : (c.status === "At Risk" ? "at-risk" : (c.status === "Lapsed" ? "lapsed" : "nurture"))}`}
+                            className={`status-pill ${c.status === "Active" ? "active" : (c.status === "At Risk" ? "at-risk" : (c.status === "Lapsed" ? "lapsed" : (c.status === "Cancelled" ? "cancelled" : "nurture")))}`}
                           >
                             {c.status || "—"}
                           </span>

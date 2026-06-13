@@ -292,7 +292,7 @@ function AgentPolicyholdersAll() {
                         <td>{p.productName || "—"}</td>
                         <td className="allpol-mono allpol-cell-nowrap">{p.policyNumber || "—"}</td>
                         <td className="allpol-cell-nowrap">
-                          <span className={`allpol-status ${p.status === "Active" ? "active" : (p.status === "At Risk" ? "at-risk" : (p.status === "Lapsed" ? "lapsed" : "nurture"))}`}>{p.status || "—"}</span>
+                          <span className={`allpol-status ${p.status === "Active" ? "active" : (p.status === "At Risk" ? "at-risk" : (p.status === "Lapsed" ? "lapsed" : (p.status === "Cancelled" ? "cancelled" : "nurture")))}`}>{p.status || "—"}</span>
                         </td>
                         <td className="allpol-cell-date">{formatDateOnly(p.lastPaidDate)}</td>
                         <td className="allpol-cell-date">{formatDateOnly(p.nextPaymentDate)}</td>
