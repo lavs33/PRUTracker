@@ -415,7 +415,13 @@ function AgentAddPaymentRecord() {
       if (!res.ok) {
         setIsEorConfirmOpen(false);
         setIsPendingTransferConfirmOpen(false);
-        setApiError(data.message || "Failed to upload premium payment eOR.");
+        const message = data.message || "Failed to upload premium payment eOR.";
+        if (message.includes("already exists")) {
+          setEorFieldErrors((prev) => ({ ...prev, eorNumber: "Record already exists for this eOR number." }));
+          setApiError("");
+        } else {
+          setApiError(message);
+        }
         return;
       }
       navigate(`/agent/${user.username}/policyholders/${policyholderId}/annual-payments/${annualPaymentId}/payments/${savedPaymentId}`);
