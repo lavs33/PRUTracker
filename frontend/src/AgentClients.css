@@ -168,7 +168,18 @@
   color: #b91c1c;
 }
 
-.status-pill.dropped {
+.status-pill.paid-up {
+  background-color: #dbeafe;
+  color: #1d4ed8;
+}
+
+.status-pill.matured {
+  background-color: #ede9fe;
+  color: #6d28d9;
+}
+
+.status-pill.dropped,
+.status-pill.cancelled {
   background-color: #e5e7eb; 
   color: #374151;
 }

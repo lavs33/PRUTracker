@@ -382,7 +382,7 @@ const handleSideNav = (key) => {
                       <th>Policy Number</th>
                       <th>Status</th>
                       <th>Last Paid Date</th>
-                      <th>Next Payment Date</th>
+                      <th>Next Payment Due</th>
                     </tr>
                   </thead>
 
@@ -415,7 +415,7 @@ const handleSideNav = (key) => {
                         <td className="mono">{c.policyNumber || "—"}</td>
                         <td>
                           <span
-                            className={`status-pill ${c.status === "Active" ? "active" : (c.status === "At Risk" ? "at-risk" : (c.status === "Lapsed" ? "lapsed" : "nurture"))}`}
+                            className={`status-pill ${c.status === "Active" ? "active" : (c.status === "At Risk" ? "at-risk" : (c.status === "Lapsed" ? "lapsed" : (c.status === "Paid-Up" ? "paid-up" : (c.status === "Matured" ? "matured" : (c.status === "Cancelled" ? "cancelled" : "nurture")))))}`}
                           >
                             {c.status || "—"}
                           </span>
