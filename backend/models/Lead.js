@@ -139,14 +139,14 @@ const leadSchema = new mongoose.Schema(
      * --------------------
      * Sales lifecycle status of the lead.
      *
-     * enum: New, In Progress, Closed, Dropped
+     * enum: New, In Progress, Closed, Dropped, Policy Declined
      * default: "New"
      * required: true ensures every lead has a valid lifecycle state.
      * index: true speeds status filtering (e.g., active leads list).
      */
     status: {
       type: String,
-      enum: ["New", "In Progress", "Closed", "Dropped"],
+      enum: ["New", "In Progress", "Closed", "Dropped", "Policy Declined"],
       default: "New",
       required: true,
       index: true,
@@ -266,7 +266,7 @@ leadSchema.pre("validate", function () {
  *
  * Meaning:
  * - You cannot create a second lead for the same prospect if the existing lead is New/In Progress.
- * - But you CAN create a new lead for the same prospect if the previous one is Closed or Dropped.
+ * - But you CAN create a new lead for the same prospect if the previous one is Closed, Dropped, or Policy Declined.
  */
 leadSchema.index(
   { prospectId: 1 },
