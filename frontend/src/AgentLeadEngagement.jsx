@@ -276,19 +276,27 @@ function AgentLeadEngagement() {
   const [applicationSubmissionScreenshotInputKey, setApplicationSubmissionScreenshotInputKey] = useState(0);
   const [applicationSubmissionConfirmOpen, setApplicationSubmissionConfirmOpen] = useState(false);
   const [applicationViewedActivityKey, setApplicationViewedActivityKey] = useState("");
-  const [policyCurrentActivityKey, setPolicyCurrentActivityKey] = useState("Record Policy Application Status");
+  const [policyCurrentActivityKey, setPolicyCurrentActivityKey] = useState("Upload Initial Premium eOR");
   const [policyViewedActivityKey, setPolicyViewedActivityKey] = useState("");
   const [policyStatusForm, setPolicyStatusForm] = useState({
     status: "",
     issuanceDate: "",
     declinedDate: "",
+    declinationLetterFileDataUrl: "",
+    declinationLetterFileName: "",
+    declinationLetterFileMimeType: "",
     declineReason: "",
+    initialPremiumRefundProofImageDataUrl: "",
+    initialPremiumRefundProofFileName: "",
+    initialPremiumRefundProofFileMimeType: "",
     notes: "",
     savedAt: "",
   });
   const [policyStatusFieldErrors, setPolicyStatusFieldErrors] = useState({});
   const [policyStatusSaving, setPolicyStatusSaving] = useState(false);
   const [policyStatusError, setPolicyStatusError] = useState("");
+  const [policyDeclinationLetterInputKey, setPolicyDeclinationLetterInputKey] = useState(0);
+  const [policyRefundProofInputKey, setPolicyRefundProofInputKey] = useState(0);
   const [policyInitialEorForm, setPolicyInitialEorForm] = useState({
     eorNumber: "",
     receiptDate: "",
@@ -300,6 +308,8 @@ function AgentLeadEngagement() {
   const [policyInitialEorSaving, setPolicyInitialEorSaving] = useState(false);
   const [policyInitialEorError, setPolicyInitialEorError] = useState("");
   const [policyInitialEorInputKey, setPolicyInitialEorInputKey] = useState(0);
+  const [policyInitialEorEditMode, setPolicyInitialEorEditMode] = useState(false);
+  const [policyInitialEorEditSnapshot, setPolicyInitialEorEditSnapshot] = useState(null);
   const [policySummaryForm, setPolicySummaryForm] = useState({
     policyNumber: "",
     policySummaryFileDataUrl: "",
@@ -328,6 +338,8 @@ function AgentLeadEngagement() {
   const [policyCoverageFieldErrors, setPolicyCoverageFieldErrors] = useState({});
   const [policyCoverageSaving, setPolicyCoverageSaving] = useState(false);
   const [policyCoverageError, setPolicyCoverageError] = useState("");
+  const [unavailablePriorityCategories, setUnavailablePriorityCategories] = useState([]);
+  const priorityOptions = ["Protection", "Health", "Investment"].filter((priority) => !unavailablePriorityCategories.includes(priority));
   const [needsSectionOpen, setNeedsSectionOpen] = useState({
     basicInformation: false,
     needsPriorities: false,
@@ -684,7 +696,7 @@ function AgentLeadEngagement() {
       });
       setApplicationSubmissionFieldErrors({});
       setApplicationSubmissionError("");
-      setPolicyCurrentActivityKey(String(policyStage?.currentActivityKey || "Record Policy Application Status").trim() || "Record Policy Application Status");
+      setPolicyCurrentActivityKey(String(policyStage?.currentActivityKey || "Upload Initial Premium eOR").trim() || "Upload Initial Premium eOR");
       setPolicyStatusForm({
         status: String(policyStage?.recordPolicyApplicationStatus?.status || ""),
         issuanceDate: policyStage?.recordPolicyApplicationStatus?.issuanceDate
@@ -693,7 +705,13 @@ function AgentLeadEngagement() {
         declinedDate: policyStage?.recordPolicyApplicationStatus?.declinedDate
           ? toDateInputValue(policyStage.recordPolicyApplicationStatus.declinedDate)
           : "",
+        declinationLetterFileDataUrl: String(policyStage?.recordPolicyApplicationStatus?.declinationLetterFileDataUrl || ""),
+        declinationLetterFileName: String(policyStage?.recordPolicyApplicationStatus?.declinationLetterFileName || ""),
+        declinationLetterFileMimeType: String(policyStage?.recordPolicyApplicationStatus?.declinationLetterFileMimeType || ""),
         declineReason: String(policyStage?.recordPolicyApplicationStatus?.declineReason || ""),
+        initialPremiumRefundProofImageDataUrl: String(policyStage?.recordPolicyApplicationStatus?.initialPremiumRefundProofImageDataUrl || ""),
+        initialPremiumRefundProofFileName: String(policyStage?.recordPolicyApplicationStatus?.initialPremiumRefundProofFileName || ""),
+        initialPremiumRefundProofFileMimeType: String(policyStage?.recordPolicyApplicationStatus?.initialPremiumRefundProofFileMimeType || ""),
         notes: String(policyStage?.recordPolicyApplicationStatus?.notes || ""),
         savedAt: policyStage?.recordPolicyApplicationStatus?.savedAt || "",
       });
@@ -708,6 +726,8 @@ function AgentLeadEngagement() {
       });
       setPolicyInitialEorFieldErrors({});
       setPolicyInitialEorError("");
+      setPolicyInitialEorEditMode(false);
+      setPolicyInitialEorEditSnapshot(null);
       setPolicySummaryForm({
         policyNumber: String(policyStage?.uploadPolicySummary?.policyNumber || ""),
         policySummaryFileDataUrl: String(policyStage?.uploadPolicySummary?.policySummaryFileDataUrl || ""),
@@ -889,6 +909,10 @@ function AgentLeadEngagement() {
         : rawOutcomeNAActivity;
       const rawFollowUpRequired = String(data?.needsAssessment?.followUpNeedsAssessmentRequired || "").trim().toUpperCase();
       setAvailableProducts(Array.isArray(data?.products) ? data.products : []);
+      const unavailablePrioritiesFromServer = Array.isArray(data?.unavailablePriorityCategories)
+        ? data.unavailablePriorityCategories.filter((priority) => ["Protection", "Health", "Investment"].includes(String(priority || "")))
+        : [];
+      setUnavailablePriorityCategories(unavailablePrioritiesFromServer);
 
       const proposalMeeting = data?.proposalMeeting || null;
       const proposalMeetings = Array.isArray(data?.proposalMeetings) && data.proposalMeetings.length
@@ -952,6 +976,10 @@ function AgentLeadEngagement() {
       const usePriorNeedsPrefill = Boolean(needsPrefill) && !hasSavedNeedsAnalysisDetails;
       const currentNeedsPriorities = usePriorNeedsPrefill ? needsPrefillPriorities : (data?.needsAssessment?.needsPriorities || {});
       const currentNeedsDependents = usePriorNeedsPrefill ? needsPrefill?.dependents : data?.needsAssessment?.dependents;
+      const currentPriorityValue = String(currentNeedsPriorities?.currentPriority || "");
+      const normalizedCurrentPriority = !hasSavedNeedsAnalysisDetails && unavailablePrioritiesFromServer.includes(currentPriorityValue)
+        ? ""
+        : currentPriorityValue;
 
       const serverNeedsForm = {
         attendanceChoice: Boolean(data?.needsAssessment?.attendanceConfirmed) ? "YES" : "",
@@ -982,7 +1010,7 @@ function AgentLeadEngagement() {
             }))
           : [],
         needsPriorities: {
-          currentPriority: String(currentNeedsPriorities?.currentPriority || ""),
+          currentPriority: normalizedCurrentPriority,
           monthlyIncomeBand: String(currentNeedsPriorities?.monthlyIncomeBand || ""),
           monthlyIncomeAmount: currentNeedsPriorities?.monthlyIncomeAmount ?? "",
           minPremium: currentNeedsPriorities?.minPremium ?? "",
@@ -1295,9 +1323,85 @@ function AgentLeadEngagement() {
     if (!selectedProductIdCheck || !selectedProductCheck) aggregateFieldErrors.selectedProductId = "Product Selection: please select a product under the chosen priority.";
     if (!String(npCheck.productSelection?.requestedFrequency || "").trim()) aggregateFieldErrors.requestedFrequency = "Product Selection: requested frequency is invalid.";
     if (!String(npCheck.productSelection?.requestedPremiumPayment ?? "").trim()) aggregateFieldErrors.requestedPremiumPayment = "Product Selection: requested premium payment is required.";
-    if (String(npCheck.currentPriority || "").trim() === "Investment") {
+
+    const currentPriorityCheck = String(npCheck.currentPriority || "").trim();
+    const monthlyIncomeBandCheck = String(npCheck.monthlyIncomeBand || "").trim();
+    const monthlyIncomeAmountCheck = toNonNegativeNumber(npCheck.monthlyIncomeAmount);
+    const approxIncomeCheck = resolveApproxIncome(monthlyIncomeBandCheck, npCheck.monthlyIncomeAmount);
+    const minPremiumCheck = toNonNegativeNumber(npCheck.minPremium);
+    const maxPremiumCheck = toNonNegativeNumber(npCheck.maxPremium);
+    const requestedPremiumPaymentCheck = toNonNegativeNumber(npCheck.productSelection?.requestedPremiumPayment);
+
+    if (["BELOW_15000", "ABOVE_500000"].includes(monthlyIncomeBandCheck)) {
+      if (monthlyIncomeAmountCheck === null) aggregateFieldErrors.monthlyIncomeAmount = "Approximate monthly income amount is required for selected bracket.";
+      else if (monthlyIncomeBandCheck === "BELOW_15000" && monthlyIncomeAmountCheck >= 15000) aggregateFieldErrors.monthlyIncomeAmount = "Manual monthly income must be below Php 15,000 for selected bracket.";
+      else if (monthlyIncomeBandCheck === "ABOVE_500000" && monthlyIncomeAmountCheck <= 500000) aggregateFieldErrors.monthlyIncomeAmount = "Manual monthly income must be above Php 500,000 for selected bracket.";
+    }
+    if (String(npCheck.minPremium ?? "").trim() && minPremiumCheck === null) aggregateFieldErrors.minPremium = "Minimum willing monthly premium is invalid.";
+    if (String(npCheck.maxPremium ?? "").trim() && maxPremiumCheck === null) aggregateFieldErrors.maxPremium = "Maximum willing monthly premium is invalid.";
+    if (minPremiumCheck !== null && approxIncomeCheck !== null && minPremiumCheck > approxIncomeCheck) aggregateFieldErrors.minPremium = "Minimum willing monthly premium cannot be higher than approximate monthly income.";
+    if (maxPremiumCheck !== null && approxIncomeCheck !== null && maxPremiumCheck > approxIncomeCheck) aggregateFieldErrors.maxPremium = "Maximum willing monthly premium cannot be higher than approximate monthly income.";
+    if (minPremiumCheck !== null && maxPremiumCheck !== null && maxPremiumCheck < minPremiumCheck) aggregateFieldErrors.maxPremium = "Maximum willing monthly premium must be equal to or higher than minimum.";
+    if (String(npCheck.productSelection?.requestedPremiumPayment ?? "").trim() && requestedPremiumPaymentCheck === null) {
+      aggregateFieldErrors.requestedPremiumPayment = "Product Selection: requested premium payment is invalid.";
+    }
+
+    if (currentPriorityCheck === "Protection") {
+      const monthlySpendRaw = String(npCheck?.protection?.monthlySpend ?? "").trim();
+      const savingsForProtectionRaw = String(npCheck?.protection?.savingsForProtection ?? "").trim();
+      const monthlySpend = toNonNegativeNumber(npCheck?.protection?.monthlySpend);
+      const savingsForProtection = toNonNegativeNumber(npCheck?.protection?.savingsForProtection);
+      if (!monthlySpendRaw) aggregateFieldErrors.protectionMonthlySpend = "Protection: approximate monthly spend is required.";
+      else if (monthlySpend === null) aggregateFieldErrors.protectionMonthlySpend = "Protection: approximate monthly spend is invalid.";
+      else if (approxIncomeCheck !== null && monthlySpend > approxIncomeCheck) aggregateFieldErrors.protectionMonthlySpend = "Protection: monthly spend cannot be higher than approximate monthly income.";
+      if (!savingsForProtectionRaw) aggregateFieldErrors.protectionSavings = "Protection: savings for protection is required.";
+      else if (savingsForProtection === null) aggregateFieldErrors.protectionSavings = "Protection: savings for protection is invalid.";
+    }
+
+    if (currentPriorityCheck === "Health") {
+      const amountToCoverCriticalIllnessRaw = String(npCheck?.health?.amountToCoverCriticalIllness ?? "").trim();
+      const savingsForCriticalIllnessRaw = String(npCheck?.health?.savingsForCriticalIllness ?? "").trim();
+      const amountToCoverCriticalIllness = toNonNegativeNumber(npCheck?.health?.amountToCoverCriticalIllness);
+      const savingsForCriticalIllness = toNonNegativeNumber(npCheck?.health?.savingsForCriticalIllness);
+      if (!amountToCoverCriticalIllnessRaw) aggregateFieldErrors.healthAmount = "Health: approximate amount to cover critical illness is required.";
+      else if (amountToCoverCriticalIllness === null) aggregateFieldErrors.healthAmount = "Health: approximate amount to cover critical illness is invalid.";
+      if (!savingsForCriticalIllnessRaw) aggregateFieldErrors.healthSavings = "Health: savings for critical illness is required.";
+      else if (savingsForCriticalIllness === null) aggregateFieldErrors.healthSavings = "Health: savings for critical illness is invalid.";
+      else if (amountToCoverCriticalIllness !== null && savingsForCriticalIllness > amountToCoverCriticalIllness) aggregateFieldErrors.healthSavings = "Health: savings for critical illness cannot be higher than amount to cover critical illness.";
+    }
+
+    for (let i = 0; i < (needsAssessmentForm.dependents || []).length; i += 1) {
+      const d = needsAssessmentForm.dependents[i] || {};
+      const depAge = Number(d.age);
+      if (!String(d.name || "").trim()) aggregateFieldErrors.dependents = `Dependent #${i + 1}: name is required.`;
+      else if (!Number.isFinite(depAge) || depAge < 0 || depAge > 120) aggregateFieldErrors.dependents = `Dependent #${i + 1}: age must be between 0 and 120.`;
+      else if (!["Male", "Female"].includes(String(d.gender || ""))) aggregateFieldErrors.dependents = `Dependent #${i + 1}: please select gender.`;
+      else if (!["Child", "Parent", "Sibling"].includes(String(d.relationship || ""))) aggregateFieldErrors.dependents = `Dependent #${i + 1}: please select relationship.`;
+      if (aggregateFieldErrors.dependents) break;
+    }
+
+    if (currentPriorityCheck === "Investment") {
       const inv = npCheck.investment || {};
+      const savingsPlan = String(inv.savingsPlan || "").trim();
+      const savingsPlanOther = String(inv.savingsPlanOther || "").trim();
+      const targetAmountRaw = String(inv.targetSavingsAmount ?? "").trim();
+      const targetYearRaw = String(inv.targetUtilizationYear ?? "").trim();
+      const savingsRaw = String(inv.savingsForInvestment ?? "").trim();
+      const targetSavingsAmount = toNonNegativeNumber(inv.targetSavingsAmount);
+      const targetUtilizationYear = Number(targetYearRaw);
+      const savingsForInvestment = toNonNegativeNumber(inv.savingsForInvestment);
+      const yearNow = new Date().getFullYear();
       const rp = inv.riskProfiler || {};
+
+      if (!savingsPlan) aggregateFieldErrors.investmentSavingsPlan = "Investment: savings plan is required.";
+      if (savingsPlan === "Other" && !savingsPlanOther) aggregateFieldErrors.investmentSavingsPlanOther = "Investment: please specify other savings plan.";
+      if (!targetAmountRaw) aggregateFieldErrors.investmentTargetAmount = "Investment: target savings amount is required.";
+      else if (targetSavingsAmount === null) aggregateFieldErrors.investmentTargetAmount = "Investment: target savings amount is invalid.";
+      if (!targetYearRaw) aggregateFieldErrors.investmentTargetYear = "Investment: target year to utilize savings is required.";
+      else if (!Number.isFinite(targetUtilizationYear) || targetUtilizationYear < yearNow + 2 || targetUtilizationYear > yearNow + 20) aggregateFieldErrors.investmentTargetYear = "Investment: target year must be between 2 and 20 years from current year.";
+      if (!savingsRaw) aggregateFieldErrors.investmentSavings = "Investment: savings for investment is required.";
+      else if (savingsForInvestment === null) aggregateFieldErrors.investmentSavings = "Investment: savings for investment is invalid.";
+      else if (targetSavingsAmount !== null && savingsForInvestment > targetSavingsAmount) aggregateFieldErrors.investmentSavings = "Investment: savings for investment cannot be higher than target savings amount.";
       if (!String(rp?.investmentHorizon || "").trim()) aggregateFieldErrors.investmentHorizon = "Investment horizon is required.";
       if (!String(rp?.investmentGoal || "").trim()) aggregateFieldErrors.investmentGoal = "Investment goal is required.";
       if (!String(rp?.marketExperience || "").trim()) aggregateFieldErrors.marketExperience = "Market experience is required.";
@@ -1327,7 +1431,7 @@ function AgentLeadEngagement() {
     }
     if (Object.keys(aggregateFieldErrors).length) {
       setNeedsAssessmentFieldErrors(aggregateFieldErrors);
-      setNeedsAssessmentError("Please complete all required fields.");
+      setNeedsAssessmentError("");
       setNeedsSectionOpen((prev) => ({
         ...prev,
         basicInformation:
@@ -1350,13 +1454,27 @@ function AgentLeadEngagement() {
           Boolean(
             aggregateFieldErrors.currentPriority ||
             aggregateFieldErrors.monthlyIncomeBand ||
+            aggregateFieldErrors.monthlyIncomeAmount ||
             aggregateFieldErrors.minPremium ||
             aggregateFieldErrors.maxPremium ||
+            aggregateFieldErrors.protectionMonthlySpend ||
+            aggregateFieldErrors.protectionSavings ||
+            aggregateFieldErrors.healthAmount ||
+            aggregateFieldErrors.healthSavings ||
             aggregateFieldErrors.investmentSavingsPlan ||
             aggregateFieldErrors.investmentSavingsPlanOther ||
             aggregateFieldErrors.investmentTargetAmount ||
             aggregateFieldErrors.investmentTargetYear ||
-            aggregateFieldErrors.investmentSavings
+            aggregateFieldErrors.investmentSavings ||
+            aggregateFieldErrors.investmentHorizon ||
+            aggregateFieldErrors.investmentGoal ||
+            aggregateFieldErrors.marketExperience ||
+            aggregateFieldErrors.volatilityReaction ||
+            aggregateFieldErrors.capitalLossAffordability ||
+            aggregateFieldErrors.riskReturnTradeoff ||
+            aggregateFieldErrors.fundChoice ||
+            aggregateFieldErrors.fundChoiceTotalAllocation ||
+            aggregateFieldErrors.mismatchReason
           ),
         productSelection:
           prev.productSelection ||
@@ -1471,18 +1589,26 @@ function AgentLeadEngagement() {
     if (requestedPremiumPayment === null) { setNeedsAssessmentError("Product Selection: requested premium payment is required."); return; }
 
     if (currentPriority === "Protection") {
+      const monthlySpendRaw = String(np?.protection?.monthlySpend ?? "").trim();
+      const savingsForProtectionRaw = String(np?.protection?.savingsForProtection ?? "").trim();
       const monthlySpend = toNonNegativeNumber(np?.protection?.monthlySpend);
       const savingsForProtection = toNonNegativeNumber(np?.protection?.savingsForProtection);
-      if (monthlySpend === null) { setNeedsAssessmentError("Protection: approximate monthly spend is required."); return; }
+      if (!monthlySpendRaw) { setNeedsAssessmentError("Protection: approximate monthly spend is required."); return; }
+      if (monthlySpend === null) { setNeedsAssessmentError("Protection: approximate monthly spend is invalid."); return; }
       if (monthlySpend > approxIncome) { setNeedsAssessmentError("Protection: monthly spend cannot be higher than approximate monthly income."); return; }
-      if (savingsForProtection === null) { setNeedsAssessmentError("Protection: savings for protection is required."); return; }
+      if (!savingsForProtectionRaw) { setNeedsAssessmentError("Protection: savings for protection is required."); return; }
+      if (savingsForProtection === null) { setNeedsAssessmentError("Protection: savings for protection is invalid."); return; }
     }
 
     if (currentPriority === "Health") {
+      const amountToCoverCriticalIllnessRaw = String(np?.health?.amountToCoverCriticalIllness ?? "").trim();
+      const savingsForCriticalIllnessRaw = String(np?.health?.savingsForCriticalIllness ?? "").trim();
       const amountToCoverCriticalIllness = toNonNegativeNumber(np?.health?.amountToCoverCriticalIllness);
       const savingsForCriticalIllness = toNonNegativeNumber(np?.health?.savingsForCriticalIllness);
-      if (amountToCoverCriticalIllness === null) { setNeedsAssessmentError("Health: approximate amount to cover critical illness is required."); return; }
-      if (savingsForCriticalIllness === null) { setNeedsAssessmentError("Health: savings for critical illness is required."); return; }
+      if (!amountToCoverCriticalIllnessRaw) { setNeedsAssessmentError("Health: approximate amount to cover critical illness is required."); return; }
+      if (amountToCoverCriticalIllness === null) { setNeedsAssessmentError("Health: approximate amount to cover critical illness is invalid."); return; }
+      if (!savingsForCriticalIllnessRaw) { setNeedsAssessmentError("Health: savings for critical illness is required."); return; }
+      if (savingsForCriticalIllness === null) { setNeedsAssessmentError("Health: savings for critical illness is invalid."); return; }
       if (savingsForCriticalIllness > amountToCoverCriticalIllness) { setNeedsAssessmentError("Health: savings for critical illness cannot be higher than amount to cover critical illness."); return; }
     }
 
@@ -1697,8 +1823,8 @@ function AgentLeadEngagement() {
 
   const POLICY_ISSUANCE_STEPS_UI = useMemo(
     () => [
-      { key: "Record Policy Application Status", label: "Record Policy Application Status" },
       { key: "Upload Initial Premium eOR", label: "Upload Initial Premium eOR" },
+      { key: "Record Policy Application Status", label: "Record Policy Application Status" },
       { key: "Upload Policy Summary", label: "Upload Policy Summary" },
       { key: "Record Coverage Duration Details", label: "Record Coverage Duration Details" },
     ],
@@ -1850,6 +1976,42 @@ function AgentLeadEngagement() {
     return String(standard?.label || fallbackLabel);
   };
   const renderTierAmount = (value) => (Number.isFinite(Number(value)) && Number(value) > 0 ? `Php ${formatAmount(Number(value))}` : "No Standard");
+  const getNeedsAssessmentProspectAge = () => {
+    const explicitAge = Number(needsAssessmentForm?.basicInformation?.age);
+    if (Number.isFinite(explicitAge) && explicitAge >= 0) return explicitAge;
+    const computedAge = computeAgeFromBirthday(needsAssessmentForm?.basicInformation?.birthday);
+    return Number.isFinite(computedAge) ? computedAge : null;
+  };
+  const findApplicableAgeTier = (tiers = []) => {
+    const prospectAge = getNeedsAssessmentProspectAge();
+    if (!Number.isFinite(prospectAge) || !Array.isArray(tiers)) return null;
+    return tiers.find((tier) => {
+      const minAge = Number.isFinite(Number(tier?.minAge)) ? Number(tier.minAge) : -Infinity;
+      const maxAge = Number.isFinite(Number(tier?.maxAge)) ? Number(tier.maxAge) : Infinity;
+      return prospectAge >= minAge && prospectAge <= maxAge;
+    }) || null;
+  };
+  const renderAgeTierRange = (tier = {}) => {
+    const minAge = Number.isFinite(Number(tier?.minAge)) ? Number(tier.minAge) : null;
+    const maxAge = Number.isFinite(Number(tier?.maxAge)) ? Number(tier.maxAge) : null;
+    if (minAge !== null && maxAge !== null) return `Ages ${minAge}-${maxAge}`;
+    if (minAge !== null) return `Ages ${minAge}+`;
+    if (maxAge !== null) return `Ages up to ${maxAge}`;
+    return "Applicable age tier";
+  };
+  const renderStandardLabelWithApplicableTier = (standard, fallbackLabel = "No Standard") => {
+    if (!standard || standard.hasStandard === false) return fallbackLabel;
+    const tiers = Array.isArray(standard?.tiers) ? standard.tiers : [];
+    if (tiers.length) {
+      const matchingTier = findApplicableAgeTier(tiers);
+      const matchingAmount = Number(matchingTier?.amount);
+      if (matchingTier && Number.isFinite(matchingAmount) && matchingAmount > 0) {
+        return `${renderAgeTierRange(matchingTier)}: Php ${formatAmount(matchingAmount)}`;
+      }
+      return String(standard?.label || "Tiered by age");
+    }
+    return renderStandardLabel(standard, fallbackLabel);
+  };
 
   const RESPONSES = useMemo(() => ["Responded", "No Response"], []);
   const INCOME_BAND_OPTIONS = useMemo(
@@ -2490,6 +2652,8 @@ function AgentLeadEngagement() {
   const stage = rawStage === "Not Started" && attempts.length > 0 ? "Contacting" : rawStage;
   const isLeadClosed = String(lead?.status || "").trim().toLowerCase() === "closed";
   const isLeadDropped = String(lead?.status || "").trim().toLowerCase() === "dropped";
+  const isLeadPolicyDeclined = String(lead?.status || "").trim().toLowerCase() === "policy declined";
+  const isLeadTerminal = isLeadClosed || isLeadDropped || isLeadPolicyDeclined;
   const isLeadInProgress = String(lead?.status || "").trim().toLowerCase() === "in progress";
 
   // Not Started => no active pipeline step
@@ -2523,20 +2687,17 @@ function AgentLeadEngagement() {
       (isViewingCurrentStage && stage === "Needs Assessment") ||
       (!isHistoryView && stage === "Proposal" && isViewingPastStage)
     ) &&
-    !isLeadClosed &&
-    !isLeadDropped;
+    !isLeadTerminal;
   const isNeedsAssessmentCurrentStageEditable =
     showNeedsAssessmentPanel &&
     isViewingCurrentStage &&
     stage === "Needs Assessment" &&
-    !isLeadClosed &&
-    !isLeadDropped;
+    !isLeadTerminal;
   const isProposalEditableNow =
     showProposalPanel &&
     isViewingCurrentStage &&
     stage === "Proposal" &&
-    !isLeadClosed &&
-    !isLeadDropped;
+    !isLeadTerminal;
 
   // Editable when viewing Contacting while current stage is Contacting,
   // or when current stage is Not Started and user moved into Contacting view
@@ -2544,8 +2705,7 @@ function AgentLeadEngagement() {
   const isContactingEditableNow =
     showContactingPanel &&
     (stage === "Contacting" || stage === "Not Started") &&
-    !isLeadClosed &&
-    !isLeadDropped;
+    !isLeadTerminal;
   const isContactingReadOnly = !isContactingEditableNow;
 
   // Activity tracker only relevant when Contacting panel is shown
@@ -2696,8 +2856,7 @@ function AgentLeadEngagement() {
     showProposalPanel &&
     isViewingCurrentStage &&
     stage === "Proposal" &&
-    !isLeadClosed &&
-    !isLeadDropped &&
+    !isLeadTerminal &&
     proposalViewedActivityKey === "Record Prospect Attendance" &&
     proposalUiActivityKey === "Record Prospect Attendance" &&
     proposalAttendanceForm.attendanceChoice === "YES";
@@ -2706,8 +2865,7 @@ function AgentLeadEngagement() {
     showProposalPanel &&
     isViewingCurrentStage &&
     stage === "Proposal" &&
-    !isLeadClosed &&
-    !isLeadDropped &&
+    !isLeadTerminal &&
     proposalViewedActivityKey === "Record Prospect Attendance" &&
     ["Present Proposal", "Schedule Application Submission"].includes(proposalUiActivityKey) &&
     proposalAttendanceForm.attendanceChoice === "YES" &&
@@ -2721,7 +2879,7 @@ function AgentLeadEngagement() {
   }, [engagement?.application?.currentActivityKey, engagement?.currentActivityKey, APPLICATION_STEPS_UI]);
 
   const policyIssuanceUiActivityKey = useMemo(() => {
-    const fallback = "Record Policy Application Status";
+    const fallback = "Upload Initial Premium eOR";
     const raw = String(engagement?.policy?.currentActivityKey || policyCurrentActivityKey || engagement?.currentActivityKey || fallback).trim();
     return POLICY_ISSUANCE_STEPS_UI.some((s) => s.key === raw) ? raw : fallback;
   }, [engagement?.policy?.currentActivityKey, policyCurrentActivityKey, engagement?.currentActivityKey, POLICY_ISSUANCE_STEPS_UI]);
@@ -2777,6 +2935,30 @@ function AgentLeadEngagement() {
     const hasSavedTimestamp = Boolean(String(applicationSubmissionForm.savedAt || "").trim());
     return hasTxId && hasScreenshot && hasSavedTimestamp;
   }, [applicationSubmissionForm.pruOneTransactionId, applicationSubmissionForm.submissionScreenshotImageDataUrl, applicationSubmissionForm.savedAt]);
+
+  const hasAnyApplicationPremiumPaymentTransferDetails = useMemo(() => {
+    return [
+      applicationPremiumPaymentForm.paymentId,
+      applicationPremiumPaymentForm.frequencyOfPremiumPayment,
+      applicationPremiumPaymentForm.totalAnnualPremiumPhp,
+      applicationPremiumPaymentForm.totalFrequencyPremiumPhp,
+      applicationPremiumPaymentForm.methodForInitialPayment,
+      applicationPremiumPaymentForm.methodForRenewalPayment,
+      applicationPremiumPaymentForm.paymentProofImageDataUrl,
+      applicationPremiumPaymentForm.paymentProofFileName,
+      applicationPremiumPaymentForm.savedAt,
+    ].some((value) => Boolean(String(value ?? "").trim()));
+  }, [
+    applicationPremiumPaymentForm.paymentId,
+    applicationPremiumPaymentForm.frequencyOfPremiumPayment,
+    applicationPremiumPaymentForm.totalAnnualPremiumPhp,
+    applicationPremiumPaymentForm.totalFrequencyPremiumPhp,
+    applicationPremiumPaymentForm.methodForInitialPayment,
+    applicationPremiumPaymentForm.methodForRenewalPayment,
+    applicationPremiumPaymentForm.paymentProofImageDataUrl,
+    applicationPremiumPaymentForm.paymentProofFileName,
+    applicationPremiumPaymentForm.savedAt,
+  ]);
 
   const engagementCycleRanges = useMemo(() => {
     const starts = new Map();
@@ -2843,6 +3025,9 @@ function AgentLeadEngagement() {
   const displayedHasSavedApplicationPremiumPaymentTransfer = isHistoryView
     ? hasSavedApplicationPremiumPaymentTransfer && isTimestampInSelectedHistoryCycle(applicationPremiumPaymentForm.savedAt)
     : hasSavedApplicationPremiumPaymentTransfer;
+  const displayedHasAnyApplicationPremiumPaymentTransferDetails = isHistoryView
+    ? hasAnyApplicationPremiumPaymentTransferDetails && isTimestampInSelectedHistoryCycle(applicationPremiumPaymentForm.savedAt)
+    : hasAnyApplicationPremiumPaymentTransferDetails;
   const displayedHasSavedApplicationSubmission = isHistoryView
     ? hasSavedApplicationSubmission && isTimestampInSelectedHistoryCycle(applicationSubmissionForm.savedAt)
     : hasSavedApplicationSubmission;
@@ -3040,8 +3225,7 @@ function AgentLeadEngagement() {
     showNeedsAssessmentPanel &&
     isViewingCurrentStage &&
     stage === "Needs Assessment" &&
-    !isLeadClosed &&
-    !isLeadDropped &&
+    !isLeadTerminal &&
     needsAssessmentViewedActivityKey === "Record Prospect Attendance" &&
     needsAssessmentForm.attendanceChoice === "YES";
   const canRequestNeedsAttendanceProofEdit =
@@ -3376,8 +3560,7 @@ function AgentLeadEngagement() {
     showApplicationPanel &&
     isViewingCurrentStage &&
     stage === "Application" &&
-    !isLeadClosed &&
-    !isLeadDropped &&
+    !isLeadTerminal &&
     applicationActiveViewedActivityKey === "Record Prospect Attendance" &&
     hasSavedApplicationAttendance &&
     Boolean(String(applicationAttendanceForm.attendanceProofImageDataUrl || "").trim());
@@ -3387,10 +3570,12 @@ function AgentLeadEngagement() {
     showApplicationPanel &&
     isViewingCurrentStage &&
     stage === "Application" &&
-    !isLeadClosed &&
-    !isLeadDropped &&
+    !isLeadTerminal &&
     applicationActiveViewedActivityKey === "Record Premium Payment Transfer" &&
     hasSavedApplicationPremiumPaymentTransfer;
+  const shouldDisplayApplicationPremiumPaymentDetails =
+    displayedHasSavedApplicationPremiumPaymentTransfer ||
+    (isLeadTerminal && displayedHasAnyApplicationPremiumPaymentTransferDetails);
   const isApplicationAttendanceProofEditable = applicationAttendanceProofEditMode;
   const isPolicyStatusViewed = policyViewedActivityKey === "Record Policy Application Status";
   const isPolicyInitialEorViewed = policyViewedActivityKey === "Upload Initial Premium eOR";
@@ -3507,6 +3692,82 @@ function AgentLeadEngagement() {
     }
 
     const currentPriority = String(npCheck.currentPriority || "").trim();
+    const monthlyIncomeBand = String(npCheck.monthlyIncomeBand || "").trim();
+    const monthlyIncomeAmount = toNonNegativeNumber(npCheck.monthlyIncomeAmount);
+    const approxIncome = resolveApproxIncome(monthlyIncomeBand, npCheck.monthlyIncomeAmount);
+    const minPremiumValue = toNonNegativeNumber(npCheck.minPremium);
+    const maxPremiumValue = toNonNegativeNumber(npCheck.maxPremium);
+    const requestedPremiumValue = toNonNegativeNumber(npCheck.productSelection?.requestedPremiumPayment);
+
+    if (needsSaveAttempted) {
+      if (needsAssessmentForm.attendanceChoice !== "YES") aggregateFieldErrors.attendanceChoice = "Prospect attendance must be marked YES before saving.";
+      if (!String(needsAssessmentForm.attendanceProofImageDataUrl || "").trim()) aggregateFieldErrors.attendanceProof = "Please upload a proof of attendance image before proceeding.";
+      if (!["Male", "Female"].includes(String(basicInfo.sex || "").trim())) aggregateFieldErrors.sex = "Sex is required.";
+      if (!String(basicInfo.civilStatus || "").trim()) aggregateFieldErrors.civilStatus = "Civil status is required.";
+      if (!String(basicInfo.birthday || "").trim()) aggregateFieldErrors.birthday = "Birthday is required.";
+      if (!["Employed", "Self-Employed", "Not Employed"].includes(String(basicInfo.occupationCategory || "").trim())) aggregateFieldErrors.occupationCategory = "Occupation category is required.";
+      if (["Employed", "Self-Employed"].includes(String(basicInfo.occupationCategory || "").trim()) && !String(basicInfo.occupation || "").trim()) aggregateFieldErrors.occupation = "Occupation is required for employed/self-employed prospects.";
+      if (!String(basicInfo.addressLine || "").trim()) aggregateFieldErrors.addressLine = "Street address is required.";
+      if (!String(basicInfo.barangay || "").trim()) aggregateFieldErrors.barangay = "Barangay is required.";
+      if (!String(basicInfo.city || "").trim()) aggregateFieldErrors.city = "City is required.";
+      if (String(basicInfo.city || "").trim() === "Other" && !String(basicInfo.otherCity || "").trim()) aggregateFieldErrors.otherCity = "Other city is required.";
+      if (!String(basicInfo.region || "").trim()) aggregateFieldErrors.region = "Region is required.";
+      if (!String(basicInfo.zipCode || "").trim()) aggregateFieldErrors.zipCode = "Zip code is required.";
+      if (!["Protection", "Health", "Investment"].includes(currentPriority)) aggregateFieldErrors.currentPriority = "Current priority is required.";
+      if (!monthlyIncomeBand) aggregateFieldErrors.monthlyIncomeBand = "Approximate monthly income bracket is required.";
+      if (!String(npCheck.minPremium ?? "").trim()) aggregateFieldErrors.minPremium = "Minimum willing monthly premium is required.";
+      if (!String(npCheck.maxPremium ?? "").trim()) aggregateFieldErrors.maxPremium = "Maximum willing monthly premium is required.";
+      if (!String(npCheck.productSelection?.selectedProductId || "").trim()) aggregateFieldErrors.selectedProductId = "Product Selection: please select a product under the chosen priority.";
+      if (!String(npCheck.productSelection?.requestedFrequency || "").trim()) aggregateFieldErrors.requestedFrequency = "Product Selection: requested frequency is invalid.";
+      if (!reqPremium) aggregateFieldErrors.requestedPremiumPayment = "Product Selection: requested premium payment is required.";
+    }
+
+    if (["BELOW_15000", "ABOVE_500000"].includes(monthlyIncomeBand)) {
+      if (monthlyIncomeAmount === null && needsSaveAttempted) aggregateFieldErrors.monthlyIncomeAmount = "Approximate monthly income amount is required for selected bracket.";
+      else if (monthlyIncomeBand === "BELOW_15000" && monthlyIncomeAmount >= 15000) aggregateFieldErrors.monthlyIncomeAmount = "Manual monthly income must be below Php 15,000 for selected bracket.";
+      else if (monthlyIncomeBand === "ABOVE_500000" && monthlyIncomeAmount <= 500000) aggregateFieldErrors.monthlyIncomeAmount = "Manual monthly income must be above Php 500,000 for selected bracket.";
+    }
+    if (String(npCheck.minPremium ?? "").trim() && minPremiumValue === null) aggregateFieldErrors.minPremium = "Minimum willing monthly premium is invalid.";
+    if (String(npCheck.maxPremium ?? "").trim() && maxPremiumValue === null) aggregateFieldErrors.maxPremium = "Maximum willing monthly premium is invalid.";
+    if (minPremiumValue !== null && approxIncome !== null && minPremiumValue > approxIncome) aggregateFieldErrors.minPremium = "Minimum willing monthly premium cannot be higher than approximate monthly income.";
+    if (maxPremiumValue !== null && approxIncome !== null && maxPremiumValue > approxIncome) aggregateFieldErrors.maxPremium = "Maximum willing monthly premium cannot be higher than approximate monthly income.";
+    if (minPremiumValue !== null && maxPremiumValue !== null && maxPremiumValue < minPremiumValue) aggregateFieldErrors.maxPremium = "Maximum willing monthly premium must be equal to or higher than minimum.";
+    if (reqPremium && requestedPremiumValue === null) aggregateFieldErrors.requestedPremiumPayment = "Product Selection: requested premium payment is invalid.";
+
+    if (currentPriority === "Protection") {
+      const monthlySpendRaw = String(npCheck?.protection?.monthlySpend ?? "").trim();
+      const savingsForProtectionRaw = String(npCheck?.protection?.savingsForProtection ?? "").trim();
+      const monthlySpend = toNonNegativeNumber(npCheck?.protection?.monthlySpend);
+      const savingsForProtection = toNonNegativeNumber(npCheck?.protection?.savingsForProtection);
+      if (!monthlySpendRaw && needsSaveAttempted) aggregateFieldErrors.protectionMonthlySpend = "Protection: approximate monthly spend is required.";
+      else if (monthlySpendRaw && monthlySpend === null) aggregateFieldErrors.protectionMonthlySpend = "Protection: approximate monthly spend is invalid.";
+      else if (monthlySpend !== null && approxIncome !== null && monthlySpend > approxIncome) aggregateFieldErrors.protectionMonthlySpend = "Protection: monthly spend cannot be higher than approximate monthly income.";
+      if (!savingsForProtectionRaw && needsSaveAttempted) aggregateFieldErrors.protectionSavings = "Protection: savings for protection is required.";
+      else if (savingsForProtectionRaw && savingsForProtection === null) aggregateFieldErrors.protectionSavings = "Protection: savings for protection is invalid.";
+    }
+
+    if (currentPriority === "Health") {
+      const amountToCoverCriticalIllnessRaw = String(npCheck?.health?.amountToCoverCriticalIllness ?? "").trim();
+      const savingsForCriticalIllnessRaw = String(npCheck?.health?.savingsForCriticalIllness ?? "").trim();
+      const amountToCoverCriticalIllness = toNonNegativeNumber(npCheck?.health?.amountToCoverCriticalIllness);
+      const savingsForCriticalIllness = toNonNegativeNumber(npCheck?.health?.savingsForCriticalIllness);
+      if (!amountToCoverCriticalIllnessRaw && needsSaveAttempted) aggregateFieldErrors.healthAmount = "Health: approximate amount to cover critical illness is required.";
+      else if (amountToCoverCriticalIllnessRaw && amountToCoverCriticalIllness === null) aggregateFieldErrors.healthAmount = "Health: approximate amount to cover critical illness is invalid.";
+      if (!savingsForCriticalIllnessRaw && needsSaveAttempted) aggregateFieldErrors.healthSavings = "Health: savings for critical illness is required.";
+      else if (savingsForCriticalIllnessRaw && savingsForCriticalIllness === null) aggregateFieldErrors.healthSavings = "Health: savings for critical illness is invalid.";
+      else if (amountToCoverCriticalIllness !== null && savingsForCriticalIllness !== null && savingsForCriticalIllness > amountToCoverCriticalIllness) aggregateFieldErrors.healthSavings = "Health: savings for critical illness cannot be higher than amount to cover critical illness.";
+    }
+
+    for (let i = 0; i < (needsAssessmentForm.dependents || []).length; i += 1) {
+      const d = needsAssessmentForm.dependents[i] || {};
+      const depAge = Number(d.age);
+      if (!String(d.name || "").trim() && needsSaveAttempted) aggregateFieldErrors.dependents = `Dependent #${i + 1}: name is required.`;
+      else if ((!Number.isFinite(depAge) || depAge < 0 || depAge > 120) && needsSaveAttempted) aggregateFieldErrors.dependents = `Dependent #${i + 1}: age must be between 0 and 120.`;
+      else if (!["Male", "Female"].includes(String(d.gender || "")) && needsSaveAttempted) aggregateFieldErrors.dependents = `Dependent #${i + 1}: please select gender.`;
+      else if (!["Child", "Parent", "Sibling"].includes(String(d.relationship || "")) && needsSaveAttempted) aggregateFieldErrors.dependents = `Dependent #${i + 1}: please select relationship.`;
+      if (aggregateFieldErrors.dependents) break;
+    }
+
     if (currentPriority === "Investment") {
       const inv = npCheck.investment || {};
       const savingsPlan = String(inv.savingsPlan || "").trim();
@@ -3582,6 +3843,7 @@ function AgentLeadEngagement() {
     scoreRiskProfile,
     SUITABLE_RISK_RATINGS_BY_CATEGORY,
     INVESTMENT_FUNDS,
+    resolveApproxIncome,
     toNonNegativeNumber,
   ]);
 
@@ -3654,6 +3916,34 @@ function AgentLeadEngagement() {
     };
   }, [needsAssessmentForm, resolveApproxIncome, scoreRiskProfile, toNonNegativeNumber, INVESTMENT_FUNDS, SUITABLE_RISK_RATINGS_BY_CATEGORY]);
 
+  const hasProtectionPriorityFieldErrors = Boolean(
+    needsAssessmentFieldErrors.protectionMonthlySpend ||
+    needsAssessmentFieldErrors.protectionSavings
+  );
+  const hasHealthPriorityFieldErrors = Boolean(
+    needsAssessmentFieldErrors.healthAmount ||
+    needsAssessmentFieldErrors.healthSavings
+  );
+  const hasInvestmentPriorityFieldErrors = Boolean(
+    needsAssessmentFieldErrors.investmentSavingsPlan ||
+    needsAssessmentFieldErrors.investmentSavingsPlanOther ||
+    needsAssessmentFieldErrors.investmentTargetAmount ||
+    needsAssessmentFieldErrors.investmentTargetYear ||
+    needsAssessmentFieldErrors.investmentSavings ||
+    needsAssessmentFieldErrors.investmentHorizon ||
+    needsAssessmentFieldErrors.investmentGoal ||
+    needsAssessmentFieldErrors.marketExperience ||
+    needsAssessmentFieldErrors.volatilityReaction ||
+    needsAssessmentFieldErrors.capitalLossAffordability ||
+    needsAssessmentFieldErrors.riskReturnTradeoff ||
+    needsAssessmentFieldErrors.fundChoice ||
+    needsAssessmentFieldErrors.fundChoiceTotalAllocation ||
+    needsAssessmentFieldErrors.mismatchReason
+  );
+  const shouldShowProtectionPriorityFields = needsPrioritiesDerived.priority === "Protection" || hasProtectionPriorityFieldErrors;
+  const shouldShowHealthPriorityFields = needsPrioritiesDerived.priority === "Health" || hasHealthPriorityFieldErrors;
+  const shouldShowInvestmentPriorityFields = needsPrioritiesDerived.priority === "Investment" || hasInvestmentPriorityFieldErrors;
+
   const previousContactingActivity = String(displayedLastAttempt?.outcomeActivity || effectiveActivityKey || "Attempt Contact").trim();
 
   const stageActivityBadge =
@@ -3671,29 +3961,29 @@ function AgentLeadEngagement() {
       ? policyIssuanceUiActivityKey
       : "";
 
-  const showCurrentSubactivityStatus = isViewingCurrentStage && !isHistoryView && !isLeadClosed && !isLeadDropped;
+  const showCurrentSubactivityStatus = isViewingCurrentStage && !isHistoryView && !isLeadTerminal;
   const closedLeadSubactivityHelperText = "";
 
   const setStageViewIfAllowed = useCallback(
     (nextStage) => {
       if (needsAttendanceRescheduleLock && nextStage !== "Contacting") return;
-      if (isLeadDropped || isLeadInProgress) {
+      if (isLeadDropped || isLeadPolicyDeclined || isLeadInProgress) {
         const nextIndex = PIPELINE_STEPS.indexOf(nextStage);
         if (nextIndex > safeIndex) return;
       }
       setSelectedStageView(nextStage);
     },
-    [needsAttendanceRescheduleLock, isLeadDropped, isLeadInProgress, PIPELINE_STEPS, safeIndex]
+    [needsAttendanceRescheduleLock, isLeadDropped, isLeadPolicyDeclined, isLeadInProgress, PIPELINE_STEPS, safeIndex]
   );
 
   useEffect(() => {
-    if (!isLeadDropped && !isLeadInProgress) return;
+    if (!isLeadDropped && !isLeadPolicyDeclined && !isLeadInProgress) return;
     if (selectedStageView === "CURRENT") return;
     const selectedIndex = PIPELINE_STEPS.indexOf(selectedStageView);
     if (selectedIndex > safeIndex) {
       setSelectedStageView("CURRENT");
     }
-  }, [isLeadDropped, isLeadInProgress, selectedStageView, PIPELINE_STEPS, safeIndex]);
+  }, [isLeadDropped, isLeadPolicyDeclined, isLeadInProgress, selectedStageView, PIPELINE_STEPS, safeIndex]);
 
   const mainTitle = effectiveViewStage === "Not Started" ? "Not Started" : effectiveViewStage || "—";
 
@@ -3786,7 +4076,7 @@ function AgentLeadEngagement() {
 
   const onOpenEditAttempt = (attempt) => {
     if (isContactingReadOnly) return;
-    if (isLeadClosed || isLeadDropped) return;
+    if (isLeadTerminal) return;
     const attemptId = String(attempt?.attemptId || "").trim();
     if (!attemptId) return;
 
@@ -5032,7 +5322,9 @@ function AgentLeadEngagement() {
       await refreshCurrentProgressView();
     } catch (err) {
       const msg = String(err?.message || "Failed to save application submission.");
-      if (msg.includes("Transaction ID")) {
+      if (msg.includes("already exists")) {
+        setApplicationSubmissionFieldErrors({ pruOneTransactionId: "Record already exists for this Transaction ID." });
+      } else if (msg.includes("Transaction ID")) {
         setApplicationSubmissionFieldErrors({ pruOneTransactionId: "PRUOnePH Transaction ID is required." });
       } else if (msg.includes("screenshot")) {
         setApplicationSubmissionFieldErrors({ submissionScreenshotImageDataUrl: "Submission screenshot is required." });
@@ -5044,17 +5336,80 @@ function AgentLeadEngagement() {
     }
   };
 
-  const applicationSubmissionSavedDateInput = useMemo(() => {
-    const raw = applicationSubmissionForm?.savedAt ? new Date(applicationSubmissionForm.savedAt) : null;
-    if (!raw || Number.isNaN(raw.getTime())) return "";
-    return toDateInputValue(raw);
-  }, [applicationSubmissionForm?.savedAt]);
-
   const todayDateInput = useMemo(() => toDateInputValue(new Date()), []);
+  const policyStatusDecisionDateMinInput = String(policyInitialEorForm.receiptDate || "").trim();
   const applicationPaymentDateMinInput = useMemo(
     () => (applicationMeetingSaved?.startAt ? toDateInputValue(applicationMeetingSaved.startAt) : ""),
     [applicationMeetingSaved?.startAt]
   );
+
+  const onPolicyDeclinationLetterPicked = (file) => {
+    if (!file) {
+      setPolicyStatusForm((f) => ({
+        ...f,
+        declinationLetterFileDataUrl: "",
+        declinationLetterFileName: "",
+        declinationLetterFileMimeType: "",
+      }));
+      return;
+    }
+    const looksPdf = String(file.type || "") === "application/pdf" || /\.pdf$/i.test(String(file.name || ""));
+    if (!looksPdf) {
+      setPolicyStatusError("");
+      setPolicyStatusFieldErrors((prev) => ({ ...prev, declinationLetterFileDataUrl: "Declination letter must be a PDF." }));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setPolicyStatusError("");
+      setPolicyStatusFieldErrors((prev) => ({ ...prev, declinationLetterFileDataUrl: "" }));
+      setPolicyStatusForm((f) => ({
+        ...f,
+        declinationLetterFileDataUrl: String(reader.result || ""),
+        declinationLetterFileName: String(file.name || ""),
+        declinationLetterFileMimeType: String(file.type || "application/pdf"),
+      }));
+    };
+    reader.onerror = () => {
+      setPolicyStatusError("");
+      setPolicyStatusFieldErrors((prev) => ({ ...prev, declinationLetterFileDataUrl: "Failed to read declination letter PDF." }));
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const onPolicyRefundProofPicked = (file) => {
+    if (!file) {
+      setPolicyStatusForm((f) => ({
+        ...f,
+        initialPremiumRefundProofImageDataUrl: "",
+        initialPremiumRefundProofFileName: "",
+        initialPremiumRefundProofFileMimeType: "",
+      }));
+      return;
+    }
+    const looksImage = /^image\/(jpeg|png)$/i.test(String(file.type || "")) || /\.(jpe?g|png)$/i.test(String(file.name || ""));
+    if (!looksImage) {
+      setPolicyStatusError("");
+      setPolicyStatusFieldErrors((prev) => ({ ...prev, initialPremiumRefundProofImageDataUrl: "Proof of initial premium refund must be a JPG, JPEG, or PNG image." }));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setPolicyStatusError("");
+      setPolicyStatusFieldErrors((prev) => ({ ...prev, initialPremiumRefundProofImageDataUrl: "" }));
+      setPolicyStatusForm((f) => ({
+        ...f,
+        initialPremiumRefundProofImageDataUrl: String(reader.result || ""),
+        initialPremiumRefundProofFileName: String(file.name || ""),
+        initialPremiumRefundProofFileMimeType: String(file.type || "image/jpeg"),
+      }));
+    };
+    reader.onerror = () => {
+      setPolicyStatusError("");
+      setPolicyStatusFieldErrors((prev) => ({ ...prev, initialPremiumRefundProofImageDataUrl: "Failed to read proof of initial premium refund image." }));
+    };
+    reader.readAsDataURL(file);
+  };
 
   const hasSavedPolicyApplicationStatus = useMemo(() => {
     const status = String(policyStatusForm.status || "").trim();
@@ -5063,10 +5418,20 @@ function AgentLeadEngagement() {
     if (status === "Issued" && !String(policyStatusForm.issuanceDate || "").trim()) return false;
     if (status === "Declined") {
       if (!String(policyStatusForm.declinedDate || "").trim()) return false;
+      if (!String(policyStatusForm.declinationLetterFileDataUrl || "").trim()) return false;
       if (!String(policyStatusForm.declineReason || "").trim()) return false;
+      if (!String(policyStatusForm.initialPremiumRefundProofImageDataUrl || "").trim()) return false;
     }
     return true;
-  }, [policyStatusForm.status, policyStatusForm.issuanceDate, policyStatusForm.declinedDate, policyStatusForm.declineReason, policyStatusForm.savedAt]);
+  }, [
+    policyStatusForm.status,
+    policyStatusForm.issuanceDate,
+    policyStatusForm.declinedDate,
+    policyStatusForm.declinationLetterFileDataUrl,
+    policyStatusForm.declineReason,
+    policyStatusForm.initialPremiumRefundProofImageDataUrl,
+    policyStatusForm.savedAt,
+  ]);
 
   const submitPolicyApplicationStatus = async () => {
     try {
@@ -5076,46 +5441,56 @@ function AgentLeadEngagement() {
       const status = String(policyStatusForm.status || "").trim();
       const issuanceDate = String(policyStatusForm.issuanceDate || "").trim();
       const declinedDate = String(policyStatusForm.declinedDate || "").trim();
+      const declinationLetterFileDataUrl = String(policyStatusForm.declinationLetterFileDataUrl || "").trim();
+      const declinationLetterFileName = String(policyStatusForm.declinationLetterFileName || "").trim();
+      const declinationLetterFileMimeType = String(policyStatusForm.declinationLetterFileMimeType || "").trim();
       const declineReason = String(policyStatusForm.declineReason || "").trim();
+      const initialPremiumRefundProofImageDataUrl = String(policyStatusForm.initialPremiumRefundProofImageDataUrl || "").trim();
+      const initialPremiumRefundProofFileName = String(policyStatusForm.initialPremiumRefundProofFileName || "").trim();
+      const initialPremiumRefundProofFileMimeType = String(policyStatusForm.initialPremiumRefundProofFileMimeType || "").trim();
       const notes = String(policyStatusForm.notes || "").trim();
 
+      const nextFieldErrors = {};
       if (!["Issued", "Declined"].includes(status)) {
-        setPolicyStatusFieldErrors({ status: "Please select policy application status." });
-        return;
+        nextFieldErrors.status = "Please select policy application status.";
       }
 
       if (status === "Issued") {
         if (!issuanceDate) {
-          setPolicyStatusFieldErrors({ issuanceDate: "Issuance date is required for Issued status." });
-          return;
-        }
-        if (applicationSubmissionSavedDateInput && issuanceDate < applicationSubmissionSavedDateInput) {
-          setPolicyStatusFieldErrors({ issuanceDate: "Issuance date cannot be earlier than application submission date." });
-          return;
-        }
-        if (issuanceDate > todayDateInput) {
-          setPolicyStatusFieldErrors({ issuanceDate: "Issuance date cannot be in the future." });
-          return;
+          nextFieldErrors.issuanceDate = "Issuance date is required for Issued status.";
+        } else if (policyStatusDecisionDateMinInput && issuanceDate < policyStatusDecisionDateMinInput) {
+          nextFieldErrors.issuanceDate = "Issuance date cannot be earlier than Initial Premium eOR receipt date.";
+        } else if (issuanceDate > todayDateInput) {
+          nextFieldErrors.issuanceDate = "Issuance date cannot be in the future.";
         }
       }
 
       if (status === "Declined") {
         if (!declinedDate) {
-          setPolicyStatusFieldErrors({ declinedDate: "Date declined is required for Declined status." });
-          return;
+          nextFieldErrors.declinedDate = "Date declined is required for Declined status.";
+        } else if (policyStatusDecisionDateMinInput && declinedDate < policyStatusDecisionDateMinInput) {
+          nextFieldErrors.declinedDate = "Date declined cannot be earlier than Initial Premium eOR receipt date.";
+        } else if (declinedDate > todayDateInput) {
+          nextFieldErrors.declinedDate = "Date declined cannot be in the future.";
         }
-        if (applicationSubmissionSavedDateInput && declinedDate < applicationSubmissionSavedDateInput) {
-          setPolicyStatusFieldErrors({ declinedDate: "Date declined cannot be earlier than application submission date." });
-          return;
-        }
-        if (declinedDate > todayDateInput) {
-          setPolicyStatusFieldErrors({ declinedDate: "Date declined cannot be in the future." });
-          return;
+        if (!declinationLetterFileDataUrl) {
+          nextFieldErrors.declinationLetterFileDataUrl = "Declination letter PDF is required.";
+        } else if (!/^data:application\/pdf;base64,/i.test(declinationLetterFileDataUrl)) {
+          nextFieldErrors.declinationLetterFileDataUrl = "Declination letter must be a PDF.";
         }
         if (!declineReason) {
-          setPolicyStatusFieldErrors({ declineReason: "Reason for decline is required." });
-          return;
+          nextFieldErrors.declineReason = "Reason for decline is required.";
         }
+        if (!initialPremiumRefundProofImageDataUrl) {
+          nextFieldErrors.initialPremiumRefundProofImageDataUrl = "Proof of initial premium refund is required.";
+        } else if (!/^data:image\/(?:jpeg|png);base64,/i.test(initialPremiumRefundProofImageDataUrl)) {
+          nextFieldErrors.initialPremiumRefundProofImageDataUrl = "Proof of initial premium refund must be a JPG, JPEG, or PNG image.";
+        }
+      }
+
+      if (Object.keys(nextFieldErrors).length > 0) {
+        setPolicyStatusFieldErrors(nextFieldErrors);
+        return;
       }
 
       setPolicyStatusSaving(true);
@@ -5126,12 +5501,24 @@ function AgentLeadEngagement() {
           status,
           issuanceDate: status === "Issued" ? issuanceDate : "",
           declinedDate: status === "Declined" ? declinedDate : "",
+          declinationLetterFileDataUrl: status === "Declined" ? declinationLetterFileDataUrl : "",
+          declinationLetterFileName: status === "Declined" ? declinationLetterFileName : "",
+          declinationLetterFileMimeType: status === "Declined" ? declinationLetterFileMimeType : "",
           declineReason: status === "Declined" ? declineReason : "",
+          initialPremiumRefundProofImageDataUrl: status === "Declined" ? initialPremiumRefundProofImageDataUrl : "",
+          initialPremiumRefundProofFileName: status === "Declined" ? initialPremiumRefundProofFileName : "",
+          initialPremiumRefundProofFileMimeType: status === "Declined" ? initialPremiumRefundProofFileMimeType : "",
           notes,
         }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data?.message || "Failed to save policy application status.");
+      if (!res.ok) {
+        if (data?.fieldErrors && Object.keys(data.fieldErrors).length > 0) {
+          setPolicyStatusFieldErrors(data.fieldErrors);
+          return;
+        }
+        throw new Error(data?.message || "Failed to save policy application status.");
+      }
       await refreshCurrentProgressView();
     } catch (err) {
       const msg = String(err?.message || "Failed to save policy application status.");
@@ -5141,6 +5528,10 @@ function AgentLeadEngagement() {
         setPolicyStatusFieldErrors({ issuanceDate: msg });
       } else if (msg.includes("Date declined")) {
         setPolicyStatusFieldErrors({ declinedDate: msg });
+      } else if (msg.includes("Declination letter")) {
+        setPolicyStatusFieldErrors({ declinationLetterFileDataUrl: msg });
+      } else if (msg.includes("Proof of initial premium refund")) {
+        setPolicyStatusFieldErrors({ initialPremiumRefundProofImageDataUrl: msg });
       } else if (msg.includes("Reason for decline")) {
         setPolicyStatusFieldErrors({ declineReason: msg });
       } else {
@@ -5158,6 +5549,54 @@ function AgentLeadEngagement() {
     const hasSaved = Boolean(String(policyInitialEorForm.uploadedAt || "").trim());
     return hasNo && hasDate && hasFile && hasSaved;
   }, [policyInitialEorForm.eorNumber, policyInitialEorForm.receiptDate, policyInitialEorForm.eorFileDataUrl, policyInitialEorForm.uploadedAt]);
+
+  const hasAnyPolicyInitialPremiumEorDetails = useMemo(() => {
+    return [
+      policyInitialEorForm.eorNumber,
+      policyInitialEorForm.receiptDate,
+      policyInitialEorForm.eorFileDataUrl,
+      policyInitialEorForm.eorFileName,
+      policyInitialEorForm.uploadedAt,
+    ].some((value) => Boolean(String(value ?? "").trim()));
+  }, [
+    policyInitialEorForm.eorNumber,
+    policyInitialEorForm.receiptDate,
+    policyInitialEorForm.eorFileDataUrl,
+    policyInitialEorForm.eorFileName,
+    policyInitialEorForm.uploadedAt,
+  ]);
+
+  const shouldDisplayPolicyInitialPremiumEorDetails =
+    hasSavedPolicyInitialPremiumEor ||
+    (isLeadTerminal && hasAnyPolicyInitialPremiumEorDetails);
+  const policyInitialEorReceiptDateMinInput = applicationPremiumPaymentForm.paymentDate || "";
+  const policyInitialEorReceiptDateMaxInput = todayDateInput;
+  const isPolicyInitialEorFormEditable = !isLeadTerminal && (!hasSavedPolicyInitialPremiumEor || policyInitialEorEditMode);
+
+  const clearPolicyInitialEorForm = useCallback(() => {
+    setPolicyInitialEorError("");
+    setPolicyInitialEorFieldErrors({});
+    setPolicyInitialEorForm({ eorNumber: "", receiptDate: "", eorFileDataUrl: "", eorFileName: "", uploadedAt: "" });
+    setPolicyInitialEorInputKey((k) => k + 1);
+  }, []);
+
+  const startPolicyInitialEorEdit = useCallback(() => {
+    setPolicyInitialEorError("");
+    setPolicyInitialEorFieldErrors({});
+    setPolicyInitialEorEditSnapshot({ ...policyInitialEorForm });
+    setPolicyInitialEorEditMode(true);
+  }, [policyInitialEorForm]);
+
+  const cancelPolicyInitialEorEdit = useCallback(() => {
+    setPolicyInitialEorError("");
+    setPolicyInitialEorFieldErrors({});
+    if (policyInitialEorEditSnapshot) {
+      setPolicyInitialEorForm(policyInitialEorEditSnapshot);
+    }
+    setPolicyInitialEorEditSnapshot(null);
+    setPolicyInitialEorEditMode(false);
+    setPolicyInitialEorInputKey((k) => k + 1);
+  }, [policyInitialEorEditSnapshot]);
 
   const onPolicyInitialEorPicked = (file) => {
     if (!file) {
@@ -5193,17 +5632,23 @@ function AgentLeadEngagement() {
         return;
       }
 
+      const nextFieldErrors = {};
       if (!eorNumber) {
-        setPolicyInitialEorFieldErrors({ eorNumber: "eOR number is required." });
-        return;
+        nextFieldErrors.eorNumber = "eOR number is required.";
       }
       if (!receiptDate) {
-        setPolicyInitialEorFieldErrors({ receiptDate: "Receipt date is required." });
-        return;
+        nextFieldErrors.receiptDate = "Receipt date is required.";
+      } else if (policyInitialEorReceiptDateMinInput && receiptDate < policyInitialEorReceiptDateMinInput) {
+        nextFieldErrors.receiptDate = "Receipt date cannot be earlier than payment date.";
+      } else if (receiptDate > policyInitialEorReceiptDateMaxInput) {
+        nextFieldErrors.receiptDate = "Receipt date cannot be in the future.";
       }
       if (!eorFileDataUrl) {
-        setPolicyInitialEorFieldErrors({ eorFileDataUrl: "eOR PDF file is required." });
-        return;
+        nextFieldErrors.eorFileDataUrl = "eOR PDF file is required.";
+      }
+      if (Object.keys(nextFieldErrors).length > 0) {
+        setPolicyInitialEorFieldErrors(nextFieldErrors);
+        if (!eorNumber) return;
       }
 
       setPolicyInitialEorSaving(true);
@@ -5213,12 +5658,22 @@ function AgentLeadEngagement() {
         body: JSON.stringify({ eorNumber, receiptDate, eorFileDataUrl, eorFileName }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data?.message || "Failed to save Initial Premium eOR.");
+      if (!res.ok) {
+        const combinedFieldErrors = { ...nextFieldErrors, ...(data?.fieldErrors || {}) };
+        if (Object.keys(combinedFieldErrors).length > 0) {
+          setPolicyInitialEorFieldErrors(combinedFieldErrors);
+          return;
+        }
+        throw new Error(data?.message || "Failed to save Initial Premium eOR.");
+      }
+      setPolicyInitialEorEditMode(false);
+      setPolicyInitialEorEditSnapshot(null);
       await refreshCurrentProgressView();
     } catch (err) {
       const msg = String(err?.message || "Failed to save Initial Premium eOR.");
-      if (msg.includes("eOR number")) setPolicyInitialEorFieldErrors({ eorNumber: "eOR number is required." });
-      else if (msg.includes("Receipt date")) setPolicyInitialEorFieldErrors({ receiptDate: msg });
+      if (msg.includes("already exists")) setPolicyInitialEorFieldErrors({ eorNumber: "Record already exists for this eOR number." });
+      else if (msg.includes("eOR number")) setPolicyInitialEorFieldErrors({ eorNumber: "eOR number is required." });
+      else if (msg.includes("Receipt date") || msg.includes("Payment date")) setPolicyInitialEorFieldErrors({ receiptDate: msg });
       else if (msg.includes("PDF")) setPolicyInitialEorFieldErrors({ eorFileDataUrl: msg });
       else setPolicyInitialEorError(msg);
     } finally {
@@ -5232,6 +5687,24 @@ function AgentLeadEngagement() {
     const hasSaved = Boolean(String(policySummaryForm.uploadedAt || "").trim());
     return hasPolicyNo && hasFile && hasSaved;
   }, [policySummaryForm.policyNumber, policySummaryForm.policySummaryFileDataUrl, policySummaryForm.uploadedAt]);
+
+  const hasAnyPolicySummaryDetails = useMemo(() => {
+    return [
+      policySummaryForm.policyNumber,
+      policySummaryForm.policySummaryFileDataUrl,
+      policySummaryForm.policySummaryFileName,
+      policySummaryForm.uploadedAt,
+    ].some((value) => Boolean(String(value ?? "").trim()));
+  }, [
+    policySummaryForm.policyNumber,
+    policySummaryForm.policySummaryFileDataUrl,
+    policySummaryForm.policySummaryFileName,
+    policySummaryForm.uploadedAt,
+  ]);
+
+  const shouldDisplayPolicySummaryDetails =
+    hasSavedPolicySummary ||
+    (isLeadTerminal && hasAnyPolicySummaryDetails);
 
   const policyPaymentTermOptions = useMemo(() => {
     const list = Array.isArray(policyChosenProduct?.paymentTermOptions) ? policyChosenProduct.paymentTermOptions : [];
@@ -5354,8 +5827,7 @@ function AgentLeadEngagement() {
   ]);
 
   const shouldShowStageActivityBadge =
-    !isLeadClosed &&
-    !isLeadDropped &&
+    !isLeadTerminal &&
     !isViewedStageFullyFinished &&
     String(stageActivityBadge || "").trim() &&
     stageActivityBadge !== "—";
@@ -5876,6 +6348,8 @@ function AgentLeadEngagement() {
                             ? "closed"
                             : lead.status === "Dropped"
                             ? "dropped"
+                            : lead.status === "Policy Declined"
+                            ? "policydeclined"
                             : "unknown"
                         }`}
                       >
@@ -5907,7 +6381,7 @@ function AgentLeadEngagement() {
                   const isActive = safeIndex === i;
                   const isDone = safeIndex > i;
                   const stageDisabledForFuture =
-                    (isLeadDropped && i > safeIndex) || (isLeadInProgress && i > safeIndex);
+                    ((isLeadDropped || isLeadPolicyDeclined) && i > safeIndex) || (isLeadInProgress && i > safeIndex);
 
                   return (
                     <div
@@ -6005,13 +6479,13 @@ function AgentLeadEngagement() {
                     </p>
                   )}
 
-                  {(isLeadClosed || isLeadDropped) && (
+                  {(isLeadTerminal) && (
                     <p className="le-muted" style={{ marginTop: 8, marginBottom: 10 }}>
-                      This lead is closed or dropped. Subactivities are view-only.
+                      This lead is closed, dropped, or policy declined. Subactivities are view-only.
                     </p>
                   )}
 
-                  {!isHistoryView && !isViewingCurrentStage && !(isLeadClosed || isLeadDropped) && (
+                  {!isHistoryView && !isViewingCurrentStage && !(isLeadTerminal) && (
                     <p className="le-muted" style={{ marginTop: 8, marginBottom: 10 }}>
                       You are viewing a non-current stage. This section is read-only.
                     </p>
@@ -6031,7 +6505,7 @@ function AgentLeadEngagement() {
                         )
                       }
                       helperText={
-                        isLeadClosed || isLeadDropped
+                        isLeadTerminal
                           ? closedLeadSubactivityHelperText
                           : contactingViewedStepIndex < contactingCurrentStepIndex
                           ? previouslySavedSubactivityHelperText
@@ -6075,7 +6549,7 @@ function AgentLeadEngagement() {
                           ? isViewingFutureStage
                             ? futureStageSubactivityHelperText
                             : ""
-                          : isLeadClosed || isLeadDropped
+                          : isLeadTerminal
                           ? closedLeadSubactivityHelperText
                           : needsViewedStepIndex < needsCurrentStepIndex
                           ? previouslySavedSubactivityHelperText
@@ -6108,7 +6582,7 @@ function AgentLeadEngagement() {
                           ? isViewingFutureStage
                             ? futureStageSubactivityHelperText
                             : ""
-                          : isLeadClosed || isLeadDropped
+                          : isLeadTerminal
                           ? closedLeadSubactivityHelperText
                           : proposalViewedStepIndex < proposalCurrentStepIndex
                           ? previouslySavedSubactivityHelperText
@@ -6141,7 +6615,7 @@ function AgentLeadEngagement() {
                           ? isViewingFutureStage
                             ? futureStageSubactivityHelperText
                             : ""
-                          : isLeadClosed || isLeadDropped
+                          : isLeadTerminal
                           ? closedLeadSubactivityHelperText
                           : applicationViewedStepIndex < applicationCurrentStepIndex
                           ? previouslySavedSubactivityHelperText
@@ -6174,7 +6648,7 @@ function AgentLeadEngagement() {
                           ? isViewingFutureStage
                             ? futureStageSubactivityHelperText
                             : ""
-                          : isLeadClosed || isLeadDropped
+                          : isLeadTerminal
                           ? closedLeadSubactivityHelperText
                           : policyViewedStepIndex < policyCurrentStepIndex
                           ? previouslySavedSubactivityHelperText
@@ -6441,13 +6915,13 @@ function AgentLeadEngagement() {
                         </div>
                       )}
 
-                      {isApplicationPremiumViewed && isHistoryView && !displayedHasSavedApplicationPremiumPaymentTransfer ? (
+                      {isApplicationPremiumViewed && ((isHistoryView && !shouldDisplayApplicationPremiumPaymentDetails) || (!isHistoryView && isLeadTerminal && !displayedHasAnyApplicationPremiumPaymentTransferDetails)) ? (
                         <div className="le-block"><p className="le-muted" style={{ marginTop: 8 }}>No details were saved for this subactivity in the selected engagement cycle.</p></div>
                       ) : null}
-                      {isApplicationPremiumViewed && (!isHistoryView ? hasSavedApplicationAttendance : displayedHasSavedApplicationPremiumPaymentTransfer) ? (
+                      {isApplicationPremiumViewed && (!isHistoryView ? (isLeadTerminal ? displayedHasAnyApplicationPremiumPaymentTransferDetails : hasSavedApplicationAttendance) : shouldDisplayApplicationPremiumPaymentDetails) ? (
                         <div className="le-block">
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-                            <h4 className="le-blockTitle" style={{ margin: 0 }}>{displayedHasSavedApplicationPremiumPaymentTransfer && !applicationPremiumPaymentEditMode ? "Premium Payment Transfer Details" : "Record Premium Payment Transfer"}</h4>
+                            <h4 className="le-blockTitle" style={{ margin: 0 }}>{shouldDisplayApplicationPremiumPaymentDetails && !applicationPremiumPaymentEditMode ? "Premium Payment Transfer Details" : "Record Premium Payment Transfer"}</h4>
                             {canRequestApplicationPremiumPaymentEdit ? (
                               <button
                                 type="button"
@@ -6474,7 +6948,7 @@ function AgentLeadEngagement() {
                             </p>
                           </div>
 
-                          {displayedHasSavedApplicationPremiumPaymentTransfer && !applicationPremiumPaymentEditMode ? (
+                          {shouldDisplayApplicationPremiumPaymentDetails && !applicationPremiumPaymentEditMode ? (
                             <>
                               <div className="le-formRow">
                                 <label className="le-label">Frequency of Premium Payment</label>
@@ -6510,14 +6984,16 @@ function AgentLeadEngagement() {
                                 <label className="le-label">Proof of Payment</label>
                                 <p className="le-smallNote">{applicationPremiumPaymentForm.paymentProofFileName || "Uploaded image"}</p>
                               </div>
-                              <div className="le-formRow">
-                                <label className="le-label">Preview</label>
-                                <img
-                                  src={applicationPremiumPaymentForm.paymentProofImageDataUrl}
-                                  alt="Application premium payment proof preview"
-                                  style={{ maxWidth: 260, width: "100%", borderRadius: 8, border: "1px solid #e5e7eb" }}
-                                />
-                              </div>
+                              {String(applicationPremiumPaymentForm.paymentProofImageDataUrl || "").trim() ? (
+                                <div className="le-formRow">
+                                  <label className="le-label">Preview</label>
+                                  <img
+                                    src={applicationPremiumPaymentForm.paymentProofImageDataUrl}
+                                    alt="Application premium payment proof preview"
+                                    style={{ maxWidth: 260, width: "100%", borderRadius: 8, border: "1px solid #e5e7eb" }}
+                                  />
+                                </div>
+                              ) : null}
 
                             </>
                           ) : (
@@ -6874,8 +7350,30 @@ function AgentLeadEngagement() {
                                     <p className="le-smallNote">{policyStatusForm.declinedDate || "—"}</p>
                                   </div>
                                   <div className="le-formRow">
+                                    <label className="le-label">Declination Letter</label>
+                                    <p className="le-smallNote">{policyStatusForm.declinationLetterFileName || "PDF uploaded"}</p>
+                                    {policyStatusForm.declinationLetterFileDataUrl ? (
+                                      <iframe
+                                        title="Declination Letter"
+                                        src={policyStatusForm.declinationLetterFileDataUrl}
+                                        style={{ width: "100%", minHeight: 320, border: "1px solid #e5e7eb", borderRadius: 10 }}
+                                      />
+                                    ) : null}
+                                  </div>
+                                  <div className="le-formRow">
                                     <label className="le-label">Reason for Decline</label>
                                     <p className="le-smallNote">{policyStatusForm.declineReason || "—"}</p>
+                                  </div>
+                                  <div className="le-formRow">
+                                    <label className="le-label">Proof of Initial Premium Refund</label>
+                                    <p className="le-smallNote">{policyStatusForm.initialPremiumRefundProofFileName || "Image uploaded"}</p>
+                                    {policyStatusForm.initialPremiumRefundProofImageDataUrl ? (
+                                      <img
+                                        src={policyStatusForm.initialPremiumRefundProofImageDataUrl}
+                                        alt="Proof of Initial Premium Refund"
+                                        style={{ maxWidth: 260, width: "100%", borderRadius: 10, border: "1px solid #e5e7eb" }}
+                                      />
+                                    ) : null}
                                   </div>
                                 </>
                               ) : null}
@@ -6900,9 +7398,23 @@ function AgentLeadEngagement() {
                                       status: v,
                                       issuanceDate: v === "Issued" ? f.issuanceDate : "",
                                       declinedDate: v === "Declined" ? f.declinedDate : "",
+                                      declinationLetterFileDataUrl: v === "Declined" ? f.declinationLetterFileDataUrl : "",
+                                      declinationLetterFileName: v === "Declined" ? f.declinationLetterFileName : "",
+                                      declinationLetterFileMimeType: v === "Declined" ? f.declinationLetterFileMimeType : "",
                                       declineReason: v === "Declined" ? f.declineReason : "",
+                                      initialPremiumRefundProofImageDataUrl: v === "Declined" ? f.initialPremiumRefundProofImageDataUrl : "",
+                                      initialPremiumRefundProofFileName: v === "Declined" ? f.initialPremiumRefundProofFileName : "",
+                                      initialPremiumRefundProofFileMimeType: v === "Declined" ? f.initialPremiumRefundProofFileMimeType : "",
                                     }));
-                                    setPolicyStatusFieldErrors((prev) => ({ ...prev, status: "", issuanceDate: "", declinedDate: "", declineReason: "" }));
+                                    setPolicyStatusFieldErrors((prev) => ({
+                                      ...prev,
+                                      status: "",
+                                      issuanceDate: "",
+                                      declinedDate: "",
+                                      declinationLetterFileDataUrl: "",
+                                      declineReason: "",
+                                      initialPremiumRefundProofImageDataUrl: "",
+                                    }));
                                   }}
                                   disabled={policyStatusSaving}
                                 >
@@ -6924,7 +7436,7 @@ function AgentLeadEngagement() {
                                       setPolicyStatusForm((f) => ({ ...f, issuanceDate: e.target.value }));
                                       setPolicyStatusFieldErrors((prev) => ({ ...prev, issuanceDate: "" }));
                                     }}
-                                    min={applicationSubmissionSavedDateInput || undefined}
+                                    min={policyStatusDecisionDateMinInput || undefined}
                                     max={todayDateInput}
                                     disabled={policyStatusSaving}
                                   />
@@ -6944,11 +7456,36 @@ function AgentLeadEngagement() {
                                         setPolicyStatusForm((f) => ({ ...f, declinedDate: e.target.value }));
                                         setPolicyStatusFieldErrors((prev) => ({ ...prev, declinedDate: "" }));
                                       }}
-                                      min={applicationSubmissionSavedDateInput || undefined}
+                                      min={policyStatusDecisionDateMinInput || undefined}
                                       max={todayDateInput}
                                       disabled={policyStatusSaving}
                                     />
                                     {policyStatusFieldErrors.declinedDate ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyStatusFieldErrors.declinedDate}</p> : null}
+                                  </div>
+
+                                  <div className="le-formRow">
+                                    <label className="le-label">Declination Letter (PDF) *</label>
+                                    <input
+                                      key={policyDeclinationLetterInputKey}
+                                      type="file"
+                                      className={`le-input ${policyStatusFieldErrors.declinationLetterFileDataUrl ? "error" : ""}`}
+                                      accept="application/pdf,.pdf"
+                                      onChange={(e) => onPolicyDeclinationLetterPicked(e.target.files?.[0] || null)}
+                                      disabled={policyStatusSaving}
+                                    />
+                                    {policyStatusFieldErrors.declinationLetterFileDataUrl ? (
+                                      <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyStatusFieldErrors.declinationLetterFileDataUrl}</p>
+                                    ) : null}
+                                    {policyStatusForm.declinationLetterFileName ? (
+                                      <p className="le-smallNote">Selected file: {policyStatusForm.declinationLetterFileName}</p>
+                                    ) : null}
+                                    {policyStatusForm.declinationLetterFileDataUrl ? (
+                                      <iframe
+                                        title="Declination Letter Preview"
+                                        src={policyStatusForm.declinationLetterFileDataUrl}
+                                        style={{ width: "100%", minHeight: 260, border: "1px solid #e5e7eb", borderRadius: 10 }}
+                                      />
+                                    ) : null}
                                   </div>
 
                                   <div className="le-formRow">
@@ -6964,6 +7501,31 @@ function AgentLeadEngagement() {
                                       disabled={policyStatusSaving}
                                     />
                                     {policyStatusFieldErrors.declineReason ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyStatusFieldErrors.declineReason}</p> : null}
+                                  </div>
+
+                                  <div className="le-formRow">
+                                    <label className="le-label">Proof of Initial Premium Refund (JPG, JPEG, PNG) *</label>
+                                    <input
+                                      key={policyRefundProofInputKey}
+                                      type="file"
+                                      className={`le-input ${policyStatusFieldErrors.initialPremiumRefundProofImageDataUrl ? "error" : ""}`}
+                                      accept="image/jpeg,image/png,.jpg,.jpeg,.png"
+                                      onChange={(e) => onPolicyRefundProofPicked(e.target.files?.[0] || null)}
+                                      disabled={policyStatusSaving}
+                                    />
+                                    {policyStatusFieldErrors.initialPremiumRefundProofImageDataUrl ? (
+                                      <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyStatusFieldErrors.initialPremiumRefundProofImageDataUrl}</p>
+                                    ) : null}
+                                    {policyStatusForm.initialPremiumRefundProofFileName ? (
+                                      <p className="le-smallNote">Selected file: {policyStatusForm.initialPremiumRefundProofFileName}</p>
+                                    ) : null}
+                                    {policyStatusForm.initialPremiumRefundProofImageDataUrl ? (
+                                      <img
+                                        src={policyStatusForm.initialPremiumRefundProofImageDataUrl}
+                                        alt="Proof of Initial Premium Refund Preview"
+                                        style={{ maxWidth: 260, width: "100%", borderRadius: 10, border: "1px solid #e5e7eb" }}
+                                      />
+                                    ) : null}
                                   </div>
                                 </>
                               ) : null}
@@ -6988,7 +7550,22 @@ function AgentLeadEngagement() {
                                   onClick={() => {
                                     setPolicyStatusError("");
                                     setPolicyStatusFieldErrors({});
-                                    setPolicyStatusForm({ status: "", issuanceDate: "", declinedDate: "", declineReason: "", notes: "", savedAt: "" });
+                                    setPolicyStatusForm({
+                                      status: "",
+                                      issuanceDate: "",
+                                      declinedDate: "",
+                                      declinationLetterFileDataUrl: "",
+                                      declinationLetterFileName: "",
+                                      declinationLetterFileMimeType: "",
+                                      declineReason: "",
+                                      initialPremiumRefundProofImageDataUrl: "",
+                                      initialPremiumRefundProofFileName: "",
+                                      initialPremiumRefundProofFileMimeType: "",
+                                      notes: "",
+                                      savedAt: "",
+                                    });
+                                    setPolicyDeclinationLetterInputKey((k) => k + 1);
+                                    setPolicyRefundProofInputKey((k) => k + 1);
                                   }}
                                   disabled={policyStatusSaving}
                                 >
@@ -7008,13 +7585,24 @@ function AgentLeadEngagement() {
                         </div>
                       )}
 
-                      {isPolicyInitialEorViewed && isHistoryView && !hasSavedPolicyInitialPremiumEor ? (
-                        <div className="le-block"><p className="le-muted" style={{ marginTop: 8 }}>No details were saved for this subactivity in the selected engagement cycle.</p></div>
+                      {isPolicyInitialEorViewed && ((isHistoryView && !shouldDisplayPolicyInitialPremiumEorDetails) || (!isHistoryView && isLeadTerminal && !hasAnyPolicyInitialPremiumEorDetails)) ? (
+                        <div className="le-block"><p className="le-muted" style={{ marginTop: 8 }}>{isHistoryView ? "No details were saved for this subactivity in the selected engagement cycle." : "No details were saved for this subactivity."}</p></div>
                       ) : null}
 
-                      {isPolicyInitialEorViewed && ((isHistoryView && hasSavedPolicyInitialPremiumEor) || (!isHistoryView && hasSavedPolicyApplicationStatus && policyStatusForm.status === "Issued")) ? (
+                      {isPolicyInitialEorViewed && ((isHistoryView && shouldDisplayPolicyInitialPremiumEorDetails) || (!isHistoryView && (!isLeadTerminal || hasAnyPolicyInitialPremiumEorDetails))) ? (
                         <div className="le-block">
-                          <h4 className="le-blockTitle">{hasSavedPolicyInitialPremiumEor ? "Initial Premium eOR Details" : "Upload Initial Premium eOR"}</h4>
+                          <div className="le-inlineActionRow" style={{ alignItems: "center", marginBottom: 10 }}>
+                            <h4 className="le-blockTitle">{shouldDisplayPolicyInitialPremiumEorDetails ? "Initial Premium eOR Details" : "Upload Initial Premium eOR"}</h4>
+                            {shouldDisplayPolicyInitialPremiumEorDetails && !isPolicyInitialEorFormEditable && !isHistoryView && !isLeadTerminal ? (
+                              <button
+                                type="button"
+                                className="le-btn secondary"
+                                onClick={startPolicyInitialEorEdit}
+                              >
+                                Edit
+                              </button>
+                            ) : null}
+                          </div>
 
                           <div className="le-formRow">
                             <label className="le-label">Method of Initial Payment</label>
@@ -7025,7 +7613,7 @@ function AgentLeadEngagement() {
                             <p className="le-smallNote">{applicationPremiumPaymentForm.totalFrequencyPremiumPhp || "—"}</p>
                           </div>
 
-                          {hasSavedPolicyInitialPremiumEor ? (
+                          {!isPolicyInitialEorFormEditable ? (
                             <>
                               <div className="le-formRow">
                                 <label className="le-label">eOR Number</label>
@@ -7076,8 +7664,8 @@ function AgentLeadEngagement() {
                                     setPolicyInitialEorForm((f) => ({ ...f, receiptDate: e.target.value }));
                                     setPolicyInitialEorFieldErrors((prev) => ({ ...prev, receiptDate: "" }));
                                   }}
-                                  min={applicationSubmissionSavedDateInput || undefined}
-                                  max={policyStatusForm.issuanceDate || todayDateInput}
+                                  min={policyInitialEorReceiptDateMinInput || undefined}
+                                  max={policyInitialEorReceiptDateMaxInput}
                                   disabled={policyInitialEorSaving}
                                 />
                                 {policyInitialEorFieldErrors.receiptDate ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyInitialEorFieldErrors.receiptDate}</p> : null}
@@ -7114,15 +7702,10 @@ function AgentLeadEngagement() {
                                 <button
                                   type="button"
                                   className="le-btn secondary"
-                                  onClick={() => {
-                                    setPolicyInitialEorError("");
-                                    setPolicyInitialEorFieldErrors({});
-                                    setPolicyInitialEorForm({ eorNumber: "", receiptDate: "", eorFileDataUrl: "", eorFileName: "", uploadedAt: "" });
-                                    setPolicyInitialEorInputKey((k) => k + 1);
-                                  }}
+                                  onClick={policyInitialEorEditMode ? cancelPolicyInitialEorEdit : clearPolicyInitialEorForm}
                                   disabled={policyInitialEorSaving}
                                 >
-                                  Cancel
+                                  {policyInitialEorEditMode ? "Cancel" : "Clear"}
                                 </button>
                                 <button
                                   type="button"
@@ -7139,15 +7722,15 @@ function AgentLeadEngagement() {
                       ) : null}
 
 
-                      {isPolicySummaryViewed && isHistoryView && !hasSavedPolicySummary ? (
-                        <div className="le-block"><p className="le-muted" style={{ marginTop: 8 }}>No details were saved for this subactivity in the selected engagement cycle.</p></div>
+                      {isPolicySummaryViewed && ((isHistoryView && !shouldDisplayPolicySummaryDetails) || (!isHistoryView && isLeadTerminal && !hasAnyPolicySummaryDetails)) ? (
+                        <div className="le-block"><p className="le-muted" style={{ marginTop: 8 }}>{isHistoryView ? "No details were saved for this subactivity in the selected engagement cycle." : "No details were saved for this subactivity."}</p></div>
                       ) : null}
 
-                      {isPolicySummaryViewed && ((isHistoryView && hasSavedPolicySummary) || (!isHistoryView && hasSavedPolicyInitialPremiumEor)) ? (
+                      {isPolicySummaryViewed && ((isHistoryView && shouldDisplayPolicySummaryDetails) || (!isHistoryView && (hasSavedPolicyInitialPremiumEor || (isLeadTerminal && hasAnyPolicySummaryDetails)))) ? (
                         <div className="le-block">
-                          <h4 className="le-blockTitle">{hasSavedPolicySummary ? "Policy Summary Details" : "Upload Policy Summary"}</h4>
+                          <h4 className="le-blockTitle">{shouldDisplayPolicySummaryDetails ? "Policy Summary Details" : "Upload Policy Summary"}</h4>
 
-                          {hasSavedPolicySummary ? (
+                          {shouldDisplayPolicySummaryDetails ? (
                             <>
                               <div className="le-formRow">
                                 <label className="le-label">Policy Number</label>
@@ -7611,8 +8194,7 @@ function AgentLeadEngagement() {
                                     <span className="le-attemptDate">{formatDateTime(a.attemptedAt)}</span>
                                     {!isHistoryView &&
                                     !isContactingReadOnly &&
-                                    !isLeadClosed &&
-                                    !isLeadDropped &&
+                                    !isLeadTerminal &&
                                     String(a.attemptId || "").trim() &&
                                     String(displayedLastAttempt?.attemptId || "") === String(a.attemptId || "") ? (
                                       <button
@@ -7757,8 +8339,7 @@ function AgentLeadEngagement() {
                                 isValidateContactEditable &&
                                 !validatingContact &&
                                 !isEngagementBlocked &&
-                                !isLeadClosed &&
-                                !isLeadDropped ? (
+                                !isLeadTerminal ? (
                                   <button
                                     type="button"
                                     className="le-btn secondary"
@@ -7911,8 +8492,7 @@ function AgentLeadEngagement() {
                                 isContactingCurrentViewEditable &&
                                 !savingInterest &&
                                 !isEngagementBlocked &&
-                                !isLeadClosed &&
-                                !isLeadDropped ? (
+                                !isLeadTerminal ? (
                                   <button
                                     type="button"
                                     className="le-btn secondary"
@@ -8324,11 +8904,11 @@ function AgentLeadEngagement() {
                             </div>
                             <div className="le-proposalDetailCard">
                               <span className="le-metaLabel">Minimum Sum Assured</span>
-                              <span className="le-metaValue">{renderStandardLabel(selectedProposalProduct?.minimumSumAssured)}</span>
+                              <span className="le-metaValue">{renderStandardLabelWithApplicableTier(selectedProposalProduct?.minimumSumAssured)}</span>
                             </div>
                             <div className="le-proposalDetailCard">
                               <span className="le-metaLabel">Minimum Annual Premium</span>
-                              <span className="le-metaValue">{renderStandardLabel(selectedProposalProduct?.minimumAnnualPremium)}</span>
+                              <span className="le-metaValue">{renderStandardLabelWithApplicableTier(selectedProposalProduct?.minimumAnnualPremium)}</span>
                             </div>
                           </div>
 
@@ -9798,7 +10378,10 @@ function AgentLeadEngagement() {
                               <div className="le-formRow">
                                 <label className="le-label">Current Priority *</label>
                                 <select className="le-input" value={needsAssessmentForm.needsPriorities?.currentPriority || ""} onChange={(e) => updateNeedsPriorities("currentPriority", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}>
-                                  <option value="">Select</option><option value="Protection">Protection</option><option value="Health">Health</option><option value="Investment">Investment</option>
+                                  <option value="">Select</option>
+                                  {priorityOptions.map((priority) => (
+                                    <option key={priority} value={priority}>{priority}</option>
+                                  ))}
                                 </select>
                               </div>
                               {renderNeedsAssessmentError("currentPriority")}
@@ -9825,7 +10408,7 @@ function AgentLeadEngagement() {
                               <div className="le-formRow"><label className="le-label">Maximum Willing Monthly Premium (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.maxPremium ?? ""} onChange={(e) => updateNeedsPriorities("maxPremium", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
                               {renderNeedsAssessmentError("maxPremium")}
 
-                              {needsPrioritiesDerived.priority === "Protection" && (
+                              {shouldShowProtectionPriorityFields && (
                                 <>
                                   <div className="le-formRow"><label className="le-label">Approximate Monthly Spend (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.protection?.monthlySpend ?? ""} onChange={(e) => updateNeedsPrioritySection("protection", "monthlySpend", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
                                   {renderNeedsAssessmentError("protectionMonthlySpend")}
@@ -9837,7 +10420,7 @@ function AgentLeadEngagement() {
                                 </>
                               )}
 
-                              {needsPrioritiesDerived.priority === "Health" && (
+                              {shouldShowHealthPriorityFields && (
                                 <>
                                   <div className="le-formRow"><label className="le-label">Approx. Amount to Cover Critical Illness (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.health?.amountToCoverCriticalIllness ?? ""} onChange={(e) => updateNeedsPrioritySection("health", "amountToCoverCriticalIllness", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
                                   {renderNeedsAssessmentError("healthAmount")}
@@ -9847,7 +10430,7 @@ function AgentLeadEngagement() {
                                 </>
                               )}
 
-                              {needsPrioritiesDerived.priority === "Investment" && (
+                              {shouldShowInvestmentPriorityFields && (
                                 <>
                                   <div className="le-formRow"><label className="le-label">Savings Plan *</label><select className="le-input" value={needsAssessmentForm.needsPriorities?.investment?.savingsPlan || ""} onChange={(e) => updateNeedsPrioritySection("investment", "savingsPlan", e.target.value)} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}><option value="">Select</option><option value="Home">Home</option><option value="Vehicle">Vehicle</option><option value="Holiday">Holiday</option><option value="Early Retirement">Early Retirement</option><option value="Other">Other</option></select></div>
                                   {renderNeedsAssessmentError("investmentSavingsPlan")}

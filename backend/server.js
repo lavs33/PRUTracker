@@ -1170,6 +1170,7 @@ app.use(
     AnnualPayment,
     Payment,
     Product,
+    Policy,
     mongoose,
   })
 );
