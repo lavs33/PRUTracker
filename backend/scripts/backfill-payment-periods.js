@@ -3,7 +3,7 @@
  * --------------------------------
  * Populates Payment.recordPremiumPaymentTransfer.paymentPeriod from the stored
  * payment date and frequency. The period starts on paymentDate and ends on the
- * day before the next payment date implied by the payment frequency.
+ * day before the next payment due implied by the payment frequency.
  *
  * Usage:
  *   node backend/scripts/backfill-payment-periods.js
