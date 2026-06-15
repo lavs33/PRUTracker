@@ -142,7 +142,8 @@ function AgentAnnualPaymentRecord() {
   const policySummaryFileDataUrl = String(policySummary.fileDataUrl || "").trim();
   const frequencyLabel = annualPayment.frequencyOfPayment === "Half-yearly" ? "Half-Yearly" : (annualPayment.frequencyOfPayment || "Payment");
   const isPolicyholderLapsed = String(policyholder.status || "") === "Lapsed";
-  const canAddPaymentRecord = ["Not Started", "Ongoing"].includes(annualStatus) && (!totalCount || paidCount < totalCount);
+  const isPolicyholderPaymentTrackingEnded = ["Cancelled", "Paid-Up", "Matured"].includes(String(policyholder.status || ""));
+  const canAddPaymentRecord = !isPolicyholderPaymentTrackingEnded && ["Not Started", "Ongoing"].includes(annualStatus) && (!totalCount || paidCount < totalCount);
 
   return (
     <div className="ph-shell">
@@ -232,7 +233,7 @@ function AgentAnnualPaymentRecord() {
                   </div>
                   {!isAnnualPaymentCompleted ? (
                     <div className="ph-summaryTile">
-                      <span>Next Payment Date</span>
+                      <span>Next Payment Due</span>
                       <strong>{formatDateOnly(annualPayment.nextPaymentDate)}</strong>
                     </div>
                   ) : null}
