@@ -323,3 +323,119 @@
     width: 100%;
   }
 }
+.manager-kpi-assignment-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 18px;
+  padding: 12px;
+  margin-top: 12px;
+  background: #fff;
+}
+
+.manager-kpi-assignment-card__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.manager-kpi-assignment-card__head strong {
+  display: block;
+  color: #111827;
+  font-size: 1rem;
+}
+
+.manager-kpi-assignment-card__head span {
+  display: block;
+  color: #6b7280;
+  font-size: 0.85rem;
+  margin-top: 3px;
+}
+
+.manager-kpi-input {
+  width: 92px;
+  border: 1px solid #d1d5db;
+  border-radius: 10px;
+  padding: 8px 10px;
+  font: inherit;
+}
+
+.manager-kpi-input:disabled {
+  background: #f9fafb;
+  color: #6b7280;
+}
+
+.manager-kpi-progress-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.manager-kpi-progress-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 18px;
+  padding: 16px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+}
+
+.manager-kpi-progress-card span,
+.manager-kpi-progress-card small {
+  color: #6b7280;
+  font-size: 0.8rem;
+}
+
+.manager-kpi-progress-card strong,
+.manager-kpi-progress-card b {
+  display: block;
+  color: #111827;
+}
+
+.manager-kpi-progress-card p {
+  margin: 8px 0 14px;
+  color: #4b5563;
+}
+
+.manager-table--kpi {
+  min-width: 0;
+  table-layout: fixed;
+}
+
+.manager-table--kpi th,
+.manager-table--kpi td {
+  padding: 8px 7px;
+  font-size: 12px;
+  white-space: normal;
+}
+
+.manager-table--kpi th:first-child,
+.manager-table--kpi td:first-child {
+  width: 62px;
+  text-align: center;
+}
+
+.manager-table--kpi th:nth-child(2),
+.manager-table--kpi td:nth-child(2) {
+  width: 24%;
+}
+
+.manager-table--kpi th:nth-child(3),
+.manager-table--kpi td:nth-child(3),
+.manager-table--kpi th:nth-child(4),
+.manager-table--kpi td:nth-child(4) {
+  width: 82px;
+}
+
+.manager-table--kpi th:nth-child(5),
+.manager-table--kpi td:nth-child(5),
+.manager-table--kpi th:nth-child(6),
+.manager-table--kpi td:nth-child(6),
+.manager-table--kpi th:nth-child(7),
+.manager-table--kpi td:nth-child(7) {
+  width: 78px;
+}
+
+.manager-table--kpi .manager-kpi-input {
+  width: 100%;
+  min-width: 0;
+  padding: 6px 7px;
+}

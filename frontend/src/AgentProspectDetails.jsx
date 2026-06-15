@@ -222,8 +222,16 @@ function AgentProspectDetails() {
   const showInvalidPhoneBanner =
     prospect.status === "Wrong Contact" || !!prospect.hasOpenUpdateContactInfoTask;
 
-  // Dropped prospects cannot create new lead
+  // Dropped prospects and prospects with non-cancelled policies for all priorities cannot create new leads.
   const isDropped = String(prospect.status || "").trim().toLowerCase() === "dropped";
+  const unavailablePriorityCategories = Array.isArray(prospect.unavailablePriorityCategories) ? prospect.unavailablePriorityCategories : [];
+  const hasAllPriorityPolicies = unavailablePriorityCategories.length >= 3;
+  const addLeadDisabled = isDropped || hasAllPriorityPolicies;
+  const addLeadDisabledTitle = isDropped
+    ? "This prospect is Dropped. You cannot create new leads."
+    : hasAllPriorityPolicies
+      ? "This prospect already has non-cancelled policies for Protection, Health, and Investment."
+      : "Add new lead";
 
   // Keep tab sane (in case old localStorage/logic tries to set tasks)
   const safeTab = recordsTab === "leads" ? "leads" : "leads";
@@ -365,19 +373,13 @@ function AgentProspectDetails() {
 
                 {safeTab === "leads" ? (
                   <div className="pd-recordActions">
-                    {isDropped ? (
-                      <div className="pd-recordNotice pd-recordNotice--warning">
-                        This prospect is <b>Dropped</b>. You cannot create new leads.
-                      </div>
-                    ) : null}
-
                     <button
                       type="button"
-                      className="pd-actionBtn"
-                      disabled={isDropped}
-                      title={isDropped ? "Cannot add lead: prospect is Dropped" : "Add new lead"}
+                      className={`pd-actionBtn ${addLeadDisabled ? "is-disabled" : ""}`}
+                      aria-disabled={addLeadDisabled}
+                      title={addLeadDisabledTitle}
                       onClick={() => {
-                        if (isDropped) return;
+                        if (addLeadDisabled) return;
                         navigate(`/agent/${user.username}/prospects/${prospectId}/leads/new`);
                       }}
                     >
