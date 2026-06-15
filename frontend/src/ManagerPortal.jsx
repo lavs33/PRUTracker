@@ -16,6 +16,46 @@ function formatMoney(value) {
   return `₱ ${Number(value || 0).toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+function formatKpiValue(value, valueType) {
+  if (value === null || value === undefined || value === "") return "No standard target";
+  if (valueType === "Currency") return formatMoney(value);
+  if (valueType === "Percent" || valueType === "Index") return `${value}%`;
+  return Number(value).toLocaleString("en-PH");
+}
+
+function formatKpiTarget(kpi = {}) {
+  if (kpi.targetValue !== null && kpi.targetValue !== undefined && kpi.targetValue !== "") {
+    return formatKpiValue(kpi.targetValue, kpi.valueType);
+  }
+  const hasMin = kpi.targetMin !== null && kpi.targetMin !== undefined && kpi.targetMin !== "";
+  const hasMax = kpi.targetMax !== null && kpi.targetMax !== undefined && kpi.targetMax !== "";
+  if (hasMin && hasMax) return `${formatKpiValue(kpi.targetMin, kpi.valueType)} - ${formatKpiValue(kpi.targetMax, kpi.valueType)}`;
+  if (hasMin) return `${formatKpiValue(kpi.targetMin, kpi.valueType)} and above`;
+  if (hasMax) return `Up to ${formatKpiValue(kpi.targetMax, kpi.valueType)}`;
+  return "No standard target";
+}
+
+function getKpiComparison(actual, kpi) {
+  const numericActual = Number(actual || 0);
+  const target = Number(kpi?.targetValue ?? kpi?.targetMin ?? 0);
+  if (!target) return { percent: 0, status: "No target", className: "neutral" };
+  const percent = Math.round((numericActual / target) * 100);
+  if (percent >= 100) return { percent, status: "Exceeding / On target", className: "good" };
+  return { percent, status: "Below target", className: "warning" };
+}
+
+function formatActualKpiValue(value, valueType) {
+  if (valueType === "Currency") return formatMoney(value);
+  if (valueType === "Percent" || valueType === "Index") return `${Number(value || 0).toFixed(0)}%`;
+  return Number(value || 0).toLocaleString("en-PH");
+}
+
+function formatScopeLabel(scopeType) {
+  if (scopeType === "AGENT") return "All Agents";
+  if (scopeType === "UNIT") return "All Units";
+  return "Branch";
+}
+
 function formatDateTime(value) {
   const dt = new Date(value);
   return Number.isNaN(dt.getTime())
@@ -419,6 +459,11 @@ function ManagerPortal({ roleType }) {
   const [taskDatePreset, setTaskDatePreset] = useState("ALL");
   const [salesDatePreset, setSalesDatePreset] = useState("ALL");
   const [portalData, setPortalData] = useState(null);
+  const [kpiData, setKpiData] = useState(null);
+  const [kpiDrafts, setKpiDrafts] = useState({});
+  const [kpiLoading, setKpiLoading] = useState(false);
+  const [kpiSavingKey, setKpiSavingKey] = useState("");
+  const [kpiMessage, setKpiMessage] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [sideNavCollapsed, setSideNavCollapsed] = useState(false);
@@ -499,6 +544,75 @@ function ManagerPortal({ roleType }) {
     user?.role,
   ]);
 
+  useEffect(() => {
+    if (!user?.id || user.role !== normalizedRole) return;
+    if (!["kpi_assignment", "kpi_progress"].includes(activeView)) return;
+
+    const controller = new AbortController();
+    const fetchKpis = async () => {
+      setKpiLoading(true);
+      setKpiMessage("");
+      try {
+        const res = await fetch(`${API_BASE}/api/manager/kpi-assignments?userId=${user.id}`, { signal: controller.signal });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data?.message || "Failed to load KPI assignments.");
+        setKpiData(data);
+        const drafts = {};
+        (data.assignments || []).forEach((assignment) => {
+          drafts[`${assignment.scopeType}:${assignment.scopeId}`] = (assignment.kpis || []).map((kpi) => ({ ...kpi }));
+        });
+        setKpiDrafts(drafts);
+      } catch (err) {
+        if (err.name !== "AbortError") setKpiMessage(err.message || "Failed to load KPI assignments.");
+      } finally {
+        if (!controller.signal.aborted) setKpiLoading(false);
+      }
+    };
+    fetchKpis();
+    return () => controller.abort();
+  }, [activeView, normalizedRole, refreshCount, user?.id, user?.role]);
+
+  const updateKpiDraft = (assignment, kpiKey, field, value) => {
+    const assignmentKey = `${assignment.scopeType}:${assignment.scopeId}`;
+    setKpiDrafts((current) => ({
+      ...current,
+      [assignmentKey]: (current[assignmentKey] || assignment.kpis || []).map((kpi) =>
+        kpi.key === kpiKey
+          ? { ...kpi, [field]: field === "assigned" ? value === true : value }
+          : kpi,
+      ),
+    }));
+  };
+
+  const saveKpiAssignment = async (assignment) => {
+    const assignmentKey = `${assignment.scopeType}:${assignment.scopeId}`;
+    setKpiSavingKey(assignmentKey);
+    setKpiMessage("");
+    try {
+      const res = await fetch(`${API_BASE}/api/manager/kpi-assignments/${assignment.scopeType}/${assignment.scopeId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: user.id, kpis: kpiDrafts[assignmentKey] || assignment.kpis || [] }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.message || "Failed to save KPI assignment.");
+      setKpiData((current) => ({
+        ...(current || {}),
+        assignments: (current?.assignments || []).map((item) =>
+          item.scopeType === assignment.scopeType && item.scopeId === assignment.scopeId
+            ? { ...item, kpis: data.assignment?.kpis || item.kpis, updatedAt: data.assignment?.updatedAt || item.updatedAt }
+            : item,
+        ),
+      }));
+      setKpiDrafts((current) => ({ ...current, [assignmentKey]: data.assignment?.kpis || current[assignmentKey] || [] }));
+      setKpiMessage("KPI assignment saved.");
+    } catch (err) {
+      setKpiMessage(err.message || "Failed to save KPI assignment.");
+    } finally {
+      setKpiSavingKey("");
+    }
+  };
+
   const handleLogout = () => {
     localStorage.removeItem("managerPortalUser");
     localStorage.setItem("role", normalizedRole);
@@ -564,6 +678,27 @@ function ManagerPortal({ roleType }) {
       ),
     [portalData?.salesRows, salesSearch],
   );
+
+  const branchKpiProgressRows = useMemo(() => {
+    const branchAssignment = (kpiData?.assignments || []).find((assignment) => assignment.scopeType === "BRANCH");
+    if (!branchAssignment) return [];
+    const activeAgentCount = (portalData?.salesRows || []).filter((row) => Number(row?.annualPremium || 0) > 0 || Number(row?.totalPolicies || 0) > 0).length;
+    const totalPolicies = Number(salesSummary.totalPolicies || 0);
+    const activePolicies = Number(salesSummary.activePolicies || 0);
+    const persistencyRate = totalPolicies ? Math.round((activePolicies / totalPolicies) * 100) : 0;
+    const salesProductionKpi = (branchAssignment.kpis || []).find((kpi) => kpi.key === "monthly_sales_production") || {};
+    const productionTarget = Number(salesProductionKpi.targetValue ?? salesProductionKpi.targetMin ?? 0);
+    const targetAchievementIndex = productionTarget ? Math.round((Number(salesSummary.totalAnnualPremium || 0) / productionTarget) * 100) : 0;
+    const actualByKey = {
+      monthly_sales_production: Number(salesSummary.totalAnnualPremium || 0),
+      monthly_active_agents: activeAgentCount,
+      monthly_persistency_rate: persistencyRate,
+      monthly_target_achievement_index: targetAchievementIndex,
+    };
+    return (branchAssignment.kpis || [])
+      .filter((kpi) => kpi.assigned !== false)
+      .map((kpi) => ({ assignment: branchAssignment, kpi, actual: actualByKey[kpi.key] || 0 }));
+  }, [kpiData?.assignments, portalData?.salesRows, salesSummary.activePolicies, salesSummary.totalAnnualPremium, salesSummary.totalPolicies]);
 
   const scope = portalData?.scope || {};
   const scopeLabel = getScopeLabel(scope);
@@ -1373,6 +1508,125 @@ function ManagerPortal({ roleType }) {
               )}
             </section>
           )}
+
+
+          {!isLoading && !loadError && activeView === "kpi_assignment" && (
+            <section className="manager-panel">
+              <div className="manager-panel__head">
+                <div>
+                  <h2>KPI Assignment Dashboard</h2>
+                  <p>
+                    {normalizedRole === "BM"
+                      ? "Assign or unassign branch-level KPI sets for all agents in the branch, all units in the branch, and the branch itself."
+                      : "View branch KPI assignments for your manager scope."}
+                  </p>
+                </div>
+              </div>
+              {kpiLoading && <div className="manager-empty-state">Loading KPI assignments...</div>}
+              {kpiMessage && <div className="manager-filter-note">{kpiMessage}</div>}
+              {!kpiLoading && (kpiData?.assignments || []).map((assignment) => {
+                const assignmentKey = `${assignment.scopeType}:${assignment.scopeId}`;
+                const draftKpis = kpiDrafts[assignmentKey] || assignment.kpis || [];
+                return (
+                  <div className="manager-kpi-assignment-card" key={assignmentKey}>
+                    <div className="manager-kpi-assignment-card__head">
+                      <div>
+                        <strong>{assignment.name}</strong>
+                        <span>{assignment.scopeType} {assignment.code ? `• ${assignment.code}` : ""} {assignment.unitName && assignment.unitName !== "—" ? `• ${assignment.unitName}` : ""}</span>
+                      </div>
+                      {kpiData?.canEdit ? (
+                        <button
+                          type="button"
+                          className="manager-refresh-btn"
+                          onClick={() => saveKpiAssignment(assignment)}
+                          disabled={kpiSavingKey === assignmentKey}
+                        >
+                          {kpiSavingKey === assignmentKey ? "Saving..." : "Save KPI Assignment"}
+                        </button>
+                      ) : null}
+                    </div>
+                    <div className="manager-kpi-edit-grid">
+                      {draftKpis.map((kpi) => (
+                        <div className="manager-kpi-edit-row" key={kpi.key}>
+                          <label className="manager-kpi-check">
+                            <input
+                              type="checkbox"
+                              checked={kpi.assigned !== false}
+                              disabled={!kpiData?.canEdit}
+                              onChange={(e) => updateKpiDraft(assignment, kpi.key, "assigned", e.target.checked)}
+                            />
+                            <span>Assigned</span>
+                          </label>
+                          <div className="manager-kpi-name">
+                            <strong>{kpi.label}</strong>
+                            <span>{formatScopeLabel(assignment.scopeType)} • {kpi.period} • {kpi.valueType}</span>
+                          </div>
+                          <label>
+                            <span>Min</span>
+                            <input className="manager-kpi-input" type="number" value={kpi.targetMin ?? ""} disabled={!kpiData?.canEdit} onChange={(e) => updateKpiDraft(assignment, kpi.key, "targetMin", e.target.value)} />
+                          </label>
+                          <label>
+                            <span>Max</span>
+                            <input className="manager-kpi-input" type="number" value={kpi.targetMax ?? ""} disabled={!kpiData?.canEdit} onChange={(e) => updateKpiDraft(assignment, kpi.key, "targetMax", e.target.value)} />
+                          </label>
+                          <label>
+                            <span>Target</span>
+                            <input className="manager-kpi-input" type="number" value={kpi.targetValue ?? ""} disabled={!kpiData?.canEdit} onChange={(e) => updateKpiDraft(assignment, kpi.key, "targetValue", e.target.value)} />
+                          </label>
+                          <div className="manager-kpi-target-display">
+                            <span>Display Target</span>
+                            <strong>{formatKpiTarget(kpi)}</strong>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </section>
+          )}
+
+          {!isLoading && !loadError && activeView === "kpi_progress" && (
+            <section className="manager-panel">
+              <div className="manager-panel__head">
+                <div>
+                  <h2>Branch KPI Progress</h2>
+                  <p>View assigned branch KPI targets for your manager level. Progress values can be wired to production analytics as the KPI tracking engine matures.</p>
+                </div>
+              </div>
+              {kpiLoading && <div className="manager-empty-state">Loading KPI progress...</div>}
+              {kpiMessage && <div className="manager-filter-note">{kpiMessage}</div>}
+              <div className="manager-kpi-progress-grid">
+                {branchKpiProgressRows.map(({ assignment, kpi, actual }) => {
+                  const comparison = getKpiComparison(actual, kpi);
+                  const barPercent = Math.max(0, Math.min(comparison.percent, 140));
+                  return (
+                    <article className={`manager-kpi-progress-card ${comparison.className}`} key={`${assignment.scopeType}:${assignment.scopeId}:${kpi.key}`}>
+                      <span>{assignment.name}</span>
+                      <strong>{kpi.label}</strong>
+                      <p>{kpi.period} • {kpi.valueType}</p>
+                      <div className="manager-kpi-progress-values">
+                        <div>
+                          <small>Actual Progress</small>
+                          <b>{formatActualKpiValue(actual, kpi.valueType)}</b>
+                        </div>
+                        <div>
+                          <small>Assigned Target</small>
+                          <b>{formatKpiTarget(kpi)}</b>
+                        </div>
+                      </div>
+                      <div className="manager-kpi-progress-bar" aria-label={`${kpi.label} progress ${comparison.percent}%`}>
+                        <span style={{ width: `${barPercent}%` }} />
+                      </div>
+                      <em>{comparison.status}{comparison.percent ? ` • ${comparison.percent}%` : ""}</em>
+                    </article>
+                  );
+                })}
+              </div>
+              {!kpiLoading && !branchKpiProgressRows.length && <div className="manager-empty-state">No branch KPI assignments available yet.</div>}
+            </section>
+          )}
+
         </main>
       </div>
     </div>

@@ -239,6 +239,19 @@ const prospectSchema = new mongoose.Schema(
     },
 
     /**
+     * statusBeforeDrop
+     * ----------------
+     * Stores the prospect status immediately before dropping so re-opening can
+     * restore the prior status without touching lead records or profile fields.
+     */
+    statusBeforeDrop: {
+      type: String,
+      enum: ["Active", "Wrong Contact"],
+      default: undefined,
+      trim: true,
+    },
+
+    /**
      * Drop fields (used only when status === "Dropped")
      * -------------------------------------------------
      * dropReason:
@@ -337,6 +350,7 @@ prospectSchema.pre("validate", function () {
     }
     if (!this.droppedAt) this.droppedAt = new Date();
   } else {
+    this.statusBeforeDrop = undefined;
     this.dropReason = undefined;
     this.dropNotes = undefined;
     this.droppedAt = null;
