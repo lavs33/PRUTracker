@@ -41,6 +41,7 @@ const AnnualPayment = require("./models/AnnualPayment");
 const Product = require("./models/Product");
 const Task = require("./models/Task");
 const Notification = require("./models/Notification");
+const KpiAssignment = require("./models/KpiAssignment");
 
 const Unit = require("./models/Unit");
 const Branch = require("./models/Branch");
@@ -542,6 +543,141 @@ async function getManagerScopeContext(user) {
     unitName: profile.unit?.unitName || "",
     branchName: profile.branch?.branchName || "",
     areaName: profile.area?.areaName || "",
+  };
+}
+
+
+const KPI_DEFINITIONS = {
+  AGENT: [
+    { key: "weekly_approaches", label: "Weekly Approaches Count", period: "Weekly", valueType: "Count", targetMin: 50, targetMax: 100, targetValue: null, assigned: true },
+    { key: "weekly_appointments", label: "Weekly Appointments Count", period: "Weekly", valueType: "Count", targetMin: 10, targetMax: 20, targetValue: null, assigned: true },
+    { key: "weekly_presentations", label: "Weekly Presentations Count", period: "Weekly", valueType: "Count", targetMin: 5, targetMax: 10, targetValue: null, assigned: true },
+    { key: "monthly_policies", label: "Sales Target", period: "Monthly", valueType: "Count", targetMin: 2, targetMax: 6, targetValue: null, assigned: true },
+    { key: "monthly_new_prospects", label: "New Prospects", period: "Monthly", valueType: "Count", targetMin: 2, targetMax: 6, targetValue: null, assigned: true },
+    { key: "monthly_closing_ratio", label: "Closing Ratio", period: "Monthly", valueType: "Percent", targetMin: 20, targetMax: 50, targetValue: null, assigned: true },
+  ],
+  UNIT: [
+    { key: "monthly_sales_production", label: "Sales Production", period: "Monthly", valueType: "Currency", targetMin: null, targetMax: null, targetValue: null, assigned: true },
+  ],
+  BRANCH: [
+    { key: "monthly_sales_production", label: "Sales Production", period: "Monthly", valueType: "Currency", targetMin: null, targetMax: null, targetValue: null, assigned: true },
+    { key: "monthly_active_agents", label: "Active Agents Count", period: "Monthly", valueType: "Count", targetMin: null, targetMax: null, targetValue: null, assigned: true },
+    { key: "monthly_persistency_rate", label: "Branch Persistency Rate", period: "Monthly", valueType: "Percent", targetMin: null, targetMax: null, targetValue: 85, assigned: true },
+    { key: "monthly_target_achievement_index", label: "Target Achievement Index", period: "Monthly", valueType: "Index", targetMin: null, targetMax: null, targetValue: 100, assigned: true },
+  ],
+};
+
+function normalizeKpiList(scopeType, savedKpis = []) {
+  const defaults = KPI_DEFINITIONS[scopeType] || [];
+  const savedByKey = new Map((Array.isArray(savedKpis) ? savedKpis : []).map((kpi) => [String(kpi?.key || ""), kpi]));
+  return defaults.map((definition) => {
+    const saved = savedByKey.get(definition.key) || {};
+    return {
+      ...definition,
+      assigned: saved.assigned !== undefined ? saved.assigned === true : definition.assigned,
+      targetMin: definition.key === "monthly_persistency_rate" ? definition.targetMin : (saved.targetMin !== undefined ? saved.targetMin : definition.targetMin),
+      targetMax: saved.targetMax !== undefined ? saved.targetMax : definition.targetMax,
+      targetValue: definition.key === "monthly_persistency_rate" && (saved.targetValue === undefined || saved.targetValue === null) ? 85 : (saved.targetValue !== undefined ? saved.targetValue : definition.targetValue),
+    };
+  });
+}
+
+function parseOptionalNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+async function buildKpiAssignmentPayload(user) {
+  const context = await getManagerScopeContext(user);
+  if (context.error) return context;
+
+  const role = context.role;
+  const branchId = context.branchId;
+  const branchName = context.branchName || "Branch";
+  const unitName = context.unitName || "Unit";
+
+  const scopes = role === "BM"
+    ? [
+        {
+          scopeType: "AGENT",
+          scopeId: branchId,
+          code: "",
+          name: "All Agents in Branch",
+          unitName: "All Units",
+          branchName,
+        },
+        {
+          scopeType: "UNIT",
+          scopeId: branchId,
+          code: "",
+          name: "All Units in Branch",
+          unitName: "All Units",
+          branchName,
+        },
+        {
+          scopeType: "BRANCH",
+          scopeId: branchId,
+          code: "",
+          name: branchName,
+          unitName: "—",
+          branchName,
+        },
+      ]
+    : [
+        {
+          scopeType: "AGENT",
+          scopeId: branchId,
+          code: "",
+          name: "All Agents in Branch",
+          unitName: "All Units",
+          branchName,
+        },
+        {
+          scopeType: "UNIT",
+          scopeId: branchId,
+          code: "",
+          name: "All Units in Branch",
+          unitName,
+          branchName,
+        },
+        {
+          scopeType: "BRANCH",
+          scopeId: branchId,
+          code: "",
+          name: branchName,
+          unitName: "—",
+          branchName,
+        },
+      ];
+
+  const assignmentDocs = scopes.length
+    ? await KpiAssignment.find({
+        $or: scopes.map((scope) => ({ scopeType: scope.scopeType, scopeId: scope.scopeId })),
+      }).lean()
+    : [];
+  const assignmentByScope = new Map(assignmentDocs.map((doc) => [`${doc.scopeType}:${doc.scopeId}`, doc]));
+
+  return {
+    payload: {
+      scope: {
+        role,
+        unitId: context.unitId,
+        unitName: context.unitName,
+        branchId: context.branchId,
+        branchName: context.branchName,
+        areaName: context.areaName,
+      },
+      canEdit: role === "BM",
+      assignments: scopes.map((scope) => {
+        const saved = assignmentByScope.get(`${scope.scopeType}:${scope.scopeId}`);
+        return {
+          ...scope,
+          kpis: normalizeKpiList(scope.scopeType, saved?.kpis || []),
+          updatedAt: saved?.updatedAt || null,
+        };
+      }),
+    },
   };
 }
 
@@ -1109,6 +1245,91 @@ app.use(
   })
 );
 
+
+/* =========================================================
+   KPI ASSIGNMENT ROUTES
+========================================================= */
+app.get("/api/manager/kpi-assignments", async (req, res) => {
+  try {
+    const { userId } = req.query;
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId)) return res.status(400).json({ message: "Invalid userId." });
+
+    const user = await User.findById(userId).select("username role").lean();
+    if (!user) return res.status(404).json({ message: "User not found." });
+    if (!["AUM", "UM", "BM"].includes(String(user.role || "").trim().toUpperCase())) {
+      return res.status(403).json({ message: "This account does not have manager KPI access." });
+    }
+
+    const result = await buildKpiAssignmentPayload(user);
+    if (result.error) return res.status(result.error.status).json({ message: result.error.message });
+    return res.json(result.payload);
+  } catch (err) {
+    console.error("KPI assignment load error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+app.put("/api/manager/kpi-assignments/:scopeType/:scopeId", async (req, res) => {
+  try {
+    const { userId, kpis } = req.body || {};
+    const scopeType = String(req.params.scopeType || "").trim().toUpperCase();
+    const scopeId = String(req.params.scopeId || "").trim();
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId) || !mongoose.isValidObjectId(scopeId)) {
+      return res.status(400).json({ message: "Invalid userId or scopeId." });
+    }
+    if (!["AGENT", "UNIT", "BRANCH"].includes(scopeType)) {
+      return res.status(400).json({ message: "Invalid KPI scope type." });
+    }
+
+    const user = await User.findById(userId).select("role").lean();
+    if (!user || String(user.role || "").trim().toUpperCase() !== "BM") {
+      return res.status(403).json({ message: "Only branch managers can edit KPI assignments." });
+    }
+
+    const context = await getManagerScopeContext(user);
+    if (context.error) return res.status(context.error.status).json({ message: context.error.message });
+
+    if (scopeId !== context.branchId) {
+      return res.status(403).json({ message: "Cannot edit KPI assignments outside your branch." });
+    }
+
+    const defaults = KPI_DEFINITIONS[scopeType] || [];
+    const inputByKey = new Map((Array.isArray(kpis) ? kpis : []).map((kpi) => [String(kpi?.key || ""), kpi]));
+    const normalizedKpis = defaults.map((definition) => {
+      const input = inputByKey.get(definition.key) || {};
+      return {
+        ...definition,
+        assigned: input.assigned !== undefined ? input.assigned === true : definition.assigned,
+        targetMin: parseOptionalNumber(input.targetMin),
+        targetMax: parseOptionalNumber(input.targetMax),
+        targetValue: parseOptionalNumber(input.targetValue),
+      };
+    });
+
+    const updated = await KpiAssignment.findOneAndUpdate(
+      { scopeType, scopeId },
+      { $set: { kpis: normalizedKpis, updatedByUserId: userId } },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    ).lean();
+
+    return res.json({
+      message: "KPI assignment saved.",
+      assignment: {
+        scopeType,
+        scopeId,
+        kpis: normalizeKpiList(scopeType, updated?.kpis || []),
+        updatedAt: updated?.updatedAt || null,
+      },
+    });
+  } catch (err) {
+    console.error("KPI assignment save error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
 /* =========================================================
    LEGACY APP ROUTES
 ========================================================= */
@@ -1170,6 +1391,7 @@ app.use(
     AnnualPayment,
     Payment,
     Product,
+    Policy,
     mongoose,
   })
 );
