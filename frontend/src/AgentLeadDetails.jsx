@@ -23,7 +23,9 @@ function AgentLeadDetails() {
   const [apiError, setApiError] = useState("");
 
   const [prospectName, setProspectName] = useState("—");
-  const [prospectSourceType, setProspectSourceType] = useState(""); 
+  const [prospectSourceType, setProspectSourceType] = useState("");
+  const [prospectStatus, setProspectStatus] = useState("");
+  const [activeLeadForReopen, setActiveLeadForReopen] = useState(null);
   const [lead, setLead] = useState(null);
   const [leadEngagement, setLeadEngagement] = useState(null);
   const [policy, setPolicy] = useState(null);
@@ -158,11 +160,15 @@ function AgentLeadDetails() {
         setApiError(data.message || "Failed to fetch lead details.");
         setLead(null);
         setPolicy(null);
+        setProspectStatus("");
+        setActiveLeadForReopen(null);
         return;
       }
 
       setProspectName(data?.prospect?.fullName || "—");
-      setProspectSourceType(data?.prospect?.source || ""); 
+      setProspectSourceType(data?.prospect?.source || "");
+      setProspectStatus(data?.prospect?.status || "");
+      setActiveLeadForReopen(data?.prospect?.activeLeadForReopen || null);
 
       setLead({
         ...(data?.lead || {}),
@@ -192,6 +198,8 @@ function AgentLeadDetails() {
           setLead(null);
           setLeadEngagement(null);
           setPolicy(null);
+          setProspectStatus("");
+          setActiveLeadForReopen(null);
         }
       } finally {
         setLoading(false);
@@ -203,11 +211,24 @@ function AgentLeadDetails() {
   }, [isReady, fetchLeadDetails]);
 
   const isDropped = String(lead?.status || "") === "Dropped";
+  const isProspectDropped = String(prospectStatus || "") === "Dropped";
+  const activeLeadReopenLabel = activeLeadForReopen
+    ? `${activeLeadForReopen.leadCode || "—"}${activeLeadForReopen.status ? `, ${activeLeadForReopen.status}` : ""}`
+    : "";
+  const reopenDisabledReason = isProspectDropped
+    ? "This lead cannot be re-opened while the prospect is Dropped."
+    : activeLeadForReopen
+    ? `This lead cannot be re-opened while the prospect has an active lead (${activeLeadReopenLabel}).`
+    : "";
+  const isReopenDisabled = Boolean(reopenDisabledReason);
   const isClosed = String(lead?.status || "") === "Closed";
+  const isPolicyDeclined = String(lead?.status || "") === "Policy Declined";
   const hasSubmittedApplication = String(leadEngagement?.currentStage || "") === "Policy Issuance";
   const dropDisabledReason = isClosed
     ? "Closed leads cannot be dropped"
-    : hasSubmittedApplication
+    : isPolicyDeclined
+      ? "Policy declined leads cannot be dropped"
+      : hasSubmittedApplication
       ? "Leads with submitted applications cannot be dropped"
       : "";
   const isDropDisabled = Boolean(dropDisabledReason);
@@ -737,17 +758,19 @@ const handleSideNav = (key) => {
                       ) : (
                         <button
                           type="button"
-                          className="ld-btn primary"
-                          onClick={() =>
+                          className={`ld-btn primary ${isReopenDisabled ? "is-disabled" : ""}`}
+                          onClick={() => {
+                            if (isReopenDisabled) return;
                             openDropModal({
                               type: "reopen",
                               title: "Re-open Lead?",
                               message:
                                 "This will re-open the lead and return it to its previous status. Do you want to continue?",
-                            })
-                          }
+                            });
+                          }}
                           disabled={dropBusy}
-                          title="Re-open Lead"
+                          aria-disabled={isReopenDisabled || dropBusy}
+                          title={reopenDisabledReason || "Re-open Lead"}
                         >
                           Re-open Lead
                         </button>
@@ -781,7 +804,7 @@ const handleSideNav = (key) => {
                     <div className="ld-policyDate">{formatDateShort(leadEngagement?.updatedAt)}</div>
                   </div>
 
-                  {lead.status !== "Closed" && lead.status !== "Dropped" && (
+                  {lead.status !== "Closed" && lead.status !== "Dropped" && lead.status !== "Policy Declined" && (
                     <div className="ld-policyBottom">
                       <div className="ld-policyStatusRow">
                         <span className="ld-policyStatusLabel">Current Stage</span>
@@ -819,7 +842,7 @@ const handleSideNav = (key) => {
                     </div>
                   </button>
                 ) : (
-                  <p className="ld-descText">No policy attached yet.</p>
+                  <p className="ld-descText">No policy attached.</p>
                 )}
               </div>
             </div>
