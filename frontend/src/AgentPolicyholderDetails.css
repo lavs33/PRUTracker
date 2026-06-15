@@ -265,6 +265,16 @@
   color: #b91c1c;
 }
 
+.status-pill.paid-up {
+  background-color: #dbeafe;
+  color: #1d4ed8;
+}
+
+.status-pill.matured {
+  background-color: #ede9fe;
+  color: #6d28d9;
+}
+
 .status-pill.dropped {
   background-color: #e5e7eb;
   color: #374151;
@@ -423,6 +433,43 @@
   color: #a31f15;
 }
 
+
+.ph-cancelPolicyRow {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.ph-cancelPolicyLink {
+  color: #DA291C;
+  font-weight: 900;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.ph-cancelPolicyLink:hover,
+.ph-cancelPolicyLink:focus-visible {
+  color: #a31f15;
+}
+
+.ph-filePreviewLink {
+  border: 0;
+  background: transparent;
+  color: #DA291C;
+  cursor: pointer;
+  font-family: "FSAlbertArabic", sans-serif;
+  font-size: inherit;
+  font-weight: 900;
+  padding: 0;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.ph-filePreviewLink:hover,
+.ph-filePreviewLink:focus-visible {
+  color: #a31f15;
+}
+
 .ph-previewOverlay {
   position: fixed;
   inset: 0;
@@ -530,6 +577,24 @@
   width: 100%;
   border: 0;
   background: #f7f7f8;
+}
+
+.ph-previewImageWrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  background: #f7f7f8;
+  overflow: auto;
+}
+
+.ph-previewImage {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 12px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.16);
 }
 
 .ph-previewEmpty {

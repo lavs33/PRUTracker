@@ -1,4 +1,4 @@
-import { FaBars, FaChartLine, FaChevronLeft, FaChevronRight, FaHome, FaTasks, FaUsers } from "react-icons/fa";
+import { FaBars, FaBullseye, FaChartLine, FaChevronLeft, FaChevronRight, FaHome, FaTasks, FaUsers } from "react-icons/fa";
 import "./ManagerSideNav.css";
 
 const NAV_ITEMS = [
@@ -6,6 +6,8 @@ const NAV_ITEMS = [
   { key: "agents", label: "Agents", icon: <FaUsers size={18} /> },
   { key: "task_progress", label: "Task Progress", icon: <FaTasks size={18} /> },
   { key: "sales_performance", label: "Sales Performance", icon: <FaChartLine size={18} /> },
+  { key: "kpi_assignment", label: "KPI Assignment", icon: <FaBullseye size={18} /> },
+  { key: "kpi_progress", label: "KPI Progress", icon: <FaBullseye size={18} /> },
 ];
 
 function ManagerSideNav({ roleLabel, active, onNavigate, collapsed, onToggle }) {

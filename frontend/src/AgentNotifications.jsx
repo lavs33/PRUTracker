@@ -5,7 +5,7 @@ import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
 import "./AgentNotifications.css";
 
-const NOTIF_TYPES = ["TASK_ADDED", "TASK_DUE_TODAY", "TASK_MISSED", "PAYMENT_TRANSFER_REMINDER", "PAYMENT_EOR_REMINDER", "PAYMENT_MISSED_TRANSFER", "PAYMENT_POLICY_LAPSED"];
+const NOTIF_TYPES = ["TASK_ADDED", "TASK_DUE_TODAY", "TASK_MISSED", "PAYMENT_TRANSFER_REMINDER", "PAYMENT_EOR_REMINDER", "PAYMENT_MISSED_TRANSFER", "PAYMENT_POLICY_LAPSED", "POLICY_PAID_UP", "POLICY_MATURED", "POLICY_PAID_UP_MATURED", "POLICY_CANCELLED"];
 
 function AgentNotifications() {
   const navigate = useNavigate();
@@ -191,7 +191,7 @@ function AgentNotifications() {
     if (t === "TASK_ADDED") return "notif-pill added";
     if (t === "TASK_DUE_TODAY") return "notif-pill due";
     if (t === "TASK_MISSED") return "notif-pill missed";
-    if (t === "PAYMENT_TRANSFER_REMINDER" || t === "PAYMENT_EOR_REMINDER" || t === "PAYMENT_MISSED_TRANSFER" || t === "PAYMENT_POLICY_LAPSED") return "notif-pill payment";
+    if (t === "PAYMENT_TRANSFER_REMINDER" || t === "PAYMENT_EOR_REMINDER" || t === "PAYMENT_MISSED_TRANSFER" || t === "PAYMENT_POLICY_LAPSED" || t === "POLICY_PAID_UP" || t === "POLICY_MATURED" || t === "POLICY_PAID_UP_MATURED" || t === "POLICY_CANCELLED") return "notif-pill payment";
     return "notif-pill";
   };
 

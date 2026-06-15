@@ -7,7 +7,7 @@
 const mongoose = require("mongoose");
 
 const PREMIUM_PAYMENT_FREQUENCIES = ["Monthly", "Quarterly", "Half-yearly", "Yearly"];
-const ANNUAL_PAYMENT_STATUSES = ["Not Started", "Ongoing", "Completed"];
+const ANNUAL_PAYMENT_STATUSES = ["Not Started", "Ongoing", "Completed", "No Longer Pursued"];
 
 const annualPaymentSchema = new mongoose.Schema(
   {
