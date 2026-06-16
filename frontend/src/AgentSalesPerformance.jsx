@@ -7,8 +7,12 @@ import "./AgentSalesPerformance.css";
 
 const DATE_PRESETS = [
   { value: "ALL", label: "All Time" },
+  { value: "1d", label: "This Day" },
+  { value: "7d", label: "Last 7 Days" },
   { value: "30d", label: "Last 30 Days" },
   { value: "90d", label: "Last 90 Days" },
+  { value: "6m", label: "Last 6 Months" },
+  { value: "12m", label: "Last 12 Months" },
 ];
 
 const LEAD_SOURCE_OPTIONS = [
@@ -22,17 +26,9 @@ const LEAD_SOURCE_OPTIONS = [
   { value: "System", label: "System" },
 ];
 
-const POLICY_STATUS_OPTIONS = [
-  { value: "ALL", label: "All Policy Statuses" },
-  { value: "Active", label: "Active" },
-  { value: "Lapsed", label: "Lapsed" },
-  { value: "Cancelled", label: "Cancelled" },
-];
-
 const DEFAULT_FILTERS = {
   datePreset: "ALL",
   leadSource: "ALL",
-  policyStatus: "ALL",
 };
 
 const DEFAULT_DATA = {
@@ -94,6 +90,12 @@ const formatDate = (value) => {
       });
 };
 
+const formatReportPeriod = (reportContext) => {
+  const start = reportContext?.startDate ? formatDate(reportContext.startDate) : null;
+  const end = reportContext?.endDate ? formatDate(reportContext.endDate) : formatDate(reportContext?.generatedAt);
+  return start ? `${start} to ${end}` : `Through ${end}`;
+};
+
 const getOptionLabel = (options, value) => options.find((option) => option.value === value)?.label || value || "All";
 
 function AgentSalesPerformance() {
@@ -130,7 +132,6 @@ function AgentSalesPerformance() {
       userId: user.id,
       datePreset: filters.datePreset,
       leadSource: filters.leadSource,
-      policyStatus: filters.policyStatus,
     });
     const res = await fetch(`http://localhost:5000/api/sales/performance?${params.toString()}`, signal ? { signal } : undefined);
     const payload = await res.json();
@@ -160,8 +161,15 @@ function AgentSalesPerformance() {
   }, [user?.id, fetchData]);
 
   const money = (n) => Number(n || 0).toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const totalPolicies = Number(data?.totalPolicies || 0);
+  const policyStatusRows = Array.isArray(data?.policyStatusBreakdown) ? data.policyStatusBreakdown : [];
+  const convertedLeadPolicyStatusRows = Array.isArray(data?.convertedLeadPolicyStatusBreakdown) ? data.convertedLeadPolicyStatusBreakdown : [];
+  const unconvertedLeadStatusRows = Array.isArray(data?.unconvertedLeadStatusBreakdown) ? data.unconvertedLeadStatusBreakdown : [];
   const sourcePerformanceRows = Array.isArray(data?.leadSourceBreakdown) ? data.leadSourceBreakdown : [];
+  const topConvertedSourceRows = [...sourcePerformanceRows].sort((a, b) => {
+    if (Number(b.convertedLeads || 0) !== Number(a.convertedLeads || 0)) return Number(b.convertedLeads || 0) - Number(a.convertedLeads || 0);
+    if (Number(b.conversionRatePct || 0) !== Number(a.conversionRatePct || 0)) return Number(b.conversionRatePct || 0) - Number(a.conversionRatePct || 0);
+    return String(a.label || "").localeCompare(String(b.label || ""));
+  });
   const premiumBreakdownRows = [
     { key: "monthlyPremiumPhp", label: "Monthly" },
     { key: "quarterlyPremiumPhp", label: "Quarterly" },
@@ -180,13 +188,15 @@ function AgentSalesPerformance() {
         data.monthlyConvertedLeads[0]
       )
     : null;
-  const bestSource = sourcePerformanceRows.length > 0
+  const bestSourceCandidate = sourcePerformanceRows.length > 0
     ? [...sourcePerformanceRows].sort((a, b) => {
-        if (b.conversionRatePct !== a.conversionRatePct) return b.conversionRatePct - a.conversionRatePct;
+        if (b.convertedAndActiveLeads !== a.convertedAndActiveLeads) return b.convertedAndActiveLeads - a.convertedAndActiveLeads;
+        if (b.activeConversionRatePct !== a.activeConversionRatePct) return b.activeConversionRatePct - a.activeConversionRatePct;
         if (b.convertedLeads !== a.convertedLeads) return b.convertedLeads - a.convertedLeads;
         return a.label.localeCompare(b.label);
       })[0]
     : null;
+  const bestSource = Number(bestSourceCandidate?.convertedAndActiveLeads || 0) > 0 ? bestSourceCandidate : null;
   const trendMax = Math.max(
     ...(Array.isArray(data?.monthlyConvertedLeads) ? data.monthlyConvertedLeads.map((x) => Number(x?.converted || 0)) : [0]),
     1
@@ -237,10 +247,11 @@ function AgentSalesPerformance() {
       for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
       return out;
     };
+    const reportPeriod = formatReportPeriod(data?.reportContext);
     const trendRows = Array.isArray(data.monthlyConvertedLeads)
       ? data.monthlyConvertedLeads.map((row) => `
           <tr>
-            <td>${escapeHtml(formatMonthLabel(row.month))}</td>
+            <td>${escapeHtml(row.label || formatMonthLabel(row.month))}</td>
             <td>${Number(row.converted || 0)}</td>
           </tr>
         `).join("")
@@ -249,18 +260,27 @@ function AgentSalesPerformance() {
       <tr>
         <td>${escapeHtml(row.label)}</td>
         <td>${Number(row.totalLeads || 0)}</td>
-        <td>${Number(row.convertedLeads || 0)}</td>
-        <td>${Number(row.conversionRatePct || 0)}%</td>
+        <td>${Number(row.convertedAndActiveLeads || 0)}</td>
+        <td>${Number(row.activeConversionRatePct || 0)}%</td>
       </tr>
     `).join("");
-    const topSourceRowsHtml = sourcePerformanceRows.map((row) => `
+    const topSourceRowsHtml = topConvertedSourceRows.map((row) => `
       <tr>
         <td>${escapeHtml(row.label)}</td>
-        <td>${Number(row.convertedLeads || 0)}</td>
+        <td>${Number(row.convertedLeads || 0)}/${Number(row.totalLeads || 0)}</td>
         <td>${Number(row.conversionRatePct || 0)}%</td>
       </tr>
     `).join("");
-    const salesChunks = chunk(salesRows, 16);
+    const policyStatusRowsHtml = policyStatusRows.map((row) => `
+      <tr><td>${escapeHtml(row.label)}</td><td>${Number(row.count || 0)}</td><td>${Number(row.sharePct || 0)}%</td></tr>
+    `).join("");
+    const convertedLeadPolicyStatusRowsHtml = convertedLeadPolicyStatusRows.map((row) => `
+      <tr><td>${escapeHtml(row.label)}</td><td>${Number(row.count || 0)}</td><td>${Number(row.sharePct || 0)}%</td></tr>
+    `).join("");
+    const unconvertedLeadStatusRowsHtml = unconvertedLeadStatusRows.map((row) => `
+      <tr><td>${escapeHtml(row.label)}</td><td>${Number(row.count || 0)}</td><td>${Number(row.sharePct || 0)}%</td></tr>
+    `).join("");
+    const salesChunks = chunk(salesRows, 24);
     if (!salesChunks.length) salesChunks.push([]);
 
     const iframe = document.createElement("iframe");
@@ -282,23 +302,20 @@ function AgentSalesPerformance() {
     document.title = reportFilename;
     reportDoc.open();
 
-    const pageBodies = [
-      `
+    const overviewPage = `
         <div class="header-band"></div>
-        <section class="section">
+        <section class="section report-header-section">
           <div class="top-grid">
             <div>
               <h1 class="report-title">Agent Sales Performance Report</h1>
-              <div class="report-period">Report Period: ${escapeHtml(data?.reportContext?.periodLabel || "All available records")}</div>
+              <div class="report-period">Report Period: ${escapeHtml(reportPeriod)}</div>
             </div>
-            <div class="details-card">
+            <div class="details-card compact">
               <h3>Agent Details</h3>
               <div class="details-grid">
                 <div class="detail-item"><b>Agent Code</b>${escapeHtml(user?.username || "—")}</div>
                 <div class="detail-item"><b>Agent Type</b>${escapeHtml(user?.agentType || "—")}</div>
-                <div class="detail-item"><b>First Name</b>${escapeHtml(user?.firstName || "—")}</div>
-                <div class="detail-item"><b>Middle Name</b>${escapeHtml(user?.middleName || "—")}</div>
-                <div class="detail-item"><b>Last Name</b>${escapeHtml(user?.lastName || "—")}</div>
+                <div class="detail-item"><b>Name</b>${escapeHtml([user?.firstName, user?.middleName, user?.lastName].filter(Boolean).join(" ") || "—")}</div>
                 <div class="detail-item"><b>Unit</b>${escapeHtml(user?.unitName || "—")}</div>
                 <div class="detail-item"><b>Branch</b>${escapeHtml(user?.branchName || "—")}</div>
                 <div class="detail-item"><b>Area</b>${escapeHtml(user?.areaName || "—")}</div>
@@ -306,113 +323,81 @@ function AgentSalesPerformance() {
             </div>
           </div>
         </section>
-        <section class="section">
-          <div class="meta-row">
+        <section class="section report-body-section">
+          <div class="meta-row tight">
             <div class="meta-chip"><div class="label">Date Range</div><div class="value">${escapeHtml(getOptionLabel(DATE_PRESETS, filters.datePreset))}</div></div>
             <div class="meta-chip"><div class="label">Lead Source</div><div class="value">${escapeHtml(getOptionLabel(LEAD_SOURCE_OPTIONS, filters.leadSource))}</div></div>
-            <div class="meta-chip"><div class="label">Policy Status</div><div class="value">${escapeHtml(getOptionLabel(POLICY_STATUS_OPTIONS, filters.policyStatus))}</div></div>
           </div>
         </section>
         <section class="section">
           <div class="insight-grid">
-            <div class="insight-card"><h4>Lead Gap</h4><p>${Number(data.unconvertedLeads || 0)} leads still to convert from the current filter scope.</p></div>
-            <div class="insight-card"><h4>Best Lead Source</h4><p>${bestSource ? `${escapeHtml(bestSource.label)} converts at ${Number(bestSource.conversionRatePct || 0)}% (${Number(bestSource.convertedLeads || 0)}/${Number(bestSource.totalLeads || 0)}).` : "No lead source pattern available yet."}</p></div>
-            <div class="insight-card"><h4>Policy Health</h4><p>${Number(data.activePolicyRatePct || 0)}% of scoped policies are active (${Number(data.activePolicies || 0)}/${Number(data.totalPolicies || 0)}).</p></div>
+            <div class="insight-card"><h4>Lead Gap</h4><p>${Number(data.leadGap || 0)} Active Leads still to convert from the current filter scope.</p></div>
+            <div class="insight-card"><h4>Best Lead Source</h4><p>${bestSource ? `${escapeHtml(bestSource.label)} has ${Number(bestSource.convertedAndActiveLeads || 0)} converted leads with active policies (${Number(bestSource.activeConversionRatePct || 0)}% of ${Number(bestSource.totalLeads || 0)} leads).` : "—"}</p></div>
+            <div class="insight-card"><h4>Policy Health</h4><p>${Number(data.activePolicyRatePct || 0)}% of all policies are active (${Number(data.activePolicies || 0)}/${Number(data.totalPolicies || 0)}).</p></div>
           </div>
         </section>
         <section class="section">
           <div class="kpi-grid">
-            ${kpis.map((item) => `
-              <div class="kpi">
-                <div class="label">${escapeHtml(item.label)}</div>
-                <div class="val">${escapeHtml(item.value)}</div>
-              </div>
-            `).join("")}
+            ${kpis.map((item) => `<div class="kpi"><div class="label">${escapeHtml(item.label)}</div><div class="val">${escapeHtml(item.value)}</div></div>`).join("")}
           </div>
         </section>
-      `,
-      `
-        <div class="header-band"></div>
         <section class="section">
-          <h2 class="section-title">Premium + Policy Breakdown</h2>
-          <div class="analytics-grid">
-            <div class="panel">
-              <h4>Frequency Premium Breakdown</h4>
-              <table>
-                <thead><tr><th>Frequency</th><th>Amount</th><th>Share</th></tr></thead>
-                <tbody>
-                  ${premiumBreakdownRows.map((row) => `
-                    <tr>
-                      <td>${escapeHtml(row.label)}</td>
-                      <td>₱ ${escapeHtml(money(row.amount))}</td>
-                      <td>${row.sharePct}%</td>
-                    </tr>
-                  `).join("")}
-                </tbody>
-              </table>
-            </div>
-            <div class="panel">
-              <h4>Policy Status Mix</h4>
-              <table>
-                <thead><tr><th>Status</th><th>Count</th><th>Share</th></tr></thead>
-                <tbody>
-                  <tr><td>Active</td><td>${Number(data.activePolicies || 0)}</td><td>${totalPolicies ? Math.round((Number(data.activePolicies || 0) / totalPolicies) * 100) : 0}%</td></tr>
-                  <tr><td>Lapsed</td><td>${Number(data.lapsedPolicies || 0)}</td><td>${totalPolicies ? Math.round((Number(data.lapsedPolicies || 0) / totalPolicies) * 100) : 0}%</td></tr>
-                  <tr><td>Cancelled</td><td>${Number(data.cancelledPolicies || 0)}</td><td>${totalPolicies ? Math.round((Number(data.cancelledPolicies || 0) / totalPolicies) * 100) : 0}%</td></tr>
-                </tbody>
-              </table>
-            </div>
+          <div class="panel">
+            <div class="panel-title-row"><h4>Total Frequency Premium Breakdown</h4><strong>₱ ${escapeHtml(money(data.totalFrequencyPremiumPhp))}</strong></div>
+            <p class="panel-note">${escapeHtml(data?.reportContext?.periodLabel || "All available records")} • active policies only</p>
+            <table><thead><tr><th>Frequency</th><th>Amount</th><th>Share</th></tr></thead><tbody>
+              ${premiumBreakdownRows.map((row) => `<tr><td>${escapeHtml(row.label)} Premium</td><td>₱ ${escapeHtml(money(row.amount))}</td><td>${row.sharePct}% of total frequency premium</td></tr>`).join("")}
+            </tbody></table>
           </div>
         </section>
-      `,
-      `
-        <div class="header-band"></div>
         <section class="section">
-          <h2 class="section-title">Lead Source + Trend</h2>
-          <div class="analytics-grid">
-            <div class="panel">
-              <h4>Lead Source Quality</h4>
-              <table>
-                <thead><tr><th>Lead Source</th><th>Total Leads</th><th>Converted</th><th>Rate</th></tr></thead>
-                <tbody>${sourceRowsHtml || '<tr><td colspan="4">No lead source data available for the selected filters.</td></tr>'}</tbody>
-              </table>
-            </div>
-            <div class="panel">
-              <h4>Converted Leads Trend (Last 6 Months)</h4>
-              <table>
-                <thead><tr><th>Month</th><th>Converted Leads</th></tr></thead>
-                <tbody>${trendRows || '<tr><td colspan="2">No conversion trend data yet.</td></tr>'}</tbody>
-              </table>
-            </div>
-          </div>
-        </section>
-      `,
-      `
-        <div class="header-band"></div>
-        <section class="section">
-          <h2 class="section-title">Conversion Snapshot</h2>
           <div class="analytics-grid">
             <div class="panel">
               <h4>Lead Conversion Progress</h4>
-              <table>
-                <thead><tr><th>Metric</th><th>Value</th></tr></thead>
-                <tbody>
-                  <tr><td>Total Leads</td><td>${Number(data.totalLeads || 0)}</td></tr>
-                  <tr><td>Converted Leads</td><td>${Number(data.convertedLeads || 0)}</td></tr>
-                  <tr><td>Conversion Rate</td><td>${Number(data.conversionRatePct || 0)}%</td></tr>
-                </tbody>
-              </table>
+              <table><thead><tr><th>Metric</th><th>Value</th></tr></thead><tbody>
+                <tr><td>Total Leads</td><td>${Number(data.totalLeads || 0)}</td></tr>
+                <tr><td>Converted Leads</td><td>${Number(data.convertedLeads || 0)}</td></tr>
+                <tr><td>Conversion Rate</td><td>${Number(data.conversionRatePct || 0)}%</td></tr>
+              </tbody></table>
+              <div class="mini-grid">
+                <div><h5>Converted by Policy Status</h5><table><tbody>${convertedLeadPolicyStatusRowsHtml || '<tr><td>No converted policy status data.</td></tr>'}</tbody></table></div>
+                <div><h5>Unconverted by Lead Status</h5><table><tbody>${unconvertedLeadStatusRowsHtml || '<tr><td>No unconverted lead status data.</td></tr>'}</tbody></table></div>
+              </div>
             </div>
             <div class="panel">
               <h4>Top Converted Lead Sources</h4>
-              <table>
-                <thead><tr><th>Lead Source</th><th>Converted Leads</th><th>Rate</th></tr></thead>
-                <tbody>${topSourceRowsHtml || '<tr><td colspan="3">No converted lead source data available.</td></tr>'}</tbody>
-              </table>
+              <table><thead><tr><th>Lead Source</th><th>Converted / Total</th><th>Rate</th></tr></thead><tbody>${topSourceRowsHtml || '<tr><td colspan="3">No converted lead source data.</td></tr>'}</tbody></table>
             </div>
           </div>
         </section>
-      `,
+      `;
+
+    const analyticsPage = `
+        <div class="header-band"></div>
+        <section class="section">
+          <div class="analytics-grid">
+            <div class="panel">
+              <h4>Policy Status Mix</h4>
+              <table><thead><tr><th>Status</th><th>Count</th><th>Share</th></tr></thead><tbody>${policyStatusRowsHtml || '<tr><td colspan="3">No policy status data.</td></tr>'}</tbody></table>
+            </div>
+            <div class="panel">
+              <h4>Lead Source Quality</h4>
+              <table><thead><tr><th>Lead Source</th><th>Total Leads</th><th>Converted and Active</th><th>Active Rate</th></tr></thead><tbody>${sourceRowsHtml || '<tr><td colspan="4">No lead source data available.</td></tr>'}</tbody></table>
+            </div>
+          </div>
+        </section>
+        <section class="section">
+          <div class="panel">
+            <div class="panel-title-row"><h4>Converted Leads Trend</h4><strong>${bestTrendMonth ? `${Number(bestTrendMonth.converted || 0)} peak conversions` : "No trend"}</strong></div>
+            <p class="panel-note">Bars adjust to the selected date range and include all converted leads regardless of policy status.</p>
+            <table><thead><tr><th>Bucket</th><th>Converted Leads</th></tr></thead><tbody>${trendRows || '<tr><td colspan="2">No conversion trend data yet.</td></tr>'}</tbody></table>
+          </div>
+        </section>
+      `;
+
+    const pageBodies = [
+      overviewPage,
+      analyticsPage,
       ...salesChunks.map((rows) => `
         <div class="header-band"></div>
         <section class="section">
@@ -467,9 +452,9 @@ function AgentSalesPerformance() {
             @page { size: A4 portrait; margin: 8mm 8mm 10mm 8mm; }
             * { box-sizing: border-box; }
             body { font-family: Verdana, Geneva, sans-serif; color: #1f2937; margin: 0; font-size: 11px; line-height: 1.3; background:#fff; }
-            .pdf-page { position: relative; min-height: 279mm; padding: 8mm 8mm 14mm; page-break-after: always; overflow: hidden; }
+            .pdf-page { position: relative; min-height: 279mm; padding: 6mm 6mm 12mm; page-break-after: always; overflow: hidden; }
             .pdf-page:last-child { page-break-after: auto; }
-            .header-band { height: 8px; background: linear-gradient(90deg, #da291c, #ffb81c, #00539b); border-radius: 6px; margin-bottom: 8px; }
+            .header-band { height: 6px; background: linear-gradient(90deg, #da291c, #ffb81c, #00539b); border-radius: 6px; margin-bottom: 6px; }
             .top-grid { display:grid; grid-template-columns: minmax(0, 1.7fr) minmax(280px, 1fr); gap: 14px; align-items:start; }
             .report-title { margin: 0; color: #991b1b; font-size: 23px; line-height: 1.08; font-weight: 700; }
             .report-period { margin-top: 10px; color: #374151; font-size: 13px; font-weight: 700; }
@@ -478,7 +463,8 @@ function AgentSalesPerformance() {
             .details-grid { display:grid; grid-template-columns: 1fr 1fr; gap: 5px 14px; }
             .detail-item { font-size: 10px; }
             .detail-item b { color: #6b7280; display:block; font-weight:700; margin-bottom:1px; }
-            .meta-row { display:grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 10px; }
+            .meta-row { display:grid; grid-template-columns: repeat(2, 1fr); gap: 6px; margin: 8px 0 0; }
+            .meta-row.tight { max-width: 520px; }
             .meta-chip { border:1px solid #f0d2cf; background:#fff7f6; border-radius:10px; padding:8px 10px; }
             .meta-chip .label { color:#6b7280; font-size:10px; text-transform:uppercase; }
             .meta-chip .value { color:#991b1b; font-size:12px; font-weight:700; margin-top:3px; }
@@ -490,13 +476,23 @@ function AgentSalesPerformance() {
             .kpi { border:1px solid #e5e7eb; border-radius:8px; padding:8px; background:#ffffff; }
             .kpi .label { color:#6b7280; font-size:10px; }
             .kpi .val { font-size:16px; font-weight:700; margin-top:2px; color:#111827; }
-            .section { margin-bottom: 8px; }
+            .section { margin-bottom: 6px; }
+            .report-header-section { padding-bottom: 6px; margin-bottom: 6px; border-bottom: 1px solid #e5e7eb; }
+            .report-body-section { margin-top: 0; }
             .section-title { margin: 0 0 6px; color: #991b1b; font-size: 14px; font-weight: 700; border-left: 4px solid #da291c; padding-left: 8px; }
-            .analytics-grid { display:grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-            .panel { border:1px solid #e5e7eb; border-radius:8px; padding:8px; background:#fff; }
-            .panel h4 { margin:0 0 6px; color:#111827; font-size:12px; }
+            .analytics-grid { display:grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+            .analytics-grid.three { grid-template-columns: 1fr 1fr 1fr; }
+            .mini-grid { display:grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-top: 6px; }
+            .mini-grid h5 { margin:0 0 4px; color:#374151; font-size:9px; }
+            .panel { border:1px solid #e5e7eb; border-radius:8px; padding:6px; background:#fff; }
+            .panel h4 { margin:0 0 5px; color:#111827; font-size:11px; }
+            .panel h4 span { color:#6b7280; font-size:9px; font-weight:700; }
+            .panel-title-row { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:4px; }
+            .panel-title-row h4 { margin:0; }
+            .panel-title-row strong { color:#991b1b; font-size:11px; }
+            .panel-note { margin:0 0 5px; color:#6b7280; font-size:9px; font-weight:700; }
             table { width:100%; border-collapse: collapse; font-size:10px; }
-            th, td { border: 1px solid #dfe5ec; padding: 5px 6px; text-align:left; vertical-align:top; }
+            th, td { border: 1px solid #dfe5ec; padding: 4px 5px; text-align:left; vertical-align:top; }
             th { background: #f3f6fa; color:#374151; }
             tbody tr:nth-child(even) td { background:#fcfcfd; }
             .report-footer { position:absolute; left:8mm; right:8mm; bottom:4mm; font-size:9px; color:#6b7280; display:flex; justify-content:space-between; align-items:center; border-top:1px solid #e5e7eb; padding-top:3px; }
@@ -590,12 +586,6 @@ function AgentSalesPerformance() {
                 {LEAD_SOURCE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
             </div>
-            <div className="sp-filterGroup">
-              <label>Policy Status</label>
-              <select value={filters.policyStatus} onChange={(e) => handleFilterChange("policyStatus", e.target.value)}>
-                {POLICY_STATUS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-              </select>
-            </div>
             <div className="sp-filterActions">
               <button className="sp-resetBtn" onClick={() => setFilters(DEFAULT_FILTERS)} disabled={loading}>Reset Filters</button>
             </div>
@@ -604,18 +594,18 @@ function AgentSalesPerformance() {
           <section className="sp-highlights">
             <div className="sp-highlight">
               <span>Lead Gap</span>
-              <strong>{data.unconvertedLeads || 0}</strong>
-              <small>Leads still to convert from the current filter scope.</small>
+              <strong>{data.leadGap || 0}</strong>
+              <small>Active Leads still to convert from the current filter scope.</small>
             </div>
             <div className="sp-highlight">
               <span>Best Lead Source</span>
               <strong>{bestSource ? bestSource.label : "—"}</strong>
-              <small>{bestSource ? `${bestSource.conversionRatePct || 0}% conversion (${bestSource.convertedLeads || 0}/${bestSource.totalLeads || 0})` : "No lead source pattern yet."}</small>
+              <small>{bestSource ? `${bestSource.convertedAndActiveLeads || 0} converted and active (${bestSource.activeConversionRatePct || 0}% of ${bestSource.totalLeads || 0})` : "No active-policy lead source pattern yet."}</small>
             </div>
             <div className="sp-highlight">
               <span>Policy Health</span>
               <strong>{data.activePolicyRatePct || 0}% active</strong>
-              <small>{data.activePolicies || 0} active out of {data.totalPolicies || 0} scoped policies.</small>
+              <small>{data.activePolicies || 0} active out of {data.totalPolicies || 0} total policies.</small>
             </div>
           </section>
 
@@ -632,7 +622,7 @@ function AgentSalesPerformance() {
             <div className="sp-cardHeader">
               <div>
                 <h3>Total Frequency Premium Breakdown</h3>
-                <p>{data?.reportContext?.periodLabel || "All available records"} • {getOptionLabel(POLICY_STATUS_OPTIONS, filters.policyStatus)}</p>
+                <p>{data?.reportContext?.periodLabel || "All available records"} • active policies only</p>
               </div>
               <strong className="sp-cardTotal">₱ {money(data.totalFrequencyPremiumPhp)}</strong>
             </div>
@@ -656,16 +646,20 @@ function AgentSalesPerformance() {
                 <b>{data.conversionRatePct || 0}%</b>
               </div>
               <p className="sp-footnote">{data.convertedLeads || 0} converted leads from {data.totalLeads || 0} total leads.</p>
+              <div className="sp-miniBreakdowns">
+                <div><b>Converted by Policy Status</b>{convertedLeadPolicyStatusRows.map((row) => <small key={row.label}>{row.label}: {row.count} ({row.sharePct}%)</small>)}</div>
+                <div><b>Unconverted by Lead Status</b>{unconvertedLeadStatusRows.map((row) => <small key={row.label}>{row.label}: {row.count} ({row.sharePct}%)</small>)}</div>
+              </div>
             </section>
 
             <section className="sp-card">
               <h3>Top Converted Lead Sources</h3>
               <div className="sp-sourceList">
-                {sourcePerformanceRows.length > 0 ? sourcePerformanceRows.map((row) => (
+                {topConvertedSourceRows.length > 0 ? topConvertedSourceRows.map((row) => (
                   <div key={row.label} className="sp-sourceRow">
                     <div className="sp-sourceMeta">
                       <strong>{row.label}</strong>
-                      <span>{row.convertedLeads || 0} converted • {row.conversionRatePct || 0}% rate</span>
+                      <span>{row.convertedLeads || 0}/{row.totalLeads || 0} converted • {row.conversionRatePct || 0}%</span>
                     </div>
                     <div className="sp-sourceTrack">
                       <span style={{ width: `${Math.round((Number(row.convertedLeads || 0) / sourceMixMax) * 100)}%` }} />
@@ -678,21 +672,13 @@ function AgentSalesPerformance() {
             <section className="sp-card">
               <h3>Policy Status Mix</h3>
               <div className="sp-statusGrid">
-                <div>
-                  <span>Active</span>
-                  <strong>{data.activePolicies || 0}</strong>
-                  <small>{totalPolicies ? Math.round((Number(data.activePolicies || 0) / totalPolicies) * 100) : 0}% of scoped policies</small>
-                </div>
-                <div>
-                  <span>Lapsed</span>
-                  <strong>{data.lapsedPolicies || 0}</strong>
-                  <small>{totalPolicies ? Math.round((Number(data.lapsedPolicies || 0) / totalPolicies) * 100) : 0}% of scoped policies</small>
-                </div>
-                <div>
-                  <span>Cancelled</span>
-                  <strong>{data.cancelledPolicies || 0}</strong>
-                  <small>{totalPolicies ? Math.round((Number(data.cancelledPolicies || 0) / totalPolicies) * 100) : 0}% of scoped policies</small>
-                </div>
+                {policyStatusRows.length > 0 ? policyStatusRows.map((row) => (
+                  <div key={row.label}>
+                    <span>{row.label}</span>
+                    <strong>{row.count || 0}</strong>
+                    <small>{row.sharePct || 0}% of all policies</small>
+                  </div>
+                )) : <p className="sp-muted">No policy status data available.</p>}
               </div>
             </section>
 
@@ -704,8 +690,8 @@ function AgentSalesPerformance() {
                     <tr>
                       <th>Lead Source</th>
                       <th>Total Leads</th>
-                      <th>Converted</th>
-                      <th>Rate</th>
+                      <th>Converted and Active</th>
+                      <th>Active Rate</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -713,8 +699,8 @@ function AgentSalesPerformance() {
                       <tr key={row.label}>
                         <td>{row.label}</td>
                         <td>{row.totalLeads || 0}</td>
-                        <td>{row.convertedLeads || 0}</td>
-                        <td>{row.conversionRatePct || 0}%</td>
+                        <td>{row.convertedAndActiveLeads || 0}</td>
+                        <td>{row.activeConversionRatePct || 0}%</td>
                       </tr>
                     )) : (
                       <tr>
@@ -729,8 +715,8 @@ function AgentSalesPerformance() {
             <section className="sp-card sp-wide">
               <div className="sp-cardHeader">
                 <div>
-                  <h3>Converted Leads Trend (Last 6 Months)</h3>
-                  <p>Zero-filled monthly trend for easier month-over-month reading.</p>
+                  <h3>Converted Leads Trend</h3>
+                  <p>Bars adjust to the selected date range and include all converted leads regardless of policy status.</p>
                 </div>
                 <strong className="sp-cardTotal">{bestTrendMonth ? `${bestTrendMonth.converted || 0} peak conversions` : "No trend"}</strong>
               </div>
@@ -742,7 +728,7 @@ function AgentSalesPerformance() {
                       <div key={m.month} className="sp-barCol">
                         <div className="sp-barWrap"><span style={{ height: `${pct}%` }} /></div>
                         <strong>{m.converted || 0}</strong>
-                        <small>{formatMonthLabel(m.month)}</small>
+                        <small>{m.label || formatMonthLabel(m.month)}</small>
                       </div>
                     );
                   })}

@@ -3645,7 +3645,6 @@ app.get("/api/sales/performance", async (req, res) => {
       userId,
       datePreset = "ALL",
       leadSource = "ALL",
-      policyStatus = "ALL",
     } = req.query;
     if (!userId) return res.status(400).json({ message: "Missing userId." });
     if (!mongoose.isValidObjectId(userId)) {
@@ -3656,21 +3655,21 @@ app.get("/api/sales/performance", async (req, res) => {
     const now = new Date();
 
     const buildSalesReportContext = () => {
-      if (datePreset === "30d") {
+      const presetMap = {
+        "1d": [1, "This day"],
+        "7d": [7, "Last 7 days"],
+        "30d": [30, "Last 30 days"],
+        "90d": [90, "Last 90 days"],
+        "6m": [183, "Last 6 months"],
+        "12m": [365, "Last 12 months"],
+      };
+      const preset = presetMap[String(datePreset || "ALL")];
+      if (preset) {
+        const [days, label] = preset;
         const start = new Date(now);
-        start.setDate(start.getDate() - 30);
-        return {
-          startDate: start,
-          periodLabel: "Last 30 days",
-        };
-      }
-      if (datePreset === "90d") {
-        const start = new Date(now);
-        start.setDate(start.getDate() - 90);
-        return {
-          startDate: start,
-          periodLabel: "Last 90 days",
-        };
+        if (String(datePreset) === "1d") start.setHours(0, 0, 0, 0);
+        else start.setDate(start.getDate() - days);
+        return { startDate: start, periodLabel: label };
       }
       return {
         startDate: null,
@@ -3683,10 +3682,11 @@ app.get("/api/sales/performance", async (req, res) => {
       filters: {
         datePreset: String(datePreset || "ALL"),
         leadSource: String(leadSource || "ALL"),
-        policyStatus: String(policyStatus || "ALL"),
       },
       reportContext: {
         periodLabel: reportContext.periodLabel,
+        startDate: reportContext.startDate,
+        endDate: now,
         generatedAt: now,
       },
       totalLeads: 0,
@@ -3708,6 +3708,11 @@ app.get("/api/sales/performance", async (req, res) => {
       activePolicies: 0,
       lapsedPolicies: 0,
       cancelledPolicies: 0,
+      policyStatusBreakdown: [],
+      leadStatusBreakdown: [],
+      convertedLeadPolicyStatusBreakdown: [],
+      unconvertedLeadStatusBreakdown: [],
+      leadGap: 0,
       leadSourceBreakdown: [],
       monthlyConvertedLeads: [],
       salesRows: [],
@@ -3774,53 +3779,21 @@ app.get("/api/sales/performance", async (req, res) => {
           .lean()
       : [];
 
-    const scopedPolicyholders =
-      policyStatus === "ALL"
-        ? policyholders
-        : policyholders.filter((policyholder) => policyholder.status === String(policyStatus));
-    const engagementIdToLeadId = new Map(engagements.map((engagement) => [String(engagement._id), String(engagement.leadId)]));
-    const leadIdsWithScopedPolicies = new Set(
-      scopedPolicyholders.map((policyholder) => engagementIdToLeadId.get(String(policyholder.leadEngagementId))).filter(Boolean)
-    );
-    const reportingLeads =
-      policyStatus === "ALL"
-        ? leads
-        : leads.filter((lead) => leadIdsWithScopedPolicies.has(String(lead._id)));
+    const scopedPolicyholders = policyholders;
+    const reportingLeads = leads;
     const totalLeads = reportingLeads.length;
 
-    if (policyStatus !== "ALL" && !reportingLeads.length) {
-      return res.json(defaultResponse);
-    }
+    const scopedApplications = applications;
+    const scopedNeedsAssessments = needsAssessments;
+    const scopedPayments = payments;
+    const scopedAnnualPayments = annualPayments;
 
-    const scopedEngagementIds = new Set(scopedPolicyholders.map((policyholder) => String(policyholder.leadEngagementId)));
-    const scopedApplications =
-      policyStatus === "ALL"
-        ? applications
-        : applications.filter((application) => scopedEngagementIds.has(String(application?.leadEngagementId || "")));
-    const scopedNeedsAssessments =
-      policyStatus === "ALL"
-        ? needsAssessments
-        : needsAssessments.filter((needsAssessment) => scopedEngagementIds.has(String(needsAssessment?.leadEngagementId || "")));
-    const scopedPayments =
-      policyStatus === "ALL"
-        ? payments
-        : payments.filter((payment) => scopedEngagementIds.has(String(payment?.leadEngagementId || "")));
-    const scopedAnnualPayments =
-      policyStatus === "ALL"
-        ? annualPayments
-        : annualPayments.filter((annualPayment) => scopedEngagementIds.has(String(annualPayment?.leadEngagementId || "")));
-    const closedLeadIds = new Set(
-      reportingLeads
-        .filter((lead) => String(lead?.status || "").trim().toLowerCase() === "closed")
-        .map((lead) => String(lead._id))
-    );
-    const closedEngagementIds = new Set(
-      engagements
-        .filter((engagement) => closedLeadIds.has(String(engagement.leadId || "")))
-        .map((engagement) => String(engagement._id))
-    );
-    const closedScopedApplications = scopedApplications.filter((application) => closedEngagementIds.has(String(application?.leadEngagementId || "")));
-    const closedScopedAnnualPayments = scopedAnnualPayments.filter((annualPayment) => closedEngagementIds.has(String(annualPayment?.leadEngagementId || "")));
+    const engagementIdToLeadId = new Map(engagements.map((engagement) => [String(engagement._id), String(engagement.leadId)]));
+    const engagementToLead = new Map(engagements.map((e) => [String(e._id), String(e.leadId)]));
+    const activePolicyholders = scopedPolicyholders.filter((p) => p.status === "Active");
+    const activeEngagementIds = new Set(activePolicyholders.map((policyholder) => String(policyholder.leadEngagementId || "")));
+    const activeLeadIds = new Set(activePolicyholders.map((policyholder) => engagementIdToLeadId.get(String(policyholder.leadEngagementId))).filter(Boolean));
+    const activeLeadGapStatuses = new Set(["new", "in progress"]);
 
     const paymentById = new Map(scopedPayments.map((payment) => [String(payment?._id || ""), payment]).filter(([paymentId]) => paymentId));
     const engagementToPayment = new Map();
@@ -3878,11 +3851,14 @@ app.get("/api/sales/performance", async (req, res) => {
       return null;
     };
 
-    const totalAnnualPremiumPhp = closedScopedAnnualPayments.reduce(
+    const activeScopedApplications = scopedApplications.filter((application) => activeEngagementIds.has(String(application?.leadEngagementId || "")));
+    const activeScopedAnnualPayments = scopedAnnualPayments.filter((annualPayment) => activeEngagementIds.has(String(annualPayment?.leadEngagementId || "")));
+
+    const totalAnnualPremiumPhp = activeScopedAnnualPayments.reduce(
       (sum, annualPayment) => sum + Number(annualPayment?.totalAnnualPremiumPhp || 0),
       0
     );
-    const totalFrequencyPremiumPhp = closedScopedApplications.reduce((sum, application) => {
+    const totalFrequencyPremiumPhp = activeScopedApplications.reduce((sum, application) => {
       const engagementId = String(application?.leadEngagementId || "");
       const payment = engagementToPayment.get(engagementId) || null;
       return sum + Number(
@@ -3891,7 +3867,7 @@ app.get("/api/sales/performance", async (req, res) => {
       );
     }, 0);
 
-    for (const appDoc of closedScopedApplications) {
+    for (const appDoc of activeScopedApplications) {
       const engagementId = String(appDoc?.leadEngagementId || "");
       const payment = engagementToPayment.get(engagementId) || null;
       const premium = Number(
@@ -3904,12 +3880,19 @@ app.get("/api/sales/performance", async (req, res) => {
       if (frequencyKey) frequencyPremiumBreakdown[frequencyKey] += premium;
     }
 
-    const activePolicies = scopedPolicyholders.filter((p) => p.status === "Active").length;
-    const lapsedPolicies = scopedPolicyholders.filter((p) => p.status === "Lapsed").length;
-    const cancelledPolicies = scopedPolicyholders.filter((p) => p.status === "Cancelled").length;
+    const policyStatusMap = new Map();
+    for (const policyholder of scopedPolicyholders) {
+      const status = String(policyholder?.status || "Unknown").trim() || "Unknown";
+      policyStatusMap.set(status, (policyStatusMap.get(status) || 0) + 1);
+    }
+    const policyStatusBreakdown = [...policyStatusMap.entries()]
+      .map(([label, count]) => ({ label, count, sharePct: scopedPolicyholders.length ? Math.round((count / scopedPolicyholders.length) * 100) : 0 }))
+      .sort((a, b) => (b.count - a.count) || a.label.localeCompare(b.label));
+    const activePolicies = policyStatusMap.get("Active") || 0;
+    const lapsedPolicies = policyStatusMap.get("Lapsed") || 0;
+    const cancelledPolicies = policyStatusMap.get("Cancelled") || 0;
     const totalPolicies = scopedPolicyholders.length;
 
-    const engagementToLead = new Map(engagements.map((e) => [String(e._id), String(e.leadId)]));
     const leadById = new Map(reportingLeads.map((lead) => [String(lead._id), lead]));
     const prospectById = new Map(prospects.map((prospect) => [String(prospect._id), prospect]));
     const normalizeLeadSourceLabel = (lead) => {
@@ -3936,16 +3919,32 @@ app.get("/api/sales/performance", async (req, res) => {
       }
     }
 
-    const convertedLeads = convertedLeadMomentsByEngagement.size;
-    const unconvertedLeads = Math.max(totalLeads - convertedLeads, 0);
+    const convertedLeadIds = new Set([...convertedLeadMomentsByEngagement.keys()].map((engagementId) => engagementToLead.get(engagementId)).filter(Boolean));
+    const convertedLeads = convertedLeadIds.size;
+    const unconvertedLeads = reportingLeads.filter((lead) => !convertedLeadIds.has(String(lead._id))).length;
+    const leadGap = reportingLeads.filter((lead) => activeLeadGapStatuses.has(String(lead?.status || "").trim().toLowerCase()) && !convertedLeadIds.has(String(lead._id))).length;
     const conversionRatePct = totalLeads ? Math.round((convertedLeads / totalLeads) * 100) : 0;
     const activePolicyRatePct = totalPolicies ? Math.round((activePolicies / totalPolicies) * 100) : 0;
-    const averageAnnualPremiumPerConvertedLeadPhp = convertedLeads
-      ? Number((totalAnnualPremiumPhp / convertedLeads).toFixed(2))
+    const activeConvertedLeadCount = activeLeadIds.size;
+    const averageAnnualPremiumPerConvertedLeadPhp = activeConvertedLeadCount
+      ? Number((totalAnnualPremiumPhp / activeConvertedLeadCount).toFixed(2))
       : 0;
-    const averageFrequencyPremiumPerConvertedLeadPhp = convertedLeads
-      ? Number((totalFrequencyPremiumPhp / convertedLeads).toFixed(2))
+    const averageFrequencyPremiumPerConvertedLeadPhp = activeConvertedLeadCount
+      ? Number((totalFrequencyPremiumPhp / activeConvertedLeadCount).toFixed(2))
       : 0;
+
+    const buildLeadStatusBreakdown = (items, total) => {
+      const statusMap = new Map();
+      for (const lead of items) {
+        const status = String(lead?.status || "Unknown").trim() || "Unknown";
+        statusMap.set(status, (statusMap.get(status) || 0) + 1);
+      }
+      return [...statusMap.entries()]
+        .map(([label, count]) => ({ label, count, sharePct: total ? Math.round((count / total) * 100) : 0 }))
+        .sort((a, b) => (b.count - a.count) || a.label.localeCompare(b.label));
+    };
+    const leadStatusBreakdown = buildLeadStatusBreakdown(reportingLeads, totalLeads);
+    const unconvertedLeadStatusBreakdown = buildLeadStatusBreakdown(reportingLeads.filter((lead) => !convertedLeadIds.has(String(lead._id))), unconvertedLeads);
 
     const leadSourceBreakdownMap = new Map();
 
@@ -3956,7 +3955,9 @@ app.get("/api/sales/performance", async (req, res) => {
           label: bucket,
           totalLeads: 0,
           convertedLeads: 0,
+          convertedAndActiveLeads: 0,
           conversionRatePct: 0,
+          activeConversionRatePct: 0,
         });
       }
       leadSourceBreakdownMap.get(bucket).totalLeads += 1;
@@ -3972,10 +3973,13 @@ app.get("/api/sales/performance", async (req, res) => {
           label: bucket,
           totalLeads: 0,
           convertedLeads: 0,
+          convertedAndActiveLeads: 0,
           conversionRatePct: 0,
+          activeConversionRatePct: 0,
         });
       }
       leadSourceBreakdownMap.get(bucket).convertedLeads += 1;
+      if (activeLeadIds.has(String(leadId))) leadSourceBreakdownMap.get(bucket).convertedAndActiveLeads += 1;
     }
 
     const leadSourceBreakdown = [...leadSourceBreakdownMap.values()]
@@ -3984,8 +3988,12 @@ app.get("/api/sales/performance", async (req, res) => {
         conversionRatePct: sourceMetrics.totalLeads
           ? Math.round((sourceMetrics.convertedLeads / sourceMetrics.totalLeads) * 100)
           : 0,
+        activeConversionRatePct: sourceMetrics.totalLeads
+          ? Math.round((sourceMetrics.convertedAndActiveLeads / sourceMetrics.totalLeads) * 100)
+          : 0,
       }))
       .sort((a, b) => {
+        if (b.convertedAndActiveLeads !== a.convertedAndActiveLeads) return b.convertedAndActiveLeads - a.convertedAndActiveLeads;
         if (b.convertedLeads !== a.convertedLeads) return b.convertedLeads - a.convertedLeads;
         if (b.totalLeads !== a.totalLeads) return b.totalLeads - a.totalLeads;
         return a.label.localeCompare(b.label);
@@ -3995,25 +4003,31 @@ app.get("/api/sales/performance", async (req, res) => {
       sourceMetrics.conversionRatePct = sourceMetrics.totalLeads
         ? Math.round((sourceMetrics.convertedLeads / sourceMetrics.totalLeads) * 100)
         : 0;
+      sourceMetrics.activeConversionRatePct = sourceMetrics.totalLeads
+        ? Math.round((sourceMetrics.convertedAndActiveLeads / sourceMetrics.totalLeads) * 100)
+        : 0;
     }
 
-    const monthMap = new Map();
+    const getTrendBucket = (dateValue) => {
+      const dt = new Date(dateValue);
+      if (Number.isNaN(dt.getTime())) return null;
+      if (String(datePreset) === "1d") return { key: String(dt.getUTCHours()).padStart(2, "0"), label: `${String(dt.getUTCHours()).padStart(2, "0")}:00` };
+      if (String(datePreset) === "7d") return { key: String(dt.getUTCDay()), label: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][dt.getUTCDay()] };
+      if (String(datePreset) === "30d" || String(datePreset) === "90d") {
+        const key = `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(dt.getUTCDate()).padStart(2, "0")}`;
+        return { key, label: key.slice(5) };
+      }
+      const key = `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}`;
+      return { key, label: key };
+    };
+    const trendMap = new Map();
     for (const conversionDate of convertedLeadMomentsByEngagement.values()) {
-      if (Number.isNaN(conversionDate.getTime())) continue;
-      const key = `${conversionDate.getUTCFullYear()}-${String(conversionDate.getUTCMonth() + 1).padStart(2, "0")}`;
-      monthMap.set(key, (monthMap.get(key) || 0) + 1);
+      const bucket = getTrendBucket(conversionDate);
+      if (!bucket) continue;
+      if (!trendMap.has(bucket.key)) trendMap.set(bucket.key, { ...bucket, month: bucket.key, converted: 0 });
+      trendMap.get(bucket.key).converted += 1;
     }
-
-    const monthlyConvertedLeads = [];
-    const currentMonth = new Date();
-    for (let offset = 5; offset >= 0; offset -= 1) {
-      const monthDate = new Date(Date.UTC(currentMonth.getUTCFullYear(), currentMonth.getUTCMonth() - offset, 1));
-      const monthKey = `${monthDate.getUTCFullYear()}-${String(monthDate.getUTCMonth() + 1).padStart(2, "0")}`;
-      monthlyConvertedLeads.push({
-        month: monthKey,
-        converted: monthMap.get(monthKey) || 0,
-      });
-    }
+    const monthlyConvertedLeads = [...trendMap.values()].sort((a, b) => a.key.localeCompare(b.key));
 
     const leadIdToPolicyholders = new Map();
     for (const policyholder of scopedPolicyholders) {
@@ -4045,14 +4059,26 @@ app.get("/api/sales/performance", async (req, res) => {
       }).filter(([leadId]) => leadId)
     );
     const leadIdToAnnualPayment = new Map(
-      closedScopedAnnualPayments.map((annualPayment) => {
+      scopedAnnualPayments.map((annualPayment) => {
         const leadId = engagementToLead.get(String(annualPayment.leadEngagementId));
         return [String(leadId || ""), annualPayment];
       }).filter(([leadId]) => leadId)
     );
 
+    const convertedLeadPolicyStatusMap = new Map();
+    for (const leadId of convertedLeadIds) {
+      const relatedPolicies = [...(leadIdToPolicyholders.get(String(leadId)) || [])].sort(
+        (a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)
+      );
+      const status = String(relatedPolicies[0]?.status || "Unknown").trim() || "Unknown";
+      convertedLeadPolicyStatusMap.set(status, (convertedLeadPolicyStatusMap.get(status) || 0) + 1);
+    }
+    const convertedLeadPolicyStatusBreakdown = [...convertedLeadPolicyStatusMap.entries()]
+      .map(([label, count]) => ({ label, count, sharePct: convertedLeads ? Math.round((count / convertedLeads) * 100) : 0 }))
+      .sort((a, b) => (b.count - a.count) || a.label.localeCompare(b.label));
+
     const salesRows = reportingLeads
-      .filter((lead) => String(lead?.status || "").trim().toLowerCase() === "closed")
+      .filter((lead) => convertedLeadIds.has(String(lead._id)))
       .map((lead) => {
         const leadKey = String(lead._id);
         const prospect = prospectById.get(String(lead.prospectId));
@@ -4115,6 +4141,11 @@ app.get("/api/sales/performance", async (req, res) => {
       activePolicies,
       lapsedPolicies,
       cancelledPolicies,
+      policyStatusBreakdown,
+      leadStatusBreakdown,
+      convertedLeadPolicyStatusBreakdown,
+      unconvertedLeadStatusBreakdown,
+      leadGap,
       leadSourceBreakdown,
       monthlyConvertedLeads,
       salesRows,
