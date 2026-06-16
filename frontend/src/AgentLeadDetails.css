@@ -464,7 +464,8 @@
   filter: brightness(0.9);
 }
 
-.ld-btn:disabled{
+.ld-btn:disabled,
+.ld-btn.is-disabled{
   opacity: 0.6;
   cursor: not-allowed;
   transform: none;

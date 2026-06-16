@@ -696,10 +696,10 @@
   background:rgba(218,41,28,0.08);
 }
 
-.pd-actionBtn:disabled {
+.pd-actionBtn:disabled,
+.pd-actionBtn.is-disabled {
   opacity: 0.45;
   cursor: not-allowed;
-  pointer-events: none; 
 }
 
 .pd-recordActions{
