@@ -7,8 +7,12 @@ import "./AgentSalesPerformance.css";
 
 const DATE_PRESETS = [
   { value: "ALL", label: "All Time" },
+  { value: "1d", label: "This Day" },
+  { value: "7d", label: "Last 7 Days" },
   { value: "30d", label: "Last 30 Days" },
   { value: "90d", label: "Last 90 Days" },
+  { value: "6m", label: "Last 6 Months" },
+  { value: "12m", label: "Last 12 Months" },
 ];
 
 const LEAD_SOURCE_OPTIONS = [
@@ -22,17 +26,9 @@ const LEAD_SOURCE_OPTIONS = [
   { value: "System", label: "System" },
 ];
 
-const POLICY_STATUS_OPTIONS = [
-  { value: "ALL", label: "All Policy Statuses" },
-  { value: "Active", label: "Active" },
-  { value: "Lapsed", label: "Lapsed" },
-  { value: "Cancelled", label: "Cancelled" },
-];
-
 const DEFAULT_FILTERS = {
   datePreset: "ALL",
   leadSource: "ALL",
-  policyStatus: "ALL",
 };
 
 const DEFAULT_DATA = {
@@ -130,7 +126,6 @@ function AgentSalesPerformance() {
       userId: user.id,
       datePreset: filters.datePreset,
       leadSource: filters.leadSource,
-      policyStatus: filters.policyStatus,
     });
     const res = await fetch(`http://localhost:5000/api/sales/performance?${params.toString()}`, signal ? { signal } : undefined);
     const payload = await res.json();
@@ -161,7 +156,14 @@ function AgentSalesPerformance() {
 
   const money = (n) => Number(n || 0).toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const totalPolicies = Number(data?.totalPolicies || 0);
+  const policyStatusRows = Array.isArray(data?.policyStatusBreakdown) ? data.policyStatusBreakdown : [];
+  const unconvertedLeadStatusRows = Array.isArray(data?.unconvertedLeadStatusBreakdown) ? data.unconvertedLeadStatusBreakdown : [];
   const sourcePerformanceRows = Array.isArray(data?.leadSourceBreakdown) ? data.leadSourceBreakdown : [];
+  const topConvertedSourceRows = [...sourcePerformanceRows].sort((a, b) => {
+    if (Number(b.convertedLeads || 0) !== Number(a.convertedLeads || 0)) return Number(b.convertedLeads || 0) - Number(a.convertedLeads || 0);
+    if (Number(b.conversionRatePct || 0) !== Number(a.conversionRatePct || 0)) return Number(b.conversionRatePct || 0) - Number(a.conversionRatePct || 0);
+    return String(a.label || "").localeCompare(String(b.label || ""));
+  });
   const premiumBreakdownRows = [
     { key: "monthlyPremiumPhp", label: "Monthly" },
     { key: "quarterlyPremiumPhp", label: "Quarterly" },
@@ -182,7 +184,8 @@ function AgentSalesPerformance() {
     : null;
   const bestSource = sourcePerformanceRows.length > 0
     ? [...sourcePerformanceRows].sort((a, b) => {
-        if (b.conversionRatePct !== a.conversionRatePct) return b.conversionRatePct - a.conversionRatePct;
+        if (b.convertedAndActiveLeads !== a.convertedAndActiveLeads) return b.convertedAndActiveLeads - a.convertedAndActiveLeads;
+        if (b.activeConversionRatePct !== a.activeConversionRatePct) return b.activeConversionRatePct - a.activeConversionRatePct;
         if (b.convertedLeads !== a.convertedLeads) return b.convertedLeads - a.convertedLeads;
         return a.label.localeCompare(b.label);
       })[0]
@@ -240,7 +243,7 @@ function AgentSalesPerformance() {
     const trendRows = Array.isArray(data.monthlyConvertedLeads)
       ? data.monthlyConvertedLeads.map((row) => `
           <tr>
-            <td>${escapeHtml(formatMonthLabel(row.month))}</td>
+            <td>${escapeHtml(row.label || formatMonthLabel(row.month))}</td>
             <td>${Number(row.converted || 0)}</td>
           </tr>
         `).join("")
@@ -253,7 +256,7 @@ function AgentSalesPerformance() {
         <td>${Number(row.conversionRatePct || 0)}%</td>
       </tr>
     `).join("");
-    const topSourceRowsHtml = sourcePerformanceRows.map((row) => `
+    const topSourceRowsHtml = topConvertedSourceRows.map((row) => `
       <tr>
         <td>${escapeHtml(row.label)}</td>
         <td>${Number(row.convertedLeads || 0)}</td>
@@ -310,14 +313,13 @@ function AgentSalesPerformance() {
           <div class="meta-row">
             <div class="meta-chip"><div class="label">Date Range</div><div class="value">${escapeHtml(getOptionLabel(DATE_PRESETS, filters.datePreset))}</div></div>
             <div class="meta-chip"><div class="label">Lead Source</div><div class="value">${escapeHtml(getOptionLabel(LEAD_SOURCE_OPTIONS, filters.leadSource))}</div></div>
-            <div class="meta-chip"><div class="label">Policy Status</div><div class="value">${escapeHtml(getOptionLabel(POLICY_STATUS_OPTIONS, filters.policyStatus))}</div></div>
           </div>
         </section>
         <section class="section">
           <div class="insight-grid">
-            <div class="insight-card"><h4>Lead Gap</h4><p>${Number(data.unconvertedLeads || 0)} leads still to convert from the current filter scope.</p></div>
-            <div class="insight-card"><h4>Best Lead Source</h4><p>${bestSource ? `${escapeHtml(bestSource.label)} converts at ${Number(bestSource.conversionRatePct || 0)}% (${Number(bestSource.convertedLeads || 0)}/${Number(bestSource.totalLeads || 0)}).` : "No lead source pattern available yet."}</p></div>
-            <div class="insight-card"><h4>Policy Health</h4><p>${Number(data.activePolicyRatePct || 0)}% of scoped policies are active (${Number(data.activePolicies || 0)}/${Number(data.totalPolicies || 0)}).</p></div>
+            <div class="insight-card"><h4>Lead Gap</h4><p>${Number(data.leadGap || 0)} Active Leads still to convert from the current filter scope.</p></div>
+            <div class="insight-card"><h4>Best Lead Source</h4><p>${bestSource ? `${escapeHtml(bestSource.label)} has ${Number(bestSource.convertedAndActiveLeads || 0)} converted leads with active policies (${Number(bestSource.activeConversionRatePct || 0)}% of ${Number(bestSource.totalLeads || 0)} leads).` : "No active-policy lead source pattern available yet."}</p></div>
+            <div class="insight-card"><h4>Policy Health</h4><p>${Number(data.activePolicyRatePct || 0)}% of all policies are active (${Number(data.activePolicies || 0)}/${Number(data.totalPolicies || 0)}).</p></div>
           </div>
         </section>
         <section class="section">
@@ -378,7 +380,7 @@ function AgentSalesPerformance() {
               </table>
             </div>
             <div class="panel">
-              <h4>Converted Leads Trend (Last 6 Months)</h4>
+              <h4>Converted Leads Trend</h4>
               <table>
                 <thead><tr><th>Month</th><th>Converted Leads</th></tr></thead>
                 <tbody>${trendRows || '<tr><td colspan="2">No conversion trend data yet.</td></tr>'}</tbody>
@@ -590,12 +592,6 @@ function AgentSalesPerformance() {
                 {LEAD_SOURCE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
             </div>
-            <div className="sp-filterGroup">
-              <label>Policy Status</label>
-              <select value={filters.policyStatus} onChange={(e) => handleFilterChange("policyStatus", e.target.value)}>
-                {POLICY_STATUS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-              </select>
-            </div>
             <div className="sp-filterActions">
               <button className="sp-resetBtn" onClick={() => setFilters(DEFAULT_FILTERS)} disabled={loading}>Reset Filters</button>
             </div>
@@ -604,18 +600,18 @@ function AgentSalesPerformance() {
           <section className="sp-highlights">
             <div className="sp-highlight">
               <span>Lead Gap</span>
-              <strong>{data.unconvertedLeads || 0}</strong>
-              <small>Leads still to convert from the current filter scope.</small>
+              <strong>{data.leadGap || 0}</strong>
+              <small>Active Leads still to convert from the current filter scope.</small>
             </div>
             <div className="sp-highlight">
               <span>Best Lead Source</span>
               <strong>{bestSource ? bestSource.label : "—"}</strong>
-              <small>{bestSource ? `${bestSource.conversionRatePct || 0}% conversion (${bestSource.convertedLeads || 0}/${bestSource.totalLeads || 0})` : "No lead source pattern yet."}</small>
+              <small>{bestSource ? `${bestSource.convertedAndActiveLeads || 0} converted and active (${bestSource.activeConversionRatePct || 0}% of ${bestSource.totalLeads || 0})` : "No active-policy lead source pattern yet."}</small>
             </div>
             <div className="sp-highlight">
               <span>Policy Health</span>
               <strong>{data.activePolicyRatePct || 0}% active</strong>
-              <small>{data.activePolicies || 0} active out of {data.totalPolicies || 0} scoped policies.</small>
+              <small>{data.activePolicies || 0} active out of {data.totalPolicies || 0} total policies.</small>
             </div>
           </section>
 
@@ -632,7 +628,7 @@ function AgentSalesPerformance() {
             <div className="sp-cardHeader">
               <div>
                 <h3>Total Frequency Premium Breakdown</h3>
-                <p>{data?.reportContext?.periodLabel || "All available records"} • {getOptionLabel(POLICY_STATUS_OPTIONS, filters.policyStatus)}</p>
+                <p>{data?.reportContext?.periodLabel || "All available records"} • active policies only</p>
               </div>
               <strong className="sp-cardTotal">₱ {money(data.totalFrequencyPremiumPhp)}</strong>
             </div>
@@ -656,16 +652,20 @@ function AgentSalesPerformance() {
                 <b>{data.conversionRatePct || 0}%</b>
               </div>
               <p className="sp-footnote">{data.convertedLeads || 0} converted leads from {data.totalLeads || 0} total leads.</p>
+              <div className="sp-miniBreakdowns">
+                <div><b>Converted by Policy Status</b>{policyStatusRows.map((row) => <small key={row.label}>{row.label}: {row.count} ({row.sharePct}%)</small>)}</div>
+                <div><b>Unconverted by Lead Status</b>{unconvertedLeadStatusRows.map((row) => <small key={row.label}>{row.label}: {row.count} ({row.sharePct}%)</small>)}</div>
+              </div>
             </section>
 
             <section className="sp-card">
               <h3>Top Converted Lead Sources</h3>
               <div className="sp-sourceList">
-                {sourcePerformanceRows.length > 0 ? sourcePerformanceRows.map((row) => (
+                {topConvertedSourceRows.length > 0 ? topConvertedSourceRows.map((row) => (
                   <div key={row.label} className="sp-sourceRow">
                     <div className="sp-sourceMeta">
                       <strong>{row.label}</strong>
-                      <span>{row.convertedLeads || 0} converted • {row.conversionRatePct || 0}% rate</span>
+                      <span>{row.convertedLeads || 0}/{row.totalLeads || 0} converted • {row.conversionRatePct || 0}%</span>
                     </div>
                     <div className="sp-sourceTrack">
                       <span style={{ width: `${Math.round((Number(row.convertedLeads || 0) / sourceMixMax) * 100)}%` }} />
@@ -678,21 +678,13 @@ function AgentSalesPerformance() {
             <section className="sp-card">
               <h3>Policy Status Mix</h3>
               <div className="sp-statusGrid">
-                <div>
-                  <span>Active</span>
-                  <strong>{data.activePolicies || 0}</strong>
-                  <small>{totalPolicies ? Math.round((Number(data.activePolicies || 0) / totalPolicies) * 100) : 0}% of scoped policies</small>
-                </div>
-                <div>
-                  <span>Lapsed</span>
-                  <strong>{data.lapsedPolicies || 0}</strong>
-                  <small>{totalPolicies ? Math.round((Number(data.lapsedPolicies || 0) / totalPolicies) * 100) : 0}% of scoped policies</small>
-                </div>
-                <div>
-                  <span>Cancelled</span>
-                  <strong>{data.cancelledPolicies || 0}</strong>
-                  <small>{totalPolicies ? Math.round((Number(data.cancelledPolicies || 0) / totalPolicies) * 100) : 0}% of scoped policies</small>
-                </div>
+                {policyStatusRows.length > 0 ? policyStatusRows.map((row) => (
+                  <div key={row.label}>
+                    <span>{row.label}</span>
+                    <strong>{row.count || 0}</strong>
+                    <small>{row.sharePct || 0}% of all policies</small>
+                  </div>
+                )) : <p className="sp-muted">No policy status data available.</p>}
               </div>
             </section>
 
@@ -704,8 +696,8 @@ function AgentSalesPerformance() {
                     <tr>
                       <th>Lead Source</th>
                       <th>Total Leads</th>
-                      <th>Converted</th>
-                      <th>Rate</th>
+                      <th>Converted and Active</th>
+                      <th>Active Rate</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -713,8 +705,8 @@ function AgentSalesPerformance() {
                       <tr key={row.label}>
                         <td>{row.label}</td>
                         <td>{row.totalLeads || 0}</td>
-                        <td>{row.convertedLeads || 0}</td>
-                        <td>{row.conversionRatePct || 0}%</td>
+                        <td>{row.convertedAndActiveLeads || 0}</td>
+                        <td>{row.activeConversionRatePct || 0}%</td>
                       </tr>
                     )) : (
                       <tr>
@@ -729,8 +721,8 @@ function AgentSalesPerformance() {
             <section className="sp-card sp-wide">
               <div className="sp-cardHeader">
                 <div>
-                  <h3>Converted Leads Trend (Last 6 Months)</h3>
-                  <p>Zero-filled monthly trend for easier month-over-month reading.</p>
+                  <h3>Converted Leads Trend</h3>
+                  <p>Bars adjust to the selected date range and include all converted leads regardless of policy status.</p>
                 </div>
                 <strong className="sp-cardTotal">{bestTrendMonth ? `${bestTrendMonth.converted || 0} peak conversions` : "No trend"}</strong>
               </div>
@@ -742,7 +734,7 @@ function AgentSalesPerformance() {
                       <div key={m.month} className="sp-barCol">
                         <div className="sp-barWrap"><span style={{ height: `${pct}%` }} /></div>
                         <strong>{m.converted || 0}</strong>
-                        <small>{formatMonthLabel(m.month)}</small>
+                        <small>{m.label || formatMonthLabel(m.month)}</small>
                       </div>
                     );
                   })}
