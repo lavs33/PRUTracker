@@ -107,3 +107,11 @@
   .sp-sourceMeta { flex-direction:column; align-items:flex-start; }
   .sp-cardTotal { white-space: normal; }
 }
+.sp-miniBreakdowns { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:8px; margin-top:12px; }
+.sp-miniBreakdowns div { border:1px solid #eef0f2; border-radius:10px; padding:10px; background:#fffafa; }
+.sp-miniBreakdowns b { display:block; color:#373a36; font:800 12px "FSAlbertArabic", sans-serif; margin-bottom:6px; }
+.sp-miniBreakdowns small { display:block; color:#6b6e6a; font:700 11px/1.4 "FSAlbertArabic", sans-serif; }
+
+@media (max-width: 860px) {
+  .sp-miniBreakdowns { grid-template-columns: 1fr; }
+}
