@@ -14346,8 +14346,8 @@ app.get("/api/tasks/progress", async (req, res) => {
       typeCounts,
       leadWorkloadRows,
       statusChart: [
-        { key: "Open", value: open.length, color: "#ef4444" },
-        { key: "Overdue Open", value: overdue.length, color: "#f59e0b" },
+        { key: "Open", value: open.length, color: "#f59e0b" },
+        { key: "Overdue Open", value: overdue.length, color: "#ef4444" },
         { key: "On-Time Done", value: onTimeDone.length, color: "#16a34a" },
         { key: "Delayed Done", value: delayedDone.length, color: "#7c3aed" },
       ],
