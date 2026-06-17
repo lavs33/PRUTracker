@@ -17,6 +17,8 @@
 .tp-filterGroup { display:grid; gap:6px; }
 .tp-filterGroup label { color:#6b6e6a; font:700 12px "FSAlbertArabic", sans-serif; }
 .tp-filterGroup select { border:1px solid #d8dce0; border-radius: 8px; padding: 8px 10px; color:#373a36; font:700 13px "FSAlbertArabic", sans-serif; }
+.tp-filterGroupWithAction { grid-column: span 2; }
+.tp-filterInline { display:grid; grid-template-columns: minmax(0, 1fr) auto; gap:8px; align-items:center; }
 .tp-filterChips { display:flex; gap:8px; align-items:end; flex-wrap:wrap; }
 .tp-chip { border:1px solid #d8dce0; background:#fff; color:#373a36; border-radius: 999px; padding: 8px 10px; font:700 12px "FSAlbertArabic", sans-serif; cursor:pointer; }
 .tp-chip.active { border-color:#da291c; color:#da291c; }
@@ -66,3 +68,8 @@
 .tp-statusFill { width: 100%; max-width: 78px; border-radius: 8px 8px 0 0; min-height: 6px; }
 .tp-statusBar small { color:#6b6e6a; font:700 11px "FSAlbertArabic", sans-serif; text-align:center; }
 .tp-statusBar strong { color:#373a36; font:800 13px "FSAlbertArabic", sans-serif; }
+.tp-table tr.tp-rowOpen td { background:#fff7ed; font-weight:800; }
+.tp-table tr.tp-rowOverdue td { background:#fef2f2; color:#991b1b; font-weight:900; }
+
+.tp-table td.tp-cellOpen { background:#fff7ed; color:#9a3412; font-weight:900; }
+.tp-table td.tp-cellOverdue { background:#fef2f2; color:#991b1b; font-weight:900; }
