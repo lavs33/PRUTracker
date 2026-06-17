@@ -68,8 +68,8 @@
 .tp-statusFill { width: 100%; max-width: 78px; border-radius: 8px 8px 0 0; min-height: 6px; }
 .tp-statusBar small { color:#6b6e6a; font:700 11px "FSAlbertArabic", sans-serif; text-align:center; }
 .tp-statusBar strong { color:#373a36; font:800 13px "FSAlbertArabic", sans-serif; }
-.tp-table tr.tp-rowOpen td { background:#fff7ed; font-weight:800; }
+.tp-table tr.tp-rowOpen td { background:#fffbeb; color:#92400e; font-weight:800; }
 .tp-table tr.tp-rowOverdue td { background:#fef2f2; color:#991b1b; font-weight:900; }
 
-.tp-table td.tp-cellOpen { background:#fff7ed; color:#9a3412; font-weight:900; }
+.tp-table td.tp-cellOpen { background:#fffbeb; color:#92400e; font-weight:900; }
 .tp-table td.tp-cellOverdue { background:#fef2f2; color:#991b1b; font-weight:900; }

@@ -423,9 +423,9 @@ function AgentTasksProgress() {
             th, td { border: 1px solid #dfe5ec; padding: 5px 6px; text-align: left; vertical-align: top; }
             th { background: #f3f6fa; color:#374151; }
             tbody tr:nth-child(even) td { background:#fcfcfd; }
-            tr.is-open td { font-weight:800; background:#fff7ed !important; color:#9a3412 !important; }
+            tr.is-open td { font-weight:800; background:#fffbeb !important; color:#92400e !important; }
             tr.is-overdue td { font-weight:800; background:#fef2f2 !important; color:#991b1b; }
-            td.cell-open { font-weight:800; background:#fff7ed !important; color:#9a3412; }
+            td.cell-open { font-weight:800; background:#fffbeb !important; color:#92400e; }
             td.cell-overdue { font-weight:900; background:#fef2f2 !important; color:#991b1b; }
             .footnote { margin-top: 5px; font-size: 9px; color: #6b7280; }
             .report-footer { position: absolute; left: 8mm; right: 8mm; bottom: 4mm; font-size: 9px; color: #6b7280; display:flex; justify-content:space-between; align-items:center; border-top: 1px solid #e5e7eb; padding-top: 3px; }
