@@ -7,6 +7,16 @@ import { logout } from "./utils/logout";
 import "./AgentTasksProgress.css";
 
 const TASK_TYPES = ["APPROACH", "FOLLOW_UP", "UPDATE_CONTACT_INFO", "APPOINTMENT", "PRESENTATION"];
+const DATE_PRESETS = [
+  { value: "ALL", label: "All Time" },
+  { value: "1d", label: "This Day" },
+  { value: "7d", label: "Last 7 Days" },
+  { value: "30d", label: "Last 30 Days" },
+  { value: "90d", label: "Last 90 Days" },
+  { value: "6m", label: "Last 6 Months" },
+  { value: "12m", label: "Last 12 Months" },
+];
+const getOptionLabel = (options, value) => options.find((option) => option.value === value)?.label || value || "All";
 const formatDateTime = (value) => {
   const dt = new Date(value);
   return Number.isNaN(dt.getTime()) ? "—" : dt.toLocaleString("en-US", {
@@ -48,11 +58,10 @@ function AgentTasksProgress() {
     statusChart: [],
     drillTasks: [],
     reportTasks: [],
-    reportContext: { datePreset: "30d", status: "ALL", type: "ALL" },
+    reportContext: { datePreset: "ALL", type: "ALL" },
   });
 
-  const [datePreset, setDatePreset] = useState("30d");
-  const [statusFilter, setStatusFilter] = useState("ALL");
+  const [datePreset, setDatePreset] = useState("ALL");
   const [typeFilter, setTypeFilter] = useState("ALL");
   const [selectedTypeDrill, setSelectedTypeDrill] = useState("");
 
@@ -72,7 +81,6 @@ function AgentTasksProgress() {
       const params = new URLSearchParams({
         userId: user.id,
         datePreset,
-        status: statusFilter,
         type: typeFilter,
         drillType: selectedTypeDrill || "",
       });
@@ -96,11 +104,11 @@ function AgentTasksProgress() {
         statusChart: Array.isArray(payload?.statusChart) ? payload.statusChart : [],
         drillTasks: Array.isArray(payload?.drillTasks) ? payload.drillTasks : [],
         reportTasks: Array.isArray(payload?.reportTasks) ? payload.reportTasks : [],
-        reportContext: payload?.reportContext || { datePreset, status: statusFilter, type: typeFilter },
+        reportContext: payload?.reportContext || { datePreset, type: typeFilter },
       });
       setLastUpdated(new Date());
     },
-    [API_BASE, user?.id, datePreset, statusFilter, typeFilter, selectedTypeDrill]
+    [API_BASE, user?.id, datePreset, typeFilter, selectedTypeDrill]
   );
 
   useEffect(() => {
@@ -137,29 +145,10 @@ function AgentTasksProgress() {
       return Number.isNaN(dt.getTime()) ? "—" : dt.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
     };
     const computePeriod = () => {
-      const preset = data.reportContext?.datePreset || datePreset;
-      const end = new Date(now);
-      const start = new Date(now);
-      if (preset === "7d") start.setDate(start.getDate() - 7);
-      else if (preset === "30d") start.setDate(start.getDate() - 30);
-      else if (preset === "90d") start.setDate(start.getDate() - 90);
-      else {
-        const candidates = (Array.isArray(data.reportTasks) ? data.reportTasks : [])
-          .map((t) => t?.dueAt || t?.createdAt)
-          .filter(Boolean)
-          .map((v) => new Date(v))
-          .filter((d) => !Number.isNaN(d.getTime()))
-          .sort((a, b) => a - b);
-        if (candidates.length) {
-          return {
-            label: `${formatDate(candidates[0])} to ${formatDate(candidates[candidates.length - 1])}`,
-            start: candidates[0],
-            end: candidates[candidates.length - 1],
-          };
-        }
-        return { label: "All available records", start: null, end: null };
-      }
-      return { label: `${formatDate(start)} to ${formatDate(end)}`, start, end };
+      const start = data.reportContext?.startDate ? new Date(data.reportContext.startDate) : null;
+      const end = data.reportContext?.endDate ? new Date(data.reportContext.endDate) : new Date(now);
+      if (start && !Number.isNaN(start.getTime())) return { label: `${formatDate(start)} to ${formatDate(end)}`, start, end };
+      return { label: `Through ${formatDate(end)}`, start: null, end };
     };
 
     const period = computePeriod();
@@ -228,7 +217,8 @@ function AgentTasksProgress() {
       return out;
     };
 
-    const detailItems = Array.isArray(data.reportTasks) ? data.reportTasks.slice(0, 120) : [];
+    const detailSourceRows = selectedTypeDrill && Array.isArray(data.drillTasks) ? data.drillTasks : data.reportTasks;
+    const detailItems = Array.isArray(detailSourceRows) ? detailSourceRows.slice(0, 120) : [];
     const workloadItems = Array.isArray(data.leadWorkloadRows) ? data.leadWorkloadRows.slice(0, 30) : [];
     const detailChunks = chunk(detailItems, detailChunkSize);
     const workloadChunks = chunk(workloadItems, workloadChunkSize);
@@ -248,9 +238,7 @@ function AgentTasksProgress() {
               <div class="details-grid">
                 <div class="detail-item"><b>Agent Code</b>${escapeHtml(agentCode)}</div>
                 <div class="detail-item"><b>Agent Type</b>${escapeHtml(agentType)}</div>
-                <div class="detail-item"><b>First Name</b>${escapeHtml(firstName)}</div>
-                <div class="detail-item"><b>Middle Name</b>${escapeHtml(middleName)}</div>
-                <div class="detail-item"><b>Last Name</b>${escapeHtml(lastName)}</div>
+                <div class="detail-item"><b>Name</b>${escapeHtml([firstName, middleName !== "—" ? middleName : "", lastName].filter(Boolean).join(" "))}</div>
                 <div class="detail-item"><b>Unit</b>${escapeHtml(unitName)}</div>
                 <div class="detail-item"><b>Branch</b>${escapeHtml(branchName)}</div>
                 <div class="detail-item"><b>Area</b>${escapeHtml(areaName)}</div>
@@ -261,8 +249,7 @@ function AgentTasksProgress() {
 
         <section class="section">
           <div class="meta-row">
-            <div class="meta-chip"><div class="label">Date Range Filter</div><div class="value">${escapeHtml((data.reportContext?.datePreset || datePreset).toUpperCase())}</div></div>
-            <div class="meta-chip"><div class="label">Status Filter</div><div class="value">${escapeHtml(data.reportContext?.status || statusFilter)}</div></div>
+            <div class="meta-chip"><div class="label">Date Range Filter</div><div class="value">${escapeHtml(getOptionLabel(DATE_PRESETS, data.reportContext?.datePreset || datePreset))}</div></div>
             <div class="meta-chip"><div class="label">Task Type Filter</div><div class="value">${escapeHtml(data.reportContext?.type || typeFilter)}</div></div>
             <div class="meta-chip"><div class="label">Rows Included</div><div class="value">${Number(detailItems.length)}</div></div>
           </div>
@@ -272,7 +259,7 @@ function AgentTasksProgress() {
           <div class="kpi-grid">
             <div class="kpi primary"><div class="label">Total Tasks</div><div class="val">${data.totalTasks}</div></div>
             <div class="kpi"><div class="label">Open</div><div class="val">${data.openTasks}</div></div>
-            <div class="kpi secondary"><div class="label">Done</div><div class="val">${data.doneTasks}</div></div>
+            <div class="kpi secondary"><div class="label">On-Time Done</div><div class="val">${data.doneTasks}</div></div>
             <div class="kpi accent"><div class="label">Overdue</div><div class="val">${data.overdueTasks}</div></div>
             <div class="kpi info"><div class="label">Completion Rate</div><div class="val">${data.completionRate}%</div></div>
             <div class="kpi secondary"><div class="label">On-Time Rate</div><div class="val">${data.onTimeRate}%</div></div>
@@ -303,8 +290,8 @@ function AgentTasksProgress() {
           <section class="section compact-top">
             <h2 class="section-title">Drill-down Task Detail</h2>
             <table>
-              <thead><tr><th>Title</th><th>Type</th><th>Status</th><th>Overdue Open</th><th>Was Delayed</th><th>Due</th><th>Lead Code</th><th>Prospect</th></tr></thead>
-              <tbody><tr><td colspan="8">No task detail rows available.</td></tr></tbody>
+              <thead><tr><th>Title</th><th>Type</th><th>Status</th><th>Overdue Open</th><th>Was Delayed</th><th>Due</th><th>Lead Code</th><th>Prospect</th><th>Lead Status</th></tr></thead>
+              <tbody><tr><td colspan="9">No task detail rows available.</td></tr></tbody>
             </table>
           </section>
         </section>
@@ -312,15 +299,16 @@ function AgentTasksProgress() {
     } else {
       detailChunks.forEach((rowsChunk) => {
         const chunkRows = rowsChunk.map((t) => `
-          <tr>
+          <tr class="${t?.isOverdue ? "is-overdue" : t?.status === "Open" ? "is-open" : ""}">
             <td>${escapeHtml(t?.title || "Untitled task")}</td>
             <td>${escapeHtml(t?.type || "—")}</td>
             <td>${escapeHtml(t?.status || "—")}</td>
             <td>${t?.isOverdue ? "Yes" : "No"}</td>
-            <td>${t?.wasDelayed ? "Yes" : "No"}</td>
+            <td>${t?.status === "Done" ? (t?.wasDelayed ? "Yes" : "No") : "—"}</td>
             <td>${t?.dueAt ? escapeHtml(formatDateTime(t.dueAt)) : "—"}</td>
             <td>${escapeHtml(t?.leadCode || "—")}</td>
             <td>${escapeHtml(t?.prospectName || "—")}</td>
+            <td>${escapeHtml(t?.leadStatus || "—")}</td>
           </tr>
         `).join("");
         pages.push(`
@@ -329,7 +317,7 @@ function AgentTasksProgress() {
               <h2 class="section-title">Drill-down Task Detail</h2>
               <table>
                 <thead>
-                  <tr><th>Title</th><th>Type</th><th>Status</th><th>Overdue Open</th><th>Was Delayed</th><th>Due</th><th>Lead Code</th><th>Prospect</th></tr>
+                  <tr><th>Title</th><th>Type</th><th>Status</th><th>Overdue Open</th><th>Was Delayed</th><th>Due</th><th>Lead Code</th><th>Prospect</th><th>Lead Status</th></tr>
                 </thead>
                 <tbody>${chunkRows}</tbody>
               </table>
@@ -346,8 +334,8 @@ function AgentTasksProgress() {
           <section class="section compact-top">
             <h2 class="section-title">Lead Engagement Workload Distribution</h2>
             <table>
-              <thead><tr><th>Lead Code</th><th>Prospect</th><th>Total Tasks</th><th>Open</th><th>Overdue</th></tr></thead>
-              <tbody><tr><td colspan="5">No workload rows available.</td></tr></tbody>
+              <thead><tr><th>Lead Code</th><th>Prospect</th><th>Lead Status</th><th>Total Tasks</th><th>Open</th><th>Overdue</th><th>Done</th></tr></thead>
+              <tbody><tr><td colspan="7">No workload rows available.</td></tr></tbody>
             </table>
           </section>
         </section>
@@ -358,9 +346,11 @@ function AgentTasksProgress() {
           <tr>
             <td>${escapeHtml(r?.leadCode || "—")}</td>
             <td>${escapeHtml(r?.prospectName || "—")}</td>
+            <td>${escapeHtml(r?.leadStatus || "—")}</td>
             <td>${Number(r?.total || 0)}</td>
-            <td>${Number(r?.open || 0)}</td>
-            <td>${Number(r?.overdue || 0)}</td>
+            <td class="${Number(r?.open || 0) > 0 ? "cell-open" : ""}">${Number(r?.open || 0)}</td>
+            <td class="${Number(r?.overdue || 0) > 0 ? "cell-overdue" : ""}">${Number(r?.overdue || 0)}</td>
+            <td>${Number(r?.done || 0)}</td>
           </tr>
         `).join("");
         pages.push(`
@@ -368,7 +358,7 @@ function AgentTasksProgress() {
             <section class="section compact-top">
               <h2 class="section-title">Lead Engagement Workload Distribution</h2>
               <table>
-                <thead><tr><th>Lead Code</th><th>Prospect</th><th>Total Tasks</th><th>Open</th><th>Overdue</th></tr></thead>
+                <thead><tr><th>Lead Code</th><th>Prospect</th><th>Lead Status</th><th>Total Tasks</th><th>Open</th><th>Overdue</th><th>Done</th></tr></thead>
                 <tbody>${chunkRows}</tbody>
               </table>
             </section>
@@ -433,6 +423,10 @@ function AgentTasksProgress() {
             th, td { border: 1px solid #dfe5ec; padding: 5px 6px; text-align: left; vertical-align: top; }
             th { background: #f3f6fa; color:#374151; }
             tbody tr:nth-child(even) td { background:#fcfcfd; }
+            tr.is-open td { font-weight:700; background:#fff7ed !important; }
+            tr.is-overdue td { font-weight:800; background:#fef2f2 !important; color:#991b1b; }
+            td.cell-open { font-weight:800; background:#fff7ed !important; color:#9a3412; }
+            td.cell-overdue { font-weight:900; background:#fef2f2 !important; color:#991b1b; }
             .footnote { margin-top: 5px; font-size: 9px; color: #6b7280; }
             .report-footer { position: absolute; left: 8mm; right: 8mm; bottom: 4mm; font-size: 9px; color: #6b7280; display:flex; justify-content:space-between; align-items:center; border-top: 1px solid #e5e7eb; padding-top: 3px; }
           </style>
@@ -526,43 +520,27 @@ function AgentTasksProgress() {
             <div className="tp-filterGroup">
               <label>Date Range</label>
               <select value={datePreset} onChange={(e) => setDatePreset(e.target.value)}>
-                <option value="7d">Last 7 days</option>
-                <option value="30d">Last 30 days</option>
-                <option value="90d">Last 90 days</option>
-                <option value="all">All time</option>
+                {DATE_PRESETS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
             </div>
 
-            <div className="tp-filterGroup">
-              <label>Status Slice</label>
-              <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-                <option value="ALL">All</option>
-                <option value="OPEN">Open</option>
-                <option value="DONE">Done</option>
-                <option value="OVERDUE_OPEN">Overdue Open</option>
-                <option value="DELAYED_DONE">Delayed Done</option>
-              </select>
-            </div>
-
-            <div className="tp-filterGroup">
+            <div className="tp-filterGroup tp-filterGroupWithAction">
               <label>Task Type</label>
-              <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
-                <option value="ALL">All types</option>
-                {TASK_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
-              </select>
-            </div>
-
-            <div className="tp-filterChips">
-              <button className={`tp-chip ${statusFilter === "OVERDUE_OPEN" ? "active" : ""}`} onClick={() => setStatusFilter("OVERDUE_OPEN")}>Needs Attention</button>
-              <button className="tp-chip" onClick={() => { setDatePreset("30d"); setStatusFilter("ALL"); setTypeFilter("ALL"); setSelectedTypeDrill(""); }}>Reset</button>
+              <div className="tp-filterInline">
+                <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+                  <option value="ALL">All types</option>
+                  {TASK_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
+                </select>
+                <button className="tp-chip" onClick={() => { setDatePreset("ALL"); setTypeFilter("ALL"); setSelectedTypeDrill(""); }}>Reset</button>
+              </div>
             </div>
           </section>
 
           <div className="tp-kpis">
             <div className="tp-kpi"><span>Total Tasks</span><strong>{data.totalTasks}</strong></div>
             <div className="tp-kpi"><span>Open</span><strong>{data.openTasks}</strong></div>
-            <div className="tp-kpi"><span>Done</span><strong>{data.doneTasks}</strong></div>
             <div className="tp-kpi"><span>Overdue</span><strong>{data.overdueTasks}</strong></div>
+            <div className="tp-kpi"><span>On-Time Done</span><strong>{data.doneTasks}</strong></div>
             <div className="tp-kpi"><span>Completion Rate</span><strong>{data.completionRate}%</strong></div>
             <div className="tp-kpi"><span>On-Time Completion</span><strong>{data.onTimeRate}%</strong></div>
             <div className="tp-kpi"><span>Late Completion Rate</span><strong>{data.lateCompletionRate}%</strong></div>
@@ -621,20 +599,24 @@ function AgentTasksProgress() {
                         <th>Title</th>
                         <th>Status</th>
                         <th>Overdue Open</th>
+                        <th>Was Delayed</th>
                         <th>Due</th>
                         <th>Lead Code</th>
                         <th>Prospect</th>
+                        <th>Lead Status</th>
                       </tr>
                     </thead>
                     <tbody>
                       {data.drillTasks.map((t) => (
-                        <tr key={t._id}>
+                        <tr key={t._id} className={t.isOverdue ? "tp-rowOverdue" : t.status === "Open" ? "tp-rowOpen" : ""}>
                           <td>{t.title || "Untitled task"}</td>
                           <td>{t.status}</td>
                           <td>{t.isOverdue ? "Yes" : "No"}</td>
+                          <td>{t.status === "Done" ? (t.wasDelayed ? "Yes" : "No") : "—"}</td>
                           <td>{t?.dueAt ? new Date(t.dueAt).toLocaleString() : "—"}</td>
                           <td>{t?.leadCode || "—"}</td>
                           <td>{t?.prospectName || "—"}</td>
+                          <td>{t?.leadStatus || "—"}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -654,9 +636,11 @@ function AgentTasksProgress() {
                       <tr>
                         <th>Lead Code</th>
                         <th>Prospect</th>
+                        <th>Lead Status</th>
                         <th>Total Tasks</th>
                         <th>Open</th>
                         <th>Overdue</th>
+                        <th>Done</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -664,9 +648,11 @@ function AgentTasksProgress() {
                         <tr key={r.leadEngagementId}>
                           <td>{r.leadCode}</td>
                           <td>{r.prospectName}</td>
+                          <td>{r.leadStatus || "—"}</td>
                           <td>{r.total}</td>
-                          <td>{r.open}</td>
-                          <td>{r.overdue}</td>
+                          <td className={Number(r.open || 0) > 0 ? "tp-cellOpen" : ""}>{r.open}</td>
+                          <td className={Number(r.overdue || 0) > 0 ? "tp-cellOverdue" : ""}>{r.overdue}</td>
+                          <td>{r.done || 0}</td>
                         </tr>
                       ))}
                     </tbody>
