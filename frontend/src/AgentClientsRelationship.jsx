@@ -7,8 +7,12 @@ import "./AgentClientsRelationship.css";
 
 const DATE_PRESETS = [
   { value: "ALL", label: "All Time" },
+  { value: "1d", label: "This Day" },
+  { value: "7d", label: "Last 7 Days" },
   { value: "30d", label: "Last 30 Days" },
   { value: "90d", label: "Last 90 Days" },
+  { value: "6m", label: "Last 6 Months" },
+  { value: "12m", label: "Last 12 Months" },
 ];
 
 const SOURCE_OPTIONS = [
@@ -37,7 +41,7 @@ const STATUS_OPTIONS = [
 ];
 
 const DEFAULT_DASHBOARD = {
-  totals: { prospects: 0, prospectsWithLeads: 0, policyholders: 0, engagements: 0, leads: 0, activeLeads: 0 },
+  totals: { prospects: 0, prospectsWithLeads: 0, prospectsWithActiveLeads: 0, policyholders: 0, activePolicyholders: 0, engagements: 0, leads: 0, activeLeads: 0 },
   filters: { datePreset: "ALL", source: "ALL", marketType: "ALL", prospectType: "ALL", status: "ALL" },
   leadStatusCounts: { new: 0, inProgress: 0 },
   conversionRatePct: 0,
@@ -46,7 +50,8 @@ const DEFAULT_DASHBOARD = {
   activePolicyRatePct: 0,
   prospectMix: { warm: 0, cold: 0, elite: 0, ordinary: 0, agentSourced: 0, systemAssigned: 0 },
   prospectStatusCounts: [],
-  policyStatusCounts: { active: 0, lapsed: 0, cancelled: 0 },
+  policyStatusCounts: { active: 0, atRisk: 0, lapsed: 0, paidUp: 0, matured: 0, cancelled: 0 },
+  policyStatusCountsList: [],
   stageProgress: [],
   sourceConversion: [],
   marketConversion: [],
@@ -187,8 +192,9 @@ function AgentClientsRelationship() {
 
     return {
       totalProspects: Number(totals.prospects || 0),
-      prospectsWithLeads: Number(totals.prospectsWithLeads || 0),
+      prospectsWithLeads: Number(totals.prospectsWithActiveLeads || totals.prospectsWithLeads || 0),
       totalPolicyholders: Number(totals.policyholders || 0),
+      activePolicyholders: Number(totals.activePolicyholders || policyStatus.active || 0),
       totalLeads: Number(totals.leads || 0),
       activeLeads: Number(totals.activeLeads || 0),
       newLeads: Number(dashboardData?.leadStatusCounts?.new || 0),
@@ -202,8 +208,12 @@ function AgentClientsRelationship() {
       agentSourced: Number(prospectMix.agentSourced || 0),
       statusCounts: Array.isArray(dashboardData?.prospectStatusCounts) ? dashboardData.prospectStatusCounts : [],
       activePolicies: Number(policyStatus.active || 0),
+      atRiskPolicies: Number(policyStatus.atRisk || policyStatus.atrisk || 0),
       lapsedPolicies: Number(policyStatus.lapsed || 0),
+      paidUpPolicies: Number(policyStatus.paidUp || policyStatus.paidup || 0),
+      maturedPolicies: Number(policyStatus.matured || 0),
       cancelledPolicies: Number(policyStatus.cancelled || 0),
+      policyStatusRows: Array.isArray(dashboardData?.policyStatusCountsList) ? dashboardData.policyStatusCountsList : [],
       conversionRate: Number(dashboardData?.conversionRatePct || 0),
       warmRate: Number(dashboardData?.warmRatePct || 0),
       activePolicyRate: Number(dashboardData?.activePolicyRatePct || 0),
@@ -228,12 +238,12 @@ function AgentClientsRelationship() {
     const topSource = dashboard.insights?.topSource;
     const leadCoverage = dashboard.insights?.leadCoverage;
     const sourceMessage = topSource
-      ? `${topSource.label} converts at ${topSource.conversionRatePct}% (${topSource.policyholders}/${topSource.prospects}).`
+      ? `${topSource.label} converts to active policyholders at ${topSource.conversionRatePct}% (${topSource.policyholders}/${topSource.prospects}).`
       : "No source conversion pattern available yet.";
     const coverageMessage = leadCoverage
-      ? `${leadCoverage.prospectsWithLeads} of ${dashboard.totalProspects} prospects already have lead records (${leadCoverage.leadCoveragePct}% coverage), leaving ${leadCoverage.prospectsWithoutLeads} still to activate.`
+      ? `${leadCoverage.prospectsWithActiveLeads || leadCoverage.prospectsWithLeads || 0} of ${dashboard.totalProspects} prospects have active leads (${leadCoverage.leadCoveragePct}% coverage). ${leadCoverage.prospectsWithClosedLeadsAndActivePolicies || 0} prospects have closed leads with active policies, and ${leadCoverage.activeLeads || 0} active leads are still going on, leaving ${leadCoverage.prospectsWithActiveLeads || leadCoverage.prospectsWithLeads || 0} prospects still in active engagement stages.`
       : "No lead coverage insight available yet.";
-    const riskMessage = `${Number(dashboard.insights?.policyRiskPct || 0)}% of policyholders are lapsed or cancelled.`;
+    const riskMessage = `${Number(dashboard.insights?.policyRiskPct || 0)}% of policyholders are at risk or lapsed (${Number(dashboard.insights?.atRiskPolicies || 0)} policies).`;
     return [
       { title: "Best Conversion Source", body: sourceMessage },
       { title: "Lead Coverage Opportunity", body: coverageMessage },
@@ -250,13 +260,25 @@ function AgentClientsRelationship() {
   }, [dashboard.agentSourced, dashboard.systemAssigned]);
 
   const policyChartStyle = useMemo(() => {
-    const total = dashboard.activePolicies + dashboard.lapsedPolicies + dashboard.cancelledPolicies || 1;
-    const activeAngle = Math.round((dashboard.activePolicies / total) * 360);
-    const lapsedAngle = activeAngle + Math.round((dashboard.lapsedPolicies / total) * 360);
-    return {
-      background: `conic-gradient(#1f9d55 0deg ${activeAngle}deg, #f59e0b ${activeAngle}deg ${lapsedAngle}deg, #6b7280 ${lapsedAngle}deg 360deg)`,
-    };
-  }, [dashboard.activePolicies, dashboard.cancelledPolicies, dashboard.lapsedPolicies]);
+    const rows = dashboard.policyStatusRows.length ? dashboard.policyStatusRows : [
+      { status: "Active", value: dashboard.activePolicies },
+      { status: "At Risk", value: dashboard.atRiskPolicies },
+      { status: "Lapsed", value: dashboard.lapsedPolicies },
+      { status: "Paid-Up", value: dashboard.paidUpPolicies },
+      { status: "Matured", value: dashboard.maturedPolicies },
+      { status: "Cancelled", value: dashboard.cancelledPolicies },
+    ];
+    const palette = ["#1f9d55", "#dc2626", "#f59e0b", "#2f80ed", "#7c3aed", "#6b7280"];
+    const total = rows.reduce((sum, row) => sum + Number(row.value || 0), 0) || 1;
+    let cursor = 0;
+    const stops = rows.map((row, index) => {
+      const next = cursor + Math.round((Number(row.value || 0) / total) * 360);
+      const stop = `${palette[index % palette.length]} ${cursor}deg ${next}deg`;
+      cursor = next;
+      return stop;
+    });
+    return { background: `conic-gradient(${stops.join(", ")})` };
+  }, [dashboard]);
 
   const generatePdfReport = () => {
     const escapeHtml = (value) =>
@@ -289,19 +311,6 @@ function AgentClientsRelationship() {
       )
       .join("");
 
-    const marketRows = dashboard.marketConversion
-      .map(
-        (row) => `
-          <tr>
-            <td>${escapeHtml(row.label)}</td>
-            <td>${Number(row.prospects || 0)}</td>
-            <td>${Number(row.policyholders || 0)}</td>
-            <td>${Number(row.conversionRatePct || 0)}%</td>
-          </tr>
-        `
-      )
-      .join("");
-
     const sourceMixRows = [
       { label: "Agent-Sourced", value: dashboard.agentSourced },
       { label: "System-Assigned", value: dashboard.systemAssigned },
@@ -317,15 +326,18 @@ function AgentClientsRelationship() {
       )
       .join("");
 
-    const policyHealthRows = [
-      { label: "Active", value: dashboard.activePolicies },
-      { label: "Lapsed", value: dashboard.lapsedPolicies },
-      { label: "Cancelled", value: dashboard.cancelledPolicies },
-    ]
+    const policyHealthRows = (dashboard.policyStatusRows.length ? dashboard.policyStatusRows : [
+      { status: "Active", value: dashboard.activePolicies },
+      { status: "At Risk", value: dashboard.atRiskPolicies },
+      { status: "Lapsed", value: dashboard.lapsedPolicies },
+      { status: "Paid-Up", value: dashboard.paidUpPolicies },
+      { status: "Matured", value: dashboard.maturedPolicies },
+      { status: "Cancelled", value: dashboard.cancelledPolicies },
+    ])
       .map(
         (row) => `
           <tr>
-            <td>${escapeHtml(row.label)}</td>
+            <td>${escapeHtml(row.status || row.label)}</td>
             <td>${Number(row.value || 0)}</td>
             <td>${dashboard.totalPolicyholders ? Math.round((Number(row.value || 0) / dashboard.totalPolicyholders) * 100) : 0}%</td>
           </tr>
@@ -345,19 +357,14 @@ function AgentClientsRelationship() {
       )
       .join("");
 
-    const segmentMixRows = [
-      { group: "Market Type", label: "Warm", value: dashboard.warm, total: dashboard.totalProspects },
-      { group: "Market Type", label: "Cold", value: dashboard.cold, total: dashboard.totalProspects },
-      { group: "Prospect Type", label: "Elite", value: dashboard.elite, total: dashboard.totalProspects },
-      { group: "Prospect Type", label: "Ordinary", value: dashboard.ordinary, total: dashboard.totalProspects },
-    ]
+    const segmentMixRows = dashboard.marketConversion
       .map(
         (row) => `
           <tr>
-            <td>${escapeHtml(row.group)}</td>
+            <td>${escapeHtml(row.group || "Segment")}</td>
             <td>${escapeHtml(row.label)}</td>
-            <td>${Number(row.value || 0)}</td>
-            <td>${row.total ? Math.round((Number(row.value || 0) / row.total) * 100) : 0}%</td>
+            <td>${Number(row.policyholders || 0)}</td>
+            <td>${Number(row.conversionRatePct || 0)}%</td>
           </tr>
         `
       )
@@ -394,26 +401,9 @@ function AgentClientsRelationship() {
     pages.push(`
       <section class="pdf-page first-page">
         <div class="header-band"></div>
-        <section class="section">
-          <div class="top-grid">
-            <div>
-              <h1 class="report-title">Agent Clients Relationship Report</h1>
-              <div class="report-period">Report Period: ${escapeHtml(dashboard.reportContext?.periodLabel || "All available records")}</div>
-            </div>
-            <div class="details-card">
-              <h3>Agent Details</h3>
-              <div class="details-grid">
-                <div class="detail-item"><b>Agent Code</b>${escapeHtml(user?.username || "—")}</div>
-                <div class="detail-item"><b>Agent Type</b>${escapeHtml(user?.agentType || "—")}</div>
-                <div class="detail-item"><b>First Name</b>${escapeHtml(user?.firstName || "—")}</div>
-                <div class="detail-item"><b>Middle Name</b>${escapeHtml(user?.middleName || "—")}</div>
-                <div class="detail-item"><b>Last Name</b>${escapeHtml(user?.lastName || "—")}</div>
-                <div class="detail-item"><b>Unit</b>${escapeHtml(user?.unitName || "—")}</div>
-                <div class="detail-item"><b>Branch</b>${escapeHtml(user?.branchName || "—")}</div>
-                <div class="detail-item"><b>Area</b>${escapeHtml(user?.areaName || "—")}</div>
-              </div>
-            </div>
-          </div>
+        <section class="section report-heading">
+          <h1 class="report-title">Agent Clients Relationship Report</h1>
+          <div class="report-period">Report Period: ${escapeHtml(dashboard.reportContext?.periodLabel || "All available records")}</div>
         </section>
         <section class="section">
           <div class="meta-row">
@@ -427,22 +417,15 @@ function AgentClientsRelationship() {
         <section class="section">
           <div class="kpi-grid">
             <div class="kpi primary"><div class="label">Total Prospects</div><div class="val">${dashboard.totalProspects}</div></div>
-            <div class="kpi"><div class="label">Prospects With Leads</div><div class="val">${dashboard.prospectsWithLeads}</div></div>
+            <div class="kpi"><div class="label">Prospects With Active Leads</div><div class="val">${dashboard.prospectsWithLeads}</div></div>
             <div class="kpi secondary"><div class="label">Total Leads</div><div class="val">${dashboard.totalLeads}</div></div>
             <div class="kpi"><div class="label">New Leads</div><div class="val">${dashboard.newLeads}</div></div>
             <div class="kpi"><div class="label">In Progress Leads</div><div class="val">${dashboard.inProgressLeads}</div></div>
-            <div class="kpi info"><div class="label">Conversion Rate</div><div class="val">${dashboard.conversionRate}%</div></div>
-            <div class="kpi secondary"><div class="label">Total Policyholders</div><div class="val">${dashboard.totalPolicyholders}</div></div>
-            <div class="kpi"><div class="label">Active Engagements</div><div class="val">${dashboard.totalEngagements}</div></div>
+            <div class="kpi info"><div class="label">Conversion Rate</div><div class="val">${dashboard.conversionRate}%</div><div class="hint">All policyholder statuses</div></div>
+            <div class="kpi secondary"><div class="label">Active Policyholders</div><div class="val">${dashboard.activePolicyholders}</div></div>
             <div class="kpi accent"><div class="label">Warm Prospect Rate</div><div class="val">${dashboard.warmRate}%</div></div>
             <div class="kpi secondary"><div class="label">Agent-Sourced Rate</div><div class="val">${dashboard.sourceRate}%</div></div>
             <div class="kpi primary"><div class="label">Active Policyholder Rate</div><div class="val">${dashboard.activePolicyRate}%</div></div>
-          </div>
-        </section>
-        <section class="section">
-          <h2 class="section-title">Key Insights</h2>
-          <div class="insight-grid">
-            ${insights.map((item) => `<div class="insight-card"><h4>${escapeHtml(item.title)}</h4><p>${escapeHtml(item.body)}</p></div>`).join("")}
           </div>
         </section>
       </section>
@@ -479,50 +462,46 @@ function AgentClientsRelationship() {
               </table>
             </div>
             <div class="panel">
-              <h4>Segment Mix</h4>
+              <h4>Segment Conversion Comparison</h4><p class="panel-note">Conversion counts include active policyholders only.</p>
               <table>
-                <thead><tr><th>Category</th><th>Segment</th><th>Count</th><th>Share</th></tr></thead>
+                <thead><tr><th>Category</th><th>Segment</th><th>Active Policyholders</th><th>Conversion</th></tr></thead>
                 <tbody>${segmentMixRows || '<tr><td colspan="4">No segment mix data available.</td></tr>'}</tbody>
               </table>
             </div>
           </div>
         </section>
         <section class="section compact-top">
-          <h2 class="section-title">Conversion Mix</h2>
-          <div class="analytics-grid">
-            <div class="panel">
-              <h4>Source Conversion</h4>
-              <table>
-                <thead><tr><th>Source</th><th>Prospects</th><th>Policyholders</th><th>Conversion</th></tr></thead>
-                <tbody>${sourceRows || '<tr><td colspan="4">No source conversion data available.</td></tr>'}</tbody>
-              </table>
-            </div>
-            <div class="panel">
-              <h4>Market Conversion</h4>
-              <table>
-                <thead><tr><th>Market</th><th>Prospects</th><th>Policyholders</th><th>Conversion</th></tr></thead>
-                <tbody>${marketRows || '<tr><td colspan="4">No market conversion data available.</td></tr>'}</tbody>
-              </table>
-            </div>
-          </div>
+          <h2 class="section-title">Relationship Pipeline Progress</h2>
+          <table>
+            <thead><tr><th>Stage</th><th>Engagements</th><th>Share</th></tr></thead>
+            <tbody>${stageRows || '<tr><td colspan="3">No stage data available.</td></tr>'}</tbody>
+          </table>
         </section>
         <section class="section compact-top">
-          <h2 class="section-title">Pipeline + Trend Summary</h2>
-          <div class="analytics-grid">
-            <div class="panel">
-              <h4>Relationship Pipeline</h4>
-              <table>
-                <thead><tr><th>Stage</th><th>Engagements</th><th>Share</th></tr></thead>
-                <tbody>${stageRows || '<tr><td colspan="3">No stage data available.</td></tr>'}</tbody>
-              </table>
-            </div>
-            <div class="panel">
-              <h4>Trend Overview</h4>
-              <table>
-                <thead><tr><th>Period</th><th>Prospects</th><th>Policyholders</th></tr></thead>
-                <tbody>${trendRows || '<tr><td colspan="3">No trend data available.</td></tr>'}</tbody>
-              </table>
-            </div>
+          <h2 class="section-title">Source Conversion Quality</h2>
+          <p class="panel-note">Policyholder counts include active policyholders only.</p>
+          <table>
+            <thead><tr><th>Source</th><th>Prospects</th><th>Active Policyholders</th><th>Conversion</th></tr></thead>
+            <tbody>${sourceRows || '<tr><td colspan="4">No source conversion data available.</td></tr>'}</tbody>
+          </table>
+        </section>
+      </section>
+    `);
+
+
+    pages.push(`
+      <section class="pdf-page">
+        <section class="section compact-top spacious-section">
+          <h2 class="section-title">Trend Overview</h2>
+          <table>
+            <thead><tr><th>Period</th><th>Prospects Created</th><th>Policyholders Created</th></tr></thead>
+            <tbody>${trendRows || '<tr><td colspan="3">No trend data available.</td></tr>'}</tbody>
+          </table>
+        </section>
+        <section class="section spacious-section">
+          <h2 class="section-title">Dashboard Insights</h2>
+          <div class="insight-grid">
+            ${insights.map((item) => `<div class="insight-card"><h4>${escapeHtml(item.title)}</h4><p>${escapeHtml(item.body)}</p></div>`).join("")}
           </div>
         </section>
       </section>
@@ -532,10 +511,10 @@ function AgentClientsRelationship() {
       pages.push(`
         <section class="pdf-page">
           <section class="section compact-top">
-            <h2 class="section-title">Top 10 Recent Prospects</h2>
+            <h2 class="section-title">Newly Created Prospects in Scope</h2>
             <table>
-              <thead><tr><th>Prospect Code</th><th>Name</th><th>Market</th><th>Type</th><th>Source</th><th>Status</th><th>Policies Count</th><th>Created</th></tr></thead>
-              <tbody><tr><td colspan="8">No recent prospects available for the selected filters.</td></tr></tbody>
+              <thead><tr><th>Prospect Code</th><th>Name</th><th>Market</th><th>Type</th><th>Source</th><th>Status</th><th>Active Leads</th><th>Active Policies</th><th>Created</th></tr></thead>
+              <tbody><tr><td colspan="9">No newly created prospects available for the selected filters.</td></tr></tbody>
             </table>
           </section>
         </section>
@@ -545,9 +524,9 @@ function AgentClientsRelationship() {
         pages.push(`
           <section class="pdf-page">
             <section class="section compact-top">
-              <h2 class="section-title">Top 10 Recent Prospects</h2>
+              <h2 class="section-title">Newly Created Prospects in Scope</h2>
               <table>
-                <thead><tr><th>Prospect Code</th><th>Name</th><th>Market</th><th>Type</th><th>Source</th><th>Status</th><th>Policies Count</th><th>Created</th></tr></thead>
+                <thead><tr><th>Prospect Code</th><th>Name</th><th>Market</th><th>Type</th><th>Source</th><th>Status</th><th>Active Leads</th><th>Active Policies</th><th>Created</th></tr></thead>
                 <tbody>
                   ${rows.map((row) => `
                     <tr>
@@ -557,7 +536,8 @@ function AgentClientsRelationship() {
                       <td>${escapeHtml(row.prospectType || "—")}</td>
                       <td>${escapeHtml(row.source || "—")}</td>
                       <td>${escapeHtml(row.status || "—")}</td>
-                      <td>${Number(row.policyholders || 0)}</td>
+                      <td>${Number(row.activeLeads || 0)}</td>
+                      <td>${Number(row.activePolicies || 0)}</td>
                       <td>${escapeHtml(formatDate(row.createdAt))}</td>
                     </tr>
                   `).join("")}
@@ -608,19 +588,14 @@ function AgentClientsRelationship() {
             .pdf-page:last-child { page-break-after: auto; }
             .first-page { padding-top: 6mm; }
             .header-band { height: 8px; background: linear-gradient(90deg, #da291c, #ffb81c, #00539b); border-radius: 6px; margin-bottom: 8px; }
-            .top-grid { display:grid; grid-template-columns: minmax(0, 1.7fr) minmax(280px, 1fr); gap: 14px; align-items:start; }
+            .report-heading { margin-bottom: 12px; }
             .report-title { margin: 0; color: #991b1b; font-size: 23px; line-height: 1.08; font-weight: 700; }
             .report-period { margin-top: 10px; color: #374151; font-size: 13px; font-weight: 700; }
-            .details-card { border: 1px solid #f3c4c0; background: #fff7f6; border-radius: 10px; padding: 10px 12px; }
-            .details-card h3 { margin: 0 0 6px; color: #991b1b; font-size: 12px; text-transform: uppercase; }
-            .details-grid { display:grid; grid-template-columns: 1fr 1fr; gap: 5px 14px; }
-            .detail-item { font-size: 10px; }
-            .detail-item b { color: #6b7280; display:block; font-weight:700; margin-bottom:1px; }
-            .meta-row { display:grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin: 10px 0 8px; }
+            .meta-row { display:grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin: 10px 0 14px; }
             .meta-chip { border: 1px solid #dbe4f0; background: #f8fbff; border-radius: 8px; padding: 6px 8px; }
             .meta-chip .label { color:#6b7280; font-size:10px; }
             .meta-chip .value { color:#111827; font-weight:700; margin-top:2px; }
-            .kpi-grid { display:grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 8px; }
+            .kpi-grid { display:grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 12px; }
             .kpi { border:1px solid #e5e7eb; border-radius:8px; padding:8px; background:#ffffff; }
             .kpi.primary { background:#fff5f5; border-color:#f3c4c0; }
             .kpi.secondary { background:#f0fdf4; border-color:#bbf7d0; }
@@ -628,12 +603,14 @@ function AgentClientsRelationship() {
             .kpi.info { background:#eff6ff; border-color:#bfdbfe; }
             .kpi .label { color:#6b7280; font-size:10px; }
             .kpi .val { font-size:18px; font-weight:700; margin-top:2px; color:#111827; }
-            .section { margin-bottom: 8px; }
+            .section { margin-bottom: 14px; }
+            .spacious-section { margin-bottom: 18px; }
             .compact-top { margin-top: 0; }
             .section-title { margin: 0 0 6px; color: #991b1b; font-size: 14px; font-weight: 700; border-left: 4px solid #da291c; padding-left: 8px; }
             .analytics-grid { display:grid; grid-template-columns: 1fr 1fr; gap: 8px; }
             .panel { border:1px solid #e5e7eb; border-radius:8px; padding:8px; background:#fff; }
             .panel h4 { margin:0 0 6px; color:#111827; font-size:12px; }
+            .panel-note { margin: 0 0 8px; color:#6b7280; font-size:10px; }
             .insight-grid { display:grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
             .insight-card { border:1px solid #e5e7eb; border-radius:8px; padding:8px; background:#fff; }
             .insight-card h4 { margin:0 0 6px; color:#111827; font-size:12px; }
@@ -783,9 +760,9 @@ function AgentClientsRelationship() {
                 <span className="cr-kpiHint">Selected relationship universe</span>
               </div>
               <div className="cr-kpiTile">
-                <span className="cr-kpiLabel">Prospects With Leads</span>
+                <span className="cr-kpiLabel">Prospects With Active Leads</span>
                 <span className="cr-kpiValue">{dashboard.prospectsWithLeads}</span>
-                <span className="cr-kpiHint">Prospects activated into lead creation</span>
+                <span className="cr-kpiHint">New/In Progress leads only</span>
               </div>
               <div className="cr-kpiTile">
                 <span className="cr-kpiLabel">Total Leads</span>
@@ -805,22 +782,17 @@ function AgentClientsRelationship() {
               <div className="cr-kpiTile">
                 <span className="cr-kpiLabel">Prospect → Policyholder</span>
                 <span className="cr-kpiValue">{dashboard.conversionRate}%</span>
-                <span className="cr-kpiHint">Overall conversion rate</span>
-              </div>
-              <div className="cr-kpiTile">
-                <span className="cr-kpiLabel">Total Policyholders</span>
-                <span className="cr-kpiValue">{dashboard.totalPolicyholders}</span>
-                <span className="cr-kpiHint">Converted relationships</span>
-              </div>
-              <div className="cr-kpiTile">
-                <span className="cr-kpiLabel">Active Engagements</span>
-                <span className="cr-kpiValue">{dashboard.totalEngagements}</span>
-                <span className="cr-kpiHint">Pipeline records in scope</span>
+                <span className="cr-kpiHint">All policyholder statuses</span>
               </div>
               <div className="cr-kpiTile">
                 <span className="cr-kpiLabel">Active Policyholders</span>
+                <span className="cr-kpiValue">{dashboard.activePolicyholders}</span>
+                <span className="cr-kpiHint">Policies with Active status only</span>
+              </div>
+              <div className="cr-kpiTile">
+                <span className="cr-kpiLabel">Active Policyholder Rate</span>
                 <span className="cr-kpiValue">{dashboard.activePolicyRate}%</span>
-                <span className="cr-kpiHint">Healthy relationship share</span>
+                <span className="cr-kpiHint">Active policies vs prospects</span>
               </div>
             </div>
 
@@ -849,7 +821,7 @@ function AgentClientsRelationship() {
               <section className="cr-panel">
                 <div className="cr-panelHeader">
                   <h3 className="cr-panelTitle">Policyholder Conversion Trend</h3>
-                  <span className="cr-panelMeta">Converted relationships by period</span>
+                  <span className="cr-panelMeta">All policyholder statuses created in selected date range</span>
                 </div>
                 <div className="cr-trendChart policy">
                   {dashboard.policyholderTrend.map((point) => (
@@ -884,14 +856,21 @@ function AgentClientsRelationship() {
               <section className="cr-panel">
                 <div className="cr-panelHeader">
                   <h3 className="cr-panelTitle">Policyholder Health</h3>
-                  <span className="cr-panelMeta">Lifecycle quality of converted clients</span>
+                  <span className="cr-panelMeta">All policy statuses in scope</span>
                 </div>
                 <div className="cr-donutWrap">
                   <div className="cr-donutChart" style={policyChartStyle}><span>{dashboard.totalPolicyholders}</span></div>
                   <div className="cr-legend">
-                    <span><i className="dot active" />Active ({dashboard.activePolicies})</span>
-                    <span><i className="dot lapsed" />Lapsed ({dashboard.lapsedPolicies})</span>
-                    <span><i className="dot cancelled" />Cancelled ({dashboard.cancelledPolicies})</span>
+                    {(dashboard.policyStatusRows.length ? dashboard.policyStatusRows : [
+                      { status: "Active", value: dashboard.activePolicies },
+                      { status: "At Risk", value: dashboard.atRiskPolicies },
+                      { status: "Lapsed", value: dashboard.lapsedPolicies },
+                      { status: "Paid-Up", value: dashboard.paidUpPolicies },
+                      { status: "Matured", value: dashboard.maturedPolicies },
+                      { status: "Cancelled", value: dashboard.cancelledPolicies },
+                    ]).map((row) => (
+                      <span key={row.status}><i className={`dot policy-${String(row.status).toLowerCase().replace(/[^a-z0-9]+/g, "")}`} />{row.status} ({Number(row.value || 0)})</span>
+                    ))}
                   </div>
                 </div>
               </section>
@@ -914,7 +893,7 @@ function AgentClientsRelationship() {
               <section className="cr-panel">
                 <div className="cr-panelHeader">
                   <h3 className="cr-panelTitle">Segment Conversion Comparison</h3>
-                  <span className="cr-panelMeta">Warm/cold relationship performance</span>
+                  <span className="cr-panelMeta">Warm/cold and elite/ordinary; active policyholders only</span>
                 </div>
                 <div className="cr-compareList">
                   {dashboard.marketConversion.map((row) => (
@@ -923,17 +902,23 @@ function AgentClientsRelationship() {
                         <span>{row.label}</span>
                         <strong>{row.conversionRatePct}%</strong>
                       </div>
-                      <p>{row.policyholders}/{row.prospects} converted to policyholders.</p>
+                      <p>{row.policyholders}/{row.prospects} converted to active policyholders.</p>
                     </div>
                   ))}
                 </div>
                 <div className="cr-chartRows compact">
                   <div className="cr-rowLabel">Warm vs Cold Share</div>
-                  <div className="cr-progressTrack"><span style={{ width: `${dashboard.totalProspects ? (dashboard.warm / dashboard.totalProspects) * 100 : 0}%` }} /></div>
-                  <div className="cr-rowMeta">Warm {dashboard.warm} • Cold {dashboard.cold}</div>
+                  <div className="cr-stackedTrack">
+                    <span className="warm" style={{ width: `${dashboard.totalProspects ? (dashboard.warm / dashboard.totalProspects) * 100 : 0}%` }} />
+                    <span className="cold" style={{ width: `${dashboard.totalProspects ? (dashboard.cold / dashboard.totalProspects) * 100 : 0}%` }} />
+                  </div>
+                  <div className="cr-rowMeta"><i className="cr-shareDot warm" />Warm {dashboard.warm} • <i className="cr-shareDot cold" />Cold {dashboard.cold}</div>
                   <div className="cr-rowLabel">Elite vs Ordinary Share</div>
-                  <div className="cr-progressTrack alt"><span style={{ width: `${dashboard.totalProspects ? (dashboard.elite / dashboard.totalProspects) * 100 : 0}%` }} /></div>
-                  <div className="cr-rowMeta">Elite {dashboard.elite} • Ordinary {dashboard.ordinary}</div>
+                  <div className="cr-stackedTrack">
+                    <span className="elite" style={{ width: `${dashboard.totalProspects ? (dashboard.elite / dashboard.totalProspects) * 100 : 0}%` }} />
+                    <span className="ordinary" style={{ width: `${dashboard.totalProspects ? (dashboard.ordinary / dashboard.totalProspects) * 100 : 0}%` }} />
+                  </div>
+                  <div className="cr-rowMeta"><i className="cr-shareDot elite" />Elite {dashboard.elite} • <i className="cr-shareDot ordinary" />Ordinary {dashboard.ordinary}</div>
                 </div>
               </section>
 
@@ -959,7 +944,7 @@ function AgentClientsRelationship() {
               <section className="cr-panel cr-panel-wide">
                 <div className="cr-panelHeader">
                   <h3 className="cr-panelTitle">Source Conversion Quality</h3>
-                  <span className="cr-panelMeta">How each acquisition source converts</span>
+                  <span className="cr-panelMeta">Active policyholders only by acquisition source</span>
                 </div>
                 <div className="cr-sourceGrid">
                   {dashboard.sourceConversion.map((row) => (
@@ -969,7 +954,7 @@ function AgentClientsRelationship() {
                         <strong>{row.conversionRatePct}%</strong>
                       </div>
                       <div className="cr-progressTrack stage"><span style={{ width: `${row.conversionRatePct}%` }} /></div>
-                      <p>{row.policyholders} policyholders from {row.prospects} prospects</p>
+                      <p>{row.policyholders} active policyholders from {row.prospects} prospects</p>
                     </div>
                   ))}
                 </div>
@@ -992,8 +977,8 @@ function AgentClientsRelationship() {
 
               <section className="cr-panel cr-panel-wide">
                 <div className="cr-panelHeader">
-                  <h3 className="cr-panelTitle">Top 10 Recent Prospects in Scope</h3>
-                  <span className="cr-panelMeta">10 most recently created relationship records for the current filters</span>
+                  <h3 className="cr-panelTitle">Newly Created Prospects in Scope</h3>
+                  <span className="cr-panelMeta">All prospects created in the selected date range, earliest to latest</span>
                 </div>
                 <div className="cr-tableWrap">
                   <table className="cr-table">
@@ -1005,7 +990,8 @@ function AgentClientsRelationship() {
                         <th>Type</th>
                         <th>Source</th>
                         <th>Status</th>
-                        <th>Policies Count</th>
+                        <th>Active Leads</th>
+                        <th>Active Policies</th>
                         <th>Created</th>
                       </tr>
                     </thead>
@@ -1019,13 +1005,14 @@ function AgentClientsRelationship() {
                             <td>{row.prospectType || "—"}</td>
                             <td>{row.source || "—"}</td>
                             <td>{row.status || "—"}</td>
-                            <td>{row.policyholders || 0}</td>
+                            <td>{row.activeLeads || 0}</td>
+                            <td>{row.activePolicies || 0}</td>
                             <td>{formatDate(row.createdAt)}</td>
                           </tr>
                         ))
                       ) : (
                         <tr>
-                          <td colSpan="8" className="cr-emptyCell">No prospects found for the selected filters.</td>
+                          <td colSpan="9" className="cr-emptyCell">No prospects found for the selected filters.</td>
                         </tr>
                       )}
                     </tbody>
