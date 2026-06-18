@@ -213,6 +213,77 @@
   outline: none;
 }
 
+
+.manager-breadcrumb {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: #6b7280;
+  font-family: "FSAlbertArabic", sans-serif;
+  font-size: 14px;
+}
+
+.manager-breadcrumb button,
+.manager-agent-link {
+  border: none;
+  background: transparent;
+  color: #b91c1c;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+  padding: 0;
+}
+
+.manager-breadcrumb button:hover,
+.manager-agent-link:hover {
+  text-decoration: underline;
+}
+
+.manager-breadcrumb strong {
+  color: #111827;
+}
+
+.manager-agent-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.manager-agent-detail-grid article {
+  border: 1px solid rgba(218, 41, 28, 0.14);
+  border-radius: 18px;
+  background: #fff;
+  padding: 18px;
+  display: grid;
+  gap: 8px;
+}
+
+.manager-agent-detail-grid h3,
+.manager-agent-kpi-section h3 {
+  margin: 0;
+  color: #111827;
+  font-family: "FSAlbertArabic", sans-serif;
+}
+
+.manager-agent-detail-grid span {
+  color: #6b7280;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.manager-agent-detail-grid strong {
+  color: #111827;
+  font-size: 22px;
+}
+
+.manager-agent-kpi-section {
+  display: grid;
+  gap: 14px;
+}
+
 .manager-report-btn {
   border: none;
   border-radius: 14px;

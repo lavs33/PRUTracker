@@ -755,6 +755,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
             lastCompletedAt: null,
             topTaskType: "—",
             leads: 0,
+            activeLeads: 0,
             converted: 0,
             totalPolicies: 0,
             activePolicies: 0,
@@ -803,6 +804,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
         lastCompletedAt: metrics.lastCompletedAt,
         topTaskType: topTaskTypeEntry?.[0] || "—",
         leads: metrics.leads,
+        activeLeads: metrics.activeLeads,
         converted: metrics.convertedLeadIds.size,
         conversionRate,
         totalPolicies: metrics.totalPolicies,
@@ -829,6 +831,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
         totalOverdueTasks: accumulator.totalOverdueTasks + Number(row.overdueTasks || 0),
         totalClosedTasks: accumulator.totalClosedTasks + Number(row.closedTasks || 0),
         totalLeads: accumulator.totalLeads + Number(row.leads || 0),
+        totalActiveLeads: accumulator.totalActiveLeads + Number(row.activeLeads || 0),
         totalConverted: accumulator.totalConverted + Number(row.converted || 0),
         totalPolicies: accumulator.totalPolicies + Number(row.totalPolicies || 0),
         activePolicies: accumulator.activePolicies + Number(row.activePolicies || 0),
@@ -847,6 +850,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
         totalOverdueTasks: 0,
         totalClosedTasks: 0,
         totalLeads: 0,
+        totalActiveLeads: 0,
         totalConverted: 0,
         totalPolicies: 0,
         activePolicies: 0,
@@ -949,8 +953,9 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
         continue;
       }
 
-      metrics.openTasks += 1;
-      if (Number.isFinite(dueAtMs) && dueAtMs < nowMs) metrics.overdueTasks += 1;
+      const isOverdue = Number.isFinite(dueAtMs) && dueAtMs < nowMs;
+      if (isOverdue) metrics.overdueTasks += 1;
+      else metrics.openTasks += 1;
       if (Number.isFinite(dueAtMs) && (!metrics.nextDueAt || dueAtMs < new Date(metrics.nextDueAt).getTime())) {
         metrics.nextDueAt = task.dueAt;
       }
@@ -970,7 +975,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
 
   const leads = prospectIds.length
     ? await Lead.find({ prospectId: { $in: prospectIds } })
-        .select("_id prospectId createdAt")
+        .select("_id prospectId status createdAt")
         .lean()
     : [];
   const leadIds = leads.map((lead) => lead._id);
@@ -1052,11 +1057,19 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       if (!metrics) continue;
 
       metrics.leads += 1;
+      if (["New", "In Progress"].includes(String(lead?.status || "").trim())) metrics.activeLeads += 1;
       const leadCreatedAtMs = new Date(lead?.createdAt).getTime();
       if (Number.isFinite(leadCreatedAtMs) && (!metrics.latestLeadCreatedAt || leadCreatedAtMs > new Date(metrics.latestLeadCreatedAt).getTime())) {
         metrics.latestLeadCreatedAt = lead.createdAt;
       }
     }
+
+    const activePolicyholderEngagementIds = new Set(
+      (policyholderList || [])
+        .filter((policyholder) => String(policyholder?.status || "").trim() === "Active")
+        .map((policyholder) => String(policyholder?.leadEngagementId || ""))
+        .filter(Boolean)
+    );
 
     for (const policyholder of policyholderList) {
       const assignedUserId = String(
@@ -1086,6 +1099,8 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       const assignedUserId = engagementIdToAssignedUserId.get(engagementId) || "";
       const metrics = metricsByUserId.get(assignedUserId);
       if (!metrics) continue;
+
+      if (!activePolicyholderEngagementIds.has(engagementId)) continue;
 
       const payment = engagementIdToPayment.get(engagementId) || null;
       const annualPayment = engagementIdToAnnualPayment.get(engagementId) || null;
