@@ -484,6 +484,8 @@ function ManagerPortal({ roleType }) {
     .toUpperCase();
   const [activeView, setActiveView] = useState("dashboard");
   const [agentSearch, setAgentSearch] = useState("");
+  const [agentUnitFilter, setAgentUnitFilter] = useState("ALL");
+  const [agentSort, setAgentSort] = useState("usernameAsc");
   const [taskSearch, setTaskSearch] = useState("");
   const [salesSearch, setSalesSearch] = useState("");
   const [taskDatePreset, setTaskDatePreset] = useState("ALL");
@@ -523,7 +525,7 @@ function ManagerPortal({ roleType }) {
 
   useEffect(() => {
     const branchPageLabels = {
-      dashboard: "Branch Overview",
+      dashboard: "Home",
       agents: "Branch Agents",
       task_progress: "Branch Task Progress",
       sales_performance: "Branch Sales Performance",
@@ -531,7 +533,7 @@ function ManagerPortal({ roleType }) {
       kpi_progress: "Branch KPI Progress",
     };
     const unitPageLabels = {
-      dashboard: "Unit Overview",
+      dashboard: "Home",
       agents: "Unit Agents",
       task_progress: "Unit Task Progress",
       sales_performance: "Unit Sales Performance",
@@ -679,6 +681,7 @@ function ManagerPortal({ roleType }) {
     totalOverdueTasks: 0,
     totalClosedTasks: 0,
     totalLeads: 0,
+    totalActiveLeads: 0,
     totalConverted: 0,
     totalPolicies: 0,
     activePolicies: 0,
@@ -699,27 +702,55 @@ function ManagerPortal({ roleType }) {
   const summaryFrequencyPremiumCards = [
     { key: "monthlyPremium", label: "Monthly Premium" },
     { key: "quarterlyPremium", label: "Quarterly Premium" },
-    { key: "halfYearlyPremium", label: "Semi-Annual Premium" },
-    { key: "yearlyPremium", label: "Annual-Frequency Premium" },
+    { key: "halfYearlyPremium", label: "Half-Yearly Premium" },
+    { key: "yearlyPremium", label: "Yearly Premium" },
   ]
     .map((item) => ({
       ...item,
       value: Number(summary.frequencyPremiumBreakdown?.[item.key] || 0),
-    }))
-    .filter((item) => item.value > 0);
+    }));
 
-  const filteredAgents = useMemo(
+  const agentUnitOptions = useMemo(
     () =>
-      sortByAgentCode(
-        buildFilter(portalData?.agents || [], agentSearch, [
-          "username",
-          "name",
-          "unit",
-          ...(normalizedRole === "BM" ? [] : ["branch"]),
-        ]),
+      [...new Set((portalData?.agents || []).map((agent) => String(agent?.unit || "").trim()).filter(Boolean))].sort((left, right) =>
+        left.localeCompare(right, undefined, { sensitivity: "base" }),
       ),
-    [agentSearch, normalizedRole, portalData?.agents],
+    [portalData?.agents],
   );
+
+  const filteredAgents = useMemo(() => {
+    const unitFilteredAgents = (portalData?.agents || []).filter((agent) =>
+      agentUnitFilter === "ALL" ? true : String(agent?.unit || "") === agentUnitFilter,
+    );
+    const searchedAgents = buildFilter(unitFilteredAgents, agentSearch, ["username", "name"]);
+    const sortedAgents = [...searchedAgents].sort((left, right) => {
+      const compareNumber = (key) => Number(left?.[key] || 0) - Number(right?.[key] || 0);
+      const compareUsername = () =>
+        String(left?.username || "").localeCompare(String(right?.username || ""), undefined, { numeric: true, sensitivity: "base" });
+
+      switch (agentSort) {
+        case "annualPremiumDesc":
+          return compareNumber("annualPremium") * -1 || compareUsername();
+        case "annualPremiumAsc":
+          return compareNumber("annualPremium") || compareUsername();
+        case "openTasksDesc":
+          return compareNumber("openTasks") * -1 || compareUsername();
+        case "openTasksAsc":
+          return compareNumber("openTasks") || compareUsername();
+        case "activeLeadsDesc":
+          return compareNumber("activeLeads") * -1 || compareUsername();
+        case "activeLeadsAsc":
+          return compareNumber("activeLeads") || compareUsername();
+        case "activePoliciesDesc":
+          return compareNumber("activePolicies") * -1 || compareUsername();
+        case "activePoliciesAsc":
+          return compareNumber("activePolicies") || compareUsername();
+        default:
+          return compareUsername();
+      }
+    });
+    return sortedAgents;
+  }, [agentSearch, agentSort, agentUnitFilter, portalData?.agents]);
   const filteredTaskRows = useMemo(
     () =>
       sortByAgentCode(
@@ -823,6 +854,7 @@ function ManagerPortal({ roleType }) {
           { label: "Total Units", value: totalUnitsInScope },
           { label: "Agents in Scope", value: summary.totalAgents },
           { label: "Open Tasks", value: summary.totalOpenTasks },
+          { label: "Total Policies", value: summary.totalPolicies },
           {
             label: "Annual Premium",
             value: formatMoney(summary.totalAnnualPremium),
@@ -832,6 +864,7 @@ function ManagerPortal({ roleType }) {
           { label: "Agents in Scope", value: summary.totalAgents },
           { label: "Open Tasks", value: summary.totalOpenTasks },
           { label: "Conversion Rate", value: `${summary.conversionRate}%` },
+          { label: "Total Policies", value: summary.totalPolicies },
           {
             label: "Annual Premium",
             value: formatMoney(summary.totalAnnualPremium),
@@ -860,6 +893,7 @@ function ManagerPortal({ roleType }) {
     { key: "name", label: "Name" },
     { key: "unit", label: "Unit" },
     { key: "leads", label: "Leads" },
+    { key: "activeLeads", label: "Active Leads" },
     { key: "converted", label: "Converted" },
     {
       key: "conversionRate",
@@ -867,7 +901,7 @@ function ManagerPortal({ roleType }) {
       render: (row) => `${row.conversionRate}%`,
     },
     { key: "totalPolicies", label: "Policies" },
-    { key: "activePolicies", label: "Active" },
+    { key: "activePolicies", label: "Active Policies" },
     {
       key: "annualPremium",
       label: "Annual Premium",
@@ -887,6 +921,11 @@ function ManagerPortal({ roleType }) {
       key: "halfYearlyPremium",
       label: "Half-yearly",
       render: (row) => formatMoney(row.halfYearlyPremium),
+    },
+    {
+      key: "yearlyPremium",
+      label: "Yearly",
+      render: (row) => formatMoney(row.yearlyPremium),
     },
   ];
 
@@ -1332,9 +1371,7 @@ function ManagerPortal({ roleType }) {
             <section className="manager-panel">
               <div className="manager-panel__head">
                 <h2>
-                  {normalizedRole === "BM"
-                    ? "Branch Overview"
-                    : "Unit Overview"}
+                  {normalizedRole === "BM" ? "Branch Overview" : "Unit Overview"}
                 </h2>
                 <p>
                   High-level pulse of workload, conversion output, and premium
@@ -1345,6 +1382,10 @@ function ManagerPortal({ roleType }) {
                 <div>
                   <span>Completed Tasks</span>
                   <strong>{summary.totalClosedTasks}</strong>
+                </div>
+                <div>
+                  <span>Open Tasks</span>
+                  <strong>{summary.totalOpenTasks}</strong>
                 </div>
                 <div>
                   <span>Overdue Tasks</span>
@@ -1361,6 +1402,10 @@ function ManagerPortal({ roleType }) {
                 <div>
                   <span>Total Policies</span>
                   <strong>{summary.totalPolicies}</strong>
+                </div>
+                <div>
+                  <span>Total Active Policies</span>
+                  <strong>{summary.activePolicies}</strong>
                 </div>
                 <div>
                   <span>Active Policy Rate</span>
@@ -1385,32 +1430,62 @@ function ManagerPortal({ roleType }) {
               <div className="manager-panel__head">
                 <div>
                   <h2>Agents in Scope</h2>
-                  <p>
-                    The scoped agent list includes the current {normalizedRole}{" "}
-                    account’s underlying agent record in both the count and the
-                    list.
-                  </p>
                 </div>
               </div>
 
               <div className="manager-toolbar manager-toolbar--search-only">
-                <label
-                  className="manager-search"
-                  htmlFor="manager-agents-search"
-                >
-                  <FaSearch size={14} />
-                  <input
-                    id="manager-agents-search"
-                    type="search"
-                    placeholder={normalizedRole === "BM" ? "Search username, name, or unit" : "Search username, name, unit, or branch"}
-                    value={agentSearch}
-                    onChange={(e) => setAgentSearch(e.target.value)}
-                  />
-                </label>
+                <div className="manager-toolbar__filters">
+                  <label
+                    className="manager-search"
+                    htmlFor="manager-agents-search"
+                  >
+                    <FaSearch size={14} />
+                    <input
+                      id="manager-agents-search"
+                      type="search"
+                      placeholder="Search username or name"
+                      value={agentSearch}
+                      onChange={(e) => setAgentSearch(e.target.value)}
+                    />
+                  </label>
+                  <label className="manager-select" htmlFor="manager-agents-unit-filter">
+                    <span>Unit</span>
+                    <select
+                      id="manager-agents-unit-filter"
+                      value={agentUnitFilter}
+                      onChange={(e) => setAgentUnitFilter(e.target.value)}
+                    >
+                      <option value="ALL">All Units</option>
+                      {agentUnitOptions.map((unit) => (
+                        <option key={unit} value={unit}>
+                          {unit}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="manager-select" htmlFor="manager-agents-sort">
+                    <span>Sort By</span>
+                    <select
+                      id="manager-agents-sort"
+                      value={agentSort}
+                      onChange={(e) => setAgentSort(e.target.value)}
+                    >
+                      <option value="usernameAsc">Username (A → Z)</option>
+                      <option value="annualPremiumDesc">Annual Premium (High → Low)</option>
+                      <option value="annualPremiumAsc">Annual Premium (Low → High)</option>
+                      <option value="openTasksDesc">Open Tasks (High → Low)</option>
+                      <option value="openTasksAsc">Open Tasks (Low → High)</option>
+                      <option value="activeLeadsDesc">Active Leads (High → Low)</option>
+                      <option value="activeLeadsAsc">Active Leads (Low → High)</option>
+                      <option value="activePoliciesDesc">Active Policies (High → Low)</option>
+                      <option value="activePoliciesAsc">Active Policies (Low → High)</option>
+                    </select>
+                  </label>
+                </div>
               </div>
 
               <div className="manager-table-wrap">
-                <table className="manager-table">
+                <table className="manager-table manager-table--wide">
                   <thead>
                     <tr>
                       <th>Username</th>
@@ -1421,8 +1496,14 @@ function ManagerPortal({ roleType }) {
                       <th>Overdue</th>
                       <th>Done</th>
                       <th>Leads</th>
+                      <th>Active Leads</th>
                       <th>Converted</th>
+                      <th>Active Policies</th>
                       <th>Annual Premium</th>
+                      <th>Monthly</th>
+                      <th>Quarterly</th>
+                      <th>Half-Yearly</th>
+                      <th>Yearly</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1436,8 +1517,14 @@ function ManagerPortal({ roleType }) {
                         <td>{agent.overdueTasks}</td>
                         <td>{agent.closedTasks}</td>
                         <td>{agent.leads}</td>
+                        <td>{agent.activeLeads}</td>
                         <td>{agent.converted}</td>
+                        <td>{agent.activePolicies}</td>
                         <td>{formatMoney(agent.annualPremium)}</td>
+                        <td>{formatMoney(agent.monthlyPremium)}</td>
+                        <td>{formatMoney(agent.quarterlyPremium)}</td>
+                        <td>{formatMoney(agent.halfYearlyPremium)}</td>
+                        <td>{formatMoney(agent.yearlyPremium)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1604,10 +1691,18 @@ function ManagerPortal({ roleType }) {
                   </strong>
                 </div>
                 <div>
-                  <span>Half-yearly Premium</span>
+                  <span>Half-Yearly Premium</span>
                   <strong>
                     {formatMoney(
                       salesSummary.frequencyPremiumBreakdown?.halfYearlyPremium,
+                    )}
+                  </strong>
+                </div>
+                <div>
+                  <span>Yearly Premium</span>
+                  <strong>
+                    {formatMoney(
+                      salesSummary.frequencyPremiumBreakdown?.yearlyPremium,
                     )}
                   </strong>
                 </div>
@@ -1637,10 +1732,11 @@ function ManagerPortal({ roleType }) {
                       <th>Name</th>
                       <th>Unit</th>
                       <th>Leads</th>
+                      <th>Active Leads</th>
                       <th>Converted</th>
                       <th>Conversion Rate</th>
                       <th>Policies</th>
-                      <th>Active</th>
+                      <th>Active Policies</th>
                       <th>Annual Premium</th>
                       <th>Monthly</th>
                       <th>Quarterly</th>
@@ -1655,6 +1751,7 @@ function ManagerPortal({ roleType }) {
                         <td>{row.name}</td>
                         <td>{row.unit || "—"}</td>
                         <td>{row.leads}</td>
+                        <td>{row.activeLeads}</td>
                         <td>{row.converted}</td>
                         <td>{row.conversionRate}%</td>
                         <td>{row.totalPolicies}</td>
