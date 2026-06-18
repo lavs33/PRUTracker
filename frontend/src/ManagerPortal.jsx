@@ -484,6 +484,9 @@ function ManagerPortal({ roleType }) {
     .toUpperCase();
   const [activeView, setActiveView] = useState("dashboard");
   const [agentSearch, setAgentSearch] = useState("");
+  const [agentSort, setAgentSort] = useState("usernameAsc");
+  const [selectedAgentId, setSelectedAgentId] = useState("");
+  const [selectedUnitName, setSelectedUnitName] = useState("");
   const [taskSearch, setTaskSearch] = useState("");
   const [salesSearch, setSalesSearch] = useState("");
   const [taskDatePreset, setTaskDatePreset] = useState("ALL");
@@ -523,16 +526,16 @@ function ManagerPortal({ roleType }) {
 
   useEffect(() => {
     const branchPageLabels = {
-      dashboard: "Branch Overview",
-      agents: "Branch Agents",
+      dashboard: "Home",
+      agents: "Branch Units",
       task_progress: "Branch Task Progress",
       sales_performance: "Branch Sales Performance",
       kpi_assignment: "Branch KPI Assignment",
       kpi_progress: "Branch KPI Progress",
     };
     const unitPageLabels = {
-      dashboard: "Unit Overview",
-      agents: "Unit Agents",
+      dashboard: "Home",
+      agents: "Unit",
       task_progress: "Unit Task Progress",
       sales_performance: "Unit Sales Performance",
       kpi_assignment: "Branch KPI Assignment",
@@ -593,7 +596,7 @@ function ManagerPortal({ roleType }) {
 
   useEffect(() => {
     if (!user?.id || user.role !== normalizedRole) return;
-    if (!["kpi_assignment", "kpi_progress"].includes(activeView)) return;
+    if (!["agents", "kpi_assignment", "kpi_progress"].includes(activeView)) return;
 
     const controller = new AbortController();
     const fetchKpis = async () => {
@@ -679,6 +682,7 @@ function ManagerPortal({ roleType }) {
     totalOverdueTasks: 0,
     totalClosedTasks: 0,
     totalLeads: 0,
+    totalActiveLeads: 0,
     totalConverted: 0,
     totalPolicies: 0,
     activePolicies: 0,
@@ -699,27 +703,136 @@ function ManagerPortal({ roleType }) {
   const summaryFrequencyPremiumCards = [
     { key: "monthlyPremium", label: "Monthly Premium" },
     { key: "quarterlyPremium", label: "Quarterly Premium" },
-    { key: "halfYearlyPremium", label: "Semi-Annual Premium" },
-    { key: "yearlyPremium", label: "Annual-Frequency Premium" },
+    { key: "halfYearlyPremium", label: "Half-Yearly Premium" },
+    { key: "yearlyPremium", label: "Yearly Premium" },
   ]
     .map((item) => ({
       ...item,
       value: Number(summary.frequencyPremiumBreakdown?.[item.key] || 0),
-    }))
-    .filter((item) => item.value > 0);
+    }));
 
-  const filteredAgents = useMemo(
-    () =>
-      sortByAgentCode(
-        buildFilter(portalData?.agents || [], agentSearch, [
-          "username",
-          "name",
-          "unit",
-          ...(normalizedRole === "BM" ? [] : ["branch"]),
-        ]),
-      ),
-    [agentSearch, normalizedRole, portalData?.agents],
+  const unitOptions = useMemo(() => {
+    const backendUnits = (portalData?.units || []).map((unit) => ({
+      ...unit,
+      name: String(unit?.name || "").trim(),
+    })).filter((unit) => unit.name);
+    if (backendUnits.length) return backendUnits;
+    return [...new Set((portalData?.agents || []).map((agent) => String(agent?.unit || "").trim()).filter(Boolean))]
+      .sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }))
+      .map((name) => ({ name, manager: { code: "—", name: "—" }, assistantManager: { code: "—", name: "—" } }));
+  }, [portalData?.agents, portalData?.units]);
+
+  useEffect(() => {
+    if (!unitOptions.length) return;
+    if (!selectedUnitName || !unitOptions.some((unit) => unit.name === selectedUnitName)) {
+      setSelectedUnitName(unitOptions[0].name);
+    }
+  }, [selectedUnitName, unitOptions]);
+
+  const selectedUnit = unitOptions.find((unit) => unit.name === selectedUnitName) || unitOptions[0] || null;
+
+  const filteredAgents = useMemo(() => {
+    const unitFilteredAgents = (portalData?.agents || []).filter((agent) =>
+      selectedUnit?.name ? String(agent?.unit || "") === selectedUnit.name : true,
+    );
+    const searchedAgents = buildFilter(unitFilteredAgents, agentSearch, ["username", "name"]);
+    const sortedAgents = [...searchedAgents].sort((left, right) => {
+      const compareNumber = (key) => Number(left?.[key] || 0) - Number(right?.[key] || 0);
+      const compareUsername = () =>
+        String(left?.username || "").localeCompare(String(right?.username || ""), undefined, { numeric: true, sensitivity: "base" });
+
+      switch (agentSort) {
+        case "openTasksDesc":
+          return compareNumber("openTasks") * -1 || compareUsername();
+        case "openTasksAsc":
+          return compareNumber("openTasks") || compareUsername();
+        case "activeLeadsDesc":
+          return compareNumber("activeLeads") * -1 || compareUsername();
+        case "activeLeadsAsc":
+          return compareNumber("activeLeads") || compareUsername();
+        case "activePoliciesDesc":
+          return compareNumber("activePolicies") * -1 || compareUsername();
+        case "activePoliciesAsc":
+          return compareNumber("activePolicies") || compareUsername();
+        default:
+          return compareUsername();
+      }
+    });
+    return sortedAgents;
+  }, [agentSearch, agentSort, portalData?.agents, selectedUnit?.name]);
+
+
+  const selectedUnitSummary = useMemo(() => {
+    const rows = filteredAgents;
+    const totals = rows.reduce((acc, row) => ({
+      totalProspects: acc.totalProspects + Number(row.totalProspects || 0),
+      activeProspects: acc.activeProspects + Number(row.activeProspects || 0),
+      leads: acc.leads + Number(row.leads || 0),
+      activeLeads: acc.activeLeads + Number(row.activeLeads || 0),
+      totalPolicies: acc.totalPolicies + Number(row.totalPolicies || 0),
+      activePolicies: acc.activePolicies + Number(row.activePolicies || 0),
+      openTasks: acc.openTasks + Number(row.openTasks || 0),
+      overdueTasks: acc.overdueTasks + Number(row.overdueTasks || 0),
+      closedTasks: acc.closedTasks + Number(row.closedTasks || 0),
+      delayedDoneTasks: acc.delayedDoneTasks + Number(row.delayedDoneTasks || 0),
+      annualPremium: acc.annualPremium + Number(row.annualPremium || 0),
+      monthlyPremium: acc.monthlyPremium + Number(row.monthlyPremium || 0),
+      quarterlyPremium: acc.quarterlyPremium + Number(row.quarterlyPremium || 0),
+      halfYearlyPremium: acc.halfYearlyPremium + Number(row.halfYearlyPremium || 0),
+      yearlyPremium: acc.yearlyPremium + Number(row.yearlyPremium || 0),
+    }), { totalProspects: 0, activeProspects: 0, leads: 0, activeLeads: 0, totalPolicies: 0, activePolicies: 0, openTasks: 0, overdueTasks: 0, closedTasks: 0, delayedDoneTasks: 0, annualPremium: 0, monthlyPremium: 0, quarterlyPremium: 0, halfYearlyPremium: 0, yearlyPremium: 0 });
+    totals.onTimeCompletionRate = totals.closedTasks ? Math.round(((totals.closedTasks - totals.delayedDoneTasks) / totals.closedTasks) * 100) : 0;
+    totals.activePolicyRate = totals.totalPolicies ? Math.round((totals.activePolicies / totals.totalPolicies) * 100) : 0;
+    return totals;
+  }, [filteredAgents]);
+
+  const selectedUnitKpiCards = useMemo(() => {
+    const unitAssignment = (kpiData?.assignments || []).find((assignment) => assignment.scopeType === "UNIT");
+    if (!unitAssignment) return [];
+    return (unitAssignment.kpis || []).filter((kpi) => kpi.assigned !== false).map((kpi) => {
+      const actualByKey = {
+        monthly_sales_production: Number(selectedUnitSummary.annualPremium || 0),
+      };
+      const actual = actualByKey[kpi.key] || 0;
+      return { kpi, actual, comparison: getKpiComparison(actual, kpi), dateRangeLabel: getKpiFrequencyRangeLabel(kpi.period) };
+    });
+  }, [kpiData?.assignments, selectedUnitSummary]);
+
+  const selectedAgent = useMemo(
+    () => (portalData?.agents || []).find((agent) => String(agent?.id || "") === selectedAgentId) || null,
+    [portalData?.agents, selectedAgentId],
   );
+
+  const selectedAgentKpiCards = useMemo(() => {
+    if (!selectedAgent) return [];
+    const assignments = (kpiData?.assignments || []).filter((assignment) => assignment.scopeType === "AGENT");
+
+    return assignments.flatMap((assignment) =>
+      (assignment.kpis || [])
+        .filter((kpi) => kpi.assigned !== false)
+        .map((kpi) => {
+          const rowsForFrequency = portalData?.kpiSalesRowsByFrequency?.[kpi.period] || [];
+          const agentRow = rowsForFrequency.find((row) => String(row?.userId || "") === String(selectedAgent.userId || "")) || selectedAgent || {};
+          const actualByKey = {
+            weekly_approaches: 0,
+            weekly_appointments: 0,
+            weekly_presentations: 0,
+            monthly_policies: Number(agentRow.totalPolicies || selectedAgent.totalPolicies || 0),
+            monthly_new_prospects: Number(agentRow.totalProspects || selectedAgent.totalProspects || 0),
+            monthly_closing_ratio: Number(agentRow.conversionRate || selectedAgent.conversionRate || 0),
+          };
+          const actual = actualByKey[kpi.key] || 0;
+          return {
+            assignment,
+            kpi,
+            actual,
+            comparison: getKpiComparison(actual, kpi),
+            dateRangeLabel: getKpiFrequencyRangeLabel(kpi.period),
+          };
+        }),
+    );
+  }, [kpiData?.assignments, portalData?.kpiSalesRowsByFrequency, selectedAgent]);
+
   const filteredTaskRows = useMemo(
     () =>
       sortByAgentCode(
@@ -823,6 +936,7 @@ function ManagerPortal({ roleType }) {
           { label: "Total Units", value: totalUnitsInScope },
           { label: "Agents in Scope", value: summary.totalAgents },
           { label: "Open Tasks", value: summary.totalOpenTasks },
+          { label: "Total Policies", value: summary.totalPolicies },
           {
             label: "Annual Premium",
             value: formatMoney(summary.totalAnnualPremium),
@@ -832,6 +946,7 @@ function ManagerPortal({ roleType }) {
           { label: "Agents in Scope", value: summary.totalAgents },
           { label: "Open Tasks", value: summary.totalOpenTasks },
           { label: "Conversion Rate", value: `${summary.conversionRate}%` },
+          { label: "Total Policies", value: summary.totalPolicies },
           {
             label: "Annual Premium",
             value: formatMoney(summary.totalAnnualPremium),
@@ -860,6 +975,7 @@ function ManagerPortal({ roleType }) {
     { key: "name", label: "Name" },
     { key: "unit", label: "Unit" },
     { key: "leads", label: "Leads" },
+    { key: "activeLeads", label: "Active Leads" },
     { key: "converted", label: "Converted" },
     {
       key: "conversionRate",
@@ -867,7 +983,7 @@ function ManagerPortal({ roleType }) {
       render: (row) => `${row.conversionRate}%`,
     },
     { key: "totalPolicies", label: "Policies" },
-    { key: "activePolicies", label: "Active" },
+    { key: "activePolicies", label: "Active Policies" },
     {
       key: "annualPremium",
       label: "Annual Premium",
@@ -887,6 +1003,11 @@ function ManagerPortal({ roleType }) {
       key: "halfYearlyPremium",
       label: "Half-yearly",
       render: (row) => formatMoney(row.halfYearlyPremium),
+    },
+    {
+      key: "yearlyPremium",
+      label: "Yearly",
+      render: (row) => formatMoney(row.yearlyPremium),
     },
   ];
 
@@ -1332,9 +1453,7 @@ function ManagerPortal({ roleType }) {
             <section className="manager-panel">
               <div className="manager-panel__head">
                 <h2>
-                  {normalizedRole === "BM"
-                    ? "Branch Overview"
-                    : "Unit Overview"}
+                  {normalizedRole === "BM" ? "Branch Overview" : "Unit Overview"}
                 </h2>
                 <p>
                   High-level pulse of workload, conversion output, and premium
@@ -1345,6 +1464,10 @@ function ManagerPortal({ roleType }) {
                 <div>
                   <span>Completed Tasks</span>
                   <strong>{summary.totalClosedTasks}</strong>
+                </div>
+                <div>
+                  <span>Open Tasks</span>
+                  <strong>{summary.totalOpenTasks}</strong>
                 </div>
                 <div>
                   <span>Overdue Tasks</span>
@@ -1361,6 +1484,10 @@ function ManagerPortal({ roleType }) {
                 <div>
                   <span>Total Policies</span>
                   <strong>{summary.totalPolicies}</strong>
+                </div>
+                <div>
+                  <span>Total Active Policies</span>
+                  <strong>{summary.activePolicies}</strong>
                 </div>
                 <div>
                   <span>Active Policy Rate</span>
@@ -1381,75 +1508,257 @@ function ManagerPortal({ roleType }) {
           )}
 
           {!isLoading && !loadError && activeView === "agents" && (
-            <section className="manager-panel">
-              <div className="manager-panel__head">
-                <div>
-                  <h2>Agents in Scope</h2>
-                  <p>
-                    The scoped agent list includes the current {normalizedRole}{" "}
-                    account’s underlying agent record in both the count and the
-                    list.
-                  </p>
+            selectedAgent ? (
+              <section className="manager-panel">
+                <nav className="manager-breadcrumb" aria-label="Agent detail breadcrumb">
+                  <button type="button" onClick={() => setSelectedAgentId("")}>Agents in Scope</button>
+                  <span>&gt;</span>
+                  <span>{selectedAgent.unit || "Unassigned Unit"}</span>
+                  <span>&gt;</span>
+                  <strong>{selectedAgent.username || selectedAgent.name}</strong>
+                </nav>
+
+                <div className="manager-panel__head">
+                  <div>
+                    <h2>{selectedAgent.name}</h2>
+                    <p>
+                      Full agent performance across clients, tasks, sales, and KPI progress for {selectedAgent.username}.
+                    </p>
+                  </div>
                 </div>
-              </div>
 
-              <div className="manager-toolbar manager-toolbar--search-only">
-                <label
-                  className="manager-search"
-                  htmlFor="manager-agents-search"
-                >
-                  <FaSearch size={14} />
-                  <input
-                    id="manager-agents-search"
-                    type="search"
-                    placeholder={normalizedRole === "BM" ? "Search username, name, or unit" : "Search username, name, unit, or branch"}
-                    value={agentSearch}
-                    onChange={(e) => setAgentSearch(e.target.value)}
-                  />
-                </label>
-              </div>
+                <div className="manager-agent-detail-grid">
+                  <article>
+                    <h3>Clients</h3>
+                    <span>Total Prospects</span>
+                    <strong>{Number(selectedAgent.totalProspects || 0)}</strong>
+                    <span>Active Prospects</span>
+                    <strong>{Number(selectedAgent.activeProspects || 0)}</strong>
+                    <span>Total Leads</span>
+                    <strong>{Number(selectedAgent.leads || 0)}</strong>
+                    <span>Active Leads</span>
+                    <strong>{Number(selectedAgent.activeLeads || 0)}</strong>
+                    <span>Total Policyholders</span>
+                    <strong>{Number(selectedAgent.totalPolicies || 0)}</strong>
+                    <span>Active Policyholders</span>
+                    <strong>{Number(selectedAgent.activePolicies || 0)}</strong>
+                    <span>At Risk Policyholders</span>
+                    <strong>{Number(selectedAgent.atRiskPolicies || 0)}</strong>
+                    <span>Lapsed Policies</span>
+                    <strong>{Number(selectedAgent.lapsedPolicies || 0)}</strong>
+                  </article>
+                  <article>
+                    <h3>Tasks</h3>
+                    <span>Open Tasks</span>
+                    <strong>{Number(selectedAgent.openTasks || 0)}</strong>
+                    <span>Overdue Tasks</span>
+                    <strong>{Number(selectedAgent.overdueTasks || 0)}</strong>
+                    <span>Done Tasks</span>
+                    <strong>{Number(selectedAgent.closedTasks || 0)}</strong>
+                    <span>On-Time Completion Rate</span>
+                    <strong>{Number(selectedAgent.closedTasks || 0) ? Math.round(((Number(selectedAgent.closedTasks || 0) - Number(selectedAgent.delayedDoneTasks || 0)) / Number(selectedAgent.closedTasks || 0)) * 100) : 0}%</strong>
+                  </article>
+                  <article>
+                    <h3>Sales</h3>
+                    <span>Annual Premium</span>
+                    <strong>{formatMoney(selectedAgent.annualPremium)}</strong>
+                    <span>Monthly</span>
+                    <strong>{formatMoney(selectedAgent.monthlyPremium)}</strong>
+                    <span>Quarterly</span>
+                    <strong>{formatMoney(selectedAgent.quarterlyPremium)}</strong>
+                    <span>Half-Yearly</span>
+                    <strong>{formatMoney(selectedAgent.halfYearlyPremium)}</strong>
+                    <span>Yearly</span>
+                    <strong>{formatMoney(selectedAgent.yearlyPremium)}</strong>
+                  </article>
+                </div>
 
-              <div className="manager-table-wrap">
-                <table className="manager-table">
-                  <thead>
-                    <tr>
-                      <th>Username</th>
-                      <th>Name</th>
-                      <th>Unit</th>
-                      {normalizedRole !== "BM" && <th>Branch</th>}
-                      <th>Open Tasks</th>
-                      <th>Overdue</th>
-                      <th>Done</th>
-                      <th>Leads</th>
-                      <th>Converted</th>
-                      <th>Annual Premium</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredAgents.map((agent) => (
-                      <tr key={agent.id}>
-                        <td>{agent.username}</td>
-                        <td>{agent.name}</td>
-                        <td>{agent.unit || "—"}</td>
-                        {normalizedRole !== "BM" && <td>{agent.branch || "—"}</td>}
-                        <td>{agent.openTasks}</td>
-                        <td>{agent.overdueTasks}</td>
-                        <td>{agent.closedTasks}</td>
-                        <td>{agent.leads}</td>
-                        <td>{agent.converted}</td>
-                        <td>{formatMoney(agent.annualPremium)}</td>
+                <div className="manager-agent-kpi-section">
+                  <h3>KPI Progress</h3>
+                  {selectedAgentKpiCards.length ? (
+                    <div className="manager-kpi-progress-grid">
+                      {selectedAgentKpiCards.map(({ assignment, kpi, actual, comparison, dateRangeLabel }) => (
+                        <article className={`manager-kpi-progress-card ${comparison.className}`} key={`${assignment.scopeType}:${assignment.scopeId}:${kpi.key}`}>
+                          <span>{assignment.name}</span>
+                          <strong>{kpi.label}</strong>
+                          <small>{dateRangeLabel} • {kpi.period}</small>
+                          <div className="manager-kpi-progress-values">
+                            <b>{formatActualKpiValue(actual, kpi.valueType)}</b>
+                            <em>{comparison.status}</em>
+                          </div>
+                          <div className="manager-kpi-progress-bar" aria-label={`${kpi.label} progress ${comparison.percent}%`}>
+                            <span style={{ width: `${comparison.percent}%` }} />
+                          </div>
+                          <small className="manager-kpi-gap-note">{comparison.deltaLabel}</small>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="manager-empty-state">No KPI progress is available for this agent yet.</div>
+                  )}
+                </div>
+              </section>
+            ) : (
+              <section className="manager-panel">
+                <div className="manager-panel__head">
+                  <div>
+                    <h2>
+                      <button type="button" className="manager-heading-link" onClick={() => setActiveView("dashboard")}>{scope.branchName || "Branch"}</button>
+                      <span> &gt; </span>
+                      <span>{selectedUnit?.name || "Unit"}</span>
+                    </h2>
+                  </div>
+                </div>
+
+                <div className="manager-toolbar manager-toolbar--search-only">
+                  <div className="manager-toolbar__filters">
+                    <label className="manager-select" htmlFor="manager-unit-selector">
+                      <span>Unit</span>
+                      <select id="manager-unit-selector" value={selectedUnit?.name || ""} onChange={(e) => { setSelectedUnitName(e.target.value); setSelectedAgentId(""); }}>
+                        {unitOptions.map((unit) => (
+                          <option key={unit.name} value={unit.name}>{unit.name}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label
+                      className="manager-search"
+                      htmlFor="manager-agents-search"
+                    >
+                      <FaSearch size={14} />
+                      <input
+                        id="manager-agents-search"
+                        type="search"
+                        placeholder="Search username or name"
+                        value={agentSearch}
+                        onChange={(e) => setAgentSearch(e.target.value)}
+                      />
+                    </label>
+                    <label className="manager-select" htmlFor="manager-agents-sort">
+                      <span>Sort By</span>
+                      <select
+                        id="manager-agents-sort"
+                        value={agentSort}
+                        onChange={(e) => setAgentSort(e.target.value)}
+                      >
+                        <option value="usernameAsc">Username (A → Z)</option>
+                        <option value="openTasksDesc">Open Tasks (High → Low)</option>
+                        <option value="openTasksAsc">Open Tasks (Low → High)</option>
+                        <option value="activeLeadsDesc">Active Leads (High → Low)</option>
+                        <option value="activeLeadsAsc">Active Leads (Low → High)</option>
+                        <option value="activePoliciesDesc">Active Policies (High → Low)</option>
+                        <option value="activePoliciesAsc">Active Policies (Low → High)</option>
+                      </select>
+                    </label>
+                  </div>
+                </div>
+
+                <div className="manager-agent-detail-grid">
+                  <article>
+                    <h3>Unit Managers</h3>
+                    <span>Unit Manager Code</span>
+                    <strong>{selectedUnit?.manager?.code || "—"}</strong>
+                    <span>Unit Manager Name</span>
+                    <strong>{selectedUnit?.manager?.name || "—"}</strong>
+                    <span>Assistant Unit Manager Code</span>
+                    <strong>{selectedUnit?.assistantManager?.code || "—"}</strong>
+                    <span>Assistant Unit Manager Name</span>
+                    <strong>{selectedUnit?.assistantManager?.name || "—"}</strong>
+                  </article>
+                  <article>
+                    <h3>Clients</h3>
+                    <span>Total Prospects</span><strong>{selectedUnitSummary.totalProspects}</strong>
+                    <span>Active Leads</span><strong>{selectedUnitSummary.activeLeads}</strong>
+                    <span>Total Policyholders</span><strong>{selectedUnitSummary.totalPolicies}</strong>
+                    <span>Active Policyholders</span><strong>{selectedUnitSummary.activePolicies}</strong>
+                  </article>
+                  <article>
+                    <h3>Tasks</h3>
+                    <span>Open Tasks</span><strong>{selectedUnitSummary.openTasks}</strong>
+                    <span>Overdue Tasks</span><strong>{selectedUnitSummary.overdueTasks}</strong>
+                    <span>Done Tasks</span><strong>{selectedUnitSummary.closedTasks}</strong>
+                    <span>On-Time Completion Rate</span><strong>{selectedUnitSummary.onTimeCompletionRate}%</strong>
+                  </article>
+                  <article>
+                    <h3>Sales</h3>
+                    <span>Annual Premium</span><strong>{formatMoney(selectedUnitSummary.annualPremium)}</strong>
+                    <span>Active Policy Rate</span><strong>{selectedUnitSummary.activePolicyRate}%</strong>
+                    <span>Monthly Premium</span><strong>{formatMoney(selectedUnitSummary.monthlyPremium)}</strong>
+                    <span>Yearly Premium</span><strong>{formatMoney(selectedUnitSummary.yearlyPremium)}</strong>
+                  </article>
+                </div>
+
+                <div className="manager-agent-kpi-section">
+                  <h3>Unit KPI Progress</h3>
+                  {selectedUnitKpiCards.length ? (
+                    <div className="manager-kpi-progress-grid">
+                      {selectedUnitKpiCards.map(({ kpi, actual, comparison, dateRangeLabel }) => (
+                        <article className={`manager-kpi-progress-card ${comparison.className}`} key={`unit:${kpi.key}`}>
+                          <span>{selectedUnit?.name || "Unit"}</span>
+                          <strong>{kpi.label}</strong>
+                          <small>{dateRangeLabel} • {kpi.period}</small>
+                          <div className="manager-kpi-progress-values"><b>{formatActualKpiValue(actual, kpi.valueType)}</b><em>{comparison.status}</em></div>
+                          <div className="manager-kpi-progress-bar" aria-label={`${kpi.label} progress ${comparison.percent}%`}><span style={{ width: `${comparison.percent}%` }} /></div>
+                          <small className="manager-kpi-gap-note">{comparison.deltaLabel}</small>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="manager-empty-state">No unit KPI progress is available yet.</div>
+                  )}
+                </div>
+
+                <div className="manager-panel__head"><h2>Agents in Scope</h2></div>
+
+                <div className="manager-table-wrap">
+                  <table className="manager-table manager-table--agents">
+                    <thead>
+                      <tr>
+                        <th>Username</th>
+                        <th>Name</th>
+                        <th>Unit</th>
+                        {normalizedRole !== "BM" && <th>Branch</th>}
+                        <th>Open Tasks</th>
+                        <th>Overdue</th>
+                        <th>Done</th>
+                        <th>Leads</th>
+                        <th>Active Leads</th>
+                        <th>Active Policies</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              {!filteredAgents.length && (
-                <div className="manager-empty-state">
-                  No agents matched this search yet.
+                    </thead>
+                    <tbody>
+                      {filteredAgents.map((agent) => (
+                        <tr key={agent.id}>
+                          <td>
+                            <button type="button" className="manager-agent-link" onClick={() => setSelectedAgentId(String(agent.id || ""))}>
+                              {agent.username}
+                            </button>
+                          </td>
+                          <td>
+                            <button type="button" className="manager-agent-link" onClick={() => setSelectedAgentId(String(agent.id || ""))}>
+                              {agent.name}
+                            </button>
+                          </td>
+                          <td>{agent.unit || "—"}</td>
+                          {normalizedRole !== "BM" && <td>{agent.branch || "—"}</td>}
+                          <td>{Number(agent.openTasks || 0)}</td>
+                          <td>{Number(agent.overdueTasks || 0)}</td>
+                          <td>{Number(agent.closedTasks || 0)}</td>
+                          <td>{Number(agent.leads || 0)}</td>
+                          <td>{Number(agent.activeLeads || 0)}</td>
+                          <td>{Number(agent.activePolicies || 0)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
-              )}
-            </section>
+
+                {!filteredAgents.length && (
+                  <div className="manager-empty-state">
+                    No agents matched this search yet.
+                  </div>
+                )}
+              </section>
+            )
           )}
 
           {!isLoading && !loadError && activeView === "task_progress" && (
@@ -1604,10 +1913,18 @@ function ManagerPortal({ roleType }) {
                   </strong>
                 </div>
                 <div>
-                  <span>Half-yearly Premium</span>
+                  <span>Half-Yearly Premium</span>
                   <strong>
                     {formatMoney(
                       salesSummary.frequencyPremiumBreakdown?.halfYearlyPremium,
+                    )}
+                  </strong>
+                </div>
+                <div>
+                  <span>Yearly Premium</span>
+                  <strong>
+                    {formatMoney(
+                      salesSummary.frequencyPremiumBreakdown?.yearlyPremium,
                     )}
                   </strong>
                 </div>
@@ -1637,10 +1954,11 @@ function ManagerPortal({ roleType }) {
                       <th>Name</th>
                       <th>Unit</th>
                       <th>Leads</th>
+                      <th>Active Leads</th>
                       <th>Converted</th>
                       <th>Conversion Rate</th>
                       <th>Policies</th>
-                      <th>Active</th>
+                      <th>Active Policies</th>
                       <th>Annual Premium</th>
                       <th>Monthly</th>
                       <th>Quarterly</th>
@@ -1655,6 +1973,7 @@ function ManagerPortal({ roleType }) {
                         <td>{row.name}</td>
                         <td>{row.unit || "—"}</td>
                         <td>{row.leads}</td>
+                        <td>{row.activeLeads}</td>
                         <td>{row.converted}</td>
                         <td>{row.conversionRate}%</td>
                         <td>{row.totalPolicies}</td>
