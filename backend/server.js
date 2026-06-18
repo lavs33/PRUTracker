@@ -949,8 +949,9 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
         continue;
       }
 
-      metrics.openTasks += 1;
-      if (Number.isFinite(dueAtMs) && dueAtMs < nowMs) metrics.overdueTasks += 1;
+      const isOverdue = Number.isFinite(dueAtMs) && dueAtMs < nowMs;
+      if (isOverdue) metrics.overdueTasks += 1;
+      else metrics.openTasks += 1;
       if (Number.isFinite(dueAtMs) && (!metrics.nextDueAt || dueAtMs < new Date(metrics.nextDueAt).getTime())) {
         metrics.nextDueAt = task.dueAt;
       }
@@ -1058,6 +1059,13 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       }
     }
 
+    const activePolicyholderEngagementIds = new Set(
+      (policyholderList || [])
+        .filter((policyholder) => String(policyholder?.status || "").trim() === "Active")
+        .map((policyholder) => String(policyholder?.leadEngagementId || ""))
+        .filter(Boolean)
+    );
+
     for (const policyholder of policyholderList) {
       const assignedUserId = String(
         policyholder?.assignedToUserId || engagementIdToAssignedUserId.get(String(policyholder?.leadEngagementId || "")) || ""
@@ -1086,6 +1094,8 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       const assignedUserId = engagementIdToAssignedUserId.get(engagementId) || "";
       const metrics = metricsByUserId.get(assignedUserId);
       if (!metrics) continue;
+
+      if (!activePolicyholderEngagementIds.has(engagementId)) continue;
 
       const payment = engagementIdToPayment.get(engagementId) || null;
       const annualPayment = engagementIdToAnnualPayment.get(engagementId) || null;

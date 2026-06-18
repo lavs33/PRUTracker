@@ -523,7 +523,7 @@ function ManagerPortal({ roleType }) {
 
   useEffect(() => {
     const branchPageLabels = {
-      dashboard: "Branch Overview",
+      dashboard: "Home",
       agents: "Branch Agents",
       task_progress: "Branch Task Progress",
       sales_performance: "Branch Sales Performance",
@@ -531,7 +531,7 @@ function ManagerPortal({ roleType }) {
       kpi_progress: "Branch KPI Progress",
     };
     const unitPageLabels = {
-      dashboard: "Unit Overview",
+      dashboard: "Home",
       agents: "Unit Agents",
       task_progress: "Unit Task Progress",
       sales_performance: "Unit Sales Performance",
@@ -699,14 +699,13 @@ function ManagerPortal({ roleType }) {
   const summaryFrequencyPremiumCards = [
     { key: "monthlyPremium", label: "Monthly Premium" },
     { key: "quarterlyPremium", label: "Quarterly Premium" },
-    { key: "halfYearlyPremium", label: "Semi-Annual Premium" },
-    { key: "yearlyPremium", label: "Annual-Frequency Premium" },
+    { key: "halfYearlyPremium", label: "Half-Yearly Premium" },
+    { key: "yearlyPremium", label: "Yearly Premium" },
   ]
     .map((item) => ({
       ...item,
       value: Number(summary.frequencyPremiumBreakdown?.[item.key] || 0),
-    }))
-    .filter((item) => item.value > 0);
+    }));
 
   const filteredAgents = useMemo(
     () =>
@@ -823,6 +822,7 @@ function ManagerPortal({ roleType }) {
           { label: "Total Units", value: totalUnitsInScope },
           { label: "Agents in Scope", value: summary.totalAgents },
           { label: "Open Tasks", value: summary.totalOpenTasks },
+          { label: "Total Policies", value: summary.totalPolicies },
           {
             label: "Annual Premium",
             value: formatMoney(summary.totalAnnualPremium),
@@ -832,6 +832,7 @@ function ManagerPortal({ roleType }) {
           { label: "Agents in Scope", value: summary.totalAgents },
           { label: "Open Tasks", value: summary.totalOpenTasks },
           { label: "Conversion Rate", value: `${summary.conversionRate}%` },
+          { label: "Total Policies", value: summary.totalPolicies },
           {
             label: "Annual Premium",
             value: formatMoney(summary.totalAnnualPremium),
@@ -1332,9 +1333,7 @@ function ManagerPortal({ roleType }) {
             <section className="manager-panel">
               <div className="manager-panel__head">
                 <h2>
-                  {normalizedRole === "BM"
-                    ? "Branch Overview"
-                    : "Unit Overview"}
+                  Home
                 </h2>
                 <p>
                   High-level pulse of workload, conversion output, and premium
@@ -1345,6 +1344,10 @@ function ManagerPortal({ roleType }) {
                 <div>
                   <span>Completed Tasks</span>
                   <strong>{summary.totalClosedTasks}</strong>
+                </div>
+                <div>
+                  <span>Open Tasks</span>
+                  <strong>{summary.totalOpenTasks}</strong>
                 </div>
                 <div>
                   <span>Overdue Tasks</span>
@@ -1361,6 +1364,10 @@ function ManagerPortal({ roleType }) {
                 <div>
                   <span>Total Policies</span>
                   <strong>{summary.totalPolicies}</strong>
+                </div>
+                <div>
+                  <span>Total Active Policies</span>
+                  <strong>{summary.activePolicies}</strong>
                 </div>
                 <div>
                   <span>Active Policy Rate</span>
@@ -1604,10 +1611,18 @@ function ManagerPortal({ roleType }) {
                   </strong>
                 </div>
                 <div>
-                  <span>Half-yearly Premium</span>
+                  <span>Half-Yearly Premium</span>
                   <strong>
                     {formatMoney(
                       salesSummary.frequencyPremiumBreakdown?.halfYearlyPremium,
+                    )}
+                  </strong>
+                </div>
+                <div>
+                  <span>Yearly Premium</span>
+                  <strong>
+                    {formatMoney(
+                      salesSummary.frequencyPremiumBreakdown?.yearlyPremium,
                     )}
                   </strong>
                 </div>
