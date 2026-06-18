@@ -301,9 +301,12 @@
 
 .dot.agent { background: #da291c; }
 .dot.system { background: #2f80ed; }
-.dot.active { background: #1f9d55; }
-.dot.lapsed { background: #f59e0b; }
-.dot.cancelled { background: #6b7280; }
+.dot.active, .dot.policy-active { background: #1f9d55; }
+.dot.policy-atrisk { background: #dc2626; }
+.dot.lapsed, .dot.policy-lapsed { background: #f59e0b; }
+.dot.policy-paidup { background: #2f80ed; }
+.dot.policy-matured { background: #7c3aed; }
+.dot.cancelled, .dot.policy-cancelled { background: #6b7280; }
 
 .cr-barList,
 .cr-chartRows {
