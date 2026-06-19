@@ -148,6 +148,20 @@
   color: #111827;
 }
 
+.manager-heading-link {
+  border: none;
+  background: transparent;
+  color: #b91c1c;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+  padding: 0;
+}
+
+.manager-heading-link:hover {
+  text-decoration: underline;
+}
+
 .manager-panel__head p {
   margin: 0;
   color: #4b5563;
@@ -213,6 +227,161 @@
   outline: none;
 }
 
+
+.manager-breadcrumb {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: #6b7280;
+  font-family: "FSAlbertArabic", sans-serif;
+  font-size: 17px;
+}
+
+.manager-breadcrumb button,
+.manager-agent-link {
+  border: none;
+  background: transparent;
+  color: #b91c1c;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+  padding: 0;
+}
+
+.manager-agent-link {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+.manager-breadcrumb button:hover,
+.manager-agent-link:hover {
+  text-decoration: underline;
+}
+
+.manager-breadcrumb strong {
+  color: #111827;
+}
+
+.manager-agent-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.manager-agent-detail-grid article {
+  border: 1px solid rgba(218, 41, 28, 0.14);
+  border-radius: 18px;
+  background: #fff;
+  padding: 18px;
+  display: grid;
+  gap: 8px;
+}
+
+.manager-agent-detail-grid h3,
+.manager-agent-kpi-section h3 {
+  margin: 0;
+  color: #111827;
+  font-family: "FSAlbertArabic", sans-serif;
+}
+
+.manager-agent-detail-grid span {
+  color: #6b7280;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.manager-agent-detail-grid strong {
+  color: #111827;
+  font-size: 22px;
+}
+
+.manager-agent-kpi-section {
+  display: grid;
+  gap: 14px;
+}
+
+.manager-unit-details-card {
+  border: 1px solid rgba(218, 41, 28, 0.14);
+  border-radius: 20px;
+  background: #fff;
+  padding: 18px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 360px);
+  align-items: start;
+  gap: 18px;
+}
+
+.manager-unit-details-card h3 {
+  margin: 0 0 12px;
+  color: #111827;
+  font-family: "FSAlbertArabic", sans-serif;
+}
+
+.manager-unit-details-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  gap: 8px 14px;
+}
+
+.manager-unit-details-grid span {
+  color: #6b7280;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.manager-unit-details-grid strong {
+  color: #111827;
+  font-size: 15px;
+}
+
+.manager-tab-buttons {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  border-radius: 999px;
+  background: #fff4f2;
+  padding: 6px;
+  width: fit-content;
+}
+
+.manager-tab-buttons button {
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: #991b1b;
+  cursor: pointer;
+  font: 800 13px/1 "FSAlbertArabic", sans-serif;
+  padding: 10px 18px;
+}
+
+.manager-tab-buttons button.active {
+  background: #da291c;
+  color: #fff;
+  box-shadow: 0 8px 16px rgba(218, 41, 28, 0.18);
+}
+
+.manager-agent-detail-grid--single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.manager-agent-detail-grid--single article {
+  grid-template-columns: repeat(5, minmax(120px, 1fr));
+  align-items: start;
+}
+
+.manager-agent-detail-grid--single h3 {
+  grid-column: 1 / -1;
+}
+
 .manager-report-btn {
   border: none;
   border-radius: 14px;
@@ -252,6 +421,57 @@
 
 .manager-table--wide {
   min-width: 1320px;
+}
+
+.manager-table--agents {
+  min-width: 1120px;
+  table-layout: fixed;
+}
+
+.manager-table--agents th,
+.manager-table--agents td {
+  padding: 10px 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+}
+
+.manager-table--agents th {
+  font-size: 10px;
+}
+
+.manager-table--agents th:nth-child(1),
+.manager-table--agents td:nth-child(1) {
+  left: 0;
+  position: sticky;
+  width: 140px;
+  z-index: 2;
+}
+.manager-table--agents th:nth-child(2),
+.manager-table--agents td:nth-child(2) {
+  left: 140px;
+  position: sticky;
+  width: 220px;
+  z-index: 2;
+}
+.manager-table--agents th:nth-child(1),
+.manager-table--agents th:nth-child(2) {
+  z-index: 3;
+}
+.manager-table--agents td:nth-child(1),
+.manager-table--agents td:nth-child(2) {
+  background: inherit;
+}
+.manager-table--agents th:nth-child(n+3),
+.manager-table--agents td:nth-child(n+3) { width: 150px; }
+
+.manager-toolbar--unit-selector .manager-select {
+  max-width: 360px;
+}
+
+.manager-toolbar--agents {
+  margin-top: -8px;
 }
 
 .manager-table--sales {
@@ -674,4 +894,14 @@
 
 .manager-kpi-toolbar--end {
   justify-content: flex-end;
+}
+@media (max-width: 900px) {
+  .manager-unit-details-card {
+    grid-template-columns: 1fr;
+  }
+
+  .manager-unit-details-grid,
+  .manager-agent-detail-grid--single article {
+    grid-template-columns: repeat(2, minmax(120px, 1fr));
+  }
 }
