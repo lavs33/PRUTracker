@@ -301,9 +301,12 @@
 
 .dot.agent { background: #da291c; }
 .dot.system { background: #2f80ed; }
-.dot.active { background: #1f9d55; }
-.dot.lapsed { background: #f59e0b; }
-.dot.cancelled { background: #6b7280; }
+.dot.active, .dot.policy-active { background: #1f9d55; }
+.dot.policy-atrisk { background: #dc2626; }
+.dot.lapsed, .dot.policy-lapsed { background: #f59e0b; }
+.dot.policy-paidup { background: #2f80ed; }
+.dot.policy-matured { background: #7c3aed; }
+.dot.cancelled, .dot.policy-cancelled { background: #6b7280; }
 
 .cr-barList,
 .cr-chartRows {
@@ -356,8 +359,48 @@
   background: linear-gradient(90deg, #1f4c8f, #4e7cc7);
 }
 
+.cr-progressTrack.warm > span {
+  background: linear-gradient(90deg, #f59e0b, #fbbf24);
+}
+
+.cr-progressTrack.elite > span {
+  background: linear-gradient(90deg, #7c3aed, #a78bfa);
+}
+
 .cr-progressTrack.stage {
   height: 12px;
+}
+
+
+.cr-stackedTrack {
+  width: 100%;
+  height: 10px;
+  background: #f1f2f4;
+  border-radius: 999px;
+  overflow: hidden;
+  display: flex;
+}
+
+.cr-stackedTrack > span {
+  display: block;
+  height: 100%;
+}
+
+.cr-stackedTrack .warm,
+.cr-shareDot.warm { background: #f59e0b; }
+.cr-stackedTrack .cold,
+.cr-shareDot.cold { background: #2f80ed; }
+.cr-stackedTrack .elite,
+.cr-shareDot.elite { background: #7c3aed; }
+.cr-stackedTrack .ordinary,
+.cr-shareDot.ordinary { background: #16a34a; }
+
+.cr-shareDot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  margin-right: 4px;
 }
 
 .cr-compareList,

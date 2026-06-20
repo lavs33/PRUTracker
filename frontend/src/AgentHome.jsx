@@ -127,8 +127,8 @@ function AgentHome() {
   const topMetrics = [
     { label: "Prospects", value: homeData.clients.totalProspects, icon: <FaUsers aria-hidden="true" /> },
     { label: "Due Today", value: dueTodayCount, icon: <FiClock aria-hidden="true" /> },
-    { label: "Policies", value: homeData.sales.totalPolicies, icon: <FiCheckCircle aria-hidden="true" /> },
-    { label: "Conversion", value: `${homeData.sales.conversionRatePct}%`, icon: <FiTrendingUp aria-hidden="true" /> },
+    { label: "Active Policies", value: homeData.sales.totalPolicies, icon: <FiCheckCircle aria-hidden="true" /> },
+    { label: "Active Policy Conversion", value: `${homeData.sales.conversionRatePct}%`, icon: <FiTrendingUp aria-hidden="true" /> },
   ];
 
   const moduleCards = [
@@ -327,15 +327,15 @@ function AgentHome() {
 
             <div className="home-statRow">
               <div className="home-statBlock">
-                <span>Conversion</span>
+                <span>Active Policy Conversion</span>
                 <strong>{homeData.sales.conversionRatePct}%</strong>
               </div>
               <div className="home-statBlock">
-                <span>Total Policies</span>
+                <span>Active Policies</span>
                 <strong>{homeData.sales.totalPolicies}</strong>
               </div>
               <div className="home-statBlock wide">
-                <span>Total Annual Premium</span>
+                <span>Active Annual Premium</span>
                 <strong>₱ {money(homeData.sales.totalAnnualPremiumPhp)}</strong>
               </div>
             </div>
@@ -348,7 +348,7 @@ function AgentHome() {
                 <>
                   <strong>{homeData.sales.bestSource.label || "Unspecified source"}</strong>
                   <p>
-                    {homeData.sales.bestSource.conversionRatePct || 0}% conversion across {homeData.sales.bestSource.convertedLeads || 0} converted leads.
+                    {homeData.sales.bestSource.conversionRatePct || 0}% active-policy conversion across {homeData.sales.bestSource.activePolicyholders || homeData.sales.bestSource.convertedLeads || 0} active policyholders.
                   </p>
                 </>
               ) : (
