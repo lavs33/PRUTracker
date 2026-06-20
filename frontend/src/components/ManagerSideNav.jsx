@@ -2,8 +2,8 @@ import { FaBars, FaBullseye, FaChartLine, FaChevronLeft, FaChevronRight, FaHome,
 import "./ManagerSideNav.css";
 
 const NAV_ITEMS = [
-  { key: "dashboard", label: "Dashboard", icon: <FaHome size={18} /> },
-  { key: "agents", label: "Agents", icon: <FaUsers size={18} /> },
+  { key: "dashboard", label: "Home", icon: <FaHome size={18} /> },
+  { key: "agents", label: "Units", icon: <FaUsers size={18} /> },
   { key: "task_progress", label: "Task Progress", icon: <FaTasks size={18} /> },
   { key: "sales_performance", label: "Sales Performance", icon: <FaChartLine size={18} /> },
   { key: "kpi_assignment", label: "KPI Assignment", icon: <FaBullseye size={18} /> },
