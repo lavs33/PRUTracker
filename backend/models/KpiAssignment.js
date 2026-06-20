@@ -23,6 +23,14 @@ const kpiAssignmentSchema = new mongoose.Schema(
         targetMin: { type: Number, default: null },
         targetMax: { type: Number, default: null },
         targetValue: { type: Number, default: null },
+        targets: [
+          {
+            period: { type: String, enum: ["Daily", "Weekly", "Monthly", "Quarterly", "Semi-Annually", "Annually"], required: true },
+            targetMin: { type: Number, default: null },
+            targetMax: { type: Number, default: null },
+            targetValue: { type: Number, default: null },
+          },
+        ],
       },
     ],
     updatedByUserId: {
