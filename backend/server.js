@@ -570,9 +570,6 @@ const KPI_DEFINITIONS = {
 const KPI_FREQUENCIES = ["Daily", "Weekly", "Monthly", "Quarterly", "Semi-Annually", "Annually"];
 
 function buildDefaultKpiTargets(definition = {}, saved = {}) {
-  if (saved.assigned === false) {
-    return KPI_FREQUENCIES.map((period) => ({ period, targetMin: null, targetMax: null, targetValue: null }));
-  }
   const savedTargetsByPeriod = new Map(
     (Array.isArray(saved.targets) ? saved.targets : [])
       .map((target) => [String(target?.period || ""), target])
@@ -597,11 +594,12 @@ function normalizeKpiList(scopeType, savedKpis = []) {
     const saved = savedByKey.get(definition.key) || {};
     const assigned = saved.assigned !== undefined ? saved.assigned === true : definition.assigned;
     const targets = buildDefaultKpiTargets(definition, saved);
-    const primaryTarget = assigned === false ? {} : (targets.find((target) => target.period === (saved.period || definition.period)) || targets[0] || {});
+    const normalizedPeriod = KPI_FREQUENCIES.includes(String(saved.period || "")) ? saved.period : definition.period;
+    const primaryTarget = targets.find((target) => target.period === normalizedPeriod) || targets[0] || {};
     return {
       ...definition,
       assigned,
-      period: assigned === false ? "" : (saved.period || definition.period),
+      period: normalizedPeriod,
       targetMin: primaryTarget.targetMin ?? null,
       targetMax: primaryTarget.targetMax ?? null,
       targetValue: primaryTarget.targetValue ?? null,
@@ -1450,20 +1448,33 @@ app.put("/api/manager/kpi-assignments/:scopeType/:scopeId", async (req, res) => 
           .filter(([period]) => KPI_FREQUENCIES.includes(period))
       );
       const assigned = input.assigned !== undefined ? input.assigned === true : definition.assigned;
+      const normalizedTargets = [];
+
       if (assigned === false) {
-        const normalizedTargets = KPI_FREQUENCIES.map((period) => ({ period, targetMin: null, targetMax: null, targetValue: null }));
+        for (const period of KPI_FREQUENCIES) {
+          const targetInput = inputTargetsByPeriod.get(period) || {};
+          const hasMin = targetInput.targetMin !== null && targetInput.targetMin !== undefined && String(targetInput.targetMin).trim() !== "";
+          const hasMax = targetInput.targetMax !== null && targetInput.targetMax !== undefined && String(targetInput.targetMax).trim() !== "";
+          const hasTarget = targetInput.targetValue !== null && targetInput.targetValue !== undefined && String(targetInput.targetValue).trim() !== "";
+          normalizedTargets.push({
+            period,
+            targetMin: hasTarget ? null : parseOptionalNumber(targetInput.targetMin),
+            targetMax: hasTarget ? null : parseOptionalNumber(targetInput.targetMax),
+            targetValue: hasMin || hasMax ? null : parseOptionalNumber(targetInput.targetValue),
+          });
+        }
+        const primaryTarget = normalizedTargets.find((target) => target.period === defaultPeriod) || normalizedTargets[0] || {};
         normalizedKpis.push({
           ...definition,
           assigned: false,
-          period: "",
-          targetMin: null,
-          targetMax: null,
-          targetValue: null,
+          period: defaultPeriod,
+          targetMin: primaryTarget.targetMin ?? null,
+          targetMax: primaryTarget.targetMax ?? null,
+          targetValue: primaryTarget.targetValue ?? null,
           targets: normalizedTargets,
         });
         continue;
       }
-      const normalizedTargets = [];
 
       for (const period of KPI_FREQUENCIES) {
         const targetInput = inputTargetsByPeriod.get(period) || {};
