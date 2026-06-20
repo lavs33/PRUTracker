@@ -549,9 +549,9 @@ async function getManagerScopeContext(user) {
 
 const KPI_DEFINITIONS = {
   AGENT: [
-    { key: "weekly_approaches", label: "Weekly Approaches Count", period: "Weekly", valueType: "Count", targetMin: 50, targetMax: 100, targetValue: null, assigned: true },
-    { key: "weekly_appointments", label: "Weekly Appointments Count", period: "Weekly", valueType: "Count", targetMin: 10, targetMax: 20, targetValue: null, assigned: true },
-    { key: "weekly_presentations", label: "Weekly Presentations Count", period: "Weekly", valueType: "Count", targetMin: 5, targetMax: 10, targetValue: null, assigned: true },
+    { key: "weekly_approaches", label: "Approaches Count", period: "Weekly", valueType: "Count", targetMin: 50, targetMax: 100, targetValue: null, assigned: true },
+    { key: "weekly_appointments", label: "Appointments Count", period: "Weekly", valueType: "Count", targetMin: 10, targetMax: 20, targetValue: null, assigned: true },
+    { key: "weekly_presentations", label: "Presentations Count", period: "Weekly", valueType: "Count", targetMin: 5, targetMax: 10, targetValue: null, assigned: true },
     { key: "monthly_policies", label: "Sales Target", period: "Monthly", valueType: "Count", targetMin: 2, targetMax: 6, targetValue: null, assigned: true },
     { key: "monthly_new_prospects", label: "New Prospects", period: "Monthly", valueType: "Count", targetMin: 2, targetMax: 6, targetValue: null, assigned: true },
     { key: "monthly_closing_ratio", label: "Closing Ratio", period: "Monthly", valueType: "Percent", targetMin: 20, targetMax: 50, targetValue: null, assigned: true },
@@ -563,22 +563,49 @@ const KPI_DEFINITIONS = {
     { key: "monthly_sales_production", label: "Sales Production", period: "Monthly", valueType: "Currency", targetMin: null, targetMax: null, targetValue: null, assigned: true },
     { key: "monthly_active_agents", label: "Active Agents Count", period: "Monthly", valueType: "Count", targetMin: null, targetMax: null, targetValue: null, assigned: true },
     { key: "monthly_persistency_rate", label: "Branch Persistency Rate", period: "Monthly", valueType: "Percent", targetMin: null, targetMax: null, targetValue: 85, assigned: true },
-    { key: "monthly_target_achievement_index", label: "Target Achievement Index", period: "Monthly", valueType: "Index", targetMin: null, targetMax: null, targetValue: 100, assigned: true },
+    { key: "monthly_target_achievement_index", label: "Target Achievement Index", period: "Monthly", valueType: "Percent", targetMin: null, targetMax: null, targetValue: 100, assigned: true },
   ],
 };
+
+const KPI_FREQUENCIES = ["Daily", "Weekly", "Monthly", "Quarterly", "Semi-Annually", "Annually"];
+
+function buildDefaultKpiTargets(definition = {}, saved = {}) {
+  if (saved.assigned === false) {
+    return KPI_FREQUENCIES.map((period) => ({ period, targetMin: null, targetMax: null, targetValue: null }));
+  }
+  const savedTargetsByPeriod = new Map(
+    (Array.isArray(saved.targets) ? saved.targets : [])
+      .map((target) => [String(target?.period || ""), target])
+      .filter(([period]) => KPI_FREQUENCIES.includes(period))
+  );
+
+  return KPI_FREQUENCIES.map((period) => {
+    const target = savedTargetsByPeriod.get(period) || {};
+    return {
+      period,
+      targetMin: target.targetMin !== undefined ? target.targetMin : (saved.targetMin !== undefined ? saved.targetMin : definition.targetMin),
+      targetMax: target.targetMax !== undefined ? target.targetMax : (saved.targetMax !== undefined ? saved.targetMax : definition.targetMax),
+      targetValue: target.targetValue !== undefined ? target.targetValue : (saved.targetValue !== undefined ? saved.targetValue : definition.targetValue),
+    };
+  });
+}
 
 function normalizeKpiList(scopeType, savedKpis = []) {
   const defaults = KPI_DEFINITIONS[scopeType] || [];
   const savedByKey = new Map((Array.isArray(savedKpis) ? savedKpis : []).map((kpi) => [String(kpi?.key || ""), kpi]));
   return defaults.map((definition) => {
     const saved = savedByKey.get(definition.key) || {};
+    const assigned = saved.assigned !== undefined ? saved.assigned === true : definition.assigned;
+    const targets = buildDefaultKpiTargets(definition, saved);
+    const primaryTarget = assigned === false ? {} : (targets.find((target) => target.period === (saved.period || definition.period)) || targets[0] || {});
     return {
       ...definition,
-      assigned: saved.assigned !== undefined ? saved.assigned === true : definition.assigned,
-      period: saved.period || definition.period,
-      targetMin: definition.key === "monthly_persistency_rate" ? definition.targetMin : (saved.targetMin !== undefined ? saved.targetMin : definition.targetMin),
-      targetMax: saved.targetMax !== undefined ? saved.targetMax : definition.targetMax,
-      targetValue: definition.key === "monthly_persistency_rate" && (saved.targetValue === undefined || saved.targetValue === null) ? 85 : (saved.targetValue !== undefined ? saved.targetValue : definition.targetValue),
+      assigned,
+      period: assigned === false ? "" : (saved.period || definition.period),
+      targetMin: primaryTarget.targetMin ?? null,
+      targetMax: primaryTarget.targetMax ?? null,
+      targetValue: primaryTarget.targetValue ?? null,
+      targets,
     };
   });
 }
@@ -754,10 +781,15 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
             nextDueAt: null,
             lastCompletedAt: null,
             topTaskType: "—",
+            totalProspects: 0,
+            activeProspects: 0,
+            activeProspectIds: new Set(),
             leads: 0,
+            activeLeads: 0,
             converted: 0,
             totalPolicies: 0,
             activePolicies: 0,
+            atRiskPolicies: 0,
             lapsedPolicies: 0,
             cancelledPolicies: 0,
             annualPremium: 0,
@@ -802,11 +834,15 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
         nextDueAt: metrics.nextDueAt,
         lastCompletedAt: metrics.lastCompletedAt,
         topTaskType: topTaskTypeEntry?.[0] || "—",
+        totalProspects: metrics.totalProspects,
+        activeProspects: metrics.activeProspects,
         leads: metrics.leads,
+        activeLeads: metrics.activeLeads,
         converted: metrics.convertedLeadIds.size,
         conversionRate,
         totalPolicies: metrics.totalPolicies,
         activePolicies: metrics.activePolicies,
+        atRiskPolicies: metrics.atRiskPolicies,
         lapsedPolicies: metrics.lapsedPolicies,
         cancelledPolicies: metrics.cancelledPolicies,
         annualPremium: metrics.annualPremium,
@@ -828,10 +864,15 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
         totalOpenTasks: accumulator.totalOpenTasks + Number(row.openTasks || 0),
         totalOverdueTasks: accumulator.totalOverdueTasks + Number(row.overdueTasks || 0),
         totalClosedTasks: accumulator.totalClosedTasks + Number(row.closedTasks || 0),
+        totalProspects: accumulator.totalProspects + Number(row.totalProspects || 0),
+        totalActiveProspects: accumulator.totalActiveProspects + Number(row.activeProspects || 0),
         totalLeads: accumulator.totalLeads + Number(row.leads || 0),
+        totalActiveLeads: accumulator.totalActiveLeads + Number(row.activeLeads || 0),
         totalConverted: accumulator.totalConverted + Number(row.converted || 0),
         totalPolicies: accumulator.totalPolicies + Number(row.totalPolicies || 0),
         activePolicies: accumulator.activePolicies + Number(row.activePolicies || 0),
+        atRiskPolicies: accumulator.atRiskPolicies + Number(row.atRiskPolicies || 0),
+        lapsedPolicies: accumulator.lapsedPolicies + Number(row.lapsedPolicies || 0),
         totalAnnualPremium: accumulator.totalAnnualPremium + Number(row.annualPremium || 0),
         totalFrequencyPremium: accumulator.totalFrequencyPremium + Number(row.frequencyPremium || 0),
         frequencyPremiumBreakdown: {
@@ -846,10 +887,15 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
         totalOpenTasks: 0,
         totalOverdueTasks: 0,
         totalClosedTasks: 0,
+        totalProspects: 0,
+        totalActiveProspects: 0,
         totalLeads: 0,
+        totalActiveLeads: 0,
         totalConverted: 0,
         totalPolicies: 0,
         activePolicies: 0,
+        atRiskPolicies: 0,
+        lapsedPolicies: 0,
         totalAnnualPremium: 0,
         totalFrequencyPremium: 0,
         frequencyPremiumBreakdown: {
@@ -907,6 +953,32 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
     })
     .lean();
 
+  const scopedUnits = context.role === "BM"
+    ? await Unit.find({ branchId: context.branchId }).sort({ unitName: 1 }).lean()
+    : await Unit.find({ _id: context.unitId }).sort({ unitName: 1 }).lean();
+  const scopedUnitIds = scopedUnits.map((unit) => unit._id);
+  const [unitManagers, assistantUnitManagers] = await Promise.all([
+    scopedUnitIds.length
+      ? UM.find({ unitId: { $in: scopedUnitIds }, isBlocked: { $ne: true } })
+          .populate({ path: "userId", select: "username firstName middleName lastName" })
+          .lean()
+      : [],
+    scopedUnitIds.length
+      ? AUM.find({ unitId: { $in: scopedUnitIds }, isBlocked: { $ne: true } })
+          .populate({ path: "userId", select: "username firstName middleName lastName" })
+          .lean()
+      : [],
+  ]);
+  const formatUnitManager = (manager) => {
+    const userDoc = manager?.userId || {};
+    return {
+      code: userDoc.username || "—",
+      name: [userDoc.firstName, userDoc.middleName, userDoc.lastName].filter(Boolean).join(" ").trim() || userDoc.username || "—",
+    };
+  };
+  const umByUnitId = new Map(unitManagers.map((manager) => [String(manager.unitId || ""), formatUnitManager(manager)]));
+  const aumByUnitId = new Map(assistantUnitManagers.map((manager) => [String(manager.unitId || ""), formatUnitManager(manager)]));
+
   const scopedUserIds = scopedAgents.map((agent) => agent.userId?._id).filter(Boolean);
   const allMetricsByUserId = createMetricsMap(scopedAgents);
   const taskMetricsByUserId = createMetricsMap(scopedAgents);
@@ -920,7 +992,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       : [],
     scopedUserIds.length
       ? Prospect.find({ assignedToUserId: { $in: scopedUserIds } })
-          .select("_id assignedToUserId")
+          .select("_id assignedToUserId status")
           .lean()
       : [],
   ]);
@@ -949,8 +1021,9 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
         continue;
       }
 
-      metrics.openTasks += 1;
-      if (Number.isFinite(dueAtMs) && dueAtMs < nowMs) metrics.overdueTasks += 1;
+      const isOverdue = Number.isFinite(dueAtMs) && dueAtMs < nowMs;
+      if (isOverdue) metrics.overdueTasks += 1;
+      else metrics.openTasks += 1;
       if (Number.isFinite(dueAtMs) && (!metrics.nextDueAt || dueAtMs < new Date(metrics.nextDueAt).getTime())) {
         metrics.nextDueAt = task.dueAt;
       }
@@ -963,6 +1036,19 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
     taskMetricsByUserId
   );
 
+
+  const applyProspectMetrics = (prospectList, metricsByUserId) => {
+    for (const prospect of prospectList) {
+      const assignedUserId = String(prospect?.assignedToUserId || "");
+      const metrics = metricsByUserId.get(assignedUserId);
+      if (!metrics) continue;
+      metrics.totalProspects += 1;
+      if (String(prospect?.status || "").trim() === "Active") metrics.activeProspects += 1;
+    }
+  };
+
+  applyProspectMetrics(prospects, allMetricsByUserId);
+
   const prospectIds = prospects.map((prospect) => prospect._id);
   const prospectIdToAssignedUserId = new Map(
     prospects.map((prospect) => [String(prospect._id), String(prospect.assignedToUserId || "")])
@@ -970,7 +1056,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
 
   const leads = prospectIds.length
     ? await Lead.find({ prospectId: { $in: prospectIds } })
-        .select("_id prospectId createdAt")
+        .select("_id prospectId status createdAt")
         .lean()
     : [];
   const leadIds = leads.map((lead) => lead._id);
@@ -1052,11 +1138,22 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       if (!metrics) continue;
 
       metrics.leads += 1;
+      if (["New", "In Progress"].includes(String(lead?.status || "").trim())) {
+        metrics.activeLeads += 1;
+        if (lead?.prospectId) metrics.activeProspectIds.add(String(lead.prospectId));
+      }
       const leadCreatedAtMs = new Date(lead?.createdAt).getTime();
       if (Number.isFinite(leadCreatedAtMs) && (!metrics.latestLeadCreatedAt || leadCreatedAtMs > new Date(metrics.latestLeadCreatedAt).getTime())) {
         metrics.latestLeadCreatedAt = lead.createdAt;
       }
     }
+
+    const activePolicyholderEngagementIds = new Set(
+      (policyholderList || [])
+        .filter((policyholder) => String(policyholder?.status || "").trim() === "Active")
+        .map((policyholder) => String(policyholder?.leadEngagementId || ""))
+        .filter(Boolean)
+    );
 
     for (const policyholder of policyholderList) {
       const assignedUserId = String(
@@ -1068,6 +1165,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       metrics.totalPolicies += 1;
       const policyStatus = String(policyholder?.status || "").trim();
       if (policyStatus === "Active") metrics.activePolicies += 1;
+      else if (policyStatus === "At Risk") metrics.atRiskPolicies += 1;
       else if (policyStatus === "Lapsed") metrics.lapsedPolicies += 1;
       else if (policyStatus === "Cancelled") metrics.cancelledPolicies += 1;
 
@@ -1086,6 +1184,8 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       const assignedUserId = engagementIdToAssignedUserId.get(engagementId) || "";
       const metrics = metricsByUserId.get(assignedUserId);
       if (!metrics) continue;
+
+      if (!activePolicyholderEngagementIds.has(engagementId)) continue;
 
       const payment = engagementIdToPayment.get(engagementId) || null;
       const annualPayment = engagementIdToAnnualPayment.get(engagementId) || null;
@@ -1207,6 +1307,12 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
         branchName: context.branchName,
         areaName: context.areaName,
       },
+      units: scopedUnits.map((unit) => ({
+        id: String(unit._id),
+        name: unit.unitName || "Unassigned Unit",
+        manager: umByUnitId.get(String(unit._id)) || { code: "—", name: "—" },
+        assistantManager: aumByUnitId.get(String(unit._id)) || { code: "—", name: "—" },
+      })),
       reportContext: {
         generatedAt: new Date(),
         taskDatePreset: taskContext.key,
@@ -1333,17 +1439,74 @@ app.put("/api/manager/kpi-assignments/:scopeType/:scopeId", async (req, res) => 
 
     const defaults = KPI_DEFINITIONS[scopeType] || [];
     const inputByKey = new Map((Array.isArray(kpis) ? kpis : []).map((kpi) => [String(kpi?.key || ""), kpi]));
-    const normalizedKpis = defaults.map((definition) => {
+    const normalizedKpis = [];
+
+    for (const definition of defaults) {
       const input = inputByKey.get(definition.key) || {};
-      return {
+      const defaultPeriod = KPI_FREQUENCIES.includes(String(input.period || "")) ? String(input.period) : definition.period;
+      const inputTargetsByPeriod = new Map(
+        (Array.isArray(input.targets) ? input.targets : [])
+          .map((target) => [String(target?.period || ""), target])
+          .filter(([period]) => KPI_FREQUENCIES.includes(period))
+      );
+      const assigned = input.assigned !== undefined ? input.assigned === true : definition.assigned;
+      if (assigned === false) {
+        const normalizedTargets = KPI_FREQUENCIES.map((period) => ({ period, targetMin: null, targetMax: null, targetValue: null }));
+        normalizedKpis.push({
+          ...definition,
+          assigned: false,
+          period: "",
+          targetMin: null,
+          targetMax: null,
+          targetValue: null,
+          targets: normalizedTargets,
+        });
+        continue;
+      }
+      const normalizedTargets = [];
+
+      for (const period of KPI_FREQUENCIES) {
+        const targetInput = inputTargetsByPeriod.get(period) || {};
+        const targetMin = parseOptionalNumber(targetInput.targetMin);
+        const targetMax = parseOptionalNumber(targetInput.targetMax);
+        const targetValue = parseOptionalNumber(targetInput.targetValue);
+        const hasMin = targetInput.targetMin !== null && targetInput.targetMin !== undefined && String(targetInput.targetMin).trim() !== "";
+        const hasMax = targetInput.targetMax !== null && targetInput.targetMax !== undefined && String(targetInput.targetMax).trim() !== "";
+        const hasTarget = targetInput.targetValue !== null && targetInput.targetValue !== undefined && String(targetInput.targetValue).trim() !== "";
+
+        if (!hasTarget && !hasMin && !hasMax) {
+          return res.status(400).json({ message: `${definition.label} (${period}): Target or min/max is required.` });
+        }
+        if ((hasMin && targetMin === null) || (hasMax && targetMax === null) || (hasTarget && targetValue === null)) {
+          return res.status(400).json({ message: `${definition.label} (${period}): Targets must be valid numbers.` });
+        }
+        if ((hasMin && !Number.isInteger(targetMin)) || (hasMax && !Number.isInteger(targetMax)) || (hasTarget && !Number.isInteger(targetValue))) {
+          return res.status(400).json({ message: `${definition.label} (${period}): Whole numbers are counted only.` });
+        }
+        if (hasMin && hasMax && targetMin >= targetMax) {
+          return res.status(400).json({ message: `${definition.label} (${period}): Min must be less than max.` });
+        }
+
+        normalizedTargets.push({
+          period,
+          targetMin: hasTarget ? null : targetMin,
+          targetMax: hasTarget ? null : targetMax,
+          targetValue: hasMin || hasMax ? null : targetValue,
+        });
+      }
+
+      const primaryTarget = normalizedTargets.find((target) => target.period === defaultPeriod) || normalizedTargets[0] || {};
+
+      normalizedKpis.push({
         ...definition,
-        assigned: input.assigned !== undefined ? input.assigned === true : definition.assigned,
-        period: ["Daily", "Weekly", "Monthly", "Quarterly", "Semi-Annually", "Annually"].includes(String(input.period || "")) ? input.period : definition.period,
-        targetMin: parseOptionalNumber(input.targetMin),
-        targetMax: parseOptionalNumber(input.targetMax),
-        targetValue: parseOptionalNumber(input.targetValue),
-      };
-    });
+        assigned,
+        period: defaultPeriod,
+        targetMin: primaryTarget.targetMin ?? null,
+        targetMax: primaryTarget.targetMax ?? null,
+        targetValue: primaryTarget.targetValue ?? null,
+        targets: normalizedTargets,
+      });
+    }
 
     const updated = await KpiAssignment.findOneAndUpdate(
       { scopeType, scopeId },

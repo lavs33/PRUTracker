@@ -12,6 +12,24 @@ const DATE_PRESETS = [
   { value: "90d", label: "Last 90 Days" },
 ];
 const KPI_FREQUENCIES = ["Daily", "Weekly", "Monthly", "Quarterly", "Semi-Annually", "Annually"];
+const KPI_FREQUENCY_WEIGHTS = {
+  Daily: 1,
+  Weekly: 7,
+  Monthly: 30,
+  Quarterly: 90,
+  "Semi-Annually": 182,
+  Annually: 365,
+};
+
+function scaleKpiTargetValue(value, valueType, fromPeriod, toPeriod) {
+  if (value === null || value === undefined || value === "") return "";
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) return "";
+  if (valueType === "Percent" || valueType === "Index") return numericValue;
+  const fromWeight = KPI_FREQUENCY_WEIGHTS[fromPeriod] || 1;
+  const toWeight = KPI_FREQUENCY_WEIGHTS[toPeriod] || fromWeight;
+  return Math.ceil(numericValue * (toWeight / fromWeight));
+}
 
 function formatMoney(value) {
   return `₱ ${Number(value || 0).toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -34,6 +52,72 @@ function formatKpiTarget(kpi = {}) {
   if (hasMin) return `${formatKpiValue(kpi.targetMin, kpi.valueType)} and above`;
   if (hasMax) return `Up to ${formatKpiValue(kpi.targetMax, kpi.valueType)}`;
   return "No standard target";
+}
+
+function formatRequiredKpiTarget(kpi = {}) {
+  const formatted = formatKpiTarget(kpi);
+  return formatted === "No standard target" ? "Required" : formatted;
+}
+
+function getKpiTargets(kpi = {}) {
+  const targetsByPeriod = new Map(
+    (Array.isArray(kpi.targets) ? kpi.targets : [])
+      .map((target) => [String(target?.period || ""), target])
+      .filter(([period]) => KPI_FREQUENCIES.includes(period)),
+  );
+  return KPI_FREQUENCIES.map((period) => {
+    const target = targetsByPeriod.get(period) || {};
+    return {
+      period,
+      targetMin: target.targetMin ?? "",
+      targetMax: target.targetMax ?? "",
+      targetValue: target.targetValue ?? "",
+    };
+  });
+}
+
+function cloneKpiDraft(kpi = {}) {
+  return { ...kpi, targets: getKpiTargets(kpi).map((target) => ({ ...target })) };
+}
+
+function buildKpiTargetsFromDefault(kpi = {}, defaultPeriodOverride = "") {
+  const defaultPeriod = KPI_FREQUENCIES.includes(defaultPeriodOverride)
+    ? defaultPeriodOverride
+    : (KPI_FREQUENCIES.includes(kpi.period) ? kpi.period : KPI_FREQUENCIES[0]);
+  const targets = getKpiTargets(kpi);
+  const defaultTarget = targets.find((target) => target.period === defaultPeriod) || {};
+  const hasDefaultTarget = String(defaultTarget.targetValue ?? "").trim() !== "";
+  const hasDefaultMin = String(defaultTarget.targetMin ?? "").trim() !== "";
+  const hasDefaultMax = String(defaultTarget.targetMax ?? "").trim() !== "";
+
+  const nextTargets = (!hasDefaultTarget && !hasDefaultMin && !hasDefaultMax)
+    ? targets
+    : targets.map((target) => {
+      if (target.period === defaultPeriod) return target;
+      if (hasDefaultTarget) {
+        return {
+          ...target,
+          targetValue: scaleKpiTargetValue(defaultTarget.targetValue, kpi.valueType, defaultPeriod, target.period),
+          targetMin: "",
+          targetMax: "",
+        };
+      }
+      return {
+        ...target,
+        targetValue: "",
+        targetMin: hasDefaultMin ? scaleKpiTargetValue(defaultTarget.targetMin, kpi.valueType, defaultPeriod, target.period) : "",
+        targetMax: hasDefaultMax ? scaleKpiTargetValue(defaultTarget.targetMax, kpi.valueType, defaultPeriod, target.period) : "",
+      };
+    });
+  const primaryTarget = nextTargets.find((target) => target.period === defaultPeriod) || {};
+  return {
+    ...kpi,
+    period: defaultPeriod,
+    targets: nextTargets,
+    targetMin: primaryTarget.targetMin ?? "",
+    targetMax: primaryTarget.targetMax ?? "",
+    targetValue: primaryTarget.targetValue ?? "",
+  };
 }
 
 function getKpiComparison(actual, kpi) {
@@ -484,6 +568,10 @@ function ManagerPortal({ roleType }) {
     .toUpperCase();
   const [activeView, setActiveView] = useState("dashboard");
   const [agentSearch, setAgentSearch] = useState("");
+  const [agentSort, setAgentSort] = useState("usernameAsc");
+  const [selectedAgentId, setSelectedAgentId] = useState("");
+  const [selectedUnitName, setSelectedUnitName] = useState("");
+  const [unitPerformanceTab, setUnitPerformanceTab] = useState("clients");
   const [taskSearch, setTaskSearch] = useState("");
   const [salesSearch, setSalesSearch] = useState("");
   const [taskDatePreset, setTaskDatePreset] = useState("ALL");
@@ -493,6 +581,9 @@ function ManagerPortal({ roleType }) {
   const [kpiDrafts, setKpiDrafts] = useState({});
   const [kpiLoading, setKpiLoading] = useState(false);
   const [kpiSavingKey, setKpiSavingKey] = useState("");
+  const [editingKpiKey, setEditingKpiKey] = useState("");
+  const [expandedKpiKey, setExpandedKpiKey] = useState("");
+  const [kpiFieldErrors, setKpiFieldErrors] = useState({});
   const [kpiMessage, setKpiMessage] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -523,16 +614,16 @@ function ManagerPortal({ roleType }) {
 
   useEffect(() => {
     const branchPageLabels = {
-      dashboard: "Branch Overview",
-      agents: "Branch Agents",
+      dashboard: "Home",
+      agents: "Branch Units",
       task_progress: "Branch Task Progress",
       sales_performance: "Branch Sales Performance",
       kpi_assignment: "Branch KPI Assignment",
       kpi_progress: "Branch KPI Progress",
     };
     const unitPageLabels = {
-      dashboard: "Unit Overview",
-      agents: "Unit Agents",
+      dashboard: "Home",
+      agents: "Unit",
       task_progress: "Unit Task Progress",
       sales_performance: "Unit Sales Performance",
       kpi_assignment: "Branch KPI Assignment",
@@ -593,7 +684,7 @@ function ManagerPortal({ roleType }) {
 
   useEffect(() => {
     if (!user?.id || user.role !== normalizedRole) return;
-    if (!["kpi_assignment", "kpi_progress"].includes(activeView)) return;
+    if (!["agents", "kpi_assignment", "kpi_progress"].includes(activeView)) return;
 
     const controller = new AbortController();
     const fetchKpis = async () => {
@@ -606,7 +697,7 @@ function ManagerPortal({ roleType }) {
         setKpiData(data);
         const drafts = {};
         (data.assignments || []).forEach((assignment) => {
-          drafts[`${assignment.scopeType}:${assignment.scopeId}`] = (assignment.kpis || []).map((kpi) => ({ ...kpi }));
+          drafts[`${assignment.scopeType}:${assignment.scopeId}`] = (assignment.kpis || []).map(cloneKpiDraft);
         });
         setKpiDrafts(drafts);
       } catch (err) {
@@ -626,6 +717,19 @@ function ManagerPortal({ roleType }) {
       [assignmentKey]: (current[assignmentKey] || assignment.kpis || []).map((kpi) => {
         if (kpi.key !== kpiKey) return kpi;
         const next = { ...kpi, [field]: field === "assigned" ? value === true : value };
+        if (field === "assigned" && value !== true) {
+          return {
+            ...next,
+            period: "",
+            targetMin: "",
+            targetMax: "",
+            targetValue: "",
+            targets: KPI_FREQUENCIES.map((period) => ({ period, targetMin: "", targetMax: "", targetValue: "" })),
+          };
+        }
+        if (field === "assigned" && value === true && !KPI_FREQUENCIES.includes(next.period)) {
+          next.period = KPI_FREQUENCIES[0];
+        }
         if (field === "targetValue" && String(value || "").trim()) {
           next.targetMin = "";
           next.targetMax = "";
@@ -633,20 +737,126 @@ function ManagerPortal({ roleType }) {
         if ((field === "targetMin" || field === "targetMax") && String(value || "").trim()) {
           next.targetValue = "";
         }
+        if (field === "period") {
+          const primaryTarget = getKpiTargets(next).find((target) => target.period === value) || {};
+          next.targetMin = primaryTarget.targetMin ?? "";
+          next.targetMax = primaryTarget.targetMax ?? "";
+          next.targetValue = primaryTarget.targetValue ?? "";
+        }
         return next;
       }),
     }));
   };
 
-  const saveKpiAssignment = async (assignment) => {
+  const updateKpiTargetDraft = (assignment, kpiKey, period, field, value) => {
     const assignmentKey = `${assignment.scopeType}:${assignment.scopeId}`;
-    setKpiSavingKey(assignmentKey);
+    const rowKey = `${assignmentKey}:${kpiKey}`;
+    setKpiDrafts((current) => ({
+      ...current,
+      [assignmentKey]: (current[assignmentKey] || assignment.kpis || []).map((kpi) => {
+        if (kpi.key !== kpiKey) return kpi;
+        const nextTargets = getKpiTargets(kpi).map((target) => {
+          if (target.period !== period) return target;
+          const nextTarget = { ...target, [field]: value };
+          if (field === "targetValue" && String(value || "").trim()) {
+            nextTarget.targetMin = "";
+            nextTarget.targetMax = "";
+          }
+          if ((field === "targetMin" || field === "targetMax") && String(value || "").trim()) {
+            nextTarget.targetValue = "";
+          }
+          return nextTarget;
+        });
+        if (period === kpi.period) {
+          return buildKpiTargetsFromDefault({ ...kpi, targets: nextTargets }, kpi.period);
+        }
+        const primaryTarget = nextTargets.find((target) => target.period === kpi.period) || nextTargets[0] || {};
+        return {
+          ...kpi,
+          targets: nextTargets,
+          targetMin: primaryTarget.targetMin,
+          targetMax: primaryTarget.targetMax,
+          targetValue: primaryTarget.targetValue,
+        };
+      }),
+    }));
+    setKpiFieldErrors((current) => {
+      const next = { ...(current[rowKey] || {}) };
+      delete next[`${period}.${field}`];
+      if (field === "targetValue") {
+        delete next[`${period}.targetMin`];
+        delete next[`${period}.targetMax`];
+      }
+      if (field === "targetMin" || field === "targetMax") delete next[`${period}.targetValue`];
+      return { ...current, [rowKey]: next };
+    });
+  };
+
+  const prefillKpiTargetsFromDefault = (assignment, kpiKey, defaultPeriodOverride = "") => {
+    const assignmentKey = `${assignment.scopeType}:${assignment.scopeId}`;
+    const rowKey = `${assignmentKey}:${kpiKey}`;
+    setKpiDrafts((current) => ({
+      ...current,
+      [assignmentKey]: (current[assignmentKey] || assignment.kpis || []).map((kpi) => {
+        if (kpi.key !== kpiKey) return kpi;
+        return buildKpiTargetsFromDefault(kpi, defaultPeriodOverride);
+      }),
+    }));
+    setKpiFieldErrors((current) => ({ ...current, [rowKey]: {} }));
+  };
+
+  const validateKpiDraft = (kpi) => {
+    const errors = {};
+    getKpiTargets(kpi).forEach((target) => {
+      const prefix = target.period;
+      const hasMin = String(target.targetMin ?? "").trim() !== "";
+      const hasMax = String(target.targetMax ?? "").trim() !== "";
+      const hasTarget = String(target.targetValue ?? "").trim() !== "";
+      const min = Number(target.targetMin);
+      const max = Number(target.targetMax);
+      const targetValue = Number(target.targetValue);
+
+      if (!hasTarget && !hasMin && !hasMax) {
+        errors[`${prefix}.targetValue`] = "Target or min/max is required.";
+      }
+      if (hasTarget && !Number.isFinite(targetValue)) errors[`${prefix}.targetValue`] = "Enter a valid number.";
+      if (hasMin && !Number.isFinite(min)) errors[`${prefix}.targetMin`] = "Enter a valid number.";
+      if (hasMax && !Number.isFinite(max)) errors[`${prefix}.targetMax`] = "Enter a valid number.";
+      if (hasTarget && Number.isFinite(targetValue) && !Number.isInteger(targetValue)) errors[`${prefix}.targetValue`] = "Whole numbers are counted only.";
+      if (hasMin && Number.isFinite(min) && !Number.isInteger(min)) errors[`${prefix}.targetMin`] = "Whole numbers are counted only.";
+      if (hasMax && Number.isFinite(max) && !Number.isInteger(max)) errors[`${prefix}.targetMax`] = "Whole numbers are counted only.";
+      if (hasMin && hasMax && Number.isFinite(min) && Number.isFinite(max) && min >= max) {
+        errors[`${prefix}.targetMin`] = "Min must be less than max.";
+        errors[`${prefix}.targetMax`] = "Max must be greater than min.";
+      }
+    });
+    return errors;
+  };
+
+  const saveKpi = async (assignment, kpiKey) => {
+    const assignmentKey = `${assignment.scopeType}:${assignment.scopeId}`;
+    const draftList = kpiDrafts[assignmentKey] || assignment.kpis || [];
+    const kpi = draftList.find((item) => item.key === kpiKey);
+    const rowKey = `${assignmentKey}:${kpiKey}`;
+    const validationErrors = validateKpiDraft(kpi || {});
+    if (kpi?.assigned !== false && Object.keys(validationErrors).length) {
+      setKpiFieldErrors((current) => ({ ...current, [rowKey]: validationErrors }));
+      setExpandedKpiKey(rowKey);
+      return;
+    }
+    setKpiFieldErrors((current) => ({ ...current, [rowKey]: {} }));
+
+    const savingKey = `${assignmentKey}:${kpiKey}`;
+    setKpiSavingKey(savingKey);
     setKpiMessage("");
     try {
       const res = await fetch(`${API_BASE}/api/manager/kpi-assignments/${assignment.scopeType}/${assignment.scopeId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: user.id, kpis: kpiDrafts[assignmentKey] || assignment.kpis || [] }),
+        body: JSON.stringify({
+          userId: user.id,
+          kpis: draftList,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to save KPI assignment.");
@@ -658,13 +868,29 @@ function ManagerPortal({ roleType }) {
             : item,
         ),
       }));
-      setKpiDrafts((current) => ({ ...current, [assignmentKey]: data.assignment?.kpis || current[assignmentKey] || [] }));
-      setKpiMessage("KPI assignment saved.");
+      setKpiDrafts((current) => ({ ...current, [assignmentKey]: (data.assignment?.kpis || current[assignmentKey] || []).map(cloneKpiDraft) }));
+      setEditingKpiKey("");
+      setExpandedKpiKey("");
+      setKpiMessage("KPI saved.");
     } catch (err) {
       setKpiMessage(err.message || "Failed to save KPI assignment.");
     } finally {
       setKpiSavingKey("");
     }
+  };
+
+  const cancelKpiEdit = (assignment, kpiKey) => {
+    const assignmentKey = `${assignment.scopeType}:${assignment.scopeId}`;
+    const savedAssignment = (kpiData?.assignments || []).find((item) => item.scopeType === assignment.scopeType && item.scopeId === assignment.scopeId);
+    const savedKpi = (savedAssignment?.kpis || assignment.kpis || []).find((item) => item.key === kpiKey);
+    const rowKey = `${assignmentKey}:${kpiKey}`;
+    setKpiDrafts((current) => ({
+      ...current,
+      [assignmentKey]: (current[assignmentKey] || assignment.kpis || []).map((kpi) => (kpi.key === kpiKey ? cloneKpiDraft(savedKpi || kpi) : kpi)),
+    }));
+    setKpiFieldErrors((current) => ({ ...current, [rowKey]: {} }));
+    setEditingKpiKey("");
+    setExpandedKpiKey("");
   };
 
   const handleLogout = () => {
@@ -679,6 +905,7 @@ function ManagerPortal({ roleType }) {
     totalOverdueTasks: 0,
     totalClosedTasks: 0,
     totalLeads: 0,
+    totalActiveLeads: 0,
     totalConverted: 0,
     totalPolicies: 0,
     activePolicies: 0,
@@ -699,27 +926,175 @@ function ManagerPortal({ roleType }) {
   const summaryFrequencyPremiumCards = [
     { key: "monthlyPremium", label: "Monthly Premium" },
     { key: "quarterlyPremium", label: "Quarterly Premium" },
-    { key: "halfYearlyPremium", label: "Semi-Annual Premium" },
-    { key: "yearlyPremium", label: "Annual-Frequency Premium" },
+    { key: "halfYearlyPremium", label: "Half-Yearly Premium" },
+    { key: "yearlyPremium", label: "Yearly Premium" },
   ]
     .map((item) => ({
       ...item,
       value: Number(summary.frequencyPremiumBreakdown?.[item.key] || 0),
-    }))
-    .filter((item) => item.value > 0);
+    }));
 
-  const filteredAgents = useMemo(
-    () =>
-      sortByAgentCode(
-        buildFilter(portalData?.agents || [], agentSearch, [
-          "username",
-          "name",
-          "unit",
-          ...(normalizedRole === "BM" ? [] : ["branch"]),
-        ]),
-      ),
-    [agentSearch, normalizedRole, portalData?.agents],
+  const unitOptions = useMemo(() => {
+    const backendUnits = (portalData?.units || []).map((unit) => ({
+      ...unit,
+      name: String(unit?.name || "").trim(),
+    })).filter((unit) => unit.name);
+    if (backendUnits.length) return backendUnits;
+    return [...new Set((portalData?.agents || []).map((agent) => String(agent?.unit || "").trim()).filter(Boolean))]
+      .sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }))
+      .map((name) => ({ name, manager: { code: "—", name: "—" }, assistantManager: { code: "—", name: "—" } }));
+  }, [portalData?.agents, portalData?.units]);
+
+  useEffect(() => {
+    if (!unitOptions.length) return;
+    if (!selectedUnitName || !unitOptions.some((unit) => unit.name === selectedUnitName)) {
+      setSelectedUnitName(unitOptions[0].name);
+    }
+  }, [selectedUnitName, unitOptions]);
+
+  useEffect(() => {
+    setAgentSort("usernameAsc");
+  }, [unitPerformanceTab]);
+
+  const selectedUnit = unitOptions.find((unit) => unit.name === selectedUnitName) || unitOptions[0] || null;
+
+  const selectedUnitRows = useMemo(
+    () => (portalData?.agents || []).filter((agent) => (selectedUnit?.name ? String(agent?.unit || "") === selectedUnit.name : true)),
+    [portalData?.agents, selectedUnit?.name],
   );
+
+  const filteredAgents = useMemo(() => {
+    const searchedAgents = buildFilter(selectedUnitRows, agentSearch, ["username", "name"]);
+    const sortedAgents = [...searchedAgents].sort((left, right) => {
+      const compareNumber = (key) => Number(left?.[key] || 0) - Number(right?.[key] || 0);
+      const compareUsername = () =>
+        String(left?.username || "").localeCompare(String(right?.username || ""), undefined, { numeric: true, sensitivity: "base" });
+
+      switch (agentSort) {
+        case "totalProspectsDesc":
+          return compareNumber("totalProspects") * -1 || compareUsername();
+        case "totalProspectsAsc":
+          return compareNumber("totalProspects") || compareUsername();
+        case "activeProspectsDesc":
+          return compareNumber("activeProspects") * -1 || compareUsername();
+        case "activeProspectsAsc":
+          return compareNumber("activeProspects") || compareUsername();
+        case "leadsDesc":
+          return compareNumber("leads") * -1 || compareUsername();
+        case "leadsAsc":
+          return compareNumber("leads") || compareUsername();
+        case "openTasksDesc":
+          return compareNumber("openTasks") * -1 || compareUsername();
+        case "openTasksAsc":
+          return compareNumber("openTasks") || compareUsername();
+        case "closedTasksDesc":
+          return compareNumber("closedTasks") * -1 || compareUsername();
+        case "closedTasksAsc":
+          return compareNumber("closedTasks") || compareUsername();
+        case "annualPremiumDesc":
+          return compareNumber("annualPremium") * -1 || compareUsername();
+        case "annualPremiumAsc":
+          return compareNumber("annualPremium") || compareUsername();
+        case "activeLeadsDesc":
+          return compareNumber("activeLeads") * -1 || compareUsername();
+        case "activeLeadsAsc":
+          return compareNumber("activeLeads") || compareUsername();
+        case "activePoliciesDesc":
+          return compareNumber("activePolicies") * -1 || compareUsername();
+        case "activePoliciesAsc":
+          return compareNumber("activePolicies") || compareUsername();
+        case "totalPoliciesDesc":
+          return compareNumber("totalPolicies") * -1 || compareUsername();
+        case "totalPoliciesAsc":
+          return compareNumber("totalPolicies") || compareUsername();
+        case "atRiskPoliciesDesc":
+          return compareNumber("atRiskPolicies") * -1 || compareUsername();
+        case "atRiskPoliciesAsc":
+          return compareNumber("atRiskPolicies") || compareUsername();
+        case "lapsedPoliciesDesc":
+          return compareNumber("lapsedPolicies") * -1 || compareUsername();
+        case "lapsedPoliciesAsc":
+          return compareNumber("lapsedPolicies") || compareUsername();
+        default:
+          return compareUsername();
+      }
+    });
+    return sortedAgents;
+  }, [agentSearch, agentSort, selectedUnitRows]);
+
+  const selectedUnitSummary = useMemo(() => {
+    const rows = selectedUnitRows;
+    const totals = rows.reduce((acc, row) => ({
+      totalProspects: acc.totalProspects + Number(row.totalProspects || 0),
+      activeProspects: acc.activeProspects + Number(row.activeProspects || 0),
+      leads: acc.leads + Number(row.leads || 0),
+      activeLeads: acc.activeLeads + Number(row.activeLeads || 0),
+      totalPolicies: acc.totalPolicies + Number(row.totalPolicies || 0),
+      activePolicies: acc.activePolicies + Number(row.activePolicies || 0),
+      atRiskPolicies: acc.atRiskPolicies + Number(row.atRiskPolicies || 0),
+      lapsedPolicies: acc.lapsedPolicies + Number(row.lapsedPolicies || 0),
+      openTasks: acc.openTasks + Number(row.openTasks || 0),
+      overdueTasks: acc.overdueTasks + Number(row.overdueTasks || 0),
+      closedTasks: acc.closedTasks + Number(row.closedTasks || 0),
+      delayedDoneTasks: acc.delayedDoneTasks + Number(row.delayedDoneTasks || 0),
+      annualPremium: acc.annualPremium + Number(row.annualPremium || 0),
+      monthlyPremium: acc.monthlyPremium + Number(row.monthlyPremium || 0),
+      quarterlyPremium: acc.quarterlyPremium + Number(row.quarterlyPremium || 0),
+      halfYearlyPremium: acc.halfYearlyPremium + Number(row.halfYearlyPremium || 0),
+      yearlyPremium: acc.yearlyPremium + Number(row.yearlyPremium || 0),
+    }), { totalProspects: 0, activeProspects: 0, leads: 0, activeLeads: 0, totalPolicies: 0, activePolicies: 0, atRiskPolicies: 0, lapsedPolicies: 0, openTasks: 0, overdueTasks: 0, closedTasks: 0, delayedDoneTasks: 0, annualPremium: 0, monthlyPremium: 0, quarterlyPremium: 0, halfYearlyPremium: 0, yearlyPremium: 0 });
+    totals.onTimeCompletionRate = totals.closedTasks ? Math.round(((totals.closedTasks - totals.delayedDoneTasks) / totals.closedTasks) * 100) : 0;
+    totals.activePolicyRate = totals.totalPolicies ? Math.round((totals.activePolicies / totals.totalPolicies) * 100) : 0;
+    return totals;
+  }, [selectedUnitRows]);
+
+  const selectedUnitKpiCards = useMemo(() => {
+    const unitAssignment = (kpiData?.assignments || []).find((assignment) => assignment.scopeType === "UNIT");
+    if (!unitAssignment) return [];
+    return (unitAssignment.kpis || []).filter((kpi) => kpi.assigned !== false).map((kpi) => {
+      const actualByKey = {
+        monthly_sales_production: Number(selectedUnitSummary.annualPremium || 0),
+      };
+      const actual = actualByKey[kpi.key] || 0;
+      return { kpi, actual, comparison: getKpiComparison(actual, kpi), dateRangeLabel: getKpiFrequencyRangeLabel(kpi.period) };
+    });
+  }, [kpiData?.assignments, selectedUnitSummary]);
+
+  const selectedAgent = useMemo(
+    () => (portalData?.agents || []).find((agent) => String(agent?.id || "") === selectedAgentId) || null,
+    [portalData?.agents, selectedAgentId],
+  );
+
+  const selectedAgentKpiCards = useMemo(() => {
+    if (!selectedAgent) return [];
+    const assignments = (kpiData?.assignments || []).filter((assignment) => assignment.scopeType === "AGENT");
+
+    return assignments.flatMap((assignment) =>
+      (assignment.kpis || [])
+        .filter((kpi) => kpi.assigned !== false)
+        .map((kpi) => {
+          const rowsForFrequency = portalData?.kpiSalesRowsByFrequency?.[kpi.period] || [];
+          const agentRow = rowsForFrequency.find((row) => String(row?.userId || "") === String(selectedAgent.userId || "")) || selectedAgent || {};
+          const actualByKey = {
+            weekly_approaches: 0,
+            weekly_appointments: 0,
+            weekly_presentations: 0,
+            monthly_policies: Number(agentRow.totalPolicies || selectedAgent.totalPolicies || 0),
+            monthly_new_prospects: Number(agentRow.totalProspects || selectedAgent.totalProspects || 0),
+            monthly_closing_ratio: Number(agentRow.conversionRate || selectedAgent.conversionRate || 0),
+          };
+          const actual = actualByKey[kpi.key] || 0;
+          return {
+            assignment,
+            kpi,
+            actual,
+            comparison: getKpiComparison(actual, kpi),
+            dateRangeLabel: getKpiFrequencyRangeLabel(kpi.period),
+          };
+        }),
+    );
+  }, [kpiData?.assignments, portalData?.kpiSalesRowsByFrequency, selectedAgent]);
+
   const filteredTaskRows = useMemo(
     () =>
       sortByAgentCode(
@@ -823,6 +1198,7 @@ function ManagerPortal({ roleType }) {
           { label: "Total Units", value: totalUnitsInScope },
           { label: "Agents in Scope", value: summary.totalAgents },
           { label: "Open Tasks", value: summary.totalOpenTasks },
+          { label: "Total Policies", value: summary.totalPolicies },
           {
             label: "Annual Premium",
             value: formatMoney(summary.totalAnnualPremium),
@@ -832,6 +1208,7 @@ function ManagerPortal({ roleType }) {
           { label: "Agents in Scope", value: summary.totalAgents },
           { label: "Open Tasks", value: summary.totalOpenTasks },
           { label: "Conversion Rate", value: `${summary.conversionRate}%` },
+          { label: "Total Policies", value: summary.totalPolicies },
           {
             label: "Annual Premium",
             value: formatMoney(summary.totalAnnualPremium),
@@ -860,6 +1237,7 @@ function ManagerPortal({ roleType }) {
     { key: "name", label: "Name" },
     { key: "unit", label: "Unit" },
     { key: "leads", label: "Leads" },
+    { key: "activeLeads", label: "Active Leads" },
     { key: "converted", label: "Converted" },
     {
       key: "conversionRate",
@@ -867,7 +1245,7 @@ function ManagerPortal({ roleType }) {
       render: (row) => `${row.conversionRate}%`,
     },
     { key: "totalPolicies", label: "Policies" },
-    { key: "activePolicies", label: "Active" },
+    { key: "activePolicies", label: "Active Policies" },
     {
       key: "annualPremium",
       label: "Annual Premium",
@@ -887,6 +1265,11 @@ function ManagerPortal({ roleType }) {
       key: "halfYearlyPremium",
       label: "Half-yearly",
       render: (row) => formatMoney(row.halfYearlyPremium),
+    },
+    {
+      key: "yearlyPremium",
+      label: "Yearly",
+      render: (row) => formatMoney(row.yearlyPremium),
     },
   ];
 
@@ -1260,6 +1643,108 @@ function ManagerPortal({ roleType }) {
     });
   };
 
+  const generateUnitPerformancePdfReport = () => {
+    const tabLabel = unitPerformanceTab.charAt(0).toUpperCase() + unitPerformanceTab.slice(1);
+    const unitName = selectedUnit?.name || "Unit";
+    const columnsByTab = {
+      clients: [
+        { key: "username", label: "Agent Code" },
+        { key: "name", label: "Agent Name" },
+        { key: "totalProspects", label: "Total Prospects" },
+        { key: "activeProspects", label: "Active Prospects" },
+        { key: "leads", label: "Total Leads" },
+        { key: "activeLeads", label: "Active Leads" },
+        { key: "totalPolicies", label: "Total Policyholders" },
+        { key: "activePolicies", label: "Active Policyholders" },
+        { key: "atRiskPolicies", label: "At Risk" },
+        { key: "lapsedPolicies", label: "Lapsed" },
+      ],
+      tasks: [
+        { key: "username", label: "Agent Code" },
+        { key: "name", label: "Agent Name" },
+        { key: "openTasks", label: "Open" },
+        { key: "overdueTasks", label: "Overdue" },
+        { key: "closedTasks", label: "Done" },
+        { key: "delayedDoneTasks", label: "Delayed Done" },
+        { key: "onTimeRate", label: "On-Time Rate" },
+        { key: "topTaskType", label: "Top Task Type" },
+      ],
+      sales: [
+        { key: "username", label: "Agent Code" },
+        { key: "name", label: "Agent Name" },
+        { key: "totalPolicies", label: "Total Policyholders" },
+        { key: "activePolicies", label: "Active Policyholders" },
+        { key: "annualPremium", label: "Annual Premium" },
+        { key: "monthlyPremium", label: "Monthly" },
+        { key: "quarterlyPremium", label: "Quarterly" },
+        { key: "halfYearlyPremium", label: "Half-Yearly" },
+        { key: "yearlyPremium", label: "Yearly" },
+      ],
+    };
+    const rows = filteredAgents.map((agent) => ({
+      ...agent,
+      onTimeRate: `${Number(agent.closedTasks || 0) ? Math.round(((Number(agent.closedTasks || 0) - Number(agent.delayedDoneTasks || 0)) / Number(agent.closedTasks || 0)) * 100) : 0}%`,
+      annualPremium: formatMoney(agent.annualPremium),
+      monthlyPremium: formatMoney(agent.monthlyPremium),
+      quarterlyPremium: formatMoney(agent.quarterlyPremium),
+      halfYearlyPremium: formatMoney(agent.halfYearlyPremium),
+      yearlyPremium: formatMoney(agent.yearlyPremium),
+    }));
+
+    createPrintableReport({
+      filename: `${user?.username || normalizedRole} - ${unitName} ${tabLabel} Performance`,
+      title: `${unitName} ${tabLabel} Performance Report`,
+      periodLabel: "Current branch unit scope",
+      detailsTitle: "Unit Details",
+      details: [
+        { label: "Branch", value: scope.branchName || "—" },
+        { label: "Unit", value: unitName },
+        { label: "Unit Manager", value: `${selectedUnit?.manager?.code || "—"} • ${selectedUnit?.manager?.name || "—"}` },
+        { label: "Assistant Unit Manager", value: `${selectedUnit?.assistantManager?.code || "—"} • ${selectedUnit?.assistantManager?.name || "—"}` },
+      ],
+      filters: [
+        { label: "Performance Tab", value: tabLabel },
+        { label: "Search Filter", value: agentSearch.trim() || "All" },
+        { label: "Agents Included", value: String(filteredAgents.length) },
+      ],
+      statCards: unitPerformanceTab === "clients"
+        ? [
+            { label: "Total Prospects", value: selectedUnitSummary.totalProspects, tone: "red" },
+            { label: "Active Prospects", value: selectedUnitSummary.activeProspects, tone: "blue" },
+            { label: "Total Leads", value: selectedUnitSummary.leads, tone: "green" },
+            { label: "Active Leads", value: selectedUnitSummary.activeLeads, tone: "gold" },
+            { label: "Total Policyholders", value: selectedUnitSummary.totalPolicies, tone: "red" },
+            { label: "Active Policyholders", value: selectedUnitSummary.activePolicies, tone: "green" },
+            { label: "At Risk", value: selectedUnitSummary.atRiskPolicies, tone: "gold" },
+            { label: "Lapsed", value: selectedUnitSummary.lapsedPolicies, tone: "blue" },
+          ]
+        : unitPerformanceTab === "tasks"
+          ? [
+              { label: "Open Tasks", value: selectedUnitSummary.openTasks, tone: "blue" },
+              { label: "Overdue", value: selectedUnitSummary.overdueTasks, tone: "gold" },
+              { label: "Done", value: selectedUnitSummary.closedTasks, tone: "green" },
+              { label: "On-Time Rate", value: `${selectedUnitSummary.onTimeCompletionRate}%`, tone: "red" },
+            ]
+          : [
+              { label: "Annual Premium", value: formatMoney(selectedUnitSummary.annualPremium), tone: "red" },
+              { label: "Monthly", value: formatMoney(selectedUnitSummary.monthlyPremium), tone: "blue" },
+              { label: "Quarterly", value: formatMoney(selectedUnitSummary.quarterlyPremium), tone: "green" },
+              { label: "Half-Yearly", value: formatMoney(selectedUnitSummary.halfYearlyPremium), tone: "gold" },
+              { label: "Yearly", value: formatMoney(selectedUnitSummary.yearlyPremium), tone: "red" },
+            ],
+      analyticsSections: [],
+      tableSections: [
+        {
+          title: "Agents in Scope",
+          columns: columnsByTab[unitPerformanceTab],
+          rows,
+          pageSize: 14,
+          emptyMessage: "No agents available for this unit report.",
+        },
+      ],
+    });
+  };
+
   return (
     <div className="manager-portal">
       <TopNav
@@ -1332,9 +1817,7 @@ function ManagerPortal({ roleType }) {
             <section className="manager-panel">
               <div className="manager-panel__head">
                 <h2>
-                  {normalizedRole === "BM"
-                    ? "Branch Overview"
-                    : "Unit Overview"}
+                  {normalizedRole === "BM" ? "Branch Overview" : "Unit Overview"}
                 </h2>
                 <p>
                   High-level pulse of workload, conversion output, and premium
@@ -1347,6 +1830,10 @@ function ManagerPortal({ roleType }) {
                   <strong>{summary.totalClosedTasks}</strong>
                 </div>
                 <div>
+                  <span>Open Tasks</span>
+                  <strong>{summary.totalOpenTasks}</strong>
+                </div>
+                <div>
                   <span>Overdue Tasks</span>
                   <strong>{summary.totalOverdueTasks}</strong>
                 </div>
@@ -1355,12 +1842,20 @@ function ManagerPortal({ roleType }) {
                   <strong>{summary.totalLeads}</strong>
                 </div>
                 <div>
+                  <span>Active Leads</span>
+                  <strong>{summary.totalActiveLeads}</strong>
+                </div>
+                <div>
                   <span>Converted Leads</span>
                   <strong>{summary.totalConverted}</strong>
                 </div>
                 <div>
                   <span>Total Policies</span>
                   <strong>{summary.totalPolicies}</strong>
+                </div>
+                <div>
+                  <span>Total Active Policies</span>
+                  <strong>{summary.activePolicies}</strong>
                 </div>
                 <div>
                   <span>Active Policy Rate</span>
@@ -1381,75 +1876,375 @@ function ManagerPortal({ roleType }) {
           )}
 
           {!isLoading && !loadError && activeView === "agents" && (
-            <section className="manager-panel">
-              <div className="manager-panel__head">
-                <div>
-                  <h2>Agents in Scope</h2>
-                  <p>
-                    The scoped agent list includes the current {normalizedRole}{" "}
-                    account’s underlying agent record in both the count and the
-                    list.
-                  </p>
+            selectedAgent ? (
+              <section className="manager-panel">
+                <nav className="manager-breadcrumb" aria-label="Agent detail breadcrumb">
+                  <button type="button" onClick={() => setSelectedAgentId("")}>Agents in Scope</button>
+                  <span>&gt;</span>
+                  <span>{selectedAgent.unit || "Unassigned Unit"}</span>
+                  <span>&gt;</span>
+                  <strong>{selectedAgent.username || selectedAgent.name}</strong>
+                </nav>
+
+                <div className="manager-panel__head">
+                  <div>
+                    <h2>{selectedAgent.name}</h2>
+                    <p>
+                      Full agent performance across clients, tasks, sales, and KPI progress for {selectedAgent.username}.
+                    </p>
+                  </div>
                 </div>
-              </div>
 
-              <div className="manager-toolbar manager-toolbar--search-only">
-                <label
-                  className="manager-search"
-                  htmlFor="manager-agents-search"
-                >
-                  <FaSearch size={14} />
-                  <input
-                    id="manager-agents-search"
-                    type="search"
-                    placeholder={normalizedRole === "BM" ? "Search username, name, or unit" : "Search username, name, unit, or branch"}
-                    value={agentSearch}
-                    onChange={(e) => setAgentSearch(e.target.value)}
-                  />
-                </label>
-              </div>
+                <div className="manager-agent-detail-grid">
+                  <article>
+                    <h3>Clients</h3>
+                    <span>Total Prospects</span>
+                    <strong>{Number(selectedAgent.totalProspects || 0)}</strong>
+                    <span>Active Prospects</span>
+                    <strong>{Number(selectedAgent.activeProspects || 0)}</strong>
+                    <span>Total Leads</span>
+                    <strong>{Number(selectedAgent.leads || 0)}</strong>
+                    <span>Active Leads</span>
+                    <strong>{Number(selectedAgent.activeLeads || 0)}</strong>
+                    <span>Total Policyholders</span>
+                    <strong>{Number(selectedAgent.totalPolicies || 0)}</strong>
+                    <span>Active Policyholders</span>
+                    <strong>{Number(selectedAgent.activePolicies || 0)}</strong>
+                    <span>At Risk Policyholders</span>
+                    <strong>{Number(selectedAgent.atRiskPolicies || 0)}</strong>
+                    <span>Lapsed Policies</span>
+                    <strong>{Number(selectedAgent.lapsedPolicies || 0)}</strong>
+                  </article>
+                  <article>
+                    <h3>Tasks</h3>
+                    <span>Open Tasks</span>
+                    <strong>{Number(selectedAgent.openTasks || 0)}</strong>
+                    <span>Overdue Tasks</span>
+                    <strong>{Number(selectedAgent.overdueTasks || 0)}</strong>
+                    <span>Done Tasks</span>
+                    <strong>{Number(selectedAgent.closedTasks || 0)}</strong>
+                    <span>On-Time Completion Rate</span>
+                    <strong>{Number(selectedAgent.closedTasks || 0) ? Math.round(((Number(selectedAgent.closedTasks || 0) - Number(selectedAgent.delayedDoneTasks || 0)) / Number(selectedAgent.closedTasks || 0)) * 100) : 0}%</strong>
+                  </article>
+                  <article>
+                    <h3>Sales</h3>
+                    <span>Annual Premium</span>
+                    <strong>{formatMoney(selectedAgent.annualPremium)}</strong>
+                    <span>Monthly</span>
+                    <strong>{formatMoney(selectedAgent.monthlyPremium)}</strong>
+                    <span>Quarterly</span>
+                    <strong>{formatMoney(selectedAgent.quarterlyPremium)}</strong>
+                    <span>Half-Yearly</span>
+                    <strong>{formatMoney(selectedAgent.halfYearlyPremium)}</strong>
+                    <span>Yearly</span>
+                    <strong>{formatMoney(selectedAgent.yearlyPremium)}</strong>
+                  </article>
+                </div>
 
-              <div className="manager-table-wrap">
-                <table className="manager-table">
-                  <thead>
-                    <tr>
-                      <th>Username</th>
-                      <th>Name</th>
-                      <th>Unit</th>
-                      {normalizedRole !== "BM" && <th>Branch</th>}
-                      <th>Open Tasks</th>
-                      <th>Overdue</th>
-                      <th>Done</th>
-                      <th>Leads</th>
-                      <th>Converted</th>
-                      <th>Annual Premium</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredAgents.map((agent) => (
-                      <tr key={agent.id}>
-                        <td>{agent.username}</td>
-                        <td>{agent.name}</td>
-                        <td>{agent.unit || "—"}</td>
-                        {normalizedRole !== "BM" && <td>{agent.branch || "—"}</td>}
-                        <td>{agent.openTasks}</td>
-                        <td>{agent.overdueTasks}</td>
-                        <td>{agent.closedTasks}</td>
-                        <td>{agent.leads}</td>
-                        <td>{agent.converted}</td>
-                        <td>{formatMoney(agent.annualPremium)}</td>
-                      </tr>
+                <div className="manager-agent-kpi-section">
+                  <h3>KPI Progress</h3>
+                  {selectedAgentKpiCards.length ? (
+                    <div className="manager-kpi-progress-grid">
+                      {selectedAgentKpiCards.map(({ assignment, kpi, actual, comparison, dateRangeLabel }) => (
+                        <article className={`manager-kpi-progress-card ${comparison.className}`} key={`${assignment.scopeType}:${assignment.scopeId}:${kpi.key}`}>
+                          <span>{assignment.name}</span>
+                          <strong>{kpi.label}</strong>
+                          <small>{dateRangeLabel} • {kpi.period}</small>
+                          <div className="manager-kpi-progress-values">
+                            <b>{formatActualKpiValue(actual, kpi.valueType)}</b>
+                            <em>{comparison.status}</em>
+                          </div>
+                          <div className="manager-kpi-progress-bar" aria-label={`${kpi.label} progress ${comparison.percent}%`}>
+                            <span style={{ width: `${comparison.percent}%` }} />
+                          </div>
+                          <small className="manager-kpi-gap-note">{comparison.deltaLabel}</small>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="manager-empty-state">No KPI progress is available for this agent yet.</div>
+                  )}
+                </div>
+              </section>
+            ) : (
+              <section className="manager-panel">
+                <div className="manager-panel__head">
+                  <div>
+                    <h2>
+                      <button type="button" className="manager-heading-link" onClick={() => setActiveView("dashboard")}>{scope.branchName || "Branch"}</button>
+                      <span> &gt; </span>
+                      <span>{selectedUnit?.name || "Unit"}</span>
+                    </h2>
+                  </div>
+                </div>
+
+                <section className="manager-unit-details-card">
+                  <div>
+                    <h3>Unit Details</h3>
+                    <div className="manager-unit-details-grid">
+                      <div className="manager-metric-pair"><span>Unit Manager Code</span><strong>{selectedUnit?.manager?.code || "—"}</strong></div>
+                      <div className="manager-metric-pair"><span>Unit Manager Name</span><strong>{selectedUnit?.manager?.name || "—"}</strong></div>
+                      <div className="manager-metric-pair"><span>Assistant Unit Manager Code</span><strong>{selectedUnit?.assistantManager?.code || "—"}</strong></div>
+                      <div className="manager-metric-pair"><span>Assistant Unit Manager Name</span><strong>{selectedUnit?.assistantManager?.name || "—"}</strong></div>
+                    </div>
+                  </div>
+                  <label className="manager-select" htmlFor="manager-unit-selector">
+                    <span>Unit</span>
+                    <select id="manager-unit-selector" value={selectedUnit?.name || ""} onChange={(e) => { setSelectedUnitName(e.target.value); setSelectedAgentId(""); }}>
+                      {unitOptions.map((unit) => (
+                        <option key={unit.name} value={unit.name}>{unit.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                </section>
+
+                <div className="manager-tab-row">
+                  <div className="manager-tab-buttons" role="tablist" aria-label="Unit performance tabs">
+                    {[
+                      ["clients", "Clients"],
+                      ["tasks", "Tasks"],
+                      ["sales", "Sales"],
+                    ].map(([key, label]) => (
+                      <button
+                        key={key}
+                        type="button"
+                        className={unitPerformanceTab === key ? "active" : ""}
+                        onClick={() => setUnitPerformanceTab(key)}
+                      >
+                        {label}
+                      </button>
                     ))}
-                  </tbody>
-                </table>
-              </div>
-
-              {!filteredAgents.length && (
-                <div className="manager-empty-state">
-                  No agents matched this search yet.
+                  </div>
+                  <button type="button" className="manager-report-btn" onClick={generateUnitPerformancePdfReport}>
+                    <FaFilePdf size={15} />
+                    <span>Generate Report (PDF)</span>
+                  </button>
                 </div>
-              )}
-            </section>
+
+                <div className="manager-agent-detail-grid manager-agent-detail-grid--single">
+                  {unitPerformanceTab === "clients" && (
+                    <article>
+                      <h3>Clients Relationship Performance</h3>
+                      <div className="manager-metric-pair"><span>Total Prospects</span><strong>{selectedUnitSummary.totalProspects}</strong></div>
+                      <div className="manager-metric-pair"><span>Active Prospects</span><strong>{selectedUnitSummary.activeProspects}</strong></div>
+                      <div className="manager-metric-pair"><span>Total Leads</span><strong>{selectedUnitSummary.leads}</strong></div>
+                      <div className="manager-metric-pair"><span>Active Leads</span><strong>{selectedUnitSummary.activeLeads}</strong></div>
+                      <div className="manager-metric-pair"><span>Total Policyholders</span><strong>{selectedUnitSummary.totalPolicies}</strong></div>
+                      <div className="manager-metric-pair"><span>Active Policyholders</span><strong>{selectedUnitSummary.activePolicies}</strong></div>
+                      <div className="manager-metric-pair"><span>At Risk Policyholders</span><strong>{selectedUnitSummary.atRiskPolicies}</strong></div>
+                      <div className="manager-metric-pair"><span>Lapsed Policies</span><strong>{selectedUnitSummary.lapsedPolicies}</strong></div>
+                    </article>
+                  )}
+                  {unitPerformanceTab === "tasks" && (
+                    <article>
+                      <h3>Tasks Performance</h3>
+                      <div className="manager-metric-pair"><span>Open Tasks</span><strong>{selectedUnitSummary.openTasks}</strong></div>
+                      <div className="manager-metric-pair"><span>Overdue Tasks</span><strong>{selectedUnitSummary.overdueTasks}</strong></div>
+                      <div className="manager-metric-pair"><span>Done Tasks</span><strong>{selectedUnitSummary.closedTasks}</strong></div>
+                      <div className="manager-metric-pair"><span>Delayed Done</span><strong>{selectedUnitSummary.delayedDoneTasks}</strong></div>
+                      <div className="manager-metric-pair"><span>On-Time Completion Rate</span><strong>{selectedUnitSummary.onTimeCompletionRate}%</strong></div>
+                    </article>
+                  )}
+                  {unitPerformanceTab === "sales" && (
+                    <article>
+                      <h3>Sales Performance</h3>
+                      <div className="manager-metric-pair"><span>Annual Premium</span><strong>{formatMoney(selectedUnitSummary.annualPremium)}</strong></div>
+                      <div className="manager-metric-pair"><span>Monthly Premium</span><strong>{formatMoney(selectedUnitSummary.monthlyPremium)}</strong></div>
+                      <div className="manager-metric-pair"><span>Quarterly Premium</span><strong>{formatMoney(selectedUnitSummary.quarterlyPremium)}</strong></div>
+                      <div className="manager-metric-pair"><span>Half-Yearly Premium</span><strong>{formatMoney(selectedUnitSummary.halfYearlyPremium)}</strong></div>
+                      <div className="manager-metric-pair"><span>Yearly Premium</span><strong>{formatMoney(selectedUnitSummary.yearlyPremium)}</strong></div>
+                    </article>
+                  )}
+                </div>
+
+                {unitPerformanceTab === "sales" && (
+                  <div className="manager-agent-kpi-section">
+                    <h3>Unit KPI Progress</h3>
+                    {selectedUnitKpiCards.length ? (
+                      <div className="manager-kpi-progress-grid">
+                        {selectedUnitKpiCards.map(({ kpi, actual, comparison, dateRangeLabel }) => (
+                          <article className={`manager-kpi-progress-card ${comparison.className}`} key={`unit:${kpi.key}`}>
+                            <span>{selectedUnit?.name || "Unit"}</span>
+                            <strong>{kpi.label}</strong>
+                            <small>{dateRangeLabel} • {kpi.period}</small>
+                            <div className="manager-kpi-progress-values"><b>{formatActualKpiValue(actual, kpi.valueType)}</b><em>{comparison.status}</em></div>
+                            <div className="manager-kpi-progress-bar" aria-label={`${kpi.label} progress ${comparison.percent}%`}><span style={{ width: `${comparison.percent}%` }} /></div>
+                            <small className="manager-kpi-gap-note">{comparison.deltaLabel}</small>
+                          </article>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="manager-empty-state">No unit KPI progress is available yet.</div>
+                    )}
+                  </div>
+                )}
+
+                <div className="manager-panel__head"><h2>Agents in Scope</h2></div>
+
+                <div className="manager-toolbar manager-toolbar--search-only manager-toolbar--agents">
+                  <div className="manager-toolbar__filters">
+                    <label
+                      className="manager-search"
+                      htmlFor="manager-agents-search"
+                    >
+                      <FaSearch size={14} />
+                      <input
+                        id="manager-agents-search"
+                        type="search"
+                        placeholder="Search username or name"
+                        value={agentSearch}
+                        onChange={(e) => setAgentSearch(e.target.value)}
+                      />
+                    </label>
+                    <label className="manager-select" htmlFor="manager-agents-sort">
+                      <span>Sort By</span>
+                      <select
+                        id="manager-agents-sort"
+                        value={agentSort}
+                        onChange={(e) => setAgentSort(e.target.value)}
+                      >
+                        <option value="usernameAsc">Username (A → Z)</option>
+                        {unitPerformanceTab === "clients" && (
+                          <>
+                            <option value="totalProspectsDesc">Prospects (High → Low)</option>
+                            <option value="totalProspectsAsc">Prospects (Low → High)</option>
+                            <option value="activeProspectsDesc">Active Prospects (High → Low)</option>
+                            <option value="activeProspectsAsc">Active Prospects (Low → High)</option>
+                            <option value="leadsDesc">Leads (High → Low)</option>
+                            <option value="leadsAsc">Leads (Low → High)</option>
+                            <option value="activeLeadsDesc">Active Leads (High → Low)</option>
+                            <option value="activeLeadsAsc">Active Leads (Low → High)</option>
+                            <option value="activePoliciesDesc">Active Policyholders (High → Low)</option>
+                            <option value="activePoliciesAsc">Active Policyholders (Low → High)</option>
+                            <option value="totalPoliciesDesc">Total Policyholders (High → Low)</option>
+                            <option value="totalPoliciesAsc">Total Policyholders (Low → High)</option>
+                            <option value="atRiskPoliciesDesc">At Risk (High → Low)</option>
+                            <option value="atRiskPoliciesAsc">At Risk (Low → High)</option>
+                            <option value="lapsedPoliciesDesc">Lapsed (High → Low)</option>
+                            <option value="lapsedPoliciesAsc">Lapsed (Low → High)</option>
+                          </>
+                        )}
+                        {unitPerformanceTab === "tasks" && (
+                          <>
+                            <option value="openTasksDesc">Open Tasks (High → Low)</option>
+                            <option value="openTasksAsc">Open Tasks (Low → High)</option>
+                            <option value="closedTasksDesc">Done Tasks (High → Low)</option>
+                            <option value="closedTasksAsc">Done Tasks (Low → High)</option>
+                          </>
+                        )}
+                        {unitPerformanceTab === "sales" && (
+                          <>
+                            <option value="annualPremiumDesc">Annual Premium (High → Low)</option>
+                            <option value="annualPremiumAsc">Annual Premium (Low → High)</option>
+                            <option value="activePoliciesDesc">Active Policyholders (High → Low)</option>
+                            <option value="activePoliciesAsc">Active Policyholders (Low → High)</option>
+                          </>
+                        )}
+                      </select>
+                    </label>
+                  </div>
+                </div>
+
+                <div className="manager-table-wrap manager-table-wrap--agents">
+                  <table className="manager-table manager-table--agents">
+                    <thead>
+                      <tr>
+                        <th>Username</th>
+                        <th>Name</th>
+                        {unitPerformanceTab === "clients" && (
+                          <>
+                            <th>Total Prospects</th>
+                            <th>Active Prospects</th>
+                            <th>Leads</th>
+                            <th>Active Leads</th>
+                            <th>Total Policyholders</th>
+                            <th>Active Policyholders</th>
+                            <th>At Risk</th>
+                            <th>Lapsed</th>
+                          </>
+                        )}
+                        {unitPerformanceTab === "tasks" && (
+                          <>
+                            <th>Open Tasks</th>
+                            <th>Overdue</th>
+                            <th>Done</th>
+                            <th>Delayed Done</th>
+                            <th>On-Time Rate</th>
+                            <th>Top Task Type</th>
+                          </>
+                        )}
+                        {unitPerformanceTab === "sales" && (
+                          <>
+                            <th>Total Policyholders</th>
+                            <th>Active Policyholders</th>
+                            <th>Annual Premium</th>
+                            <th>Monthly</th>
+                            <th>Quarterly</th>
+                            <th>Half-Yearly</th>
+                            <th>Yearly</th>
+                          </>
+                        )}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredAgents.map((agent) => (
+                        <tr key={agent.id}>
+                          <td>
+                            <button type="button" className="manager-agent-link" onClick={() => setSelectedAgentId(String(agent.id || ""))}>
+                              {agent.username}
+                            </button>
+                          </td>
+                          <td>
+                            <button type="button" className="manager-agent-link" onClick={() => setSelectedAgentId(String(agent.id || ""))}>
+                              {agent.name}
+                            </button>
+                          </td>
+                          {unitPerformanceTab === "clients" && (
+                            <>
+                              <td>{Number(agent.totalProspects || 0)}</td>
+                              <td>{Number(agent.activeProspects || 0)}</td>
+                              <td>{Number(agent.leads || 0)}</td>
+                              <td>{Number(agent.activeLeads || 0)}</td>
+                              <td>{Number(agent.totalPolicies || 0)}</td>
+                              <td>{Number(agent.activePolicies || 0)}</td>
+                              <td>{Number(agent.atRiskPolicies || 0)}</td>
+                              <td>{Number(agent.lapsedPolicies || 0)}</td>
+                            </>
+                          )}
+                          {unitPerformanceTab === "tasks" && (
+                            <>
+                              <td>{Number(agent.openTasks || 0)}</td>
+                              <td>{Number(agent.overdueTasks || 0)}</td>
+                              <td>{Number(agent.closedTasks || 0)}</td>
+                              <td>{Number(agent.delayedDoneTasks || 0)}</td>
+                              <td>{Number(agent.closedTasks || 0) ? Math.round(((Number(agent.closedTasks || 0) - Number(agent.delayedDoneTasks || 0)) / Number(agent.closedTasks || 0)) * 100) : 0}%</td>
+                              <td>{agent.topTaskType || "—"}</td>
+                            </>
+                          )}
+                          {unitPerformanceTab === "sales" && (
+                            <>
+                              <td>{Number(agent.totalPolicies || 0)}</td>
+                              <td>{Number(agent.activePolicies || 0)}</td>
+                              <td>{formatMoney(agent.annualPremium)}</td>
+                              <td>{formatMoney(agent.monthlyPremium)}</td>
+                              <td>{formatMoney(agent.quarterlyPremium)}</td>
+                              <td>{formatMoney(agent.halfYearlyPremium)}</td>
+                              <td>{formatMoney(agent.yearlyPremium)}</td>
+                            </>
+                          )}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {!filteredAgents.length && (
+                  <div className="manager-empty-state">
+                    No agents matched this search yet.
+                  </div>
+                )}
+              </section>
+            )
           )}
 
           {!isLoading && !loadError && activeView === "task_progress" && (
@@ -1604,10 +2399,18 @@ function ManagerPortal({ roleType }) {
                   </strong>
                 </div>
                 <div>
-                  <span>Half-yearly Premium</span>
+                  <span>Half-Yearly Premium</span>
                   <strong>
                     {formatMoney(
                       salesSummary.frequencyPremiumBreakdown?.halfYearlyPremium,
+                    )}
+                  </strong>
+                </div>
+                <div>
+                  <span>Yearly Premium</span>
+                  <strong>
+                    {formatMoney(
+                      salesSummary.frequencyPremiumBreakdown?.yearlyPremium,
                     )}
                   </strong>
                 </div>
@@ -1637,10 +2440,11 @@ function ManagerPortal({ roleType }) {
                       <th>Name</th>
                       <th>Unit</th>
                       <th>Leads</th>
+                      <th>Active Leads</th>
                       <th>Converted</th>
                       <th>Conversion Rate</th>
                       <th>Policies</th>
-                      <th>Active</th>
+                      <th>Active Policies</th>
                       <th>Annual Premium</th>
                       <th>Monthly</th>
                       <th>Quarterly</th>
@@ -1655,6 +2459,7 @@ function ManagerPortal({ roleType }) {
                         <td>{row.name}</td>
                         <td>{row.unit || "—"}</td>
                         <td>{row.leads}</td>
+                        <td>{row.activeLeads}</td>
                         <td>{row.converted}</td>
                         <td>{row.conversionRate}%</td>
                         <td>{row.totalPolicies}</td>
@@ -1683,7 +2488,11 @@ function ManagerPortal({ roleType }) {
             <section className="manager-panel">
               <div className="manager-panel__head">
                 <div>
-                  <h2>KPI Assignment</h2>
+                  <h2>
+                    <button type="button" className="manager-heading-link" onClick={() => setActiveView("dashboard")}>{scope.branchName || "Branch"}</button>
+                    <span> &gt; </span>
+                    <span>KPI Assignment</span>
+                  </h2>
                   <p>
                     {normalizedRole === "BM"
                       ? "Assign or unassign branch-level KPI sets for all agents in the branch, all units in the branch, and the branch itself."
@@ -1692,7 +2501,6 @@ function ManagerPortal({ roleType }) {
                 </div>
               </div>
               {kpiLoading && <div className="manager-empty-state">Loading KPI assignments...</div>}
-              {kpiMessage && <div className="manager-filter-note">{kpiMessage}</div>}
               {!kpiLoading && (kpiData?.assignments || []).map((assignment) => {
                 const assignmentKey = `${assignment.scopeType}:${assignment.scopeId}`;
                 const draftKpis = kpiDrafts[assignmentKey] || assignment.kpis || [];
@@ -1703,57 +2511,130 @@ function ManagerPortal({ roleType }) {
                         <strong>{assignment.name}</strong>
                         <span>{assignment.scopeType} {assignment.code ? `• ${assignment.code}` : ""} {assignment.unitName && assignment.unitName !== "—" ? `• ${assignment.unitName}` : ""}</span>
                       </div>
-                      {kpiData?.canEdit ? (
-                        <button
-                          type="button"
-                          className="manager-refresh-btn"
-                          onClick={() => saveKpiAssignment(assignment)}
-                          disabled={kpiSavingKey === assignmentKey}
-                        >
-                          {kpiSavingKey === assignmentKey ? "Saving..." : "Save KPI Assignment"}
-                        </button>
-                      ) : null}
                     </div>
                     <div className="manager-kpi-edit-grid">
-                      {draftKpis.map((kpi) => (
-                        <div className="manager-kpi-edit-row" key={kpi.key}>
-                          <label className="manager-kpi-check">
-                            <input
-                              type="checkbox"
-                              checked={kpi.assigned !== false}
-                              disabled={!kpiData?.canEdit}
-                              onChange={(e) => updateKpiDraft(assignment, kpi.key, "assigned", e.target.checked)}
-                            />
-                            <span>Assigned</span>
-                          </label>
-                          <div className="manager-kpi-name">
-                            <strong>{kpi.label}</strong>
-                            <span>{formatScopeLabel(assignment.scopeType)} • {kpi.valueType}</span>
+                      {draftKpis.map((kpi) => {
+                        const rowKey = `${assignmentKey}:${kpi.key}`;
+                        const isEditing = editingKpiKey === rowKey;
+                        const isSaving = kpiSavingKey === rowKey;
+                        const isExpanded = expandedKpiKey === rowKey;
+                        const rowErrors = kpiFieldErrors[rowKey] || {};
+                        const kpiTargets = getKpiTargets(kpi);
+                        return (
+                          <div className={`manager-kpi-edit-row ${isEditing ? "editing" : ""} ${isExpanded ? "expanded" : ""}`} key={kpi.key}>
+                            <div className="manager-kpi-edit-row__head">
+                              <button
+                                type="button"
+                                className="manager-kpi-collapse-btn"
+                                aria-expanded={isExpanded}
+                                onClick={() => setExpandedKpiKey(isExpanded ? "" : rowKey)}
+                              >
+                                <span className="manager-kpi-caret">{isExpanded ? "−" : "+"}</span>
+                                <span className="manager-kpi-name">
+                                  <strong>{kpi.label}</strong>
+                                  <span>{formatScopeLabel(assignment.scopeType)} • {kpi.valueType}</span>
+                                </span>
+                              </button>
+                              <div className="manager-kpi-summary-targets" aria-hidden={isExpanded}>
+                                <strong>Targets</strong>
+                                <span>{getKpiTargets(kpi).filter((target) => formatRequiredKpiTarget({ ...target, valueType: kpi.valueType }) !== "Required").length}/6 targets filled</span>
+                              </div>
+                              <div className="manager-kpi-row-actions">
+                                <button
+                                  type="button"
+                                  className={`manager-kpi-toggle ${kpi.assigned !== false ? "assigned" : ""}`}
+                                  disabled={!kpiData?.canEdit || !isEditing}
+                                  onClick={() => updateKpiDraft(assignment, kpi.key, "assigned", kpi.assigned === false)}
+                                >
+                                  {kpi.assigned !== false ? "Assigned" : "Unassigned"}
+                                </button>
+                                {kpiData?.canEdit ? (
+                                  isEditing ? (
+                                    <>
+                                      <button type="button" className="manager-refresh-btn" onClick={() => cancelKpiEdit(assignment, kpi.key)} disabled={isSaving}>
+                                        Cancel
+                                      </button>
+                                      <button type="button" className="manager-refresh-btn" onClick={() => saveKpi(assignment, kpi.key)} disabled={isSaving}>
+                                        {isSaving ? "Saving..." : "Save"}
+                                      </button>
+                                    </>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      className="manager-refresh-btn"
+                                      onClick={() => {
+                                        setEditingKpiKey(rowKey);
+                                        setExpandedKpiKey(rowKey);
+                                      }}
+                                    >
+                                      Edit
+                                    </button>
+                                  )
+                                ) : null}
+                              </div>
+                            </div>
+                            {isExpanded ? <div className="manager-kpi-frequency-grid">
+                              {kpiTargets.map((target) => (
+                                <div className="manager-kpi-frequency-card" key={target.period}>
+                                  <div className="manager-kpi-frequency-card__head">
+                                    <strong>{target.period}</strong>
+                                    <label className="manager-kpi-default-check">
+                                      <input
+                                        type="radio"
+                                        name={`${rowKey}-default-frequency`}
+                                        checked={(kpi.period || "") === target.period}
+                                        disabled={!kpiData?.canEdit || !isEditing}
+                                        onChange={() => prefillKpiTargetsFromDefault(assignment, kpi.key, target.period)}
+                                      />
+                                      <span>Default</span>
+                                    </label>
+                                  </div>
+                                  <label>
+                                    <span>Target</span>
+                                    <input
+                                      className={`manager-kpi-input ${rowErrors[`${target.period}.targetValue`] ? "has-error" : ""}`}
+                                      type="number"
+                                      step="1"
+                                      value={target.targetValue ?? ""}
+                                      disabled={!kpiData?.canEdit || !isEditing}
+                                      onChange={(e) => updateKpiTargetDraft(assignment, kpi.key, target.period, "targetValue", e.target.value)}
+                                    />
+                                    {rowErrors[`${target.period}.targetValue`] ? <em className="manager-kpi-field-error">{rowErrors[`${target.period}.targetValue`]}</em> : null}
+                                  </label>
+                                  <label>
+                                    <span>Min</span>
+                                    <input
+                                      className={`manager-kpi-input ${rowErrors[`${target.period}.targetMin`] ? "has-error" : ""}`}
+                                      type="number"
+                                      step="1"
+                                      value={target.targetMin ?? ""}
+                                      disabled={!kpiData?.canEdit || !isEditing}
+                                      onChange={(e) => updateKpiTargetDraft(assignment, kpi.key, target.period, "targetMin", e.target.value)}
+                                    />
+                                    {rowErrors[`${target.period}.targetMin`] ? <em className="manager-kpi-field-error">{rowErrors[`${target.period}.targetMin`]}</em> : null}
+                                  </label>
+                                  <label>
+                                    <span>Max</span>
+                                    <input
+                                      className={`manager-kpi-input ${rowErrors[`${target.period}.targetMax`] ? "has-error" : ""}`}
+                                      type="number"
+                                      step="1"
+                                      value={target.targetMax ?? ""}
+                                      disabled={!kpiData?.canEdit || !isEditing}
+                                      onChange={(e) => updateKpiTargetDraft(assignment, kpi.key, target.period, "targetMax", e.target.value)}
+                                    />
+                                    {rowErrors[`${target.period}.targetMax`] ? <em className="manager-kpi-field-error">{rowErrors[`${target.period}.targetMax`]}</em> : null}
+                                  </label>
+                                  <div className="manager-kpi-target-display">
+                                    <span>Display Target</span>
+                                    <strong>{formatRequiredKpiTarget({ ...target, valueType: kpi.valueType })}</strong>
+                                  </div>
+                                </div>
+                              ))}
+                            </div> : null}
                           </div>
-                          <label>
-                            <span>Frequency</span>
-                            <select className="manager-kpi-input" value={kpi.period || "Monthly"} disabled={!kpiData?.canEdit} onChange={(e) => updateKpiDraft(assignment, kpi.key, "period", e.target.value)}>
-                              {KPI_FREQUENCIES.map((frequency) => <option key={frequency} value={frequency}>{frequency}</option>)}
-                            </select>
-                          </label>
-                          <label>
-                            <span>Min</span>
-                            <input className="manager-kpi-input" type="number" value={kpi.targetMin ?? ""} disabled={!kpiData?.canEdit} onChange={(e) => updateKpiDraft(assignment, kpi.key, "targetMin", e.target.value)} />
-                          </label>
-                          <label>
-                            <span>Max</span>
-                            <input className="manager-kpi-input" type="number" value={kpi.targetMax ?? ""} disabled={!kpiData?.canEdit} onChange={(e) => updateKpiDraft(assignment, kpi.key, "targetMax", e.target.value)} />
-                          </label>
-                          <label>
-                            <span>Target</span>
-                            <input className="manager-kpi-input" type="number" value={kpi.targetValue ?? ""} disabled={!kpiData?.canEdit} onChange={(e) => updateKpiDraft(assignment, kpi.key, "targetValue", e.target.value)} />
-                          </label>
-                          <div className="manager-kpi-target-display">
-                            <span>Display Target</span>
-                            <strong>{formatKpiTarget(kpi)}</strong>
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 );

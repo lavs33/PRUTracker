@@ -17,12 +17,20 @@ const kpiAssignmentSchema = new mongoose.Schema(
       {
         key: { type: String, required: true, trim: true },
         label: { type: String, required: true, trim: true },
-        period: { type: String, enum: ["Daily", "Weekly", "Monthly", "Quarterly", "Semi-Annually", "Annually"], required: true },
+        period: { type: String, enum: ["", "Daily", "Weekly", "Monthly", "Quarterly", "Semi-Annually", "Annually"], default: "" },
         valueType: { type: String, enum: ["Count", "Currency", "Percent", "Index"], required: true },
         assigned: { type: Boolean, default: true },
         targetMin: { type: Number, default: null },
         targetMax: { type: Number, default: null },
         targetValue: { type: Number, default: null },
+        targets: [
+          {
+            period: { type: String, enum: ["Daily", "Weekly", "Monthly", "Quarterly", "Semi-Annually", "Annually"], required: true },
+            targetMin: { type: Number, default: null },
+            targetMax: { type: Number, default: null },
+            targetValue: { type: Number, default: null },
+          },
+        ],
       },
     ],
     updatedByUserId: {
