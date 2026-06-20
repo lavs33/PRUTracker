@@ -3294,37 +3294,41 @@ app.get("/api/agent/home", async (req, res) => {
         leadCount: leadCountByProspectId.get(String(prospect._id)) || 0,
       }));
 
-    const convertedLeadIds = new Set();
+    const activePolicyholderEngagementIds = new Set();
+    const activePolicyholderLeadIds = new Set();
     policyholders.forEach((policyholder) => {
-      const engagement = engagementById.get(String(policyholder?.leadEngagementId || ""));
+      if (policyholder.status !== "Active") return;
+      const engagementId = String(policyholder?.leadEngagementId || "");
+      const engagement = engagementById.get(engagementId);
       if (!engagement) return;
-      convertedLeadIds.add(String(engagement.leadId));
+      activePolicyholderEngagementIds.add(engagementId);
+      activePolicyholderLeadIds.add(String(engagement.leadId));
     });
 
     const leadSourceBreakdown = new Map();
     leads.forEach((lead) => {
       const label = String(lead?.source || "Other").trim() || "Other";
-      const current = leadSourceBreakdown.get(label) || { label, total: 0, converted: 0 };
+      const current = leadSourceBreakdown.get(label) || { label, total: 0, activeConverted: 0 };
       current.total += 1;
-      if (convertedLeadIds.has(String(lead._id))) current.converted += 1;
+      if (activePolicyholderLeadIds.has(String(lead._id))) current.activeConverted += 1;
       leadSourceBreakdown.set(label, current);
     });
 
     const bestSource = [...leadSourceBreakdown.values()]
       .map((item) => ({
         label: item.label,
-        convertedLeads: item.converted,
-        conversionRatePct: item.total ? Math.round((item.converted / item.total) * 100) : 0,
+        activePolicyholders: item.activeConverted,
+        convertedLeads: item.activeConverted,
+        conversionRatePct: item.total ? Math.round((item.activeConverted / item.total) * 100) : 0,
       }))
       .sort((a, b) => {
         if (b.conversionRatePct !== a.conversionRatePct) return b.conversionRatePct - a.conversionRatePct;
-        return b.convertedLeads - a.convertedLeads;
+        return b.activePolicyholders - a.activePolicyholders;
       })[0] || null;
 
-    const totalAnnualPremiumPhp = annualPayments.reduce(
-      (sum, annualPayment) => sum + Number(annualPayment?.totalAnnualPremiumPhp || 0),
-      0
-    );
+    const totalAnnualPremiumPhp = annualPayments
+      .filter((annualPayment) => activePolicyholderEngagementIds.has(String(annualPayment?.leadEngagementId || "")))
+      .reduce((sum, annualPayment) => sum + Number(annualPayment?.totalAnnualPremiumPhp || 0), 0);
 
     return res.json({
       tasks: {
@@ -3339,8 +3343,8 @@ app.get("/api/agent/home", async (req, res) => {
         recentProspects,
       },
       sales: {
-        conversionRatePct: conversionRate,
-        totalPolicies: totalPolicyholders,
+        conversionRatePct: activePolicyRate,
+        totalPolicies: activePolicies,
         totalAnnualPremiumPhp,
         bestSource,
       },
@@ -3372,23 +3376,29 @@ app.get("/api/clients/relationship/dashboard", async (req, res) => {
     }
 
     const now = new Date();
+    const presetMap = {
+      "1d": [1, "This day"],
+      "7d": [7, "Last 7 days"],
+      "30d": [30, "Last 30 days"],
+      "90d": [90, "Last 90 days"],
+      "6m": [183, "Last 6 months"],
+      "12m": [365, "Last 12 months"],
+    };
+    const preset = presetMap[String(datePreset || "ALL")];
     const startDate = (() => {
+      if (!preset) return null;
       const dt = new Date(now);
-      if (datePreset === "30d") {
-        dt.setDate(dt.getDate() - 30);
-        return dt;
-      }
-      if (datePreset === "90d") {
-        dt.setDate(dt.getDate() - 90);
-        return dt;
-      }
-      if (datePreset === "365d") {
-        dt.setDate(dt.getDate() - 365);
-        return dt;
-      }
-      return null;
+      if (String(datePreset) === "1d") dt.setHours(0, 0, 0, 0);
+      else dt.setDate(dt.getDate() - preset[0]);
+      return dt;
     })();
 
+    const isInSelectedRange = (value) => {
+      const dt = new Date(value);
+      if (Number.isNaN(dt.getTime())) return false;
+      if (startDate && dt < startDate) return false;
+      return dt <= now;
+    };
     const formatDate = (value) => {
       const dt = new Date(value);
       return Number.isNaN(dt.getTime())
@@ -3398,9 +3408,15 @@ app.get("/api/clients/relationship/dashboard", async (req, res) => {
     const toPct = (part, total) => (total ? Math.round((part / total) * 100) : 0);
     const countBy = (arr, predicate) => arr.filter(predicate).length;
     const normalizeKey = (value) => String(value || "");
+    const normalizeStatus = (value) => String(value || "").trim();
+    const isActiveLead = (lead) => ["New", "In Progress"].includes(normalizeStatus(lead?.status));
+    const isClosedLead = (lead) => normalizeStatus(lead?.status) === "Closed";
+    const isActivePolicyholder = (policyholder) => normalizeStatus(policyholder?.status) === "Active";
+    const isRiskPolicyholder = (policyholder) => ["At Risk", "Lapsed"].includes(normalizeStatus(policyholder?.status));
     const bucketDate = (dateValue, unit) => {
       const dt = new Date(dateValue);
       if (Number.isNaN(dt.getTime())) return null;
+      if (unit === "day") return new Date(dt.getFullYear(), dt.getMonth(), dt.getDate());
       if (unit === "week") {
         const normalized = new Date(dt);
         const day = normalized.getDay();
@@ -3411,40 +3427,44 @@ app.get("/api/clients/relationship/dashboard", async (req, res) => {
       }
       return new Date(dt.getFullYear(), dt.getMonth(), 1);
     };
+    const addBucket = (date, unit) => {
+      const next = new Date(date);
+      if (unit === "day") next.setDate(next.getDate() + 1);
+      else if (unit === "week") next.setDate(next.getDate() + 7);
+      else next.setMonth(next.getMonth() + 1);
+      return next;
+    };
     const buildSeries = (items, dateKey) => {
-      const unit = datePreset === "30d" || datePreset === "90d" ? "week" : "month";
-      const desiredBuckets = 6;
+      const unit = ["1d", "7d"].includes(String(datePreset)) ? "day" : ["30d", "90d"].includes(String(datePreset)) ? "week" : "month";
+      const seriesStart = bucketDate(startDate || new Date(now.getFullYear(), now.getMonth() - 5, 1), unit);
       const seriesEnd = bucketDate(now, unit);
-      const seriesStart = new Date(seriesEnd);
-      if (unit === "week") seriesStart.setDate(seriesStart.getDate() - ((desiredBuckets - 1) * 7));
-      else seriesStart.setMonth(seriesStart.getMonth() - (desiredBuckets - 1));
       const buckets = [];
-      const cursor = new Date(seriesStart);
-      for (let i = 0; i < desiredBuckets; i += 1) {
+      let cursor = new Date(seriesStart);
+      while (cursor <= seriesEnd && buckets.length < 370) {
         buckets.push(new Date(cursor));
-        if (unit === "week") cursor.setDate(cursor.getDate() + 7);
-        else cursor.setMonth(cursor.getMonth() + 1);
+        cursor = addBucket(cursor, unit);
       }
-
       const counts = new Map(buckets.map((bucket) => [bucket.getTime(), 0]));
       items.forEach((item) => {
+        if (!isInSelectedRange(item?.[dateKey])) return;
         const bucket = bucketDate(item?.[dateKey], unit);
         if (!bucket) return;
         const key = bucket.getTime();
         if (counts.has(key)) counts.set(key, (counts.get(key) || 0) + 1);
       });
-
       return buckets.map((bucket) => ({
-        label: unit === "week"
-          ? `${bucket.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
-          : bucket.toLocaleDateString("en-US", { month: "short", year: "2-digit" }),
+        label: unit === "day"
+          ? bucket.toLocaleDateString("en-US", { month: "short", day: "numeric" })
+          : unit === "week"
+            ? bucket.toLocaleDateString("en-US", { month: "short", day: "numeric" })
+            : bucket.toLocaleDateString("en-US", { month: "short", year: "2-digit" }),
         value: counts.get(bucket.getTime()) || 0,
       }));
     };
 
     const userObjectId = new mongoose.Types.ObjectId(userId);
     const prospectQuery = { assignedToUserId: userObjectId };
-    if (startDate) prospectQuery.createdAt = { $gte: startDate };
+    if (startDate) prospectQuery.createdAt = { $gte: startDate, $lte: now };
     if (source !== "ALL") prospectQuery.source = source;
     if (marketType !== "ALL") prospectQuery.marketType = marketType;
     if (prospectType !== "ALL") prospectQuery.prospectType = prospectType;
@@ -3471,9 +3491,21 @@ app.get("/api/clients/relationship/dashboard", async (req, res) => {
           .lean()
       : [];
 
+    const activeLeadsList = leads.filter(isActiveLead);
+    const closedLeadsList = leads.filter(isClosedLead);
+    const activePolicyholders = policyholders.filter(isActivePolicyholder);
+    const activeLeadByProspectId = new Map();
+    activeLeadsList.forEach((lead) => {
+      const key = normalizeKey(lead.prospectId);
+      const arr = activeLeadByProspectId.get(key) || [];
+      arr.push(lead);
+      activeLeadByProspectId.set(key, arr);
+    });
+
     const leadById = new Map(leads.map((lead) => [normalizeKey(lead._id), lead]));
     const engagementById = new Map(engagements.map((engagement) => [normalizeKey(engagement._id), engagement]));
     const policyholdersByProspectId = new Map();
+    const activePolicyholdersByProspectId = new Map();
 
     policyholders.forEach((policyholder) => {
       const engagement = engagementById.get(normalizeKey(policyholder.leadEngagementId));
@@ -3484,12 +3516,18 @@ app.get("/api/clients/relationship/dashboard", async (req, res) => {
       const arr = policyholdersByProspectId.get(prospectId) || [];
       arr.push(policyholder);
       policyholdersByProspectId.set(prospectId, arr);
+      if (isActivePolicyholder(policyholder)) {
+        const activeArr = activePolicyholdersByProspectId.get(prospectId) || [];
+        activeArr.push(policyholder);
+        activePolicyholdersByProspectId.set(prospectId, activeArr);
+      }
     });
 
     const totalProspects = prospects.length;
     const totalPolicyholders = policyholders.length;
+    const totalActivePolicyholders = activePolicyholders.length;
     const totalLeads = leads.length;
-    const prospectsWithLeads = new Set(leads.map((lead) => normalizeKey(lead.prospectId))).size;
+    const prospectsWithActiveLeads = activeLeadByProspectId.size;
     const newLeads = countBy(leads, (lead) => lead.status === "New");
     const inProgressLeads = countBy(leads, (lead) => lead.status === "In Progress");
     const activeLeads = newLeads + inProgressLeads;
@@ -3506,33 +3544,37 @@ app.get("/api/clients/relationship/dashboard", async (req, res) => {
       value: countBy(prospects, (p) => p.status === status),
     }));
 
-    const activePolicies = countBy(policyholders, (p) => p.status === "Active");
-    const lapsedPolicies = countBy(policyholders, (p) => p.status === "Lapsed");
-    const cancelledPolicies = countBy(policyholders, (p) => p.status === "Cancelled");
+    const POLICY_STATUSES = ["Active", "At Risk", "Lapsed", "Paid-Up", "Matured", "Cancelled"];
+    const policyStatusCountsList = POLICY_STATUSES.map((label) => ({
+      status: label,
+      value: countBy(policyholders, (p) => normalizeStatus(p.status) === label),
+    }));
+    const policyStatusCounts = policyStatusCountsList.reduce((acc, row) => {
+      acc[row.status] = row.value;
+      acc[row.status.toLowerCase().replace(/[^a-z0-9]+/g, "")] = row.value;
+      return acc;
+    }, {});
 
+    const activeEngagements = engagements.filter((engagement) => isActiveLead(leadById.get(normalizeKey(engagement.leadId))));
     const stageLabels = ["Contacting", "Needs Assessment", "Proposal", "Application", "Policy Issuance"];
-    const totalEngagements = engagements.length;
+    const totalActiveEngagements = activeEngagements.length;
     const stageProgress = stageLabels.map((label) => {
-      const count = countBy(engagements, (e) => {
-        if (String(e.currentStage || "") !== label) return false;
-        if (label !== "Policy Issuance") return true;
-
-        const lead = leadById.get(normalizeKey(e.leadId));
-        return String(lead?.status || "").trim() !== "Closed";
-      });
-      return { label, count, value: toPct(count, totalEngagements) };
+      const count = countBy(activeEngagements, (e) => String(e.currentStage || "") === label);
+      return { label, count, value: toPct(count, totalActiveEngagements) };
     });
+
+    const countActivePoliciesForProspectSet = (prospectIdSet) => activePolicyholders.filter((policyholder) => {
+      const engagement = engagementById.get(normalizeKey(policyholder.leadEngagementId));
+      if (!engagement) return false;
+      const lead = leadById.get(normalizeKey(engagement.leadId));
+      if (!lead) return false;
+      return prospectIdSet.has(normalizeKey(lead.prospectId));
+    }).length;
 
     const sourceBuckets = ["Agent-Sourced", "System-Assigned"].map((label) => {
       const sourceProspects = prospects.filter((prospect) => prospect.source === label);
       const sourceProspectIds = new Set(sourceProspects.map((prospect) => normalizeKey(prospect._id)));
-      const converted = policyholders.filter((policyholder) => {
-        const engagement = engagementById.get(normalizeKey(policyholder.leadEngagementId));
-        if (!engagement) return false;
-        const lead = leadById.get(normalizeKey(engagement.leadId));
-        if (!lead) return false;
-        return sourceProspectIds.has(normalizeKey(lead.prospectId));
-      }).length;
+      const converted = countActivePoliciesForProspectSet(sourceProspectIds);
       return {
         label,
         prospects: sourceProspects.length,
@@ -3541,17 +3583,20 @@ app.get("/api/clients/relationship/dashboard", async (req, res) => {
       };
     });
 
-    const marketBuckets = ["Warm", "Cold"].map((label) => {
-      const marketProspects = prospects.filter((prospect) => prospect.marketType === label);
-      const converted = marketProspects.reduce((sum, prospect) => {
-        const linked = policyholdersByProspectId.get(normalizeKey(prospect._id)) || [];
-        return sum + linked.length;
-      }, 0);
+    const marketBuckets = [
+      { group: "Market Type", label: "Warm", predicate: (prospect) => prospect.marketType === "Warm" },
+      { group: "Market Type", label: "Cold", predicate: (prospect) => prospect.marketType === "Cold" },
+      { group: "Prospect Type", label: "Elite", predicate: (prospect) => prospect.prospectType === "Elite" },
+      { group: "Prospect Type", label: "Ordinary", predicate: (prospect) => prospect.prospectType === "Ordinary" },
+    ].map((bucket) => {
+      const bucketProspects = prospects.filter(bucket.predicate);
+      const converted = countActivePoliciesForProspectSet(new Set(bucketProspects.map((prospect) => normalizeKey(prospect._id))));
       return {
-        label,
-        prospects: marketProspects.length,
+        group: bucket.group,
+        label: bucket.label,
+        prospects: bucketProspects.length,
         policyholders: converted,
-        conversionRatePct: toPct(converted, marketProspects.length),
+        conversionRatePct: toPct(converted, bucketProspects.length),
       };
     });
 
@@ -3559,10 +3604,11 @@ app.get("/api/clients/relationship/dashboard", async (req, res) => {
     const policyholderTrend = buildSeries(policyholders, "createdAt");
 
     const recentProspects = [...prospects]
-      .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
-      .slice(0, 10)
+      .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0))
       .map((prospect) => {
-        const linkedPolicies = policyholdersByProspectId.get(normalizeKey(prospect._id)) || [];
+        const prospectId = normalizeKey(prospect._id);
+        const linkedActiveLeads = activeLeadByProspectId.get(prospectId) || [];
+        const linkedActivePolicies = activePolicyholdersByProspectId.get(prospectId) || [];
         return {
           prospectCode: prospect.prospectCode || "—",
           fullName: [prospect.firstName, prospect.middleName, prospect.lastName].filter(Boolean).join(" "),
@@ -3571,13 +3617,21 @@ app.get("/api/clients/relationship/dashboard", async (req, res) => {
           source: prospect.source || "—",
           status: prospect.status || "—",
           createdAt: prospect.createdAt || null,
-          policyholders: linkedPolicies.length,
+          activeLeads: linkedActiveLeads.length,
+          activePolicies: linkedActivePolicies.length,
         };
       });
 
+    const closedLeadProspectsWithActivePolicies = new Set();
+    closedLeadsList.forEach((lead) => {
+      const prospectId = normalizeKey(lead.prospectId);
+      if ((activePolicyholdersByProspectId.get(prospectId) || []).length > 0) closedLeadProspectsWithActivePolicies.add(prospectId);
+    });
+
     const conversionHotspot = [...sourceBuckets].sort((a, b) => b.conversionRatePct - a.conversionRatePct)[0] || null;
-    const policyRiskPct = toPct(lapsedPolicies + cancelledPolicies, totalPolicyholders);
-    const leadCoveragePct = toPct(prospectsWithLeads, totalProspects);
+    const atRiskPolicies = countBy(policyholders, isRiskPolicyholder);
+    const policyRiskPct = toPct(atRiskPolicies, totalPolicyholders);
+    const leadCoveragePct = toPct(prospectsWithActiveLeads, totalProspects);
     const periodLabel = startDate ? `${formatDate(startDate)} to ${formatDate(now)}` : "All available records";
 
     return res.json({
@@ -3590,9 +3644,11 @@ app.get("/api/clients/relationship/dashboard", async (req, res) => {
       },
       totals: {
         prospects: totalProspects,
-        prospectsWithLeads,
+        prospectsWithLeads: prospectsWithActiveLeads,
+        prospectsWithActiveLeads,
         policyholders: totalPolicyholders,
-        engagements: totalEngagements,
+        activePolicyholders: totalActivePolicyholders,
+        engagements: totalActiveEngagements,
         leads: totalLeads,
         activeLeads,
       },
@@ -3603,14 +3659,11 @@ app.get("/api/clients/relationship/dashboard", async (req, res) => {
       conversionRatePct: toPct(totalPolicyholders, totalProspects),
       warmRatePct: toPct(warm, totalProspects),
       sourceRatePct: toPct(agentSourced, totalProspects),
-      activePolicyRatePct: toPct(activePolicies, totalPolicyholders),
+      activePolicyRatePct: toPct(totalActivePolicyholders, totalPolicyholders),
       prospectMix: { warm, cold, elite, ordinary, agentSourced, systemAssigned },
       prospectStatusCounts,
-      policyStatusCounts: {
-        active: activePolicies,
-        lapsed: lapsedPolicies,
-        cancelled: cancelledPolicies,
-      },
+      policyStatusCounts,
+      policyStatusCountsList,
       stageProgress,
       sourceConversion: sourceBuckets,
       marketConversion: marketBuckets,
@@ -3626,11 +3679,15 @@ app.get("/api/clients/relationship/dashboard", async (req, res) => {
       insights: {
         topSource: conversionHotspot,
         leadCoverage: {
-          prospectsWithLeads,
-          prospectsWithoutLeads: Math.max(totalProspects - prospectsWithLeads, 0),
+          prospectsWithLeads: prospectsWithActiveLeads,
+          prospectsWithActiveLeads,
+          prospectsWithoutLeads: Math.max(totalProspects - prospectsWithActiveLeads, 0),
+          activeLeads,
+          prospectsWithClosedLeadsAndActivePolicies: closedLeadProspectsWithActivePolicies.size,
           leadCoveragePct,
         },
         policyRiskPct,
+        atRiskPolicies,
       },
     });
   } catch (err) {
@@ -14346,8 +14403,8 @@ app.get("/api/tasks/progress", async (req, res) => {
       typeCounts,
       leadWorkloadRows,
       statusChart: [
-        { key: "Open", value: open.length, color: "#ef4444" },
-        { key: "Overdue Open", value: overdue.length, color: "#f59e0b" },
+        { key: "Open", value: open.length, color: "#f59e0b" },
+        { key: "Overdue Open", value: overdue.length, color: "#ef4444" },
         { key: "On-Time Done", value: onTimeDone.length, color: "#16a34a" },
         { key: "Delayed Done", value: delayedDone.length, color: "#7c3aed" },
       ],
