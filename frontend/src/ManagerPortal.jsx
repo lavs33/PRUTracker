@@ -17,9 +17,16 @@ const KPI_FREQUENCY_WEIGHTS = {
   Weekly: 7,
   Monthly: 30,
   Quarterly: 90,
-  "Semi-Annually": 182,
+  "Semi-Annually": 180,
   Annually: 365,
 };
+
+function roundUpFinalKpiValue(value) {
+  if (!Number.isFinite(value)) return "";
+  const nearestInteger = Math.round(value);
+  if (Math.abs(value - nearestInteger) < Number.EPSILON * 100) return nearestInteger;
+  return Math.ceil(value);
+}
 
 function scaleKpiTargetValue(value, valueType, fromPeriod, toPeriod) {
   if (value === null || value === undefined || value === "") return "";
@@ -28,7 +35,8 @@ function scaleKpiTargetValue(value, valueType, fromPeriod, toPeriod) {
   if (valueType === "Percent" || valueType === "Index") return numericValue;
   const fromWeight = KPI_FREQUENCY_WEIGHTS[fromPeriod] || 1;
   const toWeight = KPI_FREQUENCY_WEIGHTS[toPeriod] || fromWeight;
-  return Math.ceil(numericValue * (toWeight / fromWeight));
+  const exactScaledValue = numericValue * (toWeight / fromWeight);
+  return roundUpFinalKpiValue(exactScaledValue);
 }
 
 function formatMoney(value) {
@@ -579,6 +587,7 @@ function ManagerPortal({ roleType }) {
   const [portalData, setPortalData] = useState(null);
   const [kpiData, setKpiData] = useState(null);
   const [kpiDrafts, setKpiDrafts] = useState({});
+  const [lastAssignedKpiDrafts, setLastAssignedKpiDrafts] = useState({});
   const [kpiLoading, setKpiLoading] = useState(false);
   const [kpiSavingKey, setKpiSavingKey] = useState("");
   const [editingKpiKey, setEditingKpiKey] = useState("");
@@ -700,6 +709,16 @@ function ManagerPortal({ roleType }) {
           drafts[`${assignment.scopeType}:${assignment.scopeId}`] = (assignment.kpis || []).map(cloneKpiDraft);
         });
         setKpiDrafts(drafts);
+        setLastAssignedKpiDrafts((current) => {
+          const next = { ...current };
+          (data.assignments || []).forEach((assignment) => {
+            const assignmentKey = `${assignment.scopeType}:${assignment.scopeId}`;
+            (assignment.kpis || []).forEach((kpi) => {
+              if (kpi?.assigned !== false) next[`${assignmentKey}:${kpi.key}`] = cloneKpiDraft(kpi);
+            });
+          });
+          return next;
+        });
       } catch (err) {
         if (err.name !== "AbortError") setKpiMessage(err.message || "Failed to load KPI assignments.");
       } finally {
@@ -717,16 +736,7 @@ function ManagerPortal({ roleType }) {
       [assignmentKey]: (current[assignmentKey] || assignment.kpis || []).map((kpi) => {
         if (kpi.key !== kpiKey) return kpi;
         const next = { ...kpi, [field]: field === "assigned" ? value === true : value };
-        if (field === "assigned" && value !== true) {
-          return {
-            ...next,
-            period: "",
-            targetMin: "",
-            targetMax: "",
-            targetValue: "",
-            targets: KPI_FREQUENCIES.map((period) => ({ period, targetMin: "", targetMax: "", targetValue: "" })),
-          };
-        }
+        if (field === "assigned" && value !== true) return buildUnassignedKpiDraft(next);
         if (field === "assigned" && value === true && !KPI_FREQUENCIES.includes(next.period)) {
           next.period = KPI_FREQUENCIES[0];
         }
@@ -755,14 +765,21 @@ function ManagerPortal({ roleType }) {
       ...current,
       [assignmentKey]: (current[assignmentKey] || assignment.kpis || []).map((kpi) => {
         if (kpi.key !== kpiKey) return kpi;
-        const nextTargets = getKpiTargets(kpi).map((target) => {
-          if (target.period !== period) return target;
-          const nextTarget = { ...target, [field]: value };
-          if (field === "targetValue" && String(value || "").trim()) {
+        const baseTargets = getKpiTargets(kpi);
+        const shouldCopyAcrossFrequencies = kpi.valueType === "Percent";
+        const shouldScaleAcrossFrequencies = (kpi.valueType === "Currency" || kpi.valueType === "Count") && period === kpi.period;
+        const hasValue = String(value || "").trim() !== "";
+        const nextTargets = baseTargets.map((target) => {
+          if (!shouldCopyAcrossFrequencies && !shouldScaleAcrossFrequencies && target.period !== period) return target;
+          const nextValue = shouldScaleAcrossFrequencies && hasValue
+            ? scaleKpiTargetValue(value, kpi.valueType, period, target.period)
+            : value;
+          const nextTarget = { ...target, [field]: nextValue };
+          if (field === "targetValue" && hasValue) {
             nextTarget.targetMin = "";
             nextTarget.targetMax = "";
           }
-          if ((field === "targetMin" || field === "targetMax") && String(value || "").trim()) {
+          if ((field === "targetMin" || field === "targetMax") && hasValue) {
             nextTarget.targetValue = "";
           }
           return nextTarget;
@@ -805,6 +822,28 @@ function ManagerPortal({ roleType }) {
     setKpiFieldErrors((current) => ({ ...current, [rowKey]: {} }));
   };
 
+  const buildUnassignedKpiDraft = (kpi = {}) => ({
+    ...kpi,
+    assigned: false,
+  });
+
+  const restoreAssignedKpiDraft = (assignment, kpiKey, fallbackKpi = {}) => {
+    const assignmentKey = `${assignment.scopeType}:${assignment.scopeId}`;
+    const rowKey = `${assignmentKey}:${kpiKey}`;
+    const restoredKpi = {
+      ...(lastAssignedKpiDrafts[rowKey] ? cloneKpiDraft(lastAssignedKpiDrafts[rowKey]) : cloneKpiDraft(fallbackKpi)),
+      assigned: true,
+    };
+    const normalizedKpi = KPI_FREQUENCIES.includes(restoredKpi.period)
+      ? restoredKpi
+      : buildKpiTargetsFromDefault({ ...restoredKpi, period: KPI_FREQUENCIES[0] }, KPI_FREQUENCIES[0]);
+    setKpiDrafts((current) => ({
+      ...current,
+      [assignmentKey]: (current[assignmentKey] || assignment.kpis || []).map((kpi) => (kpi.key === kpiKey ? normalizedKpi : kpi)),
+    }));
+    setKpiFieldErrors((current) => ({ ...current, [rowKey]: {} }));
+  };
+
   const validateKpiDraft = (kpi) => {
     const errors = {};
     getKpiTargets(kpi).forEach((target) => {
@@ -816,12 +855,15 @@ function ManagerPortal({ roleType }) {
       const max = Number(target.targetMax);
       const targetValue = Number(target.targetValue);
 
-      if (!hasTarget && !hasMin && !hasMax) {
+      if (kpi?.assigned !== false && !hasTarget && !hasMin && !hasMax) {
         errors[`${prefix}.targetValue`] = "Target or min/max is required.";
       }
       if (hasTarget && !Number.isFinite(targetValue)) errors[`${prefix}.targetValue`] = "Enter a valid number.";
       if (hasMin && !Number.isFinite(min)) errors[`${prefix}.targetMin`] = "Enter a valid number.";
       if (hasMax && !Number.isFinite(max)) errors[`${prefix}.targetMax`] = "Enter a valid number.";
+      if (hasTarget && Number.isFinite(targetValue) && targetValue < 0) errors[`${prefix}.targetValue`] = "Negative values are not allowed.";
+      if (hasMin && Number.isFinite(min) && min < 0) errors[`${prefix}.targetMin`] = "Negative values are not allowed.";
+      if (hasMax && Number.isFinite(max) && max < 0) errors[`${prefix}.targetMax`] = "Negative values are not allowed.";
       if (hasTarget && Number.isFinite(targetValue) && !Number.isInteger(targetValue)) errors[`${prefix}.targetValue`] = "Whole numbers are counted only.";
       if (hasMin && Number.isFinite(min) && !Number.isInteger(min)) errors[`${prefix}.targetMin`] = "Whole numbers are counted only.";
       if (hasMax && Number.isFinite(max) && !Number.isInteger(max)) errors[`${prefix}.targetMax`] = "Whole numbers are counted only.";
@@ -833,18 +875,22 @@ function ManagerPortal({ roleType }) {
     return errors;
   };
 
-  const saveKpi = async (assignment, kpiKey) => {
+  const saveKpi = async (assignment, kpiKey, kpiOverride = null) => {
     const assignmentKey = `${assignment.scopeType}:${assignment.scopeId}`;
-    const draftList = kpiDrafts[assignmentKey] || assignment.kpis || [];
-    const kpi = draftList.find((item) => item.key === kpiKey);
+    const draftList = kpiOverride
+      ? (kpiDrafts[assignmentKey] || assignment.kpis || []).map((item) => (item.key === kpiKey ? kpiOverride : item))
+      : (kpiDrafts[assignmentKey] || assignment.kpis || []);
+    const kpi = kpiOverride || draftList.find((item) => item.key === kpiKey);
     const rowKey = `${assignmentKey}:${kpiKey}`;
     const validationErrors = validateKpiDraft(kpi || {});
-    if (kpi?.assigned !== false && Object.keys(validationErrors).length) {
+    if (Object.keys(validationErrors).length) {
       setKpiFieldErrors((current) => ({ ...current, [rowKey]: validationErrors }));
       setExpandedKpiKey(rowKey);
       return;
     }
     setKpiFieldErrors((current) => ({ ...current, [rowKey]: {} }));
+
+    const currentDraft = cloneKpiDraft(kpi || {});
 
     const savingKey = `${assignmentKey}:${kpiKey}`;
     setKpiSavingKey(savingKey);
@@ -855,7 +901,7 @@ function ManagerPortal({ roleType }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           userId: user.id,
-          kpis: draftList,
+          kpis: [currentDraft],
         }),
       });
       const data = await res.json();
@@ -869,9 +915,13 @@ function ManagerPortal({ roleType }) {
         ),
       }));
       setKpiDrafts((current) => ({ ...current, [assignmentKey]: (data.assignment?.kpis || current[assignmentKey] || []).map(cloneKpiDraft) }));
+      const savedKpi = (data.assignment?.kpis || []).find((item) => item.key === kpiKey);
+      if ((savedKpi || kpi)?.assigned !== false) {
+        setLastAssignedKpiDrafts((current) => ({ ...current, [rowKey]: cloneKpiDraft(savedKpi || kpi) }));
+      }
       setEditingKpiKey("");
       setExpandedKpiKey("");
-      setKpiMessage("KPI saved.");
+      setKpiMessage(kpi?.assigned === false ? "KPI unassigned." : "KPI saved.");
     } catch (err) {
       setKpiMessage(err.message || "Failed to save KPI assignment.");
     } finally {
@@ -2535,16 +2585,32 @@ function ManagerPortal({ roleType }) {
                                   <span>{formatScopeLabel(assignment.scopeType)} • {kpi.valueType}</span>
                                 </span>
                               </button>
-                              <div className="manager-kpi-summary-targets" aria-hidden={isExpanded}>
-                                <strong>Targets</strong>
-                                <span>{getKpiTargets(kpi).filter((target) => formatRequiredKpiTarget({ ...target, valueType: kpi.valueType }) !== "Required").length}/6 targets filled</span>
-                              </div>
+                              {kpi.assigned !== false ? (
+                                <div className="manager-kpi-summary-targets" aria-hidden={isExpanded}>
+                                  <strong>Targets</strong>
+                                  <span>{getKpiTargets(kpi).filter((target) => formatRequiredKpiTarget({ ...target, valueType: kpi.valueType }) !== "Required").length}/6 targets filled</span>
+                                </div>
+                              ) : (
+                                <div className="manager-kpi-summary-targets manager-kpi-summary-targets--empty" aria-hidden="true" />
+                              )}
                               <div className="manager-kpi-row-actions">
                                 <button
                                   type="button"
                                   className={`manager-kpi-toggle ${kpi.assigned !== false ? "assigned" : ""}`}
                                   disabled={!kpiData?.canEdit || !isEditing}
-                                  onClick={() => updateKpiDraft(assignment, kpi.key, "assigned", kpi.assigned === false)}
+                                  onClick={() => {
+                                    const nextAssigned = kpi.assigned === false;
+                                    if (!nextAssigned) {
+                                      setLastAssignedKpiDrafts((current) => ({ ...current, [rowKey]: cloneKpiDraft(kpi) }));
+                                      updateKpiDraft(assignment, kpi.key, "assigned", false);
+                                      setKpiFieldErrors((current) => ({ ...current, [rowKey]: {} }));
+                                      setExpandedKpiKey(rowKey);
+                                      return;
+                                    }
+                                    restoreAssignedKpiDraft(assignment, kpi.key, kpi);
+                                    setEditingKpiKey(rowKey);
+                                    setExpandedKpiKey(rowKey);
+                                  }}
                                 >
                                   {kpi.assigned !== false ? "Assigned" : "Unassigned"}
                                 </button>
@@ -2583,7 +2649,7 @@ function ManagerPortal({ roleType }) {
                                         type="radio"
                                         name={`${rowKey}-default-frequency`}
                                         checked={(kpi.period || "") === target.period}
-                                        disabled={!kpiData?.canEdit || !isEditing}
+                                        disabled={!kpiData?.canEdit || !isEditing || kpi.assigned === false}
                                         onChange={() => prefillKpiTargetsFromDefault(assignment, kpi.key, target.period)}
                                       />
                                       <span>Default</span>
@@ -2596,7 +2662,7 @@ function ManagerPortal({ roleType }) {
                                       type="number"
                                       step="1"
                                       value={target.targetValue ?? ""}
-                                      disabled={!kpiData?.canEdit || !isEditing}
+                                      disabled={!kpiData?.canEdit || !isEditing || kpi.assigned === false}
                                       onChange={(e) => updateKpiTargetDraft(assignment, kpi.key, target.period, "targetValue", e.target.value)}
                                     />
                                     {rowErrors[`${target.period}.targetValue`] ? <em className="manager-kpi-field-error">{rowErrors[`${target.period}.targetValue`]}</em> : null}
@@ -2608,7 +2674,7 @@ function ManagerPortal({ roleType }) {
                                       type="number"
                                       step="1"
                                       value={target.targetMin ?? ""}
-                                      disabled={!kpiData?.canEdit || !isEditing}
+                                      disabled={!kpiData?.canEdit || !isEditing || kpi.assigned === false}
                                       onChange={(e) => updateKpiTargetDraft(assignment, kpi.key, target.period, "targetMin", e.target.value)}
                                     />
                                     {rowErrors[`${target.period}.targetMin`] ? <em className="manager-kpi-field-error">{rowErrors[`${target.period}.targetMin`]}</em> : null}
@@ -2620,7 +2686,7 @@ function ManagerPortal({ roleType }) {
                                       type="number"
                                       step="1"
                                       value={target.targetMax ?? ""}
-                                      disabled={!kpiData?.canEdit || !isEditing}
+                                      disabled={!kpiData?.canEdit || !isEditing || kpi.assigned === false}
                                       onChange={(e) => updateKpiTargetDraft(assignment, kpi.key, target.period, "targetMax", e.target.value)}
                                     />
                                     {rowErrors[`${target.period}.targetMax`] ? <em className="manager-kpi-field-error">{rowErrors[`${target.period}.targetMax`]}</em> : null}

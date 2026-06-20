@@ -570,9 +570,6 @@ const KPI_DEFINITIONS = {
 const KPI_FREQUENCIES = ["Daily", "Weekly", "Monthly", "Quarterly", "Semi-Annually", "Annually"];
 
 function buildDefaultKpiTargets(definition = {}, saved = {}) {
-  if (saved.assigned === false) {
-    return KPI_FREQUENCIES.map((period) => ({ period, targetMin: null, targetMax: null, targetValue: null }));
-  }
   const savedTargetsByPeriod = new Map(
     (Array.isArray(saved.targets) ? saved.targets : [])
       .map((target) => [String(target?.period || ""), target])
@@ -597,11 +594,12 @@ function normalizeKpiList(scopeType, savedKpis = []) {
     const saved = savedByKey.get(definition.key) || {};
     const assigned = saved.assigned !== undefined ? saved.assigned === true : definition.assigned;
     const targets = buildDefaultKpiTargets(definition, saved);
-    const primaryTarget = assigned === false ? {} : (targets.find((target) => target.period === (saved.period || definition.period)) || targets[0] || {});
+    const normalizedPeriod = KPI_FREQUENCIES.includes(String(saved.period || "")) ? saved.period : definition.period;
+    const primaryTarget = targets.find((target) => target.period === normalizedPeriod) || targets[0] || {};
     return {
       ...definition,
       assigned,
-      period: assigned === false ? "" : (saved.period || definition.period),
+      period: normalizedPeriod,
       targetMin: primaryTarget.targetMin ?? null,
       targetMax: primaryTarget.targetMax ?? null,
       targetValue: primaryTarget.targetValue ?? null,
@@ -1437,12 +1435,15 @@ app.put("/api/manager/kpi-assignments/:scopeType/:scopeId", async (req, res) => 
       return res.status(403).json({ message: "Cannot edit KPI assignments outside your branch." });
     }
 
+    const existingAssignment = await KpiAssignment.findOne({ scopeType, scopeId }).select("kpis").lean();
+    const existingByKey = new Map((Array.isArray(existingAssignment?.kpis) ? existingAssignment.kpis : []).map((kpi) => [String(kpi?.key || ""), kpi]));
     const defaults = KPI_DEFINITIONS[scopeType] || [];
     const inputByKey = new Map((Array.isArray(kpis) ? kpis : []).map((kpi) => [String(kpi?.key || ""), kpi]));
     const normalizedKpis = [];
 
     for (const definition of defaults) {
-      const input = inputByKey.get(definition.key) || {};
+      const hasInput = inputByKey.has(definition.key);
+      const input = hasInput ? (inputByKey.get(definition.key) || {}) : (existingByKey.get(definition.key) || {});
       const defaultPeriod = KPI_FREQUENCIES.includes(String(input.period || "")) ? String(input.period) : definition.period;
       const inputTargetsByPeriod = new Map(
         (Array.isArray(input.targets) ? input.targets : [])
@@ -1450,20 +1451,45 @@ app.put("/api/manager/kpi-assignments/:scopeType/:scopeId", async (req, res) => 
           .filter(([period]) => KPI_FREQUENCIES.includes(period))
       );
       const assigned = input.assigned !== undefined ? input.assigned === true : definition.assigned;
+      const normalizedTargets = [];
+
       if (assigned === false) {
-        const normalizedTargets = KPI_FREQUENCIES.map((period) => ({ period, targetMin: null, targetMax: null, targetValue: null }));
+        for (const period of KPI_FREQUENCIES) {
+          const targetInput = inputTargetsByPeriod.get(period) || {};
+          const hasMin = targetInput.targetMin !== null && targetInput.targetMin !== undefined && String(targetInput.targetMin).trim() !== "";
+          const hasMax = targetInput.targetMax !== null && targetInput.targetMax !== undefined && String(targetInput.targetMax).trim() !== "";
+          const hasTarget = targetInput.targetValue !== null && targetInput.targetValue !== undefined && String(targetInput.targetValue).trim() !== "";
+          const targetMin = parseOptionalNumber(targetInput.targetMin);
+          const targetMax = parseOptionalNumber(targetInput.targetMax);
+          const targetValue = parseOptionalNumber(targetInput.targetValue);
+          if ((hasMin && targetMin === null) || (hasMax && targetMax === null) || (hasTarget && targetValue === null)) {
+            return res.status(400).json({ message: `${definition.label} (${period}): Targets must be valid numbers.` });
+          }
+          if ((hasMin && targetMin < 0) || (hasMax && targetMax < 0) || (hasTarget && targetValue < 0)) {
+            return res.status(400).json({ message: `${definition.label} (${period}): Negative values are not allowed.` });
+          }
+          if ((hasMin && !Number.isInteger(targetMin)) || (hasMax && !Number.isInteger(targetMax)) || (hasTarget && !Number.isInteger(targetValue))) {
+            return res.status(400).json({ message: `${definition.label} (${period}): Whole numbers are counted only.` });
+          }
+          normalizedTargets.push({
+            period,
+            targetMin: hasTarget ? null : targetMin,
+            targetMax: hasTarget ? null : targetMax,
+            targetValue: hasMin || hasMax ? null : targetValue,
+          });
+        }
+        const primaryTarget = normalizedTargets.find((target) => target.period === defaultPeriod) || normalizedTargets[0] || {};
         normalizedKpis.push({
           ...definition,
           assigned: false,
-          period: "",
-          targetMin: null,
-          targetMax: null,
-          targetValue: null,
+          period: defaultPeriod,
+          targetMin: primaryTarget.targetMin ?? null,
+          targetMax: primaryTarget.targetMax ?? null,
+          targetValue: primaryTarget.targetValue ?? null,
           targets: normalizedTargets,
         });
         continue;
       }
-      const normalizedTargets = [];
 
       for (const period of KPI_FREQUENCIES) {
         const targetInput = inputTargetsByPeriod.get(period) || {};
@@ -1474,11 +1500,14 @@ app.put("/api/manager/kpi-assignments/:scopeType/:scopeId", async (req, res) => 
         const hasMax = targetInput.targetMax !== null && targetInput.targetMax !== undefined && String(targetInput.targetMax).trim() !== "";
         const hasTarget = targetInput.targetValue !== null && targetInput.targetValue !== undefined && String(targetInput.targetValue).trim() !== "";
 
-        if (!hasTarget && !hasMin && !hasMax) {
+        if (hasInput && !hasTarget && !hasMin && !hasMax) {
           return res.status(400).json({ message: `${definition.label} (${period}): Target or min/max is required.` });
         }
         if ((hasMin && targetMin === null) || (hasMax && targetMax === null) || (hasTarget && targetValue === null)) {
           return res.status(400).json({ message: `${definition.label} (${period}): Targets must be valid numbers.` });
+        }
+        if ((hasMin && targetMin < 0) || (hasMax && targetMax < 0) || (hasTarget && targetValue < 0)) {
+          return res.status(400).json({ message: `${definition.label} (${period}): Negative values are not allowed.` });
         }
         if ((hasMin && !Number.isInteger(targetMin)) || (hasMax && !Number.isInteger(targetMax)) || (hasTarget && !Number.isInteger(targetValue))) {
           return res.status(400).json({ message: `${definition.label} (${period}): Whole numbers are counted only.` });
