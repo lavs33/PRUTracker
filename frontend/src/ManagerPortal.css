@@ -332,15 +332,17 @@
 
 .manager-unit-details-grid span {
   color: #6b7280;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
-.manager-unit-details-grid strong {
+.manager-unit-details-grid strong,
+.manager-unit-details-grid .manager-metric-pair strong {
   color: #111827;
-  font-size: 15px;
+  font-size: 20px;
+  line-height: 1.25;
 }
 
 .manager-tab-buttons {
@@ -457,11 +459,19 @@
 }
 .manager-table--agents th:nth-child(1),
 .manager-table--agents th:nth-child(2) {
-  z-index: 3;
+  background: #fff4f2;
+  box-shadow: 8px 0 14px rgba(17, 24, 39, 0.08);
+  z-index: 4;
 }
 .manager-table--agents td:nth-child(1),
 .manager-table--agents td:nth-child(2) {
-  background: inherit;
+  background: #fff;
+  background-clip: padding-box;
+  box-shadow: 8px 0 14px rgba(17, 24, 39, 0.08);
+}
+.manager-table--agents tbody tr:nth-child(even) td:nth-child(1),
+.manager-table--agents tbody tr:nth-child(even) td:nth-child(2) {
+  background: #fffafa;
 }
 .manager-table--agents th:nth-child(n+3),
 .manager-table--agents td:nth-child(n+3) { width: 150px; }
@@ -931,7 +941,13 @@
 }
 
 .manager-tab-row .manager-report-btn {
+  margin-left: 0;
+}
+
+.manager-tab-row .manager-select--unit-date {
   margin-left: auto;
+  max-width: 220px;
+  min-width: 190px;
 }
 
 .manager-unit-details-card > .manager-select {

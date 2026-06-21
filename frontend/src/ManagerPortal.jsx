@@ -8,8 +8,12 @@ import "./ManagerPortal.css";
 const API_BASE = "http://localhost:5000";
 const DATE_PRESETS = [
   { value: "ALL", label: "All Time" },
+  { value: "TODAY", label: "This Day" },
+  { value: "7d", label: "Last 7 Days" },
   { value: "30d", label: "Last 30 Days" },
   { value: "90d", label: "Last 90 Days" },
+  { value: "6m", label: "Last 6 Months" },
+  { value: "12m", label: "Last 12 Months" },
 ];
 const KPI_FREQUENCIES = ["Daily", "Weekly", "Monthly", "Quarterly", "Semi-Annually", "Annually"];
 const KPI_FREQUENCY_WEIGHTS = {
@@ -17,9 +21,20 @@ const KPI_FREQUENCY_WEIGHTS = {
   Weekly: 7,
   Monthly: 30,
   Quarterly: 90,
-  "Semi-Annually": 182,
+  "Semi-Annually": 180,
   Annually: 365,
 };
+
+function roundUpFinalKpiValue(value) {
+  if (!Number.isFinite(value)) return "";
+  const nearestInteger = Math.round(value);
+  if (Math.abs(value - nearestInteger) < Number.EPSILON * 100) return nearestInteger;
+  return Math.ceil(value);
+}
+
+function shouldCopyKpiValueAcrossFrequencies(kpi = {}) {
+  return kpi.valueType === "Percent" || kpi.key === "monthly_active_agents";
+}
 
 function scaleKpiTargetValue(value, valueType, fromPeriod, toPeriod) {
   if (value === null || value === undefined || value === "") return "";
@@ -28,11 +43,31 @@ function scaleKpiTargetValue(value, valueType, fromPeriod, toPeriod) {
   if (valueType === "Percent" || valueType === "Index") return numericValue;
   const fromWeight = KPI_FREQUENCY_WEIGHTS[fromPeriod] || 1;
   const toWeight = KPI_FREQUENCY_WEIGHTS[toPeriod] || fromWeight;
-  return Math.ceil(numericValue * (toWeight / fromWeight));
+  const exactScaledValue = numericValue * (toWeight / fromWeight);
+  return roundUpFinalKpiValue(exactScaledValue);
 }
 
 function formatMoney(value) {
   return `₱ ${Number(value || 0).toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function formatKpiLabel(kpi = {}, scopeType = "") {
+  const label = String(kpi.label || "").trim();
+  const legacyAgentLabels = {
+    "approaches count": "Number of Approaches",
+    "appointments count": "Number of Appointments",
+    "presentations count": "Number of Presentations",
+    "policies count": "Number of Policies",
+    "sales target": "Number of Policies",
+    "new prospects": "Number of New Prospects",
+  };
+  const legacyBranchLabels = {
+    "active agents count": "Number of Active Agents",
+  };
+  const normalizedLabel = label.toLowerCase();
+  if (scopeType === "AGENT" && legacyAgentLabels[normalizedLabel]) return legacyAgentLabels[normalizedLabel];
+  if (scopeType === "BRANCH" && legacyBranchLabels[normalizedLabel]) return legacyBranchLabels[normalizedLabel];
+  return label || "KPI";
 }
 
 function formatKpiValue(value, valueType) {
@@ -90,6 +125,7 @@ function buildKpiTargetsFromDefault(kpi = {}, defaultPeriodOverride = "") {
   const hasDefaultMin = String(defaultTarget.targetMin ?? "").trim() !== "";
   const hasDefaultMax = String(defaultTarget.targetMax ?? "").trim() !== "";
 
+  const shouldCopyAcrossFrequencies = shouldCopyKpiValueAcrossFrequencies(kpi);
   const nextTargets = (!hasDefaultTarget && !hasDefaultMin && !hasDefaultMax)
     ? targets
     : targets.map((target) => {
@@ -97,7 +133,9 @@ function buildKpiTargetsFromDefault(kpi = {}, defaultPeriodOverride = "") {
       if (hasDefaultTarget) {
         return {
           ...target,
-          targetValue: scaleKpiTargetValue(defaultTarget.targetValue, kpi.valueType, defaultPeriod, target.period),
+          targetValue: shouldCopyAcrossFrequencies
+            ? defaultTarget.targetValue
+            : scaleKpiTargetValue(defaultTarget.targetValue, kpi.valueType, defaultPeriod, target.period),
           targetMin: "",
           targetMax: "",
         };
@@ -105,8 +143,12 @@ function buildKpiTargetsFromDefault(kpi = {}, defaultPeriodOverride = "") {
       return {
         ...target,
         targetValue: "",
-        targetMin: hasDefaultMin ? scaleKpiTargetValue(defaultTarget.targetMin, kpi.valueType, defaultPeriod, target.period) : "",
-        targetMax: hasDefaultMax ? scaleKpiTargetValue(defaultTarget.targetMax, kpi.valueType, defaultPeriod, target.period) : "",
+        targetMin: hasDefaultMin
+          ? (shouldCopyAcrossFrequencies ? defaultTarget.targetMin : scaleKpiTargetValue(defaultTarget.targetMin, kpi.valueType, defaultPeriod, target.period))
+          : "",
+        targetMax: hasDefaultMax
+          ? (shouldCopyAcrossFrequencies ? defaultTarget.targetMax : scaleKpiTargetValue(defaultTarget.targetMax, kpi.valueType, defaultPeriod, target.period))
+          : "",
       };
     });
   const primaryTarget = nextTargets.find((target) => target.period === defaultPeriod) || {};
@@ -371,20 +413,19 @@ function createPrintableReport({
           .join("")}
       </section>
 
-      <section class="pdf-stats-grid">
-        ${statCards
-          .map(
-            (item) => `
-              <article class="pdf-stat-card ${escapeHtml(item.tone || "")}">
-                <span>${escapeHtml(item.label)}</span>
-                <strong>${escapeHtml(item.value)}</strong>
-              </article>`,
-          )
-          .join("")}
-      </section>
-
       <section class="pdf-section-block">
         <h3>Performance Analytics</h3>
+        <div class="pdf-stats-grid">
+          ${statCards
+            .map(
+              (item) => `
+                <article class="pdf-stat-card ${escapeHtml(item.tone || "")}">
+                  <span>${escapeHtml(item.label)}</span>
+                  <strong>${escapeHtml(item.value)}</strong>
+                </article>`,
+            )
+            .join("")}
+        </div>
         <div class="pdf-analytics-grid">
           ${analyticsSections
             .map(
@@ -576,9 +617,11 @@ function ManagerPortal({ roleType }) {
   const [salesSearch, setSalesSearch] = useState("");
   const [taskDatePreset, setTaskDatePreset] = useState("ALL");
   const [salesDatePreset, setSalesDatePreset] = useState("ALL");
+  const [unitPerformanceDatePreset, setUnitPerformanceDatePreset] = useState("ALL");
   const [portalData, setPortalData] = useState(null);
   const [kpiData, setKpiData] = useState(null);
   const [kpiDrafts, setKpiDrafts] = useState({});
+  const [lastAssignedKpiDrafts, setLastAssignedKpiDrafts] = useState({});
   const [kpiLoading, setKpiLoading] = useState(false);
   const [kpiSavingKey, setKpiSavingKey] = useState("");
   const [editingKpiKey, setEditingKpiKey] = useState("");
@@ -647,6 +690,7 @@ function ManagerPortal({ roleType }) {
           userId: user.id,
           taskDatePreset,
           salesDatePreset,
+          unitPerformanceDatePreset,
         });
         const res = await fetch(
           `${API_BASE}/api/manager/portal?${params.toString()}`,
@@ -678,6 +722,7 @@ function ManagerPortal({ roleType }) {
     refreshCount,
     salesDatePreset,
     taskDatePreset,
+    unitPerformanceDatePreset,
     user?.id,
     user?.role,
   ]);
@@ -700,6 +745,16 @@ function ManagerPortal({ roleType }) {
           drafts[`${assignment.scopeType}:${assignment.scopeId}`] = (assignment.kpis || []).map(cloneKpiDraft);
         });
         setKpiDrafts(drafts);
+        setLastAssignedKpiDrafts((current) => {
+          const next = { ...current };
+          (data.assignments || []).forEach((assignment) => {
+            const assignmentKey = `${assignment.scopeType}:${assignment.scopeId}`;
+            (assignment.kpis || []).forEach((kpi) => {
+              if (kpi?.assigned !== false) next[`${assignmentKey}:${kpi.key}`] = cloneKpiDraft(kpi);
+            });
+          });
+          return next;
+        });
       } catch (err) {
         if (err.name !== "AbortError") setKpiMessage(err.message || "Failed to load KPI assignments.");
       } finally {
@@ -717,16 +772,7 @@ function ManagerPortal({ roleType }) {
       [assignmentKey]: (current[assignmentKey] || assignment.kpis || []).map((kpi) => {
         if (kpi.key !== kpiKey) return kpi;
         const next = { ...kpi, [field]: field === "assigned" ? value === true : value };
-        if (field === "assigned" && value !== true) {
-          return {
-            ...next,
-            period: "",
-            targetMin: "",
-            targetMax: "",
-            targetValue: "",
-            targets: KPI_FREQUENCIES.map((period) => ({ period, targetMin: "", targetMax: "", targetValue: "" })),
-          };
-        }
+        if (field === "assigned" && value !== true) return buildUnassignedKpiDraft(next);
         if (field === "assigned" && value === true && !KPI_FREQUENCIES.includes(next.period)) {
           next.period = KPI_FREQUENCIES[0];
         }
@@ -755,14 +801,21 @@ function ManagerPortal({ roleType }) {
       ...current,
       [assignmentKey]: (current[assignmentKey] || assignment.kpis || []).map((kpi) => {
         if (kpi.key !== kpiKey) return kpi;
-        const nextTargets = getKpiTargets(kpi).map((target) => {
-          if (target.period !== period) return target;
-          const nextTarget = { ...target, [field]: value };
-          if (field === "targetValue" && String(value || "").trim()) {
+        const baseTargets = getKpiTargets(kpi);
+        const shouldCopyAcrossFrequencies = shouldCopyKpiValueAcrossFrequencies(kpi) && period === kpi.period;
+        const shouldScaleAcrossFrequencies = !shouldCopyKpiValueAcrossFrequencies(kpi) && (kpi.valueType === "Currency" || kpi.valueType === "Count") && period === kpi.period;
+        const hasValue = String(value || "").trim() !== "";
+        const nextTargets = baseTargets.map((target) => {
+          if (!shouldCopyAcrossFrequencies && !shouldScaleAcrossFrequencies && target.period !== period) return target;
+          const nextValue = shouldScaleAcrossFrequencies && hasValue
+            ? scaleKpiTargetValue(value, kpi.valueType, period, target.period)
+            : value;
+          const nextTarget = { ...target, [field]: nextValue };
+          if (field === "targetValue" && hasValue) {
             nextTarget.targetMin = "";
             nextTarget.targetMax = "";
           }
-          if ((field === "targetMin" || field === "targetMax") && String(value || "").trim()) {
+          if ((field === "targetMin" || field === "targetMax") && hasValue) {
             nextTarget.targetValue = "";
           }
           return nextTarget;
@@ -805,6 +858,28 @@ function ManagerPortal({ roleType }) {
     setKpiFieldErrors((current) => ({ ...current, [rowKey]: {} }));
   };
 
+  const buildUnassignedKpiDraft = (kpi = {}) => ({
+    ...kpi,
+    assigned: false,
+  });
+
+  const restoreAssignedKpiDraft = (assignment, kpiKey, fallbackKpi = {}) => {
+    const assignmentKey = `${assignment.scopeType}:${assignment.scopeId}`;
+    const rowKey = `${assignmentKey}:${kpiKey}`;
+    const restoredKpi = {
+      ...(lastAssignedKpiDrafts[rowKey] ? cloneKpiDraft(lastAssignedKpiDrafts[rowKey]) : cloneKpiDraft(fallbackKpi)),
+      assigned: true,
+    };
+    const normalizedKpi = KPI_FREQUENCIES.includes(restoredKpi.period)
+      ? restoredKpi
+      : buildKpiTargetsFromDefault({ ...restoredKpi, period: KPI_FREQUENCIES[0] }, KPI_FREQUENCIES[0]);
+    setKpiDrafts((current) => ({
+      ...current,
+      [assignmentKey]: (current[assignmentKey] || assignment.kpis || []).map((kpi) => (kpi.key === kpiKey ? normalizedKpi : kpi)),
+    }));
+    setKpiFieldErrors((current) => ({ ...current, [rowKey]: {} }));
+  };
+
   const validateKpiDraft = (kpi) => {
     const errors = {};
     getKpiTargets(kpi).forEach((target) => {
@@ -816,12 +891,15 @@ function ManagerPortal({ roleType }) {
       const max = Number(target.targetMax);
       const targetValue = Number(target.targetValue);
 
-      if (!hasTarget && !hasMin && !hasMax) {
+      if (kpi?.assigned !== false && !hasTarget && !hasMin && !hasMax) {
         errors[`${prefix}.targetValue`] = "Target or min/max is required.";
       }
       if (hasTarget && !Number.isFinite(targetValue)) errors[`${prefix}.targetValue`] = "Enter a valid number.";
       if (hasMin && !Number.isFinite(min)) errors[`${prefix}.targetMin`] = "Enter a valid number.";
       if (hasMax && !Number.isFinite(max)) errors[`${prefix}.targetMax`] = "Enter a valid number.";
+      if (hasTarget && Number.isFinite(targetValue) && targetValue < 0) errors[`${prefix}.targetValue`] = "Negative values are not allowed.";
+      if (hasMin && Number.isFinite(min) && min < 0) errors[`${prefix}.targetMin`] = "Negative values are not allowed.";
+      if (hasMax && Number.isFinite(max) && max < 0) errors[`${prefix}.targetMax`] = "Negative values are not allowed.";
       if (hasTarget && Number.isFinite(targetValue) && !Number.isInteger(targetValue)) errors[`${prefix}.targetValue`] = "Whole numbers are counted only.";
       if (hasMin && Number.isFinite(min) && !Number.isInteger(min)) errors[`${prefix}.targetMin`] = "Whole numbers are counted only.";
       if (hasMax && Number.isFinite(max) && !Number.isInteger(max)) errors[`${prefix}.targetMax`] = "Whole numbers are counted only.";
@@ -833,18 +911,22 @@ function ManagerPortal({ roleType }) {
     return errors;
   };
 
-  const saveKpi = async (assignment, kpiKey) => {
+  const saveKpi = async (assignment, kpiKey, kpiOverride = null) => {
     const assignmentKey = `${assignment.scopeType}:${assignment.scopeId}`;
-    const draftList = kpiDrafts[assignmentKey] || assignment.kpis || [];
-    const kpi = draftList.find((item) => item.key === kpiKey);
+    const draftList = kpiOverride
+      ? (kpiDrafts[assignmentKey] || assignment.kpis || []).map((item) => (item.key === kpiKey ? kpiOverride : item))
+      : (kpiDrafts[assignmentKey] || assignment.kpis || []);
+    const kpi = kpiOverride || draftList.find((item) => item.key === kpiKey);
     const rowKey = `${assignmentKey}:${kpiKey}`;
     const validationErrors = validateKpiDraft(kpi || {});
-    if (kpi?.assigned !== false && Object.keys(validationErrors).length) {
+    if (Object.keys(validationErrors).length) {
       setKpiFieldErrors((current) => ({ ...current, [rowKey]: validationErrors }));
       setExpandedKpiKey(rowKey);
       return;
     }
     setKpiFieldErrors((current) => ({ ...current, [rowKey]: {} }));
+
+    const currentDraft = cloneKpiDraft(kpi || {});
 
     const savingKey = `${assignmentKey}:${kpiKey}`;
     setKpiSavingKey(savingKey);
@@ -855,7 +937,7 @@ function ManagerPortal({ roleType }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           userId: user.id,
-          kpis: draftList,
+          kpis: [currentDraft],
         }),
       });
       const data = await res.json();
@@ -869,9 +951,13 @@ function ManagerPortal({ roleType }) {
         ),
       }));
       setKpiDrafts((current) => ({ ...current, [assignmentKey]: (data.assignment?.kpis || current[assignmentKey] || []).map(cloneKpiDraft) }));
+      const savedKpi = (data.assignment?.kpis || []).find((item) => item.key === kpiKey);
+      if ((savedKpi || kpi)?.assigned !== false) {
+        setLastAssignedKpiDrafts((current) => ({ ...current, [rowKey]: cloneKpiDraft(savedKpi || kpi) }));
+      }
       setEditingKpiKey("");
       setExpandedKpiKey("");
-      setKpiMessage("KPI saved.");
+      setKpiMessage(kpi?.assigned === false ? "KPI unassigned." : "KPI saved.");
     } catch (err) {
       setKpiMessage(err.message || "Failed to save KPI assignment.");
     } finally {
@@ -959,8 +1045,8 @@ function ManagerPortal({ roleType }) {
   const selectedUnit = unitOptions.find((unit) => unit.name === selectedUnitName) || unitOptions[0] || null;
 
   const selectedUnitRows = useMemo(
-    () => (portalData?.agents || []).filter((agent) => (selectedUnit?.name ? String(agent?.unit || "") === selectedUnit.name : true)),
-    [portalData?.agents, selectedUnit?.name],
+    () => (portalData?.unitPerformanceRows || portalData?.agents || []).filter((agent) => (selectedUnit?.name ? String(agent?.unit || "") === selectedUnit.name : true)),
+    [portalData?.agents, portalData?.unitPerformanceRows, selectedUnit?.name],
   );
 
   const filteredAgents = useMemo(() => {
@@ -1059,6 +1145,43 @@ function ManagerPortal({ roleType }) {
       return { kpi, actual, comparison: getKpiComparison(actual, kpi), dateRangeLabel: getKpiFrequencyRangeLabel(kpi.period) };
     });
   }, [kpiData?.assignments, selectedUnitSummary]);
+
+  const unitPerformancePeriodLabel = useMemo(() => {
+    const reportContext = portalData?.reportContext || {};
+    const endDate = reportContext.unitPerformanceEndDate ? new Date(reportContext.unitPerformanceEndDate) : new Date();
+    const startDate = reportContext.unitPerformanceStartDate ? new Date(reportContext.unitPerformanceStartDate) : null;
+    if (!startDate || Number.isNaN(startDate.getTime())) return `All Time to ${formatDate(endDate)}`;
+    return `${formatDate(startDate)} to ${formatDate(endDate)}`;
+  }, [portalData?.reportContext]);
+
+  const unitSortLabel = useMemo(() => {
+    const selectLabels = {
+      usernameAsc: "Username (A → Z)",
+      totalProspectsDesc: "Total Prospects (High → Low)",
+      totalProspectsAsc: "Total Prospects (Low → High)",
+      activeProspectsDesc: "Active Prospects (High → Low)",
+      activeProspectsAsc: "Active Prospects (Low → High)",
+      leadsDesc: "Total Leads (High → Low)",
+      leadsAsc: "Total Leads (Low → High)",
+      activeLeadsDesc: "Active Leads (High → Low)",
+      activeLeadsAsc: "Active Leads (Low → High)",
+      totalPoliciesDesc: "Total Policyholders (High → Low)",
+      totalPoliciesAsc: "Total Policyholders (Low → High)",
+      activePoliciesDesc: "Active Policyholders (High → Low)",
+      activePoliciesAsc: "Active Policyholders (Low → High)",
+      atRiskPoliciesDesc: "At Risk Policyholders (High → Low)",
+      atRiskPoliciesAsc: "At Risk Policyholders (Low → High)",
+      lapsedPoliciesDesc: "Lapsed Policies (High → Low)",
+      lapsedPoliciesAsc: "Lapsed Policies (Low → High)",
+      openTasksDesc: "Open Tasks (High → Low)",
+      openTasksAsc: "Open Tasks (Low → High)",
+      closedTasksDesc: "Done Tasks (High → Low)",
+      closedTasksAsc: "Done Tasks (Low → High)",
+      annualPremiumDesc: "Annual Premium (High → Low)",
+      annualPremiumAsc: "Annual Premium (Low → High)",
+    };
+    return selectLabels[agentSort] || selectLabels.usernameAsc;
+  }, [agentSort]);
 
   const selectedAgent = useMemo(
     () => (portalData?.agents || []).find((agent) => String(agent?.id || "") === selectedAgentId) || null,
@@ -1474,7 +1597,7 @@ function ManagerPortal({ roleType }) {
     const kpiTableRows = branchKpiProgressRows.map(({ assignment, kpi, actual, dateRangeLabel }) => {
       const comparison = getKpiComparison(actual, kpi);
       return {
-        kpi: kpi.label,
+        kpi: formatKpiLabel(kpi, assignment.scopeType),
         frequency: kpi.period,
         dateRange: dateRangeLabel,
         type: kpi.valueType,
@@ -1656,8 +1779,8 @@ function ManagerPortal({ roleType }) {
         { key: "activeLeads", label: "Active Leads" },
         { key: "totalPolicies", label: "Total Policyholders" },
         { key: "activePolicies", label: "Active Policyholders" },
-        { key: "atRiskPolicies", label: "At Risk" },
-        { key: "lapsedPolicies", label: "Lapsed" },
+        { key: "atRiskPolicies", label: "At Risk Policyholders" },
+        { key: "lapsedPolicies", label: "Lapsed Policies" },
       ],
       tasks: [
         { key: "username", label: "Agent Code" },
@@ -1693,10 +1816,11 @@ function ManagerPortal({ roleType }) {
 
     createPrintableReport({
       filename: `${user?.username || normalizedRole} - ${unitName} ${tabLabel} Performance`,
-      title: `${unitName} ${tabLabel} Performance Report`,
-      periodLabel: "Current branch unit scope",
+      title: unitPerformanceTab === "clients" ? "Unit Clients Performance Report" : `${unitName} ${tabLabel} Performance Report`,
+      periodLabel: unitPerformancePeriodLabel,
       detailsTitle: "Unit Details",
       details: [
+        { label: "Area", value: scope.areaName || "—" },
         { label: "Branch", value: scope.branchName || "—" },
         { label: "Unit", value: unitName },
         { label: "Unit Manager", value: `${selectedUnit?.manager?.code || "—"} • ${selectedUnit?.manager?.name || "—"}` },
@@ -1704,8 +1828,9 @@ function ManagerPortal({ roleType }) {
       ],
       filters: [
         { label: "Performance Tab", value: tabLabel },
+        { label: "Date Range", value: getPresetLabel(unitPerformanceDatePreset) },
         { label: "Search Filter", value: agentSearch.trim() || "All" },
-        { label: "Agents Included", value: String(filteredAgents.length) },
+        { label: "Sort Filter", value: unitSortLabel },
       ],
       statCards: unitPerformanceTab === "clients"
         ? [
@@ -1715,8 +1840,8 @@ function ManagerPortal({ roleType }) {
             { label: "Active Leads", value: selectedUnitSummary.activeLeads, tone: "gold" },
             { label: "Total Policyholders", value: selectedUnitSummary.totalPolicies, tone: "red" },
             { label: "Active Policyholders", value: selectedUnitSummary.activePolicies, tone: "green" },
-            { label: "At Risk", value: selectedUnitSummary.atRiskPolicies, tone: "gold" },
-            { label: "Lapsed", value: selectedUnitSummary.lapsedPolicies, tone: "blue" },
+            { label: "At Risk Policyholders", value: selectedUnitSummary.atRiskPolicies, tone: "gold" },
+            { label: "Lapsed Policies", value: selectedUnitSummary.lapsedPolicies, tone: "blue" },
           ]
         : unitPerformanceTab === "tasks"
           ? [
@@ -1948,13 +2073,13 @@ function ManagerPortal({ roleType }) {
                       {selectedAgentKpiCards.map(({ assignment, kpi, actual, comparison, dateRangeLabel }) => (
                         <article className={`manager-kpi-progress-card ${comparison.className}`} key={`${assignment.scopeType}:${assignment.scopeId}:${kpi.key}`}>
                           <span>{assignment.name}</span>
-                          <strong>{kpi.label}</strong>
+                          <strong>{formatKpiLabel(kpi, assignment.scopeType)}</strong>
                           <small>{dateRangeLabel} • {kpi.period}</small>
                           <div className="manager-kpi-progress-values">
                             <b>{formatActualKpiValue(actual, kpi.valueType)}</b>
                             <em>{comparison.status}</em>
                           </div>
-                          <div className="manager-kpi-progress-bar" aria-label={`${kpi.label} progress ${comparison.percent}%`}>
+                          <div className="manager-kpi-progress-bar" aria-label={`${formatKpiLabel(kpi, assignment.scopeType)} progress ${comparison.percent}%`}>
                             <span style={{ width: `${comparison.percent}%` }} />
                           </div>
                           <small className="manager-kpi-gap-note">{comparison.deltaLabel}</small>
@@ -2015,6 +2140,18 @@ function ManagerPortal({ roleType }) {
                       </button>
                     ))}
                   </div>
+                  <label className="manager-select manager-select--unit-date" htmlFor="manager-unit-performance-date-preset">
+                    <span>Date Range</span>
+                    <select
+                      id="manager-unit-performance-date-preset"
+                      value={unitPerformanceDatePreset}
+                      onChange={(e) => setUnitPerformanceDatePreset(e.target.value)}
+                    >
+                      {DATE_PRESETS.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </label>
                   <button type="button" className="manager-report-btn" onClick={generateUnitPerformancePdfReport}>
                     <FaFilePdf size={15} />
                     <span>Generate Report (PDF)</span>
@@ -2065,10 +2202,10 @@ function ManagerPortal({ roleType }) {
                         {selectedUnitKpiCards.map(({ kpi, actual, comparison, dateRangeLabel }) => (
                           <article className={`manager-kpi-progress-card ${comparison.className}`} key={`unit:${kpi.key}`}>
                             <span>{selectedUnit?.name || "Unit"}</span>
-                            <strong>{kpi.label}</strong>
+                            <strong>{formatKpiLabel(kpi, "UNIT")}</strong>
                             <small>{dateRangeLabel} • {kpi.period}</small>
                             <div className="manager-kpi-progress-values"><b>{formatActualKpiValue(actual, kpi.valueType)}</b><em>{comparison.status}</em></div>
-                            <div className="manager-kpi-progress-bar" aria-label={`${kpi.label} progress ${comparison.percent}%`}><span style={{ width: `${comparison.percent}%` }} /></div>
+                            <div className="manager-kpi-progress-bar" aria-label={`${formatKpiLabel(kpi, "UNIT")} progress ${comparison.percent}%`}><span style={{ width: `${comparison.percent}%` }} /></div>
                             <small className="manager-kpi-gap-note">{comparison.deltaLabel}</small>
                           </article>
                         ))}
@@ -2106,22 +2243,22 @@ function ManagerPortal({ roleType }) {
                         <option value="usernameAsc">Username (A → Z)</option>
                         {unitPerformanceTab === "clients" && (
                           <>
-                            <option value="totalProspectsDesc">Prospects (High → Low)</option>
-                            <option value="totalProspectsAsc">Prospects (Low → High)</option>
+                            <option value="totalProspectsDesc">Total Prospects (High → Low)</option>
+                            <option value="totalProspectsAsc">Total Prospects (Low → High)</option>
                             <option value="activeProspectsDesc">Active Prospects (High → Low)</option>
                             <option value="activeProspectsAsc">Active Prospects (Low → High)</option>
-                            <option value="leadsDesc">Leads (High → Low)</option>
-                            <option value="leadsAsc">Leads (Low → High)</option>
+                            <option value="leadsDesc">Total Leads (High → Low)</option>
+                            <option value="leadsAsc">Total Leads (Low → High)</option>
                             <option value="activeLeadsDesc">Active Leads (High → Low)</option>
                             <option value="activeLeadsAsc">Active Leads (Low → High)</option>
-                            <option value="activePoliciesDesc">Active Policyholders (High → Low)</option>
-                            <option value="activePoliciesAsc">Active Policyholders (Low → High)</option>
                             <option value="totalPoliciesDesc">Total Policyholders (High → Low)</option>
                             <option value="totalPoliciesAsc">Total Policyholders (Low → High)</option>
-                            <option value="atRiskPoliciesDesc">At Risk (High → Low)</option>
-                            <option value="atRiskPoliciesAsc">At Risk (Low → High)</option>
-                            <option value="lapsedPoliciesDesc">Lapsed (High → Low)</option>
-                            <option value="lapsedPoliciesAsc">Lapsed (Low → High)</option>
+                            <option value="activePoliciesDesc">Active Policyholders (High → Low)</option>
+                            <option value="activePoliciesAsc">Active Policyholders (Low → High)</option>
+                            <option value="atRiskPoliciesDesc">At Risk Policyholders (High → Low)</option>
+                            <option value="atRiskPoliciesAsc">At Risk Policyholders (Low → High)</option>
+                            <option value="lapsedPoliciesDesc">Lapsed Policies (High → Low)</option>
+                            <option value="lapsedPoliciesAsc">Lapsed Policies (Low → High)</option>
                           </>
                         )}
                         {unitPerformanceTab === "tasks" && (
@@ -2155,12 +2292,12 @@ function ManagerPortal({ roleType }) {
                           <>
                             <th>Total Prospects</th>
                             <th>Active Prospects</th>
-                            <th>Leads</th>
+                            <th>Total Leads</th>
                             <th>Active Leads</th>
                             <th>Total Policyholders</th>
                             <th>Active Policyholders</th>
-                            <th>At Risk</th>
-                            <th>Lapsed</th>
+                            <th>At Risk Policyholders</th>
+                            <th>Lapsed Policies</th>
                           </>
                         )}
                         {unitPerformanceTab === "tasks" && (
@@ -2439,7 +2576,7 @@ function ManagerPortal({ roleType }) {
                       <th>Username</th>
                       <th>Name</th>
                       <th>Unit</th>
-                      <th>Leads</th>
+                      <th>Total Leads</th>
                       <th>Active Leads</th>
                       <th>Converted</th>
                       <th>Conversion Rate</th>
@@ -2531,20 +2668,37 @@ function ManagerPortal({ roleType }) {
                               >
                                 <span className="manager-kpi-caret">{isExpanded ? "−" : "+"}</span>
                                 <span className="manager-kpi-name">
-                                  <strong>{kpi.label}</strong>
+                                  <strong>{formatKpiLabel(kpi, assignment.scopeType)}</strong>
                                   <span>{formatScopeLabel(assignment.scopeType)} • {kpi.valueType}</span>
                                 </span>
                               </button>
-                              <div className="manager-kpi-summary-targets" aria-hidden={isExpanded}>
-                                <strong>Targets</strong>
-                                <span>{getKpiTargets(kpi).filter((target) => formatRequiredKpiTarget({ ...target, valueType: kpi.valueType }) !== "Required").length}/6 targets filled</span>
-                              </div>
+                              {kpi.assigned !== false ? (
+                                <div className="manager-kpi-summary-targets" aria-hidden={isExpanded}>
+                                  <strong>Targets</strong>
+                                  <span>{getKpiTargets(kpi).filter((target) => formatRequiredKpiTarget({ ...target, valueType: kpi.valueType }) !== "Required").length}/6 targets filled</span>
+                                  <span>Default: {KPI_FREQUENCIES.includes(kpi.period) ? kpi.period : "Not set"}</span>
+                                </div>
+                              ) : (
+                                <div className="manager-kpi-summary-targets manager-kpi-summary-targets--empty" aria-hidden="true" />
+                              )}
                               <div className="manager-kpi-row-actions">
                                 <button
                                   type="button"
                                   className={`manager-kpi-toggle ${kpi.assigned !== false ? "assigned" : ""}`}
                                   disabled={!kpiData?.canEdit || !isEditing}
-                                  onClick={() => updateKpiDraft(assignment, kpi.key, "assigned", kpi.assigned === false)}
+                                  onClick={() => {
+                                    const nextAssigned = kpi.assigned === false;
+                                    if (!nextAssigned) {
+                                      setLastAssignedKpiDrafts((current) => ({ ...current, [rowKey]: cloneKpiDraft(kpi) }));
+                                      updateKpiDraft(assignment, kpi.key, "assigned", false);
+                                      setKpiFieldErrors((current) => ({ ...current, [rowKey]: {} }));
+                                      setExpandedKpiKey(rowKey);
+                                      return;
+                                    }
+                                    restoreAssignedKpiDraft(assignment, kpi.key, kpi);
+                                    setEditingKpiKey(rowKey);
+                                    setExpandedKpiKey(rowKey);
+                                  }}
                                 >
                                   {kpi.assigned !== false ? "Assigned" : "Unassigned"}
                                 </button>
@@ -2583,7 +2737,7 @@ function ManagerPortal({ roleType }) {
                                         type="radio"
                                         name={`${rowKey}-default-frequency`}
                                         checked={(kpi.period || "") === target.period}
-                                        disabled={!kpiData?.canEdit || !isEditing}
+                                        disabled={!kpiData?.canEdit || !isEditing || kpi.assigned === false}
                                         onChange={() => prefillKpiTargetsFromDefault(assignment, kpi.key, target.period)}
                                       />
                                       <span>Default</span>
@@ -2596,7 +2750,7 @@ function ManagerPortal({ roleType }) {
                                       type="number"
                                       step="1"
                                       value={target.targetValue ?? ""}
-                                      disabled={!kpiData?.canEdit || !isEditing}
+                                      disabled={!kpiData?.canEdit || !isEditing || kpi.assigned === false}
                                       onChange={(e) => updateKpiTargetDraft(assignment, kpi.key, target.period, "targetValue", e.target.value)}
                                     />
                                     {rowErrors[`${target.period}.targetValue`] ? <em className="manager-kpi-field-error">{rowErrors[`${target.period}.targetValue`]}</em> : null}
@@ -2608,7 +2762,7 @@ function ManagerPortal({ roleType }) {
                                       type="number"
                                       step="1"
                                       value={target.targetMin ?? ""}
-                                      disabled={!kpiData?.canEdit || !isEditing}
+                                      disabled={!kpiData?.canEdit || !isEditing || kpi.assigned === false}
                                       onChange={(e) => updateKpiTargetDraft(assignment, kpi.key, target.period, "targetMin", e.target.value)}
                                     />
                                     {rowErrors[`${target.period}.targetMin`] ? <em className="manager-kpi-field-error">{rowErrors[`${target.period}.targetMin`]}</em> : null}
@@ -2620,7 +2774,7 @@ function ManagerPortal({ roleType }) {
                                       type="number"
                                       step="1"
                                       value={target.targetMax ?? ""}
-                                      disabled={!kpiData?.canEdit || !isEditing}
+                                      disabled={!kpiData?.canEdit || !isEditing || kpi.assigned === false}
                                       onChange={(e) => updateKpiTargetDraft(assignment, kpi.key, target.period, "targetMax", e.target.value)}
                                     />
                                     {rowErrors[`${target.period}.targetMax`] ? <em className="manager-kpi-field-error">{rowErrors[`${target.period}.targetMax`]}</em> : null}
@@ -2665,7 +2819,7 @@ function ManagerPortal({ roleType }) {
                   return (
                     <article className={`manager-kpi-progress-card ${comparison.className}`} key={`${assignment.scopeType}:${assignment.scopeId}:${kpi.key}`}>
                       <span>{assignment.name}</span>
-                      <strong>{kpi.label}</strong>
+                      <strong>{formatKpiLabel(kpi, assignment.scopeType)}</strong>
                       <p>{kpi.period} • {dateRangeLabel} • {kpi.valueType}</p>
                       <div className="manager-kpi-progress-values">
                         <div>
@@ -2677,7 +2831,7 @@ function ManagerPortal({ roleType }) {
                           <b>{formatKpiTarget(kpi)}</b>
                         </div>
                       </div>
-                      <div className="manager-kpi-progress-bar" aria-label={`${kpi.label} progress ${comparison.percent}%`}>
+                      <div className="manager-kpi-progress-bar" aria-label={`${formatKpiLabel(kpi, assignment.scopeType)} progress ${comparison.percent}%`}>
                         <span style={{ width: `${barPercent}%` }} />
                       </div>
                       <em>{comparison.status}</em>
