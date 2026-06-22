@@ -127,7 +127,7 @@ function createAuthController({
 
   const getManagerPortal = async (req, res) => {
     try {
-      const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
+      const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL", unitPerformanceDatePreset = "ALL" } = req.query;
 
       if (!userId) return res.status(400).json({ message: "Missing userId." });
       if (!mongoose.isValidObjectId(userId)) {
@@ -141,7 +141,7 @@ function createAuthController({
         return res.status(403).json({ message: "This account does not have manager portal access." });
       }
 
-      const result = await buildManagerPortalPayload(user, { taskDatePreset, salesDatePreset });
+      const result = await buildManagerPortalPayload(user, { taskDatePreset, salesDatePreset, unitPerformanceDatePreset });
       if (result.error) {
         return res.status(result.error.status).json({ message: result.error.message });
       }
