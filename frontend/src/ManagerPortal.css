@@ -1319,3 +1319,35 @@
 .manager-table-scroll-top__inner--clients.manager-table-scroll-top__inner--all-units { width: 1740px; }
 .manager-table-scroll-top__inner--tasks.manager-table-scroll-top__inner--all-units { width: 1680px; }
 .manager-table-scroll-top__inner--sales.manager-table-scroll-top__inner--all-units { width: 2380px; }
+.manager-breadcrumb--agent {
+  font-size: 24px;
+  gap: 10px;
+}
+
+.manager-panel__head--split {
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.9fr);
+  align-items: start;
+}
+
+.manager-agent-profile-card {
+  border: 1px solid rgba(218, 41, 28, 0.14);
+  border-radius: 18px;
+  background: #fffafa;
+  padding: 16px;
+  display: grid;
+  gap: 10px;
+}
+
+.manager-agent-profile-card .manager-metric-pair strong {
+  text-align: right;
+}
+
+@media (max-width: 900px) {
+  .manager-panel__head--split {
+    grid-template-columns: 1fr;
+  }
+
+  .manager-breadcrumb--agent {
+    font-size: 20px;
+  }
+}
