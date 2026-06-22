@@ -735,8 +735,12 @@ function ManagerPortal({ roleType }) {
       kpi_progress: "Branch KPI Progress Dashboard",
     };
     const pageLabels = normalizedRole === "BM" ? branchPageLabels : unitPageLabels;
+    if (activeView === "agents" && selectedAgentId) {
+      document.title = `${portalData?.scope?.branchCode || user?.username || normalizedRole} | Agent Details`;
+      return;
+    }
     document.title = `${user?.username || normalizedRole} | ${pageLabels[activeView] || pageLabels.dashboard}`;
-  }, [activeView, normalizedRole, user?.username]);
+  }, [activeView, normalizedRole, portalData?.scope?.branchCode, selectedAgentId, user?.username]);
 
   useEffect(() => {
     if (!user?.id || user.role !== normalizedRole) return;
@@ -1381,6 +1385,43 @@ function ManagerPortal({ roleType }) {
     );
   }, [kpiData?.assignments, portalData?.kpiSalesRowsByFrequency, selectedAgent]);
 
+  const selectedAgentSummary = useMemo(() => {
+    if (!selectedAgent) return null;
+    const totalTasks = Number(selectedAgent.totalTasks || 0);
+    const closedTasks = Number(selectedAgent.closedTasks || 0);
+    const delayedDoneTasks = Number(selectedAgent.delayedDoneTasks || 0);
+    const onTimeDoneTasks = Math.max(0, closedTasks - delayedDoneTasks);
+    const leads = Number(selectedAgent.leads || 0);
+    const converted = Number(selectedAgent.converted || 0);
+    const totalPolicies = Number(selectedAgent.totalPolicies || 0);
+    const activePolicies = Number(selectedAgent.activePolicies || 0);
+    return {
+      ...selectedAgent,
+      totalTasks,
+      closedTasks,
+      delayedDoneTasks,
+      onTimeDoneTasks,
+      overallCompletionRate: totalTasks ? Math.round((closedTasks / totalTasks) * 100) : 0,
+      onTimeCompletionRate: closedTasks ? Math.round((onTimeDoneTasks / closedTasks) * 100) : 0,
+      lateCompletionRate: closedTasks ? Math.round((delayedDoneTasks / closedTasks) * 100) : 0,
+      unconverted: Math.max(0, leads - converted),
+      conversionRate: leads ? Math.round((converted / leads) * 100) : 0,
+      activePolicyRate: totalPolicies ? Math.round((activePolicies / totalPolicies) * 100) : 0,
+    };
+  }, [selectedAgent]);
+
+  const openAgentDetails = (agentId) => {
+    setSelectedAgentId(String(agentId || ""));
+    window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+  };
+
+  const goToAgentUnit = () => {
+    setSelectedAgentId("");
+    setUnitPerformanceTab("clients");
+    setSelectedUnitName(selectedAgent?.unit || "");
+    window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+  };
+
   const filteredTaskRows = useMemo(
     () =>
       sortByAgentCode(
@@ -1446,6 +1487,8 @@ function ManagerPortal({ roleType }) {
       .find((value) => value !== null && value !== undefined && value !== "");
     const productionTarget = Number(productionTargetValue || 0);
     const targetAchievementIndex = productionTarget ? Math.round((Number(rowSummary.totalAnnualPremium || 0) / productionTarget) * 100) : 0;
+    const productionTargetLabel = formatKpiTarget({ ...salesProductionKpiForPeriod, valueType: "Currency" });
+    const productionActual = Number(rowSummary.totalAnnualPremium || 0);
 
     return (branchAssignment.kpis || [])
       .filter((kpi) => kpi.assigned !== false && ["monthly_sales_production", "monthly_target_achievement_index"].includes(kpi.key))
@@ -1460,6 +1503,8 @@ function ManagerPortal({ roleType }) {
           kpi: kpiForPeriod,
           actual: actualByKey[kpi.key] || 0,
           targetBasis: kpi.key === "monthly_target_achievement_index" ? productionTarget : null,
+          targetBasisLabel: kpi.key === "monthly_target_achievement_index" ? productionTargetLabel : "",
+          productionActual: kpi.key === "monthly_target_achievement_index" ? productionActual : null,
           dateRangeLabel: getKpiFrequencyRangeLabel(selectedKpiPeriod),
         };
       });
@@ -1953,6 +1998,82 @@ function ManagerPortal({ roleType }) {
     });
   };
 
+  const generateAgentDetailsPdfReport = () => {
+    if (!selectedAgentSummary) return;
+    const tabLabel = unitPerformanceTab.charAt(0).toUpperCase() + unitPerformanceTab.slice(1);
+    const detailRowsByTab = {
+      clients: [
+        ["Total Prospects", selectedAgentSummary.totalProspects],
+        ["Active Prospects", selectedAgentSummary.activeProspects],
+        ["Total Leads", selectedAgentSummary.leads],
+        ["Active Leads", selectedAgentSummary.activeLeads],
+        ["Total Policyholders", selectedAgentSummary.totalPolicies],
+        ["Active Policyholders", selectedAgentSummary.activePolicies],
+        ["At Risk Policyholders", selectedAgentSummary.atRiskPolicies],
+        ["Lapsed Policies", selectedAgentSummary.lapsedPolicies],
+      ],
+      tasks: [
+        ["Total Tasks", selectedAgentSummary.totalTasks],
+        ["Open Tasks", selectedAgentSummary.openTasks],
+        ["Overdue Tasks", selectedAgentSummary.overdueTasks],
+        ["On-Time Done Tasks", selectedAgentSummary.onTimeDoneTasks],
+        ["Overall Completion Rate", `${selectedAgentSummary.overallCompletionRate}%`],
+        ["On-Time Completion Rate", `${selectedAgentSummary.onTimeCompletionRate}%`],
+        ["Late Completion Rate", `${selectedAgentSummary.lateCompletionRate}%`],
+      ],
+      sales: [
+        ["Total Leads", selectedAgentSummary.leads],
+        ["Converted Leads", selectedAgentSummary.converted],
+        ["Unconverted Leads", selectedAgentSummary.unconverted],
+        ["Conversion Rate", `${selectedAgentSummary.conversionRate}%`],
+        ["Total Policies", selectedAgentSummary.totalPolicies],
+        ["Active Policies", selectedAgentSummary.activePolicies],
+        ["Active Policy Rate", `${selectedAgentSummary.activePolicyRate}%`],
+        ["Total Annual Premium", formatMoney(selectedAgentSummary.annualPremium)],
+        ["Monthly Premium Breakdown", formatMoney(selectedAgentSummary.monthlyPremium)],
+        ["Quarterly Premium Breakdown", formatMoney(selectedAgentSummary.quarterlyPremium)],
+        ["Half-Yearly Premium Breakdown", formatMoney(selectedAgentSummary.halfYearlyPremium)],
+        ["Yearly Premium Breakdown", formatMoney(selectedAgentSummary.yearlyPremium)],
+      ],
+    };
+
+    createPrintableReport({
+      filename: `${selectedAgentSummary.username || "Agent"} - Agent ${tabLabel} Performance Report`,
+      title: `Agent ${tabLabel} Performance Report`,
+      periodLabel: unitPerformancePeriodLabel,
+      detailsTitle: "Agent Details",
+      details: [
+        { label: "Branch", value: scope.branchName || selectedAgentSummary.branch || "—" },
+        { label: "Unit", value: selectedAgentSummary.unit || "—" },
+        { label: "Agent Code", value: selectedAgentSummary.username || "—" },
+        { label: "Agent Name", value: selectedAgentSummary.name || "—" },
+        { label: "Agent Type", value: selectedAgentSummary.agentType || "—" },
+        { label: "Date Employed", value: selectedAgentSummary.dateEmployed ? formatDate(selectedAgentSummary.dateEmployed) : "—" },
+      ],
+      filters: [
+        { label: "Performance Tab", value: tabLabel },
+        { label: "Date Range", value: getPresetLabel(unitPerformanceDatePreset) },
+      ],
+      statCards: (detailRowsByTab[unitPerformanceTab] || []).map(([label, value], index) => ({
+        label,
+        value,
+        tone: ["red", "blue", "green", "gold"][index % 4],
+      })),
+      analyticsSections: selectedAgentKpiCards.length
+        ? [
+            {
+              title: "Agent KPI Progress",
+              rows: selectedAgentKpiCards.map(({ kpi, actual }) => ({
+                label: formatKpiLabel(kpi, "AGENT"),
+                value: `Actual ${formatActualKpiValue(actual, kpi.valueType)} • Target ${formatKpiTarget(kpi)}`,
+              })),
+            },
+          ]
+        : [],
+      tableSections: [],
+    });
+  };
+
   const generateUnitPerformancePdfReport = () => {
     const tabLabel = unitPerformanceTab.charAt(0).toUpperCase() + unitPerformanceTab.slice(1);
     const unitName = selectedUnit?.name || "Unit";
@@ -2083,23 +2204,42 @@ function ManagerPortal({ roleType }) {
               { label: "Half-Yearly Premium Breakdown", value: formatMoney(selectedUnitSummary.halfYearlyPremium), tone: "gold" },
               { label: "Yearly Premium Breakdown", value: formatMoney(selectedUnitSummary.yearlyPremium), tone: "red" },
             ],
-      analyticsSections: unitPerformanceTab === "sales" && isAllUnitsSelected && selectedKpiPeriod && branchSalesKpiProgressRows.length
-        ? [
-            {
-              title: "Branch KPI Progress",
-              rows: branchSalesKpiProgressRows.map(({ kpi, actual, targetBasis }) => ({
-                label: formatKpiLabel(kpi, "BRANCH"),
-                value: `Actual ${formatActualKpiValue(actual, kpi.valueType)} • Target ${formatKpiTarget(kpi)}`,
-              })),
-            },
-            {
-              title: "Unit Drilldown",
-              rows: branchKpiUnitRows.map((unit) => ({
-                label: unit.unit,
-                value: `${formatMoney(unit.annualPremium)}${unit.topAgents.length ? ` • Top: ${unit.topAgents.map((agent) => `${agent.username} ${agent.name || ""} (${formatMoney(agent.annualPremium)})`.trim()).join(", ")}` : ""}`,
-              })),
-            },
-          ]
+      analyticsSections: unitPerformanceTab === "sales" && selectedKpiPeriod
+        ? (isAllUnitsSelected && branchSalesKpiProgressRows.length
+            ? [
+                {
+                  title: "Branch KPI Progress",
+                  rows: branchSalesKpiProgressRows.map(({ kpi, actual }) => ({
+                    label: formatKpiLabel(kpi, "BRANCH"),
+                    value: `Actual ${formatActualKpiValue(actual, kpi.valueType)} • Target ${formatKpiTarget(kpi)}`,
+                  })),
+                },
+                {
+                  title: "Unit Drilldown",
+                  rows: branchKpiUnitRows.map((unit) => ({
+                    label: unit.unit,
+                    value: `${formatMoney(unit.annualPremium)}${unit.topAgents.length ? ` • Top contributing agents: ${unit.topAgents.map((agent) => `${agent.username} ${agent.name || ""} (${formatMoney(agent.annualPremium)})`.trim()).join(", ")}` : ""}`,
+                  })),
+                },
+              ]
+            : (!isAllUnitsSelected && selectedUnitKpiCards.length
+                ? [
+                    {
+                      title: "Unit KPI Progress",
+                      rows: selectedUnitKpiCards.map(({ kpi, actual }) => ({
+                        label: formatKpiLabel(kpi, "UNIT"),
+                        value: `Actual ${formatActualKpiValue(actual, kpi.valueType)} • Target ${formatKpiTarget(kpi)}`,
+                      })),
+                    },
+                    {
+                      title: "Top 5 Contributing Agents",
+                      rows: topUnitSalesAgents.map((agent) => ({
+                        label: `${agent.username} • ${agent.name || agent.username}`,
+                        value: formatMoney(agent.annualPremium),
+                      })),
+                    },
+                  ]
+                : []))
         : [],
       tableSections: [
         {
@@ -2248,9 +2388,9 @@ function ManagerPortal({ roleType }) {
             selectedAgent ? (
               <section className="manager-panel">
                 <nav className="manager-breadcrumb" aria-label="Agent detail breadcrumb">
-                  <button type="button" onClick={() => setSelectedAgentId("")}>Agents in Scope</button>
+                  <button type="button" onClick={() => { setSelectedAgentId(""); window.scrollTo({ top: 0, behavior: "smooth" }); }}>{scope.branchName || selectedAgent.branch || "Branch"}</button>
                   <span>&gt;</span>
-                  <span>{selectedAgent.unit || "Unassigned Unit"}</span>
+                  <button type="button" onClick={goToAgentUnit}>{selectedAgent.unit || "Unassigned Unit"}</button>
                   <span>&gt;</span>
                   <strong>{selectedAgent.username || selectedAgent.name}</strong>
                 </nav>
@@ -2259,59 +2399,93 @@ function ManagerPortal({ roleType }) {
                   <div>
                     <h2>{selectedAgent.name}</h2>
                     <p>
-                      Full agent performance across clients, tasks, sales, and KPI progress for {selectedAgent.username}.
+                      Agent Type: {selectedAgent.agentType || "—"} • Date Employed: {selectedAgent.dateEmployed ? formatDate(selectedAgent.dateEmployed) : "—"}
                     </p>
                   </div>
                 </div>
 
-                <div className="manager-agent-detail-grid">
-                  <article>
-                    <h3>Clients</h3>
-                    <span>Total Prospects</span>
-                    <strong>{Number(selectedAgent.totalProspects || 0)}</strong>
-                    <span>Active Prospects</span>
-                    <strong>{Number(selectedAgent.activeProspects || 0)}</strong>
-                    <span>Total Leads</span>
-                    <strong>{Number(selectedAgent.leads || 0)}</strong>
-                    <span>Active Leads</span>
-                    <strong>{Number(selectedAgent.activeLeads || 0)}</strong>
-                    <span>Total Policyholders</span>
-                    <strong>{Number(selectedAgent.totalPolicies || 0)}</strong>
-                    <span>Active Policyholders</span>
-                    <strong>{Number(selectedAgent.activePolicies || 0)}</strong>
-                    <span>At Risk Policyholders</span>
-                    <strong>{Number(selectedAgent.atRiskPolicies || 0)}</strong>
-                    <span>Lapsed Policies</span>
-                    <strong>{Number(selectedAgent.lapsedPolicies || 0)}</strong>
-                  </article>
-                  <article>
-                    <h3>Tasks</h3>
-                    <span>Open Tasks</span>
-                    <strong>{Number(selectedAgent.openTasks || 0)}</strong>
-                    <span>Overdue Tasks</span>
-                    <strong>{Number(selectedAgent.overdueTasks || 0)}</strong>
-                    <span>Done Tasks</span>
-                    <strong>{Number(selectedAgent.closedTasks || 0)}</strong>
-                    <span>On-Time Completion Rate</span>
-                    <strong>{Number(selectedAgent.closedTasks || 0) ? Math.round(((Number(selectedAgent.closedTasks || 0) - Number(selectedAgent.delayedDoneTasks || 0)) / Number(selectedAgent.closedTasks || 0)) * 100) : 0}%</strong>
-                  </article>
-                  <article>
-                    <h3>Sales</h3>
-                    <span>Annual Premium</span>
-                    <strong>{formatMoney(selectedAgent.annualPremium)}</strong>
-                    <span>Monthly</span>
-                    <strong>{formatMoney(selectedAgent.monthlyPremium)}</strong>
-                    <span>Quarterly</span>
-                    <strong>{formatMoney(selectedAgent.quarterlyPremium)}</strong>
-                    <span>Half-Yearly</span>
-                    <strong>{formatMoney(selectedAgent.halfYearlyPremium)}</strong>
-                    <span>Yearly</span>
-                    <strong>{formatMoney(selectedAgent.yearlyPremium)}</strong>
-                  </article>
+                <div className="manager-tab-row">
+                  <div className="manager-tab-buttons" role="tablist" aria-label="Agent performance tabs">
+                    {[
+                      ["clients", "Clients"],
+                      ["tasks", "Tasks"],
+                      ["sales", "Sales"],
+                    ].map(([key, label]) => (
+                      <button
+                        key={key}
+                        type="button"
+                        className={unitPerformanceTab === key ? "active" : ""}
+                        onClick={() => setUnitPerformanceTab(key)}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <label className="manager-select manager-select--unit-date" htmlFor="manager-agent-performance-date-preset">
+                    <span>Date Range</span>
+                    <select
+                      id="manager-agent-performance-date-preset"
+                      value={unitPerformanceDatePreset}
+                      onChange={(e) => setUnitPerformanceDatePreset(e.target.value)}
+                    >
+                      {DATE_PRESETS.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <button type="button" className="manager-report-btn" onClick={generateAgentDetailsPdfReport}>
+                    <FaFilePdf size={15} />
+                    <span>Generate Report (PDF)</span>
+                  </button>
+                </div>
+
+                <div className="manager-agent-detail-grid manager-agent-detail-grid--single">
+                  {unitPerformanceTab === "clients" && selectedAgentSummary && (
+                    <article>
+                      <h3>Clients Relationship Performance</h3>
+                      <div className="manager-metric-pair"><span>Total Prospects</span><strong>{selectedAgentSummary.totalProspects}</strong></div>
+                      <div className="manager-metric-pair"><span>Active Prospects</span><strong>{selectedAgentSummary.activeProspects}</strong></div>
+                      <div className="manager-metric-pair"><span>Total Leads</span><strong>{selectedAgentSummary.leads}</strong></div>
+                      <div className="manager-metric-pair"><span>Active Leads</span><strong>{selectedAgentSummary.activeLeads}</strong></div>
+                      <div className="manager-metric-pair"><span>Total Policyholders</span><strong>{selectedAgentSummary.totalPolicies}</strong></div>
+                      <div className="manager-metric-pair"><span>Active Policyholders</span><strong>{selectedAgentSummary.activePolicies}</strong></div>
+                      <div className="manager-metric-pair"><span>At Risk Policyholders</span><strong>{selectedAgentSummary.atRiskPolicies}</strong></div>
+                      <div className="manager-metric-pair"><span>Lapsed Policies</span><strong>{selectedAgentSummary.lapsedPolicies}</strong></div>
+                    </article>
+                  )}
+                  {unitPerformanceTab === "tasks" && selectedAgentSummary && (
+                    <article>
+                      <h3>Tasks Performance</h3>
+                      <div className="manager-metric-pair"><span>Total Tasks</span><strong>{selectedAgentSummary.totalTasks}</strong></div>
+                      <div className="manager-metric-pair"><span>Open Tasks</span><strong>{selectedAgentSummary.openTasks}</strong></div>
+                      <div className="manager-metric-pair"><span>Overdue Tasks</span><strong>{selectedAgentSummary.overdueTasks}</strong></div>
+                      <div className="manager-metric-pair"><span>On-Time Done Tasks</span><strong>{selectedAgentSummary.onTimeDoneTasks}</strong></div>
+                      <div className="manager-metric-pair"><span>Overall Completion Rate</span><strong>{selectedAgentSummary.overallCompletionRate}%</strong></div>
+                      <div className="manager-metric-pair"><span>On-Time Completion Rate</span><strong>{selectedAgentSummary.onTimeCompletionRate}%</strong></div>
+                      <div className="manager-metric-pair"><span>Late Completion Rate</span><strong>{selectedAgentSummary.lateCompletionRate}%</strong></div>
+                    </article>
+                  )}
+                  {unitPerformanceTab === "sales" && selectedAgentSummary && (
+                    <article>
+                      <h3>Sales Performance</h3>
+                      <div className="manager-metric-pair"><span>Total Leads</span><strong>{selectedAgentSummary.leads}</strong></div>
+                      <div className="manager-metric-pair"><span>Converted Leads</span><strong>{selectedAgentSummary.converted}</strong></div>
+                      <div className="manager-metric-pair"><span>Unconverted Leads</span><strong>{selectedAgentSummary.unconverted}</strong></div>
+                      <div className="manager-metric-pair"><span>Conversion Rate</span><strong>{selectedAgentSummary.conversionRate}%</strong></div>
+                      <div className="manager-metric-pair"><span>Total Policies</span><strong>{selectedAgentSummary.totalPolicies}</strong></div>
+                      <div className="manager-metric-pair"><span>Active Policies</span><strong>{selectedAgentSummary.activePolicies}</strong></div>
+                      <div className="manager-metric-pair"><span>Active Policy Rate</span><strong>{selectedAgentSummary.activePolicyRate}%</strong></div>
+                      <div className="manager-metric-pair"><span>Total Annual Premium</span><strong>{formatMoney(selectedAgentSummary.annualPremium)}</strong></div>
+                      <div className="manager-metric-pair"><span>Monthly Premium Breakdown</span><strong>{formatMoney(selectedAgentSummary.monthlyPremium)}</strong></div>
+                      <div className="manager-metric-pair"><span>Quarterly Premium Breakdown</span><strong>{formatMoney(selectedAgentSummary.quarterlyPremium)}</strong></div>
+                      <div className="manager-metric-pair"><span>Half-Yearly Premium Breakdown</span><strong>{formatMoney(selectedAgentSummary.halfYearlyPremium)}</strong></div>
+                      <div className="manager-metric-pair"><span>Yearly Premium Breakdown</span><strong>{formatMoney(selectedAgentSummary.yearlyPremium)}</strong></div>
+                    </article>
+                  )}
                 </div>
 
                 <div className="manager-agent-kpi-section">
-                  <h3>KPI Progress</h3>
+                  <h3>Agent KPI Progress</h3>
                   {selectedAgentKpiCards.length ? (
                     <div className="manager-kpi-progress-grid">
                       {selectedAgentKpiCards.map(({ assignment, kpi, actual, comparison, dateRangeLabel }) => (
@@ -2481,12 +2655,12 @@ function ManagerPortal({ roleType }) {
                           ))}
                         </div>
                         <div className="manager-kpi-unit-drilldown">
-                          <h3>Top 5 Producing Agents</h3>
+                          <h3>Top 5 Contributing Agents</h3>
                           {topUnitSalesAgents.length ? (
                             <ul className="manager-kpi-agent-list">
                               {topUnitSalesAgents.map((agent) => (
                                 <li key={`top-agent:${agent.id}`}>
-                                  <button type="button" className="manager-kpi-agent-link" onClick={() => setSelectedAgentId(String(agent.id || ""))}>
+                                  <button type="button" className="manager-kpi-agent-link" onClick={() => openAgentDetails(agent.id)}>
                                     <strong>{agent.username}</strong>
                                     <span>{agent.name || agent.username}</span>
                                   </button>
@@ -2511,7 +2685,7 @@ function ManagerPortal({ roleType }) {
                     {branchSalesKpiProgressRows.length ? (
                       <>
                         <div className="manager-kpi-progress-grid">
-                          {branchSalesKpiProgressRows.map(({ assignment, kpi, actual, targetBasis, dateRangeLabel }) => {
+                          {branchSalesKpiProgressRows.map(({ assignment, kpi, actual, targetBasis, targetBasisLabel, productionActual, dateRangeLabel }) => {
                             const comparison = getKpiComparison(actual, kpi);
                             return (
                               <article className={`manager-kpi-progress-card ${comparison.className}`} key={`branch-sales:${kpi.key}`}>
@@ -2523,7 +2697,7 @@ function ManagerPortal({ roleType }) {
                                   <div><small>Assigned Target</small><b>{formatKpiTarget(kpi)}</b></div>
                                 </div>
                                 {kpi.key === "monthly_target_achievement_index" && targetBasis ? (
-                                  <small className="manager-kpi-gap-note">Sales production target for {kpi.period}: {formatMoney(targetBasis)} • Target achievement: {formatActualKpiValue(actual, kpi.valueType)}</small>
+                                  <small className="manager-kpi-gap-note">Actual sales production achieved: {formatMoney(productionActual)} • Sales production target for {kpi.period}: {targetBasisLabel || formatMoney(targetBasis)}</small>
                                 ) : null}
                                 <div className="manager-kpi-progress-bar" aria-label={`${formatKpiLabel(kpi, assignment.scopeType)} progress ${comparison.percent}%`}><span style={{ width: `${Math.max(0, Math.min(comparison.percent, 140))}%` }} /></div>
                                 <em>{comparison.status}</em>
@@ -2545,7 +2719,7 @@ function ManagerPortal({ roleType }) {
                                     <ul className="manager-kpi-agent-list manager-kpi-agent-list--compact">
                                     {unit.topAgents.map((agent) => (
                                       <li key={`unit-top-agent:${unit.unit}:${agent.id}`}>
-                                        <button type="button" className="manager-kpi-agent-link" onClick={() => setSelectedAgentId(String(agent.id || ""))}>
+                                        <button type="button" className="manager-kpi-agent-link" onClick={() => openAgentDetails(agent.id)}>
                                           <strong>{agent.username}</strong>
                                           <span>{agent.name || agent.username}</span>
                                         </button>
@@ -2725,12 +2899,12 @@ function ManagerPortal({ roleType }) {
                       {filteredAgents.map((agent) => (
                         <tr key={agent.id}>
                           <td>
-                            <button type="button" className="manager-agent-link" onClick={() => setSelectedAgentId(String(agent.id || ""))}>
+                            <button type="button" className="manager-agent-link" onClick={() => openAgentDetails(agent.id)}>
                               {agent.username}
                             </button>
                           </td>
                           <td>
-                            <button type="button" className="manager-agent-link" onClick={() => setSelectedAgentId(String(agent.id || ""))}>
+                            <button type="button" className="manager-agent-link" onClick={() => openAgentDetails(agent.id)}>
                               {agent.name}
                             </button>
                           </td>
