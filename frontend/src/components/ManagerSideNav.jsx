@@ -1,11 +1,9 @@
-import { FaBars, FaBullseye, FaChartLine, FaChevronLeft, FaChevronRight, FaHome, FaSignal, FaTasks, FaUsers } from "react-icons/fa";
+import { FaBars, FaBullseye, FaChevronLeft, FaChevronRight, FaHome, FaSignal, FaUsers } from "react-icons/fa";
 import "./ManagerSideNav.css";
 
 const NAV_ITEMS = [
   { key: "dashboard", label: "Home", icon: <FaHome size={18} /> },
   { key: "agents", label: "Units", icon: <FaUsers size={18} /> },
-  { key: "task_progress", label: "Task Progress", icon: <FaTasks size={18} /> },
-  { key: "sales_performance", label: "Sales Performance", icon: <FaChartLine size={18} /> },
   { key: "kpi_assignment", label: "KPI Assignment", icon: <FaBullseye size={18} /> },
   { key: "kpi_progress", label: "Branch KPI Progress", icon: <FaSignal size={18} /> },
 ];
