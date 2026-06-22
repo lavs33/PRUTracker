@@ -5,6 +5,7 @@ import LoginPage from "./LoginPage";
 import AdminLoginPage from "./AdminLoginPage";
 import AdminOrganizationPage from "./AdminOrganizationPage";
 import ManagerPortal from "./ManagerPortal";
+import ManagerProfile from "./ManagerProfile";
 import AgentHome from "./AgentHome";
 import AgentProfile from "./AgentProfile";
 import AgentClients from "./AgentClients";
@@ -41,6 +42,9 @@ function App() {
         <Route path="/aum/:username" element={<ManagerPortal roleType="AUM" />} />
         <Route path="/um/:username" element={<ManagerPortal roleType="UM" />} />
         <Route path="/bm/:username" element={<ManagerPortal roleType="BM" />} />
+        <Route path="/aum/:username/profile" element={<ManagerProfile />} />
+        <Route path="/um/:username/profile" element={<ManagerProfile />} />
+        <Route path="/bm/:username/profile" element={<ManagerProfile />} />
 
         {/* Agent routes (guard handled inside pages) */}
         <Route path="/agent/:username" element={<AgentHome />} />
