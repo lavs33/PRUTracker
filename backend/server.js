@@ -549,11 +549,11 @@ async function getManagerScopeContext(user) {
 
 const KPI_DEFINITIONS = {
   AGENT: [
-    { key: "weekly_approaches", label: "Approaches Count", period: "Weekly", valueType: "Count", targetMin: 50, targetMax: 100, targetValue: null, assigned: true },
-    { key: "weekly_appointments", label: "Appointments Count", period: "Weekly", valueType: "Count", targetMin: 10, targetMax: 20, targetValue: null, assigned: true },
-    { key: "weekly_presentations", label: "Presentations Count", period: "Weekly", valueType: "Count", targetMin: 5, targetMax: 10, targetValue: null, assigned: true },
-    { key: "monthly_policies", label: "Sales Target", period: "Monthly", valueType: "Count", targetMin: 2, targetMax: 6, targetValue: null, assigned: true },
-    { key: "monthly_new_prospects", label: "New Prospects", period: "Monthly", valueType: "Count", targetMin: 2, targetMax: 6, targetValue: null, assigned: true },
+    { key: "weekly_approaches", label: "Number of Approaches", period: "Weekly", valueType: "Count", targetMin: 50, targetMax: 100, targetValue: null, assigned: true },
+    { key: "weekly_appointments", label: "Number of Appointments", period: "Weekly", valueType: "Count", targetMin: 10, targetMax: 20, targetValue: null, assigned: true },
+    { key: "weekly_presentations", label: "Number of Presentations", period: "Weekly", valueType: "Count", targetMin: 5, targetMax: 10, targetValue: null, assigned: true },
+    { key: "monthly_policies", label: "Number of Policies", period: "Monthly", valueType: "Count", targetMin: 2, targetMax: 6, targetValue: null, assigned: true },
+    { key: "monthly_new_prospects", label: "Number of New Prospects", period: "Monthly", valueType: "Count", targetMin: 2, targetMax: 6, targetValue: null, assigned: true },
     { key: "monthly_closing_ratio", label: "Closing Ratio", period: "Monthly", valueType: "Percent", targetMin: 20, targetMax: 50, targetValue: null, assigned: true },
   ],
   UNIT: [
@@ -561,7 +561,7 @@ const KPI_DEFINITIONS = {
   ],
   BRANCH: [
     { key: "monthly_sales_production", label: "Sales Production", period: "Monthly", valueType: "Currency", targetMin: null, targetMax: null, targetValue: null, assigned: true },
-    { key: "monthly_active_agents", label: "Active Agents Count", period: "Monthly", valueType: "Count", targetMin: null, targetMax: null, targetValue: null, assigned: true },
+    { key: "monthly_active_agents", label: "Number of Active Agents", period: "Monthly", valueType: "Count", targetMin: null, targetMax: null, targetValue: null, assigned: true },
     { key: "monthly_persistency_rate", label: "Branch Persistency Rate", period: "Monthly", valueType: "Percent", targetMin: null, targetMax: null, targetValue: 85, assigned: true },
     { key: "monthly_target_achievement_index", label: "Target Achievement Index", period: "Monthly", valueType: "Percent", targetMin: null, targetMax: null, targetValue: 100, assigned: true },
   ],
@@ -570,9 +570,6 @@ const KPI_DEFINITIONS = {
 const KPI_FREQUENCIES = ["Daily", "Weekly", "Monthly", "Quarterly", "Semi-Annually", "Annually"];
 
 function buildDefaultKpiTargets(definition = {}, saved = {}) {
-  if (saved.assigned === false) {
-    return KPI_FREQUENCIES.map((period) => ({ period, targetMin: null, targetMax: null, targetValue: null }));
-  }
   const savedTargetsByPeriod = new Map(
     (Array.isArray(saved.targets) ? saved.targets : [])
       .map((target) => [String(target?.period || ""), target])
@@ -597,11 +594,12 @@ function normalizeKpiList(scopeType, savedKpis = []) {
     const saved = savedByKey.get(definition.key) || {};
     const assigned = saved.assigned !== undefined ? saved.assigned === true : definition.assigned;
     const targets = buildDefaultKpiTargets(definition, saved);
-    const primaryTarget = assigned === false ? {} : (targets.find((target) => target.period === (saved.period || definition.period)) || targets[0] || {});
+    const normalizedPeriod = KPI_FREQUENCIES.includes(String(saved.period || "")) ? saved.period : definition.period;
+    const primaryTarget = targets.find((target) => target.period === normalizedPeriod) || targets[0] || {};
     return {
       ...definition,
       assigned,
-      period: assigned === false ? "" : (saved.period || definition.period),
+      period: normalizedPeriod,
       targetMin: primaryTarget.targetMin ?? null,
       targetMax: primaryTarget.targetMax ?? null,
       targetValue: primaryTarget.targetValue ?? null,
@@ -709,7 +707,7 @@ async function buildKpiAssignmentPayload(user) {
   };
 }
 
-async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDatePreset = "ALL" } = {}) {
+async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDatePreset = "ALL", unitPerformanceDatePreset = "ALL" } = {}) {
   const context = await getManagerScopeContext(user);
   if (context.error) return context;
 
@@ -739,6 +737,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
 
   const taskContext = buildPresetContext(taskDatePreset);
   const salesContext = buildPresetContext(salesDatePreset);
+  const unitPerformanceContext = buildPresetContext(unitPerformanceDatePreset);
 
   const isWithinPreset = (value, presetContext, fallbackValue = null) => {
     if (!presetContext?.startDate) return true;
@@ -992,7 +991,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       : [],
     scopedUserIds.length
       ? Prospect.find({ assignedToUserId: { $in: scopedUserIds } })
-          .select("_id assignedToUserId status")
+          .select("_id assignedToUserId status createdAt")
           .lean()
       : [],
   ]);
@@ -1078,8 +1077,13 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
   );
 
   const [policyholders, applications, needsAssessments, payments, annualPayments] = await Promise.all([
-    scopedUserIds.length
-      ? Policyholder.find({ assignedToUserId: { $in: scopedUserIds } })
+    scopedUserIds.length || engagementIds.length
+      ? Policyholder.find({
+          $or: [
+            ...(scopedUserIds.length ? [{ assignedToUserId: { $in: scopedUserIds } }] : []),
+            ...(engagementIds.length ? [{ leadEngagementId: { $in: engagementIds } }] : []),
+          ],
+        })
           .select("assignedToUserId leadEngagementId status createdAt")
           .lean()
       : [],
@@ -1236,6 +1240,23 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
     return buildRows(metricsByUserId);
   };
 
+  const buildRowsForUnitPerformanceContext = (presetContext) => {
+    const metricsByUserId = createMetricsMap(scopedAgents);
+    applyTaskMetrics(
+      tasks.filter((task) => isWithinPreset(task?.dueAt, presetContext, task?.createdAt)),
+      metricsByUserId
+    );
+    applyProspectMetrics(
+      prospects.filter((prospect) => isWithinPreset(prospect?.createdAt, presetContext)),
+      metricsByUserId
+    );
+    applySalesMetrics({
+      ...buildSalesMetricInput(presetContext),
+      metricsByUserId,
+    });
+    return buildRows(metricsByUserId);
+  };
+
   applySalesMetrics({
     ...buildSalesMetricInput(salesContext),
     metricsByUserId: salesMetricsByUserId,
@@ -1245,6 +1266,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
   const allRows = buildRows(allMetricsByUserId);
   const taskRows = buildRows(taskMetricsByUserId);
   const salesRows = buildRows(salesMetricsByUserId);
+  const unitPerformanceRows = buildRowsForUnitPerformanceContext(unitPerformanceContext);
   const kpiSalesRowsByFrequency = {
     Daily: buildRowsForSalesContext(buildPresetContext("TODAY")),
     Weekly: buildRowsForSalesContext(buildPresetContext("7d")),
@@ -1265,12 +1287,35 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       branch: row.branch,
       area: row.area,
       displayPhoto: row.displayPhoto,
+      totalTasks: row.totalTasks,
       openTasks: row.openTasks,
       overdueTasks: row.overdueTasks,
       closedTasks: row.closedTasks,
+      delayedDoneTasks: row.delayedDoneTasks,
+      completionRate: row.completionRate,
+      nextDueAt: row.nextDueAt,
+      lastCompletedAt: row.lastCompletedAt,
+      topTaskType: row.topTaskType,
+      totalProspects: row.totalProspects,
+      activeProspects: row.activeProspects,
       leads: row.leads,
+      activeLeads: row.activeLeads,
       converted: row.converted,
+      conversionRate: row.conversionRate,
+      totalPolicies: row.totalPolicies,
+      activePolicies: row.activePolicies,
+      atRiskPolicies: row.atRiskPolicies,
+      lapsedPolicies: row.lapsedPolicies,
+      cancelledPolicies: row.cancelledPolicies,
       annualPremium: row.annualPremium,
+      frequencyPremium: row.frequencyPremium,
+      monthlyPremium: row.monthlyPremium,
+      quarterlyPremium: row.quarterlyPremium,
+      halfYearlyPremium: row.halfYearlyPremium,
+      yearlyPremium: row.yearlyPremium,
+      latestLeadCreatedAt: row.latestLeadCreatedAt,
+      latestPolicyIssuedAt: row.latestPolicyIssuedAt,
+      latestPolicyStatus: row.latestPolicyStatus,
     }))
     .sort(byName);
 
@@ -1317,8 +1362,12 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
         generatedAt: new Date(),
         taskDatePreset: taskContext.key,
         salesDatePreset: salesContext.key,
+        unitPerformanceDatePreset: unitPerformanceContext.key,
         taskPeriodLabel: taskContext.periodLabel,
         salesPeriodLabel: salesContext.periodLabel,
+        unitPerformancePeriodLabel: unitPerformanceContext.periodLabel,
+        unitPerformanceStartDate: unitPerformanceContext.startDate || null,
+        unitPerformanceEndDate: new Date(),
       },
       summary: summarizeRows(allRows),
       taskSummary: summarizeRows(taskRows),
@@ -1327,6 +1376,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       agents,
       taskRows: sortedTaskRows,
       salesRows: sortedSalesRows,
+      unitPerformanceRows,
     },
   };
 }
@@ -1437,12 +1487,15 @@ app.put("/api/manager/kpi-assignments/:scopeType/:scopeId", async (req, res) => 
       return res.status(403).json({ message: "Cannot edit KPI assignments outside your branch." });
     }
 
+    const existingAssignment = await KpiAssignment.findOne({ scopeType, scopeId }).select("kpis").lean();
+    const existingByKey = new Map((Array.isArray(existingAssignment?.kpis) ? existingAssignment.kpis : []).map((kpi) => [String(kpi?.key || ""), kpi]));
     const defaults = KPI_DEFINITIONS[scopeType] || [];
     const inputByKey = new Map((Array.isArray(kpis) ? kpis : []).map((kpi) => [String(kpi?.key || ""), kpi]));
     const normalizedKpis = [];
 
     for (const definition of defaults) {
-      const input = inputByKey.get(definition.key) || {};
+      const hasInput = inputByKey.has(definition.key);
+      const input = hasInput ? (inputByKey.get(definition.key) || {}) : (existingByKey.get(definition.key) || {});
       const defaultPeriod = KPI_FREQUENCIES.includes(String(input.period || "")) ? String(input.period) : definition.period;
       const inputTargetsByPeriod = new Map(
         (Array.isArray(input.targets) ? input.targets : [])
@@ -1450,20 +1503,45 @@ app.put("/api/manager/kpi-assignments/:scopeType/:scopeId", async (req, res) => 
           .filter(([period]) => KPI_FREQUENCIES.includes(period))
       );
       const assigned = input.assigned !== undefined ? input.assigned === true : definition.assigned;
+      const normalizedTargets = [];
+
       if (assigned === false) {
-        const normalizedTargets = KPI_FREQUENCIES.map((period) => ({ period, targetMin: null, targetMax: null, targetValue: null }));
+        for (const period of KPI_FREQUENCIES) {
+          const targetInput = inputTargetsByPeriod.get(period) || {};
+          const hasMin = targetInput.targetMin !== null && targetInput.targetMin !== undefined && String(targetInput.targetMin).trim() !== "";
+          const hasMax = targetInput.targetMax !== null && targetInput.targetMax !== undefined && String(targetInput.targetMax).trim() !== "";
+          const hasTarget = targetInput.targetValue !== null && targetInput.targetValue !== undefined && String(targetInput.targetValue).trim() !== "";
+          const targetMin = parseOptionalNumber(targetInput.targetMin);
+          const targetMax = parseOptionalNumber(targetInput.targetMax);
+          const targetValue = parseOptionalNumber(targetInput.targetValue);
+          if ((hasMin && targetMin === null) || (hasMax && targetMax === null) || (hasTarget && targetValue === null)) {
+            return res.status(400).json({ message: `${definition.label} (${period}): Targets must be valid numbers.` });
+          }
+          if ((hasMin && targetMin < 0) || (hasMax && targetMax < 0) || (hasTarget && targetValue < 0)) {
+            return res.status(400).json({ message: `${definition.label} (${period}): Negative values are not allowed.` });
+          }
+          if ((hasMin && !Number.isInteger(targetMin)) || (hasMax && !Number.isInteger(targetMax)) || (hasTarget && !Number.isInteger(targetValue))) {
+            return res.status(400).json({ message: `${definition.label} (${period}): Whole numbers are counted only.` });
+          }
+          normalizedTargets.push({
+            period,
+            targetMin: hasTarget ? null : targetMin,
+            targetMax: hasTarget ? null : targetMax,
+            targetValue: hasMin || hasMax ? null : targetValue,
+          });
+        }
+        const primaryTarget = normalizedTargets.find((target) => target.period === defaultPeriod) || normalizedTargets[0] || {};
         normalizedKpis.push({
           ...definition,
           assigned: false,
-          period: "",
-          targetMin: null,
-          targetMax: null,
-          targetValue: null,
+          period: defaultPeriod,
+          targetMin: primaryTarget.targetMin ?? null,
+          targetMax: primaryTarget.targetMax ?? null,
+          targetValue: primaryTarget.targetValue ?? null,
           targets: normalizedTargets,
         });
         continue;
       }
-      const normalizedTargets = [];
 
       for (const period of KPI_FREQUENCIES) {
         const targetInput = inputTargetsByPeriod.get(period) || {};
@@ -1474,11 +1552,14 @@ app.put("/api/manager/kpi-assignments/:scopeType/:scopeId", async (req, res) => 
         const hasMax = targetInput.targetMax !== null && targetInput.targetMax !== undefined && String(targetInput.targetMax).trim() !== "";
         const hasTarget = targetInput.targetValue !== null && targetInput.targetValue !== undefined && String(targetInput.targetValue).trim() !== "";
 
-        if (!hasTarget && !hasMin && !hasMax) {
+        if (hasInput && !hasTarget && !hasMin && !hasMax) {
           return res.status(400).json({ message: `${definition.label} (${period}): Target or min/max is required.` });
         }
         if ((hasMin && targetMin === null) || (hasMax && targetMax === null) || (hasTarget && targetValue === null)) {
           return res.status(400).json({ message: `${definition.label} (${period}): Targets must be valid numbers.` });
+        }
+        if ((hasMin && targetMin < 0) || (hasMax && targetMax < 0) || (hasTarget && targetValue < 0)) {
+          return res.status(400).json({ message: `${definition.label} (${period}): Negative values are not allowed.` });
         }
         if ((hasMin && !Number.isInteger(targetMin)) || (hasMax && !Number.isInteger(targetMax)) || (hasTarget && !Number.isInteger(targetValue))) {
           return res.status(400).json({ message: `${definition.label} (${period}): Whole numbers are counted only.` });
