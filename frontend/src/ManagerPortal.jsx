@@ -1446,6 +1446,8 @@ function ManagerPortal({ roleType }) {
       .find((value) => value !== null && value !== undefined && value !== "");
     const productionTarget = Number(productionTargetValue || 0);
     const targetAchievementIndex = productionTarget ? Math.round((Number(rowSummary.totalAnnualPremium || 0) / productionTarget) * 100) : 0;
+    const productionTargetLabel = formatKpiTarget({ ...salesProductionKpiForPeriod, valueType: "Currency" });
+    const productionActual = Number(rowSummary.totalAnnualPremium || 0);
 
     return (branchAssignment.kpis || [])
       .filter((kpi) => kpi.assigned !== false && ["monthly_sales_production", "monthly_target_achievement_index"].includes(kpi.key))
@@ -1460,6 +1462,8 @@ function ManagerPortal({ roleType }) {
           kpi: kpiForPeriod,
           actual: actualByKey[kpi.key] || 0,
           targetBasis: kpi.key === "monthly_target_achievement_index" ? productionTarget : null,
+          targetBasisLabel: kpi.key === "monthly_target_achievement_index" ? productionTargetLabel : "",
+          productionActual: kpi.key === "monthly_target_achievement_index" ? productionActual : null,
           dateRangeLabel: getKpiFrequencyRangeLabel(selectedKpiPeriod),
         };
       });
@@ -2083,23 +2087,42 @@ function ManagerPortal({ roleType }) {
               { label: "Half-Yearly Premium Breakdown", value: formatMoney(selectedUnitSummary.halfYearlyPremium), tone: "gold" },
               { label: "Yearly Premium Breakdown", value: formatMoney(selectedUnitSummary.yearlyPremium), tone: "red" },
             ],
-      analyticsSections: unitPerformanceTab === "sales" && isAllUnitsSelected && selectedKpiPeriod && branchSalesKpiProgressRows.length
-        ? [
-            {
-              title: "Branch KPI Progress",
-              rows: branchSalesKpiProgressRows.map(({ kpi, actual, targetBasis }) => ({
-                label: formatKpiLabel(kpi, "BRANCH"),
-                value: `Actual ${formatActualKpiValue(actual, kpi.valueType)} • Target ${formatKpiTarget(kpi)}`,
-              })),
-            },
-            {
-              title: "Unit Drilldown",
-              rows: branchKpiUnitRows.map((unit) => ({
-                label: unit.unit,
-                value: `${formatMoney(unit.annualPremium)}${unit.topAgents.length ? ` • Top: ${unit.topAgents.map((agent) => `${agent.username} ${agent.name || ""} (${formatMoney(agent.annualPremium)})`.trim()).join(", ")}` : ""}`,
-              })),
-            },
-          ]
+      analyticsSections: unitPerformanceTab === "sales" && selectedKpiPeriod
+        ? (isAllUnitsSelected && branchSalesKpiProgressRows.length
+            ? [
+                {
+                  title: "Branch KPI Progress",
+                  rows: branchSalesKpiProgressRows.map(({ kpi, actual }) => ({
+                    label: formatKpiLabel(kpi, "BRANCH"),
+                    value: `Actual ${formatActualKpiValue(actual, kpi.valueType)} • Target ${formatKpiTarget(kpi)}`,
+                  })),
+                },
+                {
+                  title: "Unit Drilldown",
+                  rows: branchKpiUnitRows.map((unit) => ({
+                    label: unit.unit,
+                    value: `${formatMoney(unit.annualPremium)}${unit.topAgents.length ? ` • Top contributing agents: ${unit.topAgents.map((agent) => `${agent.username} ${agent.name || ""} (${formatMoney(agent.annualPremium)})`.trim()).join(", ")}` : ""}`,
+                  })),
+                },
+              ]
+            : (!isAllUnitsSelected && selectedUnitKpiCards.length
+                ? [
+                    {
+                      title: "Unit KPI Progress",
+                      rows: selectedUnitKpiCards.map(({ kpi, actual }) => ({
+                        label: formatKpiLabel(kpi, "UNIT"),
+                        value: `Actual ${formatActualKpiValue(actual, kpi.valueType)} • Target ${formatKpiTarget(kpi)}`,
+                      })),
+                    },
+                    {
+                      title: "Top 5 Contributing Agents",
+                      rows: topUnitSalesAgents.map((agent) => ({
+                        label: `${agent.username} • ${agent.name || agent.username}`,
+                        value: formatMoney(agent.annualPremium),
+                      })),
+                    },
+                  ]
+                : []))
         : [],
       tableSections: [
         {
@@ -2481,7 +2504,7 @@ function ManagerPortal({ roleType }) {
                           ))}
                         </div>
                         <div className="manager-kpi-unit-drilldown">
-                          <h3>Top 5 Producing Agents</h3>
+                          <h3>Top 5 Contributing Agents</h3>
                           {topUnitSalesAgents.length ? (
                             <ul className="manager-kpi-agent-list">
                               {topUnitSalesAgents.map((agent) => (
@@ -2511,7 +2534,7 @@ function ManagerPortal({ roleType }) {
                     {branchSalesKpiProgressRows.length ? (
                       <>
                         <div className="manager-kpi-progress-grid">
-                          {branchSalesKpiProgressRows.map(({ assignment, kpi, actual, targetBasis, dateRangeLabel }) => {
+                          {branchSalesKpiProgressRows.map(({ assignment, kpi, actual, targetBasis, targetBasisLabel, productionActual, dateRangeLabel }) => {
                             const comparison = getKpiComparison(actual, kpi);
                             return (
                               <article className={`manager-kpi-progress-card ${comparison.className}`} key={`branch-sales:${kpi.key}`}>
@@ -2523,7 +2546,7 @@ function ManagerPortal({ roleType }) {
                                   <div><small>Assigned Target</small><b>{formatKpiTarget(kpi)}</b></div>
                                 </div>
                                 {kpi.key === "monthly_target_achievement_index" && targetBasis ? (
-                                  <small className="manager-kpi-gap-note">Sales production target for {kpi.period}: {formatMoney(targetBasis)} • Target achievement: {formatActualKpiValue(actual, kpi.valueType)}</small>
+                                  <small className="manager-kpi-gap-note">Actual sales production achieved: {formatMoney(productionActual)} • Sales production target for {kpi.period}: {targetBasisLabel || formatMoney(targetBasis)}</small>
                                 ) : null}
                                 <div className="manager-kpi-progress-bar" aria-label={`${formatKpiLabel(kpi, assignment.scopeType)} progress ${comparison.percent}%`}><span style={{ width: `${Math.max(0, Math.min(comparison.percent, 140))}%` }} /></div>
                                 <em>{comparison.status}</em>
