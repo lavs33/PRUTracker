@@ -766,12 +766,20 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
             id: String(agent?._id || assignedUserId),
             userId: assignedUserId,
             username: agent?.userId?.username || "",
+            firstName: agent?.userId?.firstName || "",
+            middleName: agent?.userId?.middleName || "",
+            lastName: agent?.userId?.lastName || "",
             name: fullName || agent?.userId?.username || "—",
             unit: agent?.unitId?.unitName || "",
             branch: agent?.unitId?.branchId?.branchName || "",
             area: agent?.unitId?.branchId?.areaId?.areaName || "",
             displayPhoto: agent?.userId?.displayPhoto || "",
+            dateEmployed: agent?.userId?.dateEmployed || null,
+            agentType: agent?.agentType || "",
             totalTasks: 0,
+            completedApproaches: 0,
+            completedAppointments: 0,
+            completedPresentations: 0,
             openTasks: 0,
             overdueTasks: 0,
             closedTasks: 0,
@@ -786,6 +794,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
             leads: 0,
             activeLeads: 0,
             converted: 0,
+            submittedApplications: 0,
             totalPolicies: 0,
             activePolicies: 0,
             atRiskPolicies: 0,
@@ -819,12 +828,20 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
         id: metrics.id,
         userId: metrics.userId,
         username: metrics.username,
+        firstName: metrics.firstName,
+        middleName: metrics.middleName,
+        lastName: metrics.lastName,
         name: metrics.name,
         unit: metrics.unit,
         branch: metrics.branch,
         area: metrics.area,
         displayPhoto: metrics.displayPhoto,
+        dateEmployed: metrics.dateEmployed,
+        agentType: metrics.agentType,
         totalTasks: metrics.totalTasks,
+        completedApproaches: metrics.completedApproaches,
+        completedAppointments: metrics.completedAppointments,
+        completedPresentations: metrics.completedPresentations,
         openTasks: metrics.openTasks,
         overdueTasks: metrics.overdueTasks,
         closedTasks: metrics.closedTasks,
@@ -838,6 +855,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
         leads: metrics.leads,
         activeLeads: metrics.activeLeads,
         converted: metrics.convertedLeadIds.size,
+        submittedApplications: metrics.submittedApplications,
         conversionRate,
         totalPolicies: metrics.totalPolicies,
         activePolicies: metrics.activePolicies,
@@ -936,7 +954,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
   const scopedAgents = await Agent.find(agentQuery)
     .populate({
       path: "userId",
-      select: "username firstName middleName lastName displayPhoto role",
+      select: "username firstName middleName lastName displayPhoto dateEmployed role",
     })
     .populate({
       path: "unitId",
@@ -1013,6 +1031,9 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
 
       if (normalizedStatus === "Done") {
         metrics.closedTasks += 1;
+        if (taskType === "APPROACH") metrics.completedApproaches += 1;
+        else if (taskType === "APPOINTMENT") metrics.completedAppointments += 1;
+        else if (taskType === "PRESENTATION") metrics.completedPresentations += 1;
         if (task?.wasDelayed) metrics.delayedDoneTasks += 1;
         if (Number.isFinite(completedAtMs) && (!metrics.lastCompletedAt || completedAtMs > new Date(metrics.lastCompletedAt).getTime())) {
           metrics.lastCompletedAt = task.completedAt;
@@ -1031,7 +1052,11 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
 
   applyTaskMetrics(tasks, allMetricsByUserId);
   applyTaskMetrics(
-    tasks.filter((task) => isWithinPreset(task?.dueAt, taskContext, task?.createdAt)),
+    tasks.filter((task) => isWithinPreset(
+      String(task?.status || "").toLowerCase() === "done" ? task?.completedAt : task?.dueAt,
+      taskContext,
+      task?.createdAt
+    )),
     taskMetricsByUserId
   );
 
@@ -1089,7 +1114,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       : [],
     engagementIds.length
       ? Application.find({ leadEngagementId: { $in: engagementIds } })
-          .select("leadEngagementId recordPremiumPaymentTransfer")
+          .select("leadEngagementId recordApplicationSubmission.savedAt recordApplicationSubmission.pruOneTransactionId recordPremiumPaymentTransfer")
           .lean()
       : [],
     engagementIds.length
@@ -1189,6 +1214,10 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       const metrics = metricsByUserId.get(assignedUserId);
       if (!metrics) continue;
 
+      const submittedAt = new Date(application?.recordApplicationSubmission?.savedAt).getTime();
+      const hasSubmission = Number.isFinite(submittedAt) || String(application?.recordApplicationSubmission?.pruOneTransactionId || "").trim();
+      if (hasSubmission) metrics.submittedApplications += 1;
+
       if (!activePolicyholderEngagementIds.has(engagementId)) continue;
 
       const payment = engagementIdToPayment.get(engagementId) || null;
@@ -1218,16 +1247,18 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
     );
     const filteredLeads = leads.filter((lead) => filteredLeadIds.has(String(lead._id)));
     const filteredPolicyholders = policyholders.filter((policyholder) => isWithinPreset(policyholder?.createdAt, presetContext));
-    const filteredPolicyholderEngagementIds = new Set(
-      filteredPolicyholders
-        .map((policyholder) => String(policyholder?.leadEngagementId || ""))
-        .filter(Boolean)
-    );
+    const filteredApplications = applications.filter((application) => {
+      const engagementId = String(application?.leadEngagementId || "");
+      if (!engagementIdToAssignedUserId.get(engagementId)) return false;
+      const submittedAt = application?.recordApplicationSubmission?.savedAt;
+      if (submittedAt) return isWithinPreset(submittedAt, presetContext);
+      return !presetContext?.startDate && String(application?.recordApplicationSubmission?.pruOneTransactionId || "").trim();
+    });
 
     return {
       leadList: filteredLeads,
       policyholderList: filteredPolicyholders,
-      applicationList: applications.filter((application) => filteredPolicyholderEngagementIds.has(String(application?.leadEngagementId || ""))),
+      applicationList: filteredApplications,
     };
   };
 
@@ -1243,7 +1274,11 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
   const buildRowsForUnitPerformanceContext = (presetContext) => {
     const metricsByUserId = createMetricsMap(scopedAgents);
     applyTaskMetrics(
-      tasks.filter((task) => isWithinPreset(task?.dueAt, presetContext, task?.createdAt)),
+      tasks.filter((task) => isWithinPreset(
+        String(task?.status || "").toLowerCase() === "done" ? task?.completedAt : task?.dueAt,
+        presetContext,
+        task?.createdAt
+      )),
       metricsByUserId
     );
     applyProspectMetrics(
@@ -1282,12 +1317,20 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       id: row.id,
       userId: row.userId,
       username: row.username,
+      firstName: row.firstName,
+      middleName: row.middleName,
+      lastName: row.lastName,
       name: row.name,
       unit: row.unit,
       branch: row.branch,
       area: row.area,
       displayPhoto: row.displayPhoto,
+      dateEmployed: row.dateEmployed,
+      agentType: row.agentType,
       totalTasks: row.totalTasks,
+      completedApproaches: row.completedApproaches,
+      completedAppointments: row.completedAppointments,
+      completedPresentations: row.completedPresentations,
       openTasks: row.openTasks,
       overdueTasks: row.overdueTasks,
       closedTasks: row.closedTasks,
@@ -1301,6 +1344,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       leads: row.leads,
       activeLeads: row.activeLeads,
       converted: row.converted,
+      submittedApplications: row.submittedApplications,
       conversionRate: row.conversionRate,
       totalPolicies: row.totalPolicies,
       activePolicies: row.activePolicies,
