@@ -1319,3 +1319,14 @@
 .manager-table-scroll-top__inner--clients.manager-table-scroll-top__inner--all-units { width: 1740px; }
 .manager-table-scroll-top__inner--tasks.manager-table-scroll-top__inner--all-units { width: 1680px; }
 .manager-table-scroll-top__inner--sales.manager-table-scroll-top__inner--all-units { width: 2380px; }
+.manager-breadcrumb--agent {
+  font-size: 24px;
+  gap: 10px;
+}
+
+@media (max-width: 900px) {
+  .manager-breadcrumb--agent {
+    font-size: 20px;
+  }
+}
+
