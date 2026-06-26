@@ -241,6 +241,7 @@ function AgentSalesPerformance() {
 
     const reportFilename = `${user?.username || "Agent"} - Agent Sales Performance Report`;
     const previousDocumentTitle = document.title;
+    const previousBrowserPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
     const now = new Date();
     const chunk = (arr, size) => {
       const out = [];
@@ -298,6 +299,10 @@ function AgentSalesPerformance() {
       document.body.removeChild(iframe);
       return;
     }
+
+    try {
+      window.history.replaceState(window.history.state, "", "/agent-sales-performance-report");
+    } catch {}
 
     document.title = reportFilename;
     reportDoc.open();
@@ -513,6 +518,9 @@ function AgentSalesPerformance() {
       if (cleanedUp) return;
       cleanedUp = true;
       document.title = previousDocumentTitle;
+      try {
+        window.history.replaceState(window.history.state, "", previousBrowserPath || "/");
+      } catch {}
       setTimeout(() => {
         if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
       }, 400);

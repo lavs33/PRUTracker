@@ -217,7 +217,7 @@ function AgentProfile() {
         </div>
 
         <div className="logout-row">
-          <button className="logout-main-btn" onClick={() => logout(navigate)}>
+          <button className="logout-main-btn" onClick={() => logout(navigate, user.role || "AG")}>
             Log out
           </button>
         </div>

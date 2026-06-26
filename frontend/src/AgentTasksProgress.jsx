@@ -192,6 +192,7 @@ function AgentTasksProgress() {
 
     const iframe = document.createElement("iframe");
     const previousDocumentTitle = document.title;
+    const previousBrowserPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
     iframe.style.position = "fixed";
     iframe.style.right = "0";
     iframe.style.bottom = "0";
@@ -206,6 +207,10 @@ function AgentTasksProgress() {
       document.body.removeChild(iframe);
       return;
     }
+
+    try {
+      window.history.replaceState(window.history.state, "", "/agent-task-performance-report");
+    } catch {}
 
     document.title = reportFilename;
     reportDoc.open();
@@ -446,6 +451,9 @@ function AgentTasksProgress() {
       if (cleanedUp) return;
       cleanedUp = true;
       document.title = previousDocumentTitle;
+      try {
+        window.history.replaceState(window.history.state, "", previousBrowserPath || "/");
+      } catch {}
       setTimeout(() => {
         if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
       }, 400);
