@@ -47,7 +47,9 @@ function ManagerProfile({ roleType }) {
     .map((part) => part[0]?.toUpperCase())
     .join("");
   const roleLabel = String(user.role || "BM").toUpperCase();
+  const managerTypeLabel = { AUM: "Assistant Unit Manager", UM: "Unit Manager", BM: "Branch Manager" }[roleLabel] || "Manager";
   const branchName = user.branchName || "Not available yet";
+  const unitName = user.unitName || "Not available yet";
   const areaName = user.areaName || "Not available yet";
 
   const handleSavePassword = () => {
@@ -69,17 +71,24 @@ function ManagerProfile({ roleType }) {
     { label: "Age", value: user.age || "—" },
   ];
 
-  const branchManagerInfo = [
+  const managerInfo = [
     { label: "Date Employed", value: formatDate(user.dateEmployed) },
+    ...(roleLabel === "BM" ? [] : [{ label: "Unit Name", value: unitName }]),
     { label: "Branch Name", value: branchName },
     { label: "Area Name", value: areaName },
   ];
 
-  const quickStats = [
-    { icon: <FiUser aria-hidden="true" />, label: "Role", value: roleLabel },
-    { icon: <FiBriefcase aria-hidden="true" />, label: "Branch", value: branchName },
-    { icon: <FiMapPin aria-hidden="true" />, label: "Area", value: areaName },
-  ];
+  const quickStats = roleLabel === "BM"
+    ? [
+        { icon: <FiUser aria-hidden="true" />, label: "Role", value: roleLabel },
+        { icon: <FiBriefcase aria-hidden="true" />, label: "Branch", value: branchName },
+        { icon: <FiMapPin aria-hidden="true" />, label: "Area", value: areaName },
+      ]
+    : [
+        { icon: <FiUser aria-hidden="true" />, label: "Role", value: roleLabel },
+        { icon: <FiBriefcase aria-hidden="true" />, label: "Unit", value: unitName },
+        { icon: <FiMapPin aria-hidden="true" />, label: "Branch", value: branchName },
+      ];
 
   return (
     <div className="profile-page">
@@ -100,7 +109,7 @@ function ManagerProfile({ roleType }) {
             </div>
 
             <div className="profile-header-info">
-              <span className="profile-eyebrow">Branch manager workspace profile</span>
+              <span className="profile-eyebrow">{managerTypeLabel} workspace profile</span>
               <h1 className="profile-name">{fullName}</h1>
               <p className="profile-username">@{user.username}</p>
 
@@ -150,12 +159,12 @@ function ManagerProfile({ roleType }) {
             <div className="section-heading">
               <div>
                 <span className="section-kicker">Organization</span>
-                <h2 className="section-title">Branch Manager Information</h2>
+                <h2 className="section-title">{managerTypeLabel} Information</h2>
               </div>
             </div>
 
             <div className="info-grid info-grid-work">
-              {branchManagerInfo.map((item) => (
+              {managerInfo.map((item) => (
                 <div key={item.label} className="info-item">
                   <span className="label">{item.label}</span>
                   <span className="value">{item.value}</span>
@@ -209,7 +218,7 @@ function ManagerProfile({ roleType }) {
         </div>
 
         <div className="logout-row">
-          <button className="logout-main-btn" onClick={() => logout(navigate)}>
+          <button className="logout-main-btn" onClick={() => logout(navigate, roleLabel)}>
             Log out
           </button>
         </div>

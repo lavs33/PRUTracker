@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { useLocation } from "react-router-dom";
-import { FaUsers, FaTasks, FaChartLine } from "react-icons/fa";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { FaUsers, FaTasks, FaChartLine, FaBullseye } from "react-icons/fa";
 import { FiChevronLeft, FiChevronRight } from "react-icons/fi";
 import "./SideNav.css";
 
@@ -8,6 +8,8 @@ const LS_COLLAPSED_KEY = "sidenav_collapsed";
 
 function SideNav({ active, onNavigate }) {
   const location = useLocation();
+  const navigate = useNavigate();
+  const { username } = useParams();
 
   const inferredActive = useMemo(() => {
     const p = location.pathname;
@@ -18,6 +20,7 @@ function SideNav({ active, onNavigate }) {
     if (p.includes("/tasks/all")) return "tasks_all";
     if (p.includes("/tasks")) return "tasks";
 
+    if (p.includes("/kpi/progress")) return "agent_kpi_progress";
     if (p.includes("/sales/performance")) return "sales_performance";
     if (p.includes("/clients/relationship")) return "clients_relationship";
     if (p.includes("/prospects")) return "clients_all_prospects";
@@ -81,6 +84,7 @@ function SideNav({ active, onNavigate }) {
         ],
       },
       { key: "sales_performance", label: "Sales Performance", icon: <FaChartLine size={22} /> },
+      { key: "agent_kpi_progress", label: "KPI Progress", icon: <FaBullseye size={22} /> },
     ],
     []
   );
@@ -103,6 +107,14 @@ function SideNav({ active, onNavigate }) {
       ...g,
       [groupKey]: !g[groupKey],
     }));
+  };
+
+  const handleNavigate = (key) => {
+    if (key === "agent_kpi_progress" && username) {
+      navigate(`/agent/${username}/kpi/progress`);
+      return;
+    }
+    onNavigate?.(key);
   };
 
   return (
@@ -145,7 +157,7 @@ function SideNav({ active, onNavigate }) {
                 className={`side-nav-item ${groupActive ? "active" : ""} ${
                   groupSubActive ? "subActive" : ""
                 }`}
-                onClick={() => onNavigate(item.key)}
+                onClick={() => handleNavigate(item.key)}
               >
                 <div className="side-nav-icon">{item.icon}</div>
 
@@ -181,7 +193,7 @@ function SideNav({ active, onNavigate }) {
                       key={child.key}
                       type="button"
                       className={`side-nav-subItem ${isActive(child.key) ? "active" : ""}`}
-                      onClick={() => onNavigate(child.key)}
+                      onClick={() => handleNavigate(child.key)}
                     >
                       {child.label}
                     </button>
