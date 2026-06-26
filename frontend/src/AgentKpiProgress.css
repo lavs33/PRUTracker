@@ -1,0 +1,108 @@
+.agent-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.agent-kpi-card {
+  background: #fff;
+  border: 1px solid #e4e7ec;
+  border-radius: 16px;
+  padding: 16px;
+  box-shadow: 0 10px 26px rgba(17, 24, 39, 0.08);
+  display: grid;
+  gap: 14px;
+}
+
+.agent-kpi-card__head {
+  display: grid;
+  gap: 6px;
+}
+
+.agent-kpi-card__head span,
+.agent-kpi-values span {
+  color: #6b6e6a;
+  font: 700 12px/1.35 "FSAlbertArabic", sans-serif;
+}
+
+.agent-kpi-card__head strong {
+  color: #111827;
+  font: 900 17px/1.25 "FSAlbertArabic", sans-serif;
+}
+
+.agent-kpi-values {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.agent-kpi-values div {
+  display: grid;
+  gap: 6px;
+}
+
+.agent-kpi-values b {
+  color: #111827;
+  font: 900 18px/1.25 "FSAlbertArabic", sans-serif;
+}
+
+.agent-kpi-progress-bar {
+  height: 12px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: #e5e7eb;
+}
+
+.agent-kpi-progress-bar span {
+  display: block;
+  height: 100%;
+  background: #f59e0b;
+}
+
+.agent-kpi-card.good .agent-kpi-progress-bar span {
+  background: #16a34a;
+}
+
+.agent-kpi-card.neutral .agent-kpi-progress-bar span {
+  background: #9ca3af;
+}
+
+.agent-kpi-card em {
+  color: #374151;
+  font: 800 12px/1.35 "FSAlbertArabic", sans-serif;
+  font-style: normal;
+}
+
+.agent-kpi-contribution-card em,
+.agent-kpi-card small {
+  color: #6b6e6a;
+  font: 700 12px/1.35 "FSAlbertArabic", sans-serif;
+}
+
+.agent-kpi-contribution-card em {
+  color: #374151;
+  font-weight: 800;
+  font-style: normal;
+}
+
+.agent-kpi-contribution-card small {
+  color: #6b6e6a;
+  font: 700 12px/1.35 "FSAlbertArabic", sans-serif;
+}
+
+
+@media (max-width: 860px) {
+  .agent-kpi-grid,
+  .agent-kpi-values { grid-template-columns: 1fr; }
+}
+
+.agent-kpi-contribution-card {
+  margin-top: 14px;
+  background: #fff;
+  border: 1px solid #f3c4c0;
+  border-radius: 16px;
+  padding: 16px;
+  box-shadow: 0 10px 26px rgba(17, 24, 39, 0.08);
+  display: grid;
+  gap: 14px;
+}
