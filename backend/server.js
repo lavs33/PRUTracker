@@ -549,10 +549,10 @@ async function getManagerScopeContext(user) {
 
 const KPI_DEFINITIONS = {
   AGENT: [
-    { key: "weekly_approaches", label: "Number of Approaches", period: "Weekly", valueType: "Count", targetMin: 50, targetMax: 100, targetValue: null, assigned: true },
-    { key: "weekly_appointments", label: "Number of Appointments", period: "Weekly", valueType: "Count", targetMin: 10, targetMax: 20, targetValue: null, assigned: true },
-    { key: "weekly_presentations", label: "Number of Presentations", period: "Weekly", valueType: "Count", targetMin: 5, targetMax: 10, targetValue: null, assigned: true },
-    { key: "monthly_policies", label: "Number of Policies", period: "Monthly", valueType: "Count", targetMin: 2, targetMax: 6, targetValue: null, assigned: true },
+    { key: "weekly_approaches", label: "Number of Done Approaches", period: "Weekly", valueType: "Count", targetMin: 50, targetMax: 100, targetValue: null, assigned: true },
+    { key: "weekly_appointments", label: "Number of Done Appointments", period: "Weekly", valueType: "Count", targetMin: 10, targetMax: 20, targetValue: null, assigned: true },
+    { key: "weekly_presentations", label: "Number of Done Presentations", period: "Weekly", valueType: "Count", targetMin: 5, targetMax: 10, targetValue: null, assigned: true },
+    { key: "monthly_policies", label: "Number of Active Policies", period: "Monthly", valueType: "Count", targetMin: 2, targetMax: 6, targetValue: null, assigned: true },
     { key: "monthly_new_prospects", label: "Number of New Prospects", period: "Monthly", valueType: "Count", targetMin: 2, targetMax: 6, targetValue: null, assigned: true },
     { key: "monthly_closing_ratio", label: "Closing Ratio", period: "Monthly", valueType: "Percent", targetMin: 20, targetMax: 50, targetValue: null, assigned: true },
   ],
@@ -766,12 +766,20 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
             id: String(agent?._id || assignedUserId),
             userId: assignedUserId,
             username: agent?.userId?.username || "",
+            firstName: agent?.userId?.firstName || "",
+            middleName: agent?.userId?.middleName || "",
+            lastName: agent?.userId?.lastName || "",
             name: fullName || agent?.userId?.username || "—",
             unit: agent?.unitId?.unitName || "",
             branch: agent?.unitId?.branchId?.branchName || "",
             area: agent?.unitId?.branchId?.areaId?.areaName || "",
             displayPhoto: agent?.userId?.displayPhoto || "",
+            dateEmployed: agent?.userId?.dateEmployed || null,
+            agentType: agent?.agentType || "",
             totalTasks: 0,
+            completedApproaches: 0,
+            completedAppointments: 0,
+            completedPresentations: 0,
             openTasks: 0,
             overdueTasks: 0,
             closedTasks: 0,
@@ -786,6 +794,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
             leads: 0,
             activeLeads: 0,
             converted: 0,
+            submittedApplications: 0,
             totalPolicies: 0,
             activePolicies: 0,
             atRiskPolicies: 0,
@@ -819,12 +828,20 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
         id: metrics.id,
         userId: metrics.userId,
         username: metrics.username,
+        firstName: metrics.firstName,
+        middleName: metrics.middleName,
+        lastName: metrics.lastName,
         name: metrics.name,
         unit: metrics.unit,
         branch: metrics.branch,
         area: metrics.area,
         displayPhoto: metrics.displayPhoto,
+        dateEmployed: metrics.dateEmployed,
+        agentType: metrics.agentType,
         totalTasks: metrics.totalTasks,
+        completedApproaches: metrics.completedApproaches,
+        completedAppointments: metrics.completedAppointments,
+        completedPresentations: metrics.completedPresentations,
         openTasks: metrics.openTasks,
         overdueTasks: metrics.overdueTasks,
         closedTasks: metrics.closedTasks,
@@ -838,6 +855,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
         leads: metrics.leads,
         activeLeads: metrics.activeLeads,
         converted: metrics.convertedLeadIds.size,
+        submittedApplications: metrics.submittedApplications,
         conversionRate,
         totalPolicies: metrics.totalPolicies,
         activePolicies: metrics.activePolicies,
@@ -936,7 +954,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
   const scopedAgents = await Agent.find(agentQuery)
     .populate({
       path: "userId",
-      select: "username firstName middleName lastName displayPhoto role",
+      select: "username firstName middleName lastName displayPhoto dateEmployed role",
     })
     .populate({
       path: "unitId",
@@ -1013,6 +1031,9 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
 
       if (normalizedStatus === "Done") {
         metrics.closedTasks += 1;
+        if (taskType === "APPROACH") metrics.completedApproaches += 1;
+        else if (taskType === "APPOINTMENT") metrics.completedAppointments += 1;
+        else if (taskType === "PRESENTATION") metrics.completedPresentations += 1;
         if (task?.wasDelayed) metrics.delayedDoneTasks += 1;
         if (Number.isFinite(completedAtMs) && (!metrics.lastCompletedAt || completedAtMs > new Date(metrics.lastCompletedAt).getTime())) {
           metrics.lastCompletedAt = task.completedAt;
@@ -1031,7 +1052,11 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
 
   applyTaskMetrics(tasks, allMetricsByUserId);
   applyTaskMetrics(
-    tasks.filter((task) => isWithinPreset(task?.dueAt, taskContext, task?.createdAt)),
+    tasks.filter((task) => isWithinPreset(
+      String(task?.status || "").toLowerCase() === "done" ? task?.completedAt : task?.dueAt,
+      taskContext,
+      task?.createdAt
+    )),
     taskMetricsByUserId
   );
 
@@ -1089,7 +1114,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       : [],
     engagementIds.length
       ? Application.find({ leadEngagementId: { $in: engagementIds } })
-          .select("leadEngagementId recordPremiumPaymentTransfer")
+          .select("leadEngagementId recordApplicationSubmission.savedAt recordApplicationSubmission.pruOneTransactionId recordPremiumPaymentTransfer")
           .lean()
       : [],
     engagementIds.length
@@ -1189,6 +1214,10 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       const metrics = metricsByUserId.get(assignedUserId);
       if (!metrics) continue;
 
+      const submittedAt = new Date(application?.recordApplicationSubmission?.savedAt).getTime();
+      const hasSubmission = Number.isFinite(submittedAt) || String(application?.recordApplicationSubmission?.pruOneTransactionId || "").trim();
+      if (hasSubmission) metrics.submittedApplications += 1;
+
       if (!activePolicyholderEngagementIds.has(engagementId)) continue;
 
       const payment = engagementIdToPayment.get(engagementId) || null;
@@ -1218,16 +1247,18 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
     );
     const filteredLeads = leads.filter((lead) => filteredLeadIds.has(String(lead._id)));
     const filteredPolicyholders = policyholders.filter((policyholder) => isWithinPreset(policyholder?.createdAt, presetContext));
-    const filteredPolicyholderEngagementIds = new Set(
-      filteredPolicyholders
-        .map((policyholder) => String(policyholder?.leadEngagementId || ""))
-        .filter(Boolean)
-    );
+    const filteredApplications = applications.filter((application) => {
+      const engagementId = String(application?.leadEngagementId || "");
+      if (!engagementIdToAssignedUserId.get(engagementId)) return false;
+      const submittedAt = application?.recordApplicationSubmission?.savedAt;
+      if (submittedAt) return isWithinPreset(submittedAt, presetContext);
+      return !presetContext?.startDate && String(application?.recordApplicationSubmission?.pruOneTransactionId || "").trim();
+    });
 
     return {
       leadList: filteredLeads,
       policyholderList: filteredPolicyholders,
-      applicationList: applications.filter((application) => filteredPolicyholderEngagementIds.has(String(application?.leadEngagementId || ""))),
+      applicationList: filteredApplications,
     };
   };
 
@@ -1243,7 +1274,11 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
   const buildRowsForUnitPerformanceContext = (presetContext) => {
     const metricsByUserId = createMetricsMap(scopedAgents);
     applyTaskMetrics(
-      tasks.filter((task) => isWithinPreset(task?.dueAt, presetContext, task?.createdAt)),
+      tasks.filter((task) => isWithinPreset(
+        String(task?.status || "").toLowerCase() === "done" ? task?.completedAt : task?.dueAt,
+        presetContext,
+        task?.createdAt
+      )),
       metricsByUserId
     );
     applyProspectMetrics(
@@ -1282,12 +1317,20 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       id: row.id,
       userId: row.userId,
       username: row.username,
+      firstName: row.firstName,
+      middleName: row.middleName,
+      lastName: row.lastName,
       name: row.name,
       unit: row.unit,
       branch: row.branch,
       area: row.area,
       displayPhoto: row.displayPhoto,
+      dateEmployed: row.dateEmployed,
+      agentType: row.agentType,
       totalTasks: row.totalTasks,
+      completedApproaches: row.completedApproaches,
+      completedAppointments: row.completedAppointments,
+      completedPresentations: row.completedPresentations,
       openTasks: row.openTasks,
       overdueTasks: row.overdueTasks,
       closedTasks: row.closedTasks,
@@ -1301,6 +1344,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       leads: row.leads,
       activeLeads: row.activeLeads,
       converted: row.converted,
+      submittedApplications: row.submittedApplications,
       conversionRate: row.conversionRate,
       totalPolicies: row.totalPolicies,
       activePolicies: row.activePolicies,
@@ -1606,6 +1650,158 @@ app.put("/api/manager/kpi-assignments/:scopeType/:scopeId", async (req, res) => 
     });
   } catch (err) {
     console.error("KPI assignment save error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+app.get("/api/agent/kpi-progress", async (req, res) => {
+  try {
+    const { userId, datePreset = "1d" } = req.query;
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId)) return res.status(400).json({ message: "Invalid userId." });
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const agent = await Agent.findOne({ userId: userObjectId })
+      .populate({
+        path: "userId",
+        select: "username firstName middleName lastName displayPhoto dateEmployed role",
+      })
+      .populate({
+        path: "unitId",
+        select: "unitName branchId",
+        populate: {
+          path: "branchId",
+          select: "branchName areaId",
+          populate: { path: "areaId", select: "areaName" },
+        },
+      })
+      .lean();
+
+    if (!agent) return res.status(404).json({ message: "Agent not found." });
+    const branchId = String(agent?.unitId?.branchId?._id || agent?.unitId?.branchId || "");
+    if (!branchId) return res.status(404).json({ message: "Agent branch not found." });
+
+    const now = new Date();
+    const presetMap = {
+      "1d": { label: "This Day", frequency: "Daily", days: 1 },
+      "7d": { label: "Last 7 Days", frequency: "Weekly", days: 7 },
+      "30d": { label: "Last 30 Days", frequency: "Monthly", days: 30 },
+      "90d": { label: "Last 90 Days", frequency: "Quarterly", days: 90 },
+      "6m": { label: "Last 6 Months", frequency: "Semi-Annually", days: 183 },
+      "12m": { label: "Last 12 Months", frequency: "Annually", days: 365 },
+    };
+    const preset = presetMap[String(datePreset || "1d")] || presetMap["1d"];
+    const startDate = new Date(now);
+    if (String(datePreset || "1d") === "1d") startDate.setHours(0, 0, 0, 0);
+    else startDate.setDate(startDate.getDate() - preset.days);
+    const withinRange = (value) => {
+      const ms = new Date(value).getTime();
+      return Number.isFinite(ms) && ms >= startDate.getTime() && ms <= now.getTime();
+    };
+
+    const assignment = await KpiAssignment.findOne({ scopeType: "AGENT", scopeId: branchId }).select("kpis updatedAt").lean();
+    const unitAssignment = await KpiAssignment.findOne({ scopeType: "UNIT", scopeId: branchId }).select("kpis updatedAt").lean();
+    const unitSalesProductionKpi = normalizeKpiList("UNIT", unitAssignment?.kpis || [])
+      .find((kpi) => kpi.key === "monthly_sales_production" && kpi.assigned !== false);
+    const unitSalesProductionKpiForPeriod = unitSalesProductionKpi ? (() => {
+      const periodTarget = (Array.isArray(unitSalesProductionKpi.targets) ? unitSalesProductionKpi.targets : []).find((target) => target.period === preset.frequency) || {};
+      return {
+        ...unitSalesProductionKpi,
+        period: preset.frequency,
+        targetMin: periodTarget.targetMin ?? unitSalesProductionKpi.targetMin ?? null,
+        targetMax: periodTarget.targetMax ?? unitSalesProductionKpi.targetMax ?? null,
+        targetValue: periodTarget.targetValue ?? unitSalesProductionKpi.targetValue ?? null,
+      };
+    })() : null;
+    const assignedKpis = normalizeKpiList("AGENT", assignment?.kpis || [])
+      .filter((kpi) => kpi.assigned !== false)
+      .map((kpi) => {
+        const periodTarget = (Array.isArray(kpi.targets) ? kpi.targets : []).find((target) => target.period === preset.frequency) || {};
+        return {
+          ...kpi,
+          period: preset.frequency,
+          targetMin: periodTarget.targetMin ?? kpi.targetMin ?? null,
+          targetMax: periodTarget.targetMax ?? kpi.targetMax ?? null,
+          targetValue: periodTarget.targetValue ?? kpi.targetValue ?? null,
+        };
+      });
+
+    const tasks = await Task.find({ assignedToUserId: userObjectId, softDeletedAt: null })
+      .select("type status completedAt createdAt")
+      .lean();
+    const doneTasks = tasks.filter((task) => String(task?.status || "").toLowerCase() === "done" && withinRange(task?.completedAt || task?.createdAt));
+    const countDoneType = (type) => doneTasks.filter((task) => String(task?.type || "").toUpperCase() === type).length;
+
+    const prospects = await Prospect.find({ assignedToUserId: userObjectId })
+      .select("_id createdAt")
+      .lean();
+    const prospectIds = prospects.map((prospect) => prospect._id);
+    const leads = prospectIds.length
+      ? await Lead.find({ prospectId: { $in: prospectIds } }).select("_id").lean()
+      : [];
+    const leadIds = leads.map((lead) => lead._id);
+    const engagements = leadIds.length
+      ? await LeadEngagement.find({ leadId: { $in: leadIds } }).select("_id").lean()
+      : [];
+    const engagementIds = engagements.map((engagement) => engagement._id);
+    const applications = engagementIds.length
+      ? await Application.find({ leadEngagementId: { $in: engagementIds } })
+        .select("leadEngagementId recordApplicationSubmission.savedAt recordApplicationSubmission.pruOneTransactionId createdAt")
+        .lean()
+      : [];
+    const policyholders = await Policyholder.find({ assignedToUserId: userObjectId })
+      .select("leadEngagementId status createdAt")
+      .lean();
+
+    const newProspects = prospects.filter((prospect) => withinRange(prospect?.createdAt)).length;
+    const activePolicyholdersInRange = policyholders.filter((policyholder) => String(policyholder?.status || "").toLowerCase() === "active" && withinRange(policyholder?.createdAt));
+    const activePolicies = activePolicyholdersInRange.length;
+    const activePolicyholderEngagementIds = activePolicyholdersInRange.map((policyholder) => policyholder.leadEngagementId).filter(Boolean);
+    const annualPayments = activePolicyholderEngagementIds.length
+      ? await AnnualPayment.find({ leadEngagementId: { $in: activePolicyholderEngagementIds } })
+        .select("leadEngagementId totalAnnualPremiumPhp")
+        .lean()
+      : [];
+    const agentSalesProduction = annualPayments.reduce((total, payment) => total + Number(payment?.totalAnnualPremiumPhp || 0), 0);
+    const submittedApplications = applications.filter((application) => {
+      const submittedAt = application?.recordApplicationSubmission?.savedAt;
+      if (submittedAt) return withinRange(submittedAt);
+      return withinRange(application?.createdAt) && String(application?.recordApplicationSubmission?.pruOneTransactionId || "").trim();
+    }).length;
+    const closingRatio = submittedApplications ? Math.round((activePolicies / submittedApplications) * 100) : 0;
+
+    const actualsByKey = {
+      weekly_approaches: countDoneType("APPROACH"),
+      weekly_appointments: countDoneType("APPOINTMENT"),
+      weekly_presentations: countDoneType("PRESENTATION"),
+      monthly_policies: activePolicies,
+      monthly_new_prospects: newProspects,
+      monthly_closing_ratio: closingRatio,
+    };
+
+    return res.json({
+      agent: {
+        id: String(agent._id),
+        userId: String(agent.userId?._id || userId),
+        username: agent.userId?.username || "",
+        firstName: agent.userId?.firstName || "",
+        middleName: agent.userId?.middleName || "",
+        lastName: agent.userId?.lastName || "",
+        agentType: agent.agentType || "",
+        unitName: agent.unitId?.unitName || "",
+        branchName: agent.unitId?.branchId?.branchName || "",
+        areaName: agent.unitId?.branchId?.areaId?.areaName || "",
+      },
+      filters: { datePreset: String(datePreset || "1d"), frequency: preset.frequency },
+      reportContext: { periodLabel: preset.label, startDate, endDate: now, generatedAt: now },
+      kpis: assignedKpis.map((kpi) => ({ ...kpi, actual: Number(actualsByKey[kpi.key] || 0) })),
+      unitSalesContribution: unitSalesProductionKpiForPeriod ? {
+        kpi: unitSalesProductionKpiForPeriod,
+        actual: agentSalesProduction,
+      } : null,
+    });
+  } catch (err) {
+    console.error("Agent KPI progress error:", err);
     return res.status(500).json({ message: "Server error." });
   }
 });
