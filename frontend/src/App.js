@@ -30,6 +30,7 @@ import AgentTasksProgress from "./AgentTasksProgress";
 
 import AgentNotifications from "./AgentNotifications";
 import AgentSalesPerformance from "./AgentSalesPerformance";
+import AgentKpiProgress from "./AgentKpiProgress";
 
 function App() {
   return (
@@ -73,6 +74,7 @@ function App() {
 
         <Route path="/agent/:username/notifications" element={<AgentNotifications />} />
         <Route path="/agent/:username/sales/performance" element={<AgentSalesPerformance />} />
+        <Route path="/agent/:username/kpi/progress" element={<AgentKpiProgress />} />
 
         <Route path="*" element={<Navigate to="/" />} />
       </Routes>
