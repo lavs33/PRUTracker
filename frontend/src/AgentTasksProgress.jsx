@@ -72,7 +72,7 @@ function AgentTasksProgress() {
   }, [user, username, navigate]);
 
   useEffect(() => {
-    document.title = `${username} | Task Progress Dashboard`;
+    document.title = `${username} | Task Progress and Workload Distribution`;
   }, [username]);
 
   const fetchProgress = useCallback(

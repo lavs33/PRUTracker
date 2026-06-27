@@ -118,7 +118,7 @@ function AgentKpiProgress() {
   }, [navigate, user, username]);
 
   useEffect(() => {
-    document.title = `${username} | KPI Progress Dashboard`;
+    document.title = `${username} | KPI Progress`;
   }, [username]);
 
   const fetchData = useCallback(async (signal) => {

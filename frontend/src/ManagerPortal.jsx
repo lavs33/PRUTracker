@@ -1623,7 +1623,10 @@ function ManagerPortal({ roleType }) {
     if (!branchSalesProductionKpi) return null;
     const branchKpiForPeriod = selectKpiTargetForPeriod(branchSalesProductionKpi, unitKpiPeriod);
     const periodRows = portalData?.kpiSalesRowsByFrequency?.[unitKpiPeriod] || [];
-    const branchActual = periodRows.reduce((total, row) => total + Number(row?.annualPremium || 0), 0);
+    const branchTotalFromPayload = Number(portalData?.branchKpiSalesTotalsByFrequency?.[unitKpiPeriod]?.totalAnnualPremium);
+    const branchActual = Number.isFinite(branchTotalFromPayload)
+      ? branchTotalFromPayload
+      : periodRows.reduce((total, row) => total + Number(row?.annualPremium || 0), 0);
     const unitActual = periodRows
       .filter((row) => String(row?.unit || "") === String(selectedUnit?.name || ""))
       .reduce((total, row) => total + Number(row?.annualPremium || 0), 0);
@@ -1636,7 +1639,7 @@ function ManagerPortal({ roleType }) {
       dateRangeLabel: getKpiFrequencyRangeLabel(unitKpiPeriod),
       kpi: branchKpiForPeriod,
     };
-  }, [dashboardUnitKpiCards, kpiData?.assignments, portalData?.kpiSalesRowsByFrequency, selectedUnit?.name, unitKpiPeriod]);
+  }, [dashboardUnitKpiCards, kpiData?.assignments, portalData?.branchKpiSalesTotalsByFrequency, portalData?.kpiSalesRowsByFrequency, selectedUnit?.name, unitKpiPeriod]);
 
 
   const branchSalesKpiUnitRows = useMemo(() => {
@@ -2361,6 +2364,8 @@ function ManagerPortal({ roleType }) {
               { metric: "Branch Sales Production", value: formatMoney(unitBranchSalesContribution.branchActual) },
               { metric: "Contribution Share", value: `${unitBranchSalesContribution.contributionShare}%` },
               { metric: "Branch KPI Target", value: formatKpiTarget(unitBranchSalesContribution.kpi) },
+              { metric: "Status", value: unitBranchSalesContribution.comparison.status },
+              { metric: "Gap / Excess", value: unitBranchSalesContribution.comparison.deltaLabel },
             ],
             pageSize: 8,
             compactWithPrevious: true,

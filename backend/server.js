@@ -1311,6 +1311,56 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
     Annually: buildRowsForSalesContext(buildPresetContext("12m")),
   };
 
+  let branchKpiSalesTotalsByFrequency = null;
+  if (context.role !== "BM" && context.branchId) {
+    const branchUnitsForKpi = await Unit.find({ branchId: context.branchId }).select("_id").lean();
+    const branchAgentsForKpi = branchUnitsForKpi.length
+      ? await Agent.find({ unitId: { $in: branchUnitsForKpi.map((unit) => unit._id) } }).select("userId").lean()
+      : [];
+    const branchUserIdsForKpi = branchAgentsForKpi.map((agent) => agent.userId).filter(Boolean);
+    const branchProspectsForKpi = branchUserIdsForKpi.length
+      ? await Prospect.find({ assignedToUserId: { $in: branchUserIdsForKpi } }).select("_id").lean()
+      : [];
+    const branchLeadsForKpi = branchProspectsForKpi.length
+      ? await Lead.find({ prospectId: { $in: branchProspectsForKpi.map((prospect) => prospect._id) } }).select("_id").lean()
+      : [];
+    const branchEngagementsForKpi = branchLeadsForKpi.length
+      ? await LeadEngagement.find({ leadId: { $in: branchLeadsForKpi.map((lead) => lead._id) } }).select("_id").lean()
+      : [];
+    const branchEngagementIdsForKpi = branchEngagementsForKpi.map((engagement) => engagement._id).filter(Boolean);
+    const branchActivePolicyholdersForKpi = branchUserIdsForKpi.length || branchEngagementIdsForKpi.length
+      ? await Policyholder.find({
+          status: "Active",
+          $or: [
+            ...(branchUserIdsForKpi.length ? [{ assignedToUserId: { $in: branchUserIdsForKpi } }] : []),
+            ...(branchEngagementIdsForKpi.length ? [{ leadEngagementId: { $in: branchEngagementIdsForKpi } }] : []),
+          ],
+        })
+          .select("leadEngagementId createdAt")
+          .lean()
+      : [];
+    const branchActiveEngagementIdsForKpi = branchActivePolicyholdersForKpi.map((policyholder) => policyholder.leadEngagementId).filter(Boolean);
+    const branchAnnualPaymentsForKpi = branchActiveEngagementIdsForKpi.length
+      ? await AnnualPayment.find({ leadEngagementId: { $in: branchActiveEngagementIdsForKpi } })
+          .select("leadEngagementId totalAnnualPremiumPhp")
+          .lean()
+      : [];
+    const branchAnnualPaymentByEngagementId = new Map(
+      branchAnnualPaymentsForKpi.map((payment) => [String(payment?.leadEngagementId || ""), Number(payment?.totalAnnualPremiumPhp || 0)])
+    );
+    const totalForBranchKpiContext = (presetContext) => branchActivePolicyholdersForKpi
+      .filter((policyholder) => isWithinPreset(policyholder?.createdAt, presetContext))
+      .reduce((total, policyholder) => total + Number(branchAnnualPaymentByEngagementId.get(String(policyholder?.leadEngagementId || "")) || 0), 0);
+    branchKpiSalesTotalsByFrequency = {
+      Daily: { totalAnnualPremium: totalForBranchKpiContext(buildPresetContext("TODAY")) },
+      Weekly: { totalAnnualPremium: totalForBranchKpiContext(buildPresetContext("7d")) },
+      Monthly: { totalAnnualPremium: totalForBranchKpiContext(buildPresetContext("30d")) },
+      Quarterly: { totalAnnualPremium: totalForBranchKpiContext(buildPresetContext("90d")) },
+      "Semi-Annually": { totalAnnualPremium: totalForBranchKpiContext(buildPresetContext("6m")) },
+      Annually: { totalAnnualPremium: totalForBranchKpiContext(buildPresetContext("12m")) },
+    };
+  }
+
   const byName = (left, right) => String(left.name).localeCompare(String(right.name)) || String(left.username).localeCompare(String(right.username));
   const agents = allRows
     .map((row) => ({
@@ -1417,6 +1467,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       taskSummary: summarizeRows(taskRows),
       salesSummary: summarizeRows(salesRows),
       kpiSalesRowsByFrequency,
+      branchKpiSalesTotalsByFrequency,
       agents,
       taskRows: sortedTaskRows,
       salesRows: sortedSalesRows,

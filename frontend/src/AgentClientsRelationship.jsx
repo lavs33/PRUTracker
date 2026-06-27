@@ -722,7 +722,7 @@ function AgentClientsRelationship() {
         <main className="cr-page-content">
           <div className="cr-headRow">
             <div>
-              <h1 className="cr-module-title">Client Relationship Dashboard</h1>
+              <h1 className="cr-module-title">Clients Relationship Dashboard</h1>
               <p className="cr-module-subtitle">
                 Track segment mix, relationship health, conversion quality, and pipeline momentum for your assigned clients.
               </p>
