@@ -430,3 +430,57 @@
     align-items: flex-start;
   }
 }
+.home-kpiPreviewSection {
+  max-width: 1320px;
+  margin: 0 auto 22px;
+  border: 1px solid rgba(226, 232, 240, 0.92);
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 20px 40px rgba(15, 23, 42, 0.08);
+  border-radius: 26px;
+  padding: 22px;
+}
+
+.home-kpiPreviewGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.home-kpiPreviewCard {
+  border: 1px solid rgba(226, 232, 240, 0.92);
+  border-radius: 18px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  padding: 16px;
+  display: grid;
+  gap: 8px;
+}
+
+.home-kpiPreviewCard span,
+.home-kpiPreviewCard small {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.home-kpiPreviewCard strong {
+  color: #0f172a;
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.home-kpiPreviewCard p {
+  margin: 0;
+  color: #334155;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.module-card.kpi {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, rgba(255, 251, 235, 0.96) 100%);
+}
+
+@media (max-width: 1180px) {
+  .home-kpiPreviewGrid {
+    grid-template-columns: 1fr;
+  }
+}
