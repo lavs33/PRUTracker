@@ -1,28 +1,18 @@
 /**
- * logout(navigate)
- * ----------------
- * Handles user logout behavior by:
- * 1. Clearing all locally stored session data
- * 2. Redirecting the user to the landing page
- *
- * Parameters:
- * - navigate (Function): React Router's navigation function
- *   obtained via useNavigate()
- *
- * Behavior:
- * - localStorage.clear()
- *     Removes all keys stored in browser localStorage.
- *     This effectively clears:
- *       - user session data
- *       - stored role
- *       - authentication-related info
- *
- * - navigate("/", { replace: true })
- *     Redirects user to the root (Landing Page).
- *     replace: true prevents user from navigating back
- *     to protected pages using browser back button.
+ * logout(navigate, role)
+ * ----------------------
+ * Clears session data and redirects either to the PRUTracker entry page
+ * or, when a role is provided, to that role's login portal.
  */
-export function logout(navigate) {
+export function logout(navigate, role = "") {
+  const nextRole = String(role || "").trim().toUpperCase();
   localStorage.clear();
-  navigate("/", { replace: true });
+  window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  if (nextRole) {
+    localStorage.setItem("role", nextRole);
+    navigate("/login", { replace: true });
+  } else {
+    navigate("/", { replace: true });
+  }
+  window.requestAnimationFrame(() => window.scrollTo({ top: 0, left: 0, behavior: "auto" }));
 }

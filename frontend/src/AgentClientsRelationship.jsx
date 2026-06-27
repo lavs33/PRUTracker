@@ -595,12 +595,12 @@ function AgentClientsRelationship() {
         <head>
           <title>${escapeHtml(reportFilename)}</title>
           <style>
-            @page { size: A4 portrait; margin: 8mm 8mm 10mm 8mm; }
+            @page { size: A4 portrait; margin: 0; }
             * { box-sizing: border-box; }
             body { font-family: Verdana, Geneva, sans-serif; color: #1f2937; margin: 0; font-size: 11px; line-height: 1.3; background:#fff; }
-            .pdf-page { position: relative; min-height: 279mm; padding: 8mm 8mm 14mm; page-break-after: always; overflow: hidden; }
+            .pdf-page { position: relative; min-height: 297mm; padding: 16mm 16mm 24mm; page-break-after: always; overflow: hidden; }
             .pdf-page:last-child { page-break-after: auto; }
-            .first-page { padding-top: 6mm; }
+            .first-page { padding-top: 14mm; }
             .header-band { height: 8px; background: linear-gradient(90deg, #da291c, #ffb81c, #00539b); border-radius: 6px; margin-bottom: 8px; }
             .report-heading { margin-bottom: 10px; }
             .top-grid { display:grid; grid-template-columns: minmax(0, 1.7fr) minmax(280px, 1fr); gap: 14px; align-items:start; }
@@ -640,7 +640,7 @@ function AgentClientsRelationship() {
             th, td { border: 1px solid #dfe5ec; padding: 5px 6px; text-align: left; vertical-align: top; }
             th { background: #f3f6fa; color:#374151; }
             tbody tr:nth-child(even) td { background:#fcfcfd; }
-            .report-footer { position: absolute; left: 8mm; right: 8mm; bottom: 4mm; font-size: 9px; color: #6b7280; display:flex; justify-content:space-between; align-items:center; border-top: 1px solid #e5e7eb; padding-top: 3px; }
+            .report-footer { position: absolute; left: 16mm; right: 16mm; bottom: 14mm; font-size: 9px; color: #6b7280; display:flex; justify-content:space-between; align-items:center; border-top: 1px solid #e5e7eb; padding-top: 3px; }
           </style>
         </head>
         <body>${pagesWithFooters}</body>
@@ -649,9 +649,6 @@ function AgentClientsRelationship() {
     reportDoc.close();
     reportDoc.title = reportFilename;
 
-    try {
-      iframe.contentWindow.history.replaceState({}, "", "/client-relationship-report");
-    } catch {}
 
     let cleanedUp = false;
     const cleanup = () => {
