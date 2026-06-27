@@ -381,12 +381,12 @@ function AgentTasksProgress() {
         <head>
           <title>${escapeHtml(reportFilename)}</title>
           <style>
-            @page { size: A4 portrait; margin: 8mm 8mm 10mm 8mm; }
+            @page { size: A4 portrait; margin: 0; }
             * { box-sizing: border-box; }
             body { font-family: Verdana, Geneva, sans-serif; color: #1f2937; margin: 0; font-size: 11px; line-height: 1.3; background:#fff; }
-            .pdf-page { position: relative; min-height: 279mm; padding: 8mm 8mm 14mm; page-break-after: always; overflow: hidden; }
+            .pdf-page { position: relative; min-height: 297mm; padding: 16mm 16mm 24mm; page-break-after: always; overflow: hidden; }
             .pdf-page:last-child { page-break-after: auto; }
-            .first-page { padding-top: 6mm; }
+            .first-page { padding-top: 14mm; }
             .header-band { height: 8px; background: linear-gradient(90deg, #da291c, #ffb81c, #00539b); border-radius: 6px; margin-bottom: 8px; }
             .top-grid { display: grid; grid-template-columns: minmax(0, 1.9fr) minmax(280px, 1fr); gap: 14px; align-items: start; }
             .title-block { padding: 4px 0 2px; }
@@ -428,7 +428,7 @@ function AgentTasksProgress() {
             td.cell-open { font-weight:800; background:#fffbeb !important; color:#92400e; }
             td.cell-overdue { font-weight:900; background:#fef2f2 !important; color:#991b1b; }
             .footnote { margin-top: 5px; font-size: 9px; color: #6b7280; }
-            .report-footer { position: absolute; left: 8mm; right: 8mm; bottom: 4mm; font-size: 9px; color: #6b7280; display:flex; justify-content:space-between; align-items:center; border-top: 1px solid #e5e7eb; padding-top: 3px; }
+            .report-footer { position: absolute; left: 16mm; right: 16mm; bottom: 14mm; font-size: 9px; color: #6b7280; display:flex; justify-content:space-between; align-items:center; border-top: 1px solid #e5e7eb; padding-top: 3px; }
           </style>
         </head>
         <body>${pagesWithFooters}</body>
@@ -437,9 +437,6 @@ function AgentTasksProgress() {
     reportDoc.close();
     reportDoc.title = reportFilename;
 
-    try {
-      iframe.contentWindow.history.replaceState({}, "", "/agent-task-performance-report");
-    } catch {}
 
     let cleanedUp = false;
     const cleanup = () => {

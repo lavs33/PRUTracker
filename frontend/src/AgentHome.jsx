@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { FaChartLine, FaTasks, FaUsers } from "react-icons/fa";
+import { FaBullseye, FaChartLine, FaTasks, FaUsers } from "react-icons/fa";
 import { FiAlertCircle, FiArrowRight, FiCheckCircle, FiClock, FiTrendingUp } from "react-icons/fi";
 import "./AgentHome.css";
 import TopNav from "./components/TopNav";
@@ -26,6 +26,10 @@ const DEFAULT_HOME_DATA = {
     totalAnnualPremiumPhp: 0,
     bestSource: null,
   },
+  kpiProgress: {
+    assignedKpis: [],
+    periodLabel: "This Day",
+  },
 };
 
 function AgentHome() {
@@ -44,6 +48,11 @@ function AgentHome() {
   const [apiError, setApiError] = useState("");
   const [homeData, setHomeData] = useState(DEFAULT_HOME_DATA);
 
+  const navigateToTop = useCallback((path) => {
+    navigate(path);
+    window.setTimeout(() => window.scrollTo({ top: 0, left: 0, behavior: "auto" }), 0);
+  }, [navigate]);
+
   useEffect(() => {
     if (!user || user.username !== username) {
       navigate("/", { replace: true });
@@ -59,14 +68,22 @@ function AgentHome() {
   const fetchHomeData = useCallback(async (signal) => {
     if (!user?.id) return;
 
-    const response = await fetch(
-      `${API_BASE}/api/agent/home?${new URLSearchParams({ userId: user.id }).toString()}`,
-      signal ? { signal } : undefined
-    );
+    const [homeResponse, kpiResponse] = await Promise.all([
+      fetch(
+        `${API_BASE}/api/agent/home?${new URLSearchParams({ userId: user.id }).toString()}`,
+        signal ? { signal } : undefined
+      ),
+      fetch(
+        `${API_BASE}/api/agent/kpi-progress?${new URLSearchParams({ userId: user.id, datePreset: "1d" }).toString()}`,
+        signal ? { signal } : undefined
+      ),
+    ]);
 
-    const payload = await response.json();
+    const payload = await homeResponse.json();
+    const kpiPayload = await kpiResponse.json();
 
-    if (!response.ok) throw new Error(payload?.message || "Failed to load agent home preview.");
+    if (!homeResponse.ok) throw new Error(payload?.message || "Failed to load agent home preview.");
+    if (!kpiResponse.ok) throw new Error(kpiPayload?.message || "Failed to load KPI progress preview.");
 
     setHomeData({
       tasks: {
@@ -85,6 +102,10 @@ function AgentHome() {
         totalPolicies: Number(payload?.sales?.totalPolicies || 0),
         totalAnnualPremiumPhp: Number(payload?.sales?.totalAnnualPremiumPhp || 0),
         bestSource: payload?.sales?.bestSource || null,
+      },
+      kpiProgress: {
+        assignedKpis: Array.isArray(kpiPayload?.kpis) ? kpiPayload.kpis.slice(0, 3) : [],
+        periodLabel: kpiPayload?.reportContext?.periodLabel || "This Day",
       },
     });
   }, [user?.id]);
@@ -120,6 +141,27 @@ function AgentHome() {
       maximumFractionDigits: 2,
     });
 
+  const formatKpiValue = (value, valueType) => {
+    if (valueType === "Currency") return `₱ ${money(value)}`;
+    if (valueType === "Percent") return `${Number(value || 0)}%`;
+    return Number(value || 0).toLocaleString();
+  };
+
+  const formatKpiTarget = (kpi = {}) => {
+    const defaultPeriod = kpi.defaultPeriod || kpi.period;
+    const defaultTarget = (Array.isArray(kpi.targets) ? kpi.targets : []).find((target) => target.period === defaultPeriod) || kpi;
+    const targetValue = defaultTarget.targetValue ?? kpi.targetValue;
+    const targetMin = defaultTarget.targetMin ?? kpi.targetMin;
+    const targetMax = defaultTarget.targetMax ?? kpi.targetMax;
+    if (targetValue !== null && targetValue !== undefined && targetValue !== "") return formatKpiValue(targetValue, kpi.valueType);
+    const hasMin = targetMin !== null && targetMin !== undefined && targetMin !== "";
+    const hasMax = targetMax !== null && targetMax !== undefined && targetMax !== "";
+    if (hasMin && hasMax) return `${formatKpiValue(targetMin, kpi.valueType)} - ${formatKpiValue(targetMax, kpi.valueType)}`;
+    if (hasMin) return `${formatKpiValue(targetMin, kpi.valueType)} and above`;
+    if (hasMax) return `Up to ${formatKpiValue(targetMax, kpi.valueType)}`;
+    return "No target set";
+  };
+
   const dueTodayCount = homeData.tasks.dueTodayTop5.length;
   const recentTaskCount = homeData.tasks.recentlyAddedTop5.length;
   const recentProspectsCount = homeData.clients.recentProspects.length;
@@ -137,7 +179,7 @@ function AgentHome() {
       title: "Clients",
       description: "Relationship visibility, recent prospects, and policyholder overview.",
       icon: <FaUsers size={28} className="module-icon" />,
-      onClick: () => navigate(`/agent/${user.username}/clients`),
+      onClick: () => navigateToTop(`/agent/${user.username}/clients`),
       accent: "clients",
     },
     {
@@ -145,7 +187,7 @@ function AgentHome() {
       title: "Tasks",
       description: "Open today’s follow-ups, due items, and execution queues.",
       icon: <FaTasks size={28} className="module-icon" />,
-      onClick: () => navigate(`/agent/${user.username}/tasks`),
+      onClick: () => navigateToTop(`/agent/${user.username}/tasks`),
       accent: "tasks",
     },
     {
@@ -153,8 +195,16 @@ function AgentHome() {
       title: "Sales Performance",
       description: "Monitor conversion, premium production, and source quality.",
       icon: <FaChartLine size={28} className="module-icon" />,
-      onClick: () => navigate(`/agent/${user.username}/sales/performance`),
+      onClick: () => navigateToTop(`/agent/${user.username}/sales/performance`),
       accent: "sales",
+    },
+    {
+      key: "kpi-progress",
+      title: "KPI Progress",
+      description: "Review assigned KPI targets, current progress, and production contribution.",
+      icon: <FaBullseye size={28} className="module-icon" />,
+      onClick: () => navigateToTop(`/agent/${user.username}/kpi/progress`),
+      accent: "kpi",
     },
   ];
 
@@ -162,10 +212,10 @@ function AgentHome() {
     <>
       <TopNav
         user={user}
-        onLogoClick={() => navigate(`/agent/${user.username}`)}
-        onProfileClick={() => navigate(`/agent/${user.username}/profile`)}
+        onLogoClick={() => navigateToTop(`/agent/${user.username}`)}
+        onProfileClick={() => navigateToTop(`/agent/${user.username}/profile`)}
         onLogout={() => logout(navigate)}
-        onNotificationsClick={() => navigate(`/agent/${user.username}/notifications`)}
+        onNotificationsClick={() => navigateToTop(`/agent/${user.username}/notifications`)}
       />
 
       <div className="agent-homePage">
@@ -178,14 +228,17 @@ function AgentHome() {
             </p>
 
             <div className="home-quickActions">
-              <button type="button" className="home-actionBtn primary" onClick={() => navigate(`/agent/${user.username}/tasks`)}>
+              <button type="button" className="home-actionBtn primary" onClick={() => navigateToTop(`/agent/${user.username}/tasks`)}>
                 Review tasks
               </button>
-              <button type="button" className="home-actionBtn" onClick={() => navigate(`/agent/${user.username}/clients/relationship`)}>
+              <button type="button" className="home-actionBtn" onClick={() => navigateToTop(`/agent/${user.username}/clients/relationship`)}>
                 Open client dashboard
               </button>
-              <button type="button" className="home-actionBtn" onClick={() => navigate(`/agent/${user.username}/sales/performance`)}>
+              <button type="button" className="home-actionBtn" onClick={() => navigateToTop(`/agent/${user.username}/sales/performance`)}>
                 View sales performance
+              </button>
+              <button type="button" className="home-actionBtn" onClick={() => navigateToTop(`/agent/${user.username}/kpi/progress`)}>
+                Check KPI progress
               </button>
             </div>
           </div>
@@ -215,7 +268,7 @@ function AgentHome() {
                 <span className="home-cardKicker">Clients</span>
                 <h2>Relationship snapshot</h2>
               </div>
-              <button type="button" className="home-inlineLink" onClick={() => navigate(`/agent/${user.username}/clients/relationship`)}>
+              <button type="button" className="home-inlineLink" onClick={() => navigateToTop(`/agent/${user.username}/clients/relationship`)}>
                 Open dashboard
                 <FiArrowRight aria-hidden="true" />
               </button>
@@ -250,7 +303,7 @@ function AgentHome() {
                     key={prospect._id}
                     type="button"
                     className="home-listItem"
-                    onClick={() => navigate(`/agent/${user.username}/prospects/${prospect._id}`)}
+                    onClick={() => navigateToTop(`/agent/${user.username}/prospects/${prospect._id}`)}
                   >
                     <div>
                       <strong>{prospect.fullName || prospect.name || "Unnamed prospect"}</strong>
@@ -271,7 +324,7 @@ function AgentHome() {
                 <span className="home-cardKicker">Tasks</span>
                 <h2>Today’s queue</h2>
               </div>
-              <button type="button" className="home-inlineLink" onClick={() => navigate(`/agent/${user.username}/tasks`)}>
+              <button type="button" className="home-inlineLink" onClick={() => navigateToTop(`/agent/${user.username}/tasks`)}>
                 Open tasks
                 <FiArrowRight aria-hidden="true" />
               </button>
@@ -298,7 +351,7 @@ function AgentHome() {
                     key={task._id}
                     type="button"
                     className="home-listItem"
-                    onClick={() => navigate(`/agent/${user.username}/tasks`)}
+                    onClick={() => navigateToTop(`/agent/${user.username}/tasks`)}
                   >
                     <div>
                       <strong>{task.title || "Untitled task"}</strong>
@@ -319,7 +372,7 @@ function AgentHome() {
                 <span className="home-cardKicker">Sales</span>
                 <h2>Performance preview</h2>
               </div>
-              <button type="button" className="home-inlineLink" onClick={() => navigate(`/agent/${user.username}/sales/performance`)}>
+              <button type="button" className="home-inlineLink" onClick={() => navigateToTop(`/agent/${user.username}/sales/performance`)}>
                 Open sales
                 <FiArrowRight aria-hidden="true" />
               </button>
@@ -356,6 +409,39 @@ function AgentHome() {
               )}
             </div>
           </article>
+        </section>
+
+        <section className="home-kpiPreviewSection">
+          <div className="home-cardHeader home-cardHeaderStandalone">
+            <div>
+              <span className="home-cardKicker">KPI Progress</span>
+              <h2>Assigned KPI preview</h2>
+            </div>
+            <button type="button" className="home-inlineLink" onClick={() => navigateToTop(`/agent/${user.username}/kpi/progress`)}>
+              Open KPI progress
+              <FiArrowRight aria-hidden="true" />
+            </button>
+          </div>
+
+          <div className="home-kpiPreviewGrid">
+            {loading ? (
+              <div className="home-emptyState">Loading KPI progress preview…</div>
+            ) : homeData.kpiProgress.assignedKpis.length > 0 ? (
+              homeData.kpiProgress.assignedKpis.map((kpi) => {
+                const defaultPeriod = kpi.defaultPeriod || kpi.period || "—";
+                return (
+                  <article key={kpi.key} className="home-kpiPreviewCard">
+                    <span>{defaultPeriod}</span>
+                    <strong>{kpi.label}</strong>
+                    <p>Current progress: {formatKpiValue(kpi.actual, kpi.valueType)}</p>
+                    <small>Default target: {formatKpiTarget(kpi)}</small>
+                  </article>
+                );
+              })
+            ) : (
+              <div className="home-emptyState">No assigned KPIs to preview yet.</div>
+            )}
+          </div>
         </section>
 
         <section className="home-modulesSection">
