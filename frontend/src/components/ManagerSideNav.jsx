@@ -1,11 +1,10 @@
-import { FaBars, FaBullseye, FaChevronLeft, FaChevronRight, FaHome, FaSignal, FaUsers } from "react-icons/fa";
+import { FaBars, FaBullseye, FaChevronLeft, FaChevronRight, FaHome, FaUsers } from "react-icons/fa";
 import "./ManagerSideNav.css";
 
 const NAV_ITEMS = [
   { key: "dashboard", label: "Home", icon: <FaHome size={18} /> },
   { key: "agents", label: "Units", icon: <FaUsers size={18} /> },
   { key: "kpi_assignment", label: "KPI Assignment", icon: <FaBullseye size={18} /> },
-  { key: "kpi_progress", label: "Branch KPI Progress", icon: <FaSignal size={18} /> },
 ];
 
 function ManagerSideNav({ roleLabel, active, onNavigate, collapsed, onToggle }) {
@@ -39,18 +38,21 @@ function ManagerSideNav({ roleLabel, active, onNavigate, collapsed, onToggle }) 
       </div>
 
       <div className="manager-side-nav__list">
-        {NAV_ITEMS.map((item) => (
-          <button
-            key={item.key}
-            type="button"
-            className={`manager-side-nav__item ${active === item.key ? "active" : ""}`}
-            onClick={() => onNavigate(item.key)}
-            title={collapsed ? item.label : undefined}
-          >
-            <span className="manager-side-nav__icon">{item.icon}</span>
-            {!collapsed && <span>{item.label}</span>}
-          </button>
-        ))}
+        {NAV_ITEMS.filter((item) => roleLabel === "BM" || item.key !== "kpi_assignment").map((item) => {
+          const itemLabel = roleLabel === "BM" || item.key !== "agents" ? item.label : "Unit Details";
+          return (
+            <button
+              key={item.key}
+              type="button"
+              className={`manager-side-nav__item ${active === item.key ? "active" : ""}`}
+              onClick={() => onNavigate(item.key)}
+              title={collapsed ? itemLabel : undefined}
+            >
+              <span className="manager-side-nav__icon">{item.icon}</span>
+              {!collapsed && <span>{itemLabel}</span>}
+            </button>
+          );
+        })}
       </div>
     </aside>
   );
