@@ -225,6 +225,20 @@ function formatScopeLabel(scopeType) {
   return "Branch";
 }
 
+function getCurrentAgeFromBirthday(value) {
+  const birthday = new Date(value);
+  if (Number.isNaN(birthday.getTime())) return null;
+  const today = new Date();
+  let age = today.getFullYear() - birthday.getFullYear();
+  const monthDiff = today.getMonth() - birthday.getMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthday.getDate())) age -= 1;
+  return age >= 0 ? age : null;
+}
+
+function formatPromotionRole(role) {
+  return String(role || "").trim() || "—";
+}
+
 function formatDateTime(value) {
   const dt = new Date(value);
   return Number.isNaN(dt.getTime())
@@ -675,9 +689,16 @@ function ManagerPortal({ roleType }) {
     .toUpperCase();
   const agentTableTopScrollRef = useRef(null);
   const agentTableScrollRef = useRef(null);
+  const orphanTableTopScrollRef = useRef(null);
+  const orphanTableScrollRef = useRef(null);
   const [activeView, setActiveView] = useState("dashboard");
   const [agentSearch, setAgentSearch] = useState("");
   const [agentSort, setAgentSort] = useState("usernameAsc");
+  const [orphanAgentSearch, setOrphanAgentSearch] = useState("");
+  const [orphanAgentSort, setOrphanAgentSort] = useState("usernameAsc");
+  const [orphanAgentTypeFilter, setOrphanAgentTypeFilter] = useState("ALL");
+  const [orphanUnitFilter, setOrphanUnitFilter] = useState("ALL");
+  const [orphanStatusFilter, setOrphanStatusFilter] = useState("ALL");
   const [selectedAgentId, setSelectedAgentId] = useState("");
   const [selectedUnitName, setSelectedUnitName] = useState("");
   const [unitPerformanceTab, setUnitPerformanceTab] = useState("clients");
@@ -707,9 +728,7 @@ function ManagerPortal({ roleType }) {
   const [sideNavCollapsed, setSideNavCollapsed] = useState(false);
   const [refreshCount, setRefreshCount] = useState(0);
 
-  const syncAgentTableScroll = (source) => {
-    const topScroller = agentTableTopScrollRef.current;
-    const tableScroller = agentTableScrollRef.current;
+  const syncScrollPair = (source, topScroller, tableScroller) => {
     if (!topScroller || !tableScroller) return;
     const sourceScroller = source === "top" ? topScroller : tableScroller;
     const targetScroller = source === "top" ? tableScroller : topScroller;
@@ -717,6 +736,14 @@ function ManagerPortal({ roleType }) {
     const targetMax = Math.max(0, targetScroller.scrollWidth - targetScroller.clientWidth);
     const nextLeft = (sourceScroller.scrollLeft / sourceMax) * targetMax;
     if (Math.abs(targetScroller.scrollLeft - nextLeft) > 1) targetScroller.scrollLeft = nextLeft;
+  };
+
+  const syncAgentTableScroll = (source) => {
+    syncScrollPair(source, agentTableTopScrollRef.current, agentTableScrollRef.current);
+  };
+
+  const syncOrphanTableScroll = (source) => {
+    syncScrollPair(source, orphanTableTopScrollRef.current, orphanTableScrollRef.current);
   };
 
   const user = useMemo(() => {
@@ -747,6 +774,7 @@ function ManagerPortal({ roleType }) {
       agents: "Branch Units",
       kpi_assignment: "Branch KPI Assignment",
       kpi_progress: "Branch KPI Progress",
+      orphan_clients: "Orphan Client Management",
     };
     const unitPageLabels = {
       dashboard: "Unit Overview",
@@ -754,7 +782,7 @@ function ManagerPortal({ roleType }) {
       kpi_progress: "Branch KPI Progress Dashboard",
     };
     const pageLabels = normalizedRole === "BM" ? branchPageLabels : unitPageLabels;
-    if (activeView === "agents" && selectedAgentId) {
+    if ((activeView === "agents" || activeView === "orphan_clients") && selectedAgentId) {
       document.title = `${portalData?.scope?.branchCode || user?.username || normalizedRole} | Agent Details`;
       return;
     }
@@ -762,7 +790,7 @@ function ManagerPortal({ roleType }) {
   }, [activeView, normalizedRole, portalData?.scope?.branchCode, selectedAgentId, user?.username]);
 
   useEffect(() => {
-    if (normalizedRole !== "BM" && activeView === "kpi_assignment") setActiveView("dashboard");
+    if (normalizedRole !== "BM" && (activeView === "kpi_assignment" || activeView === "orphan_clients")) setActiveView("dashboard");
   }, [activeView, normalizedRole]);
 
   useEffect(() => {
@@ -818,7 +846,7 @@ function ManagerPortal({ roleType }) {
 
   useEffect(() => {
     if (!user?.id || user.role !== normalizedRole) return;
-    const kpiViews = normalizedRole === "BM" ? ["dashboard", "agents", "kpi_assignment", "kpi_progress"] : ["dashboard", "agents", "kpi_progress"];
+    const kpiViews = normalizedRole === "BM" ? ["dashboard", "agents", "kpi_assignment", "kpi_progress", "orphan_clients"] : ["dashboard", "agents", "kpi_progress"];
     if (!kpiViews.includes(activeView)) return;
 
     const controller = new AbortController();
@@ -1422,6 +1450,64 @@ function ManagerPortal({ roleType }) {
     [portalData?.agents, selectedAgentId, selectedUnitRows],
   );
 
+  const orphanAgentTypeOptions = useMemo(() =>
+    [...new Set((portalData?.agents || []).map((agent) => String(agent?.agentType || "").trim()).filter(Boolean))]
+      .sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" })),
+    [portalData?.agents],
+  );
+
+  const orphanUnitOptions = useMemo(() =>
+    [...new Set((portalData?.agents || []).map((agent) => String(agent?.unit || "").trim()).filter(Boolean))]
+      .sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" })),
+    [portalData?.agents],
+  );
+
+  const orphanStatusOptions = ["Active", "On Long Leave", "Retired"];
+
+  const orphanAgentRows = useMemo(() => {
+    const searchedAgents = buildFilter(portalData?.agents || [], orphanAgentSearch, ["username", "name"]);
+    const filteredByDropdowns = searchedAgents.filter((agent) => {
+      const agentType = String(agent?.agentType || "");
+      const unit = String(agent?.unit || "");
+      const status = String(agent?.status || "Active");
+      return (orphanAgentTypeFilter === "ALL" || agentType === orphanAgentTypeFilter)
+        && (orphanUnitFilter === "ALL" || unit === orphanUnitFilter)
+        && (orphanStatusFilter === "ALL" || status === orphanStatusFilter);
+    });
+
+    const compareText = (left, right, key) => String(left?.[key] || "").localeCompare(String(right?.[key] || ""), undefined, { numeric: true, sensitivity: "base" });
+    const compareDate = (left, right, key) => {
+      const leftTime = new Date(left?.[key] || 0).getTime() || 0;
+      const rightTime = new Date(right?.[key] || 0).getTime() || 0;
+      return leftTime - rightTime;
+    };
+    const sorters = {
+      usernameAsc: (left, right) => compareText(left, right, "username"),
+      usernameDesc: (left, right) => compareText(left, right, "username") * -1,
+      nameAsc: (left, right) => compareText(left, right, "name"),
+      nameDesc: (left, right) => compareText(left, right, "name") * -1,
+      dateEmployedAsc: (left, right) => compareDate(left, right, "dateEmployed"),
+      dateEmployedDesc: (left, right) => compareDate(left, right, "dateEmployed") * -1,
+    };
+
+    return [...filteredByDropdowns].sort((left, right) => (sorters[orphanAgentSort] || sorters.usernameAsc)(left, right) || compareText(left, right, "username"));
+  }, [orphanAgentSearch, orphanAgentSort, orphanAgentTypeFilter, orphanStatusFilter, orphanUnitFilter, portalData?.agents]);
+
+  const clearOrphanAgentControls = () => {
+    setOrphanAgentSort("usernameAsc");
+    setOrphanAgentTypeFilter("ALL");
+    setOrphanUnitFilter("ALL");
+    setOrphanStatusFilter("ALL");
+  };
+
+  const selectedAgentAge = selectedAgent?.birthday ? getCurrentAgeFromBirthday(selectedAgent.birthday) : selectedAgent?.age;
+  const selectedAgentPromotionHistory = useMemo(() =>
+    (Array.isArray(selectedAgent?.promotionHistory) ? selectedAgent.promotionHistory : [])
+      .slice()
+      .sort((left, right) => (new Date(right?.datePromoted || 0).getTime() || 0) - (new Date(left?.datePromoted || 0).getTime() || 0)),
+    [selectedAgent?.promotionHistory],
+  );
+
   const selectedAgentKpiCards = useMemo(() => {
     if (!selectedAgent || !selectedKpiPeriod) return [];
     const kpiKeysByTab = {
@@ -1488,7 +1574,7 @@ function ManagerPortal({ roleType }) {
 
   const openAgentDetails = (agentId) => {
     setSelectedAgentId(String(agentId || ""));
-    setActiveView("agents");
+    setActiveView(activeView === "orphan_clients" ? "orphan_clients" : "agents");
     window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
   };
 
@@ -3269,6 +3355,167 @@ function ManagerPortal({ roleType }) {
                     No agents matched this search yet.
                   </div>
                 )}
+              </section>
+            )
+          )}
+
+
+          {!isLoading && !loadError && activeView === "orphan_clients" && normalizedRole === "BM" && (
+            selectedAgent ? (
+              <section className="manager-panel">
+                <nav className="manager-breadcrumb manager-breadcrumb--agent" aria-label="Orphan client agent detail breadcrumb">
+                  <button type="button" onClick={() => { setSelectedAgentId(""); setActiveView("dashboard"); window.scrollTo({ top: 0, behavior: "smooth" }); }}>{scope.branchName || selectedAgent.branch || "Branch"}</button>
+                  <span>&gt;</span>
+                  <button type="button" onClick={() => { setSelectedAgentId(""); window.scrollTo({ top: 0, behavior: "smooth" }); }}>All Agents</button>
+                  <span>&gt;</span>
+                  <strong>{selectedAgent.username || selectedAgent.name}</strong>
+                </nav>
+
+                <div className="manager-panel__head manager-agent-profile-head">
+                  <div className="manager-agent-photo-wrap">
+                    {selectedAgent.displayPhoto ? (
+                      <img src={selectedAgent.displayPhoto} alt={`${selectedAgent.name || selectedAgent.username} display`} className="manager-agent-photo" />
+                    ) : (
+                      <div className="manager-agent-photo manager-agent-photo--placeholder">{String(selectedAgent.name || selectedAgent.username || "A").charAt(0).toUpperCase()}</div>
+                    )}
+                  </div>
+                  <div>
+                    <h2>{selectedAgent.name || "Agent Details"}</h2>
+                    <p>{selectedAgent.username || "—"} • {selectedAgent.agentType || "—"} • {selectedAgent.status || "Active"} • {selectedAgent.unit || "Unassigned Unit"}</p>
+                  </div>
+                </div>
+
+                <div className="manager-agent-detail-grid manager-agent-detail-grid--profile">
+                  <article><span>Username</span><strong>{selectedAgent.username || "—"}</strong></article>
+                  <article><span>Agent Name</span><strong>{selectedAgent.name || "—"}</strong></article>
+                  <article><span>Agent Type</span><strong>{selectedAgent.agentType || "—"}</strong></article>
+                  <article><span>Agent Status</span><strong>{selectedAgent.status || "Active"}</strong></article>
+                  <article><span>Unit Name</span><strong>{selectedAgent.unit || "—"}</strong></article>
+                  <article><span>Date Employed</span><strong>{selectedAgent.dateEmployed ? formatDate(selectedAgent.dateEmployed) : "—"}</strong></article>
+                  <article><span>Sex</span><strong>{selectedAgent.sex || "—"}</strong></article>
+                  <article><span>Birthday</span><strong>{selectedAgent.birthday ? formatDate(selectedAgent.birthday) : "—"}</strong></article>
+                  <article><span>Age</span><strong>{selectedAgentAge ?? "—"}</strong></article>
+                </div>
+
+                <div className="manager-section-subhead">
+                  <h3>Promotion History</h3>
+                  <p>Full promotion history recorded for this agent.</p>
+                </div>
+                {selectedAgentPromotionHistory.length ? (
+                  <div className="manager-table-wrap">
+                    <table className="manager-table">
+                      <thead>
+                        <tr>
+                          <th>Promoted Role</th>
+                          <th>Date Promoted</th>
+                          <th>Manager Username</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selectedAgentPromotionHistory.map((promotion, index) => (
+                          <tr key={`${promotion?.datePromoted || index}-${promotion?.role || "role"}`}>
+                            <td>{formatPromotionRole(promotion?.role)}</td>
+                            <td>{promotion?.datePromoted ? formatDate(promotion.datePromoted) : "—"}</td>
+                            <td>{promotion?.managerUsername || "—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="manager-empty-state">No promotion history recorded for this agent.</div>
+                )}
+              </section>
+            ) : (
+              <section className="manager-panel">
+                <nav className="manager-breadcrumb manager-breadcrumb--agent" aria-label="Orphan client management breadcrumb">
+                  <button type="button" onClick={() => { setActiveView("dashboard"); window.scrollTo({ top: 0, behavior: "smooth" }); }}>{scope.branchName || "Branch"}</button>
+                  <span>&gt;</span>
+                  <strong>All Agents</strong>
+                </nav>
+                <div className="manager-panel__head">
+                  <div>
+                    <h2 className="manager-orphan-title">Orphan Client Management</h2>
+                    <p>Review all agents under {scope.branchName || "this branch"} before managing orphan client relationships.</p>
+                  </div>
+                </div>
+                <div className="manager-toolbar manager-toolbar--orphan">
+                  <div className="manager-toolbar__filters">
+                    <label className="manager-search manager-orphan-search" htmlFor="manager-orphan-agent-search">
+                      <FaSearch size={14} />
+                      <input
+                        id="manager-orphan-agent-search"
+                        type="search"
+                        placeholder="Search by username or agent name"
+                        value={orphanAgentSearch}
+                        onChange={(e) => setOrphanAgentSearch(e.target.value)}
+                      />
+                    </label>
+                    <label className="manager-select manager-orphan-control manager-orphan-control--type" htmlFor="manager-orphan-agent-type-filter">
+                      <span>Agent Type</span>
+                      <select id="manager-orphan-agent-type-filter" value={orphanAgentTypeFilter} onChange={(e) => setOrphanAgentTypeFilter(e.target.value)}>
+                        <option value="ALL">All Agent Types</option>
+                        {orphanAgentTypeOptions.map((agentType) => <option key={agentType} value={agentType}>{agentType}</option>)}
+                      </select>
+                    </label>
+                    <label className="manager-select manager-orphan-control manager-orphan-control--unit" htmlFor="manager-orphan-unit-filter">
+                      <span>Unit Name</span>
+                      <select id="manager-orphan-unit-filter" value={orphanUnitFilter} onChange={(e) => setOrphanUnitFilter(e.target.value)}>
+                        <option value="ALL">All Units</option>
+                        {orphanUnitOptions.map((unitName) => <option key={unitName} value={unitName}>{unitName}</option>)}
+                      </select>
+                    </label>
+                    <label className="manager-select manager-orphan-control manager-orphan-control--status" htmlFor="manager-orphan-status-filter">
+                      <span>Agent Status</span>
+                      <select id="manager-orphan-status-filter" value={orphanStatusFilter} onChange={(e) => setOrphanStatusFilter(e.target.value)}>
+                        <option value="ALL">All Statuses</option>
+                        {orphanStatusOptions.map((status) => <option key={status} value={status}>{status}</option>)}
+                      </select>
+                    </label>
+                    <label className="manager-select manager-orphan-control manager-orphan-control--sort" htmlFor="manager-orphan-sort">
+                      <span>Sort By</span>
+                      <select id="manager-orphan-sort" value={orphanAgentSort} onChange={(e) => setOrphanAgentSort(e.target.value)}>
+                        <option value="usernameAsc">Username (A → Z)</option>
+                        <option value="usernameDesc">Username (Z → A)</option>
+                        <option value="nameAsc">Agent Name (A → Z)</option>
+                        <option value="nameDesc">Agent Name (Z → A)</option>
+                        <option value="dateEmployedAsc">Date Employed (Oldest → Newest)</option>
+                        <option value="dateEmployedDesc">Date Employed (Newest → Oldest)</option>
+                      </select>
+                    </label>
+                    <button type="button" className="manager-clear-btn manager-clear-btn--orphan" onClick={clearOrphanAgentControls}>Clear</button>
+                  </div>
+                </div>
+                <div className="manager-table-scroll-top manager-table-scroll-top--orphan" ref={orphanTableTopScrollRef} onScroll={() => syncOrphanTableScroll("top")}>
+                  <div className="manager-table-scroll-top__inner manager-table-scroll-top__inner--orphan" />
+                </div>
+                <div className="manager-table-wrap manager-table-wrap--orphan" ref={orphanTableScrollRef} onScroll={() => syncOrphanTableScroll("table")}>
+                  <table className="manager-table manager-table--clickable manager-table--orphan">
+                    <thead>
+                      <tr>
+                        <th>Username</th>
+                        <th>Agent Name</th>
+                        <th>Agent Type</th>
+                        <th>Agent Status</th>
+                        <th>Unit Name</th>
+                        <th>Date Employed</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {orphanAgentRows.map((agent) => (
+                        <tr key={agent.id} onClick={() => openAgentDetails(agent.id)} tabIndex={0} role="button" onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") openAgentDetails(agent.id); }}>
+                          <td>{agent.username || "—"}</td>
+                          <td>{agent.name || "—"}</td>
+                          <td>{agent.agentType || "—"}</td>
+                          <td>{agent.status || "Active"}</td>
+                          <td>{agent.unit || "—"}</td>
+                          <td>{agent.dateEmployed ? formatDate(agent.dateEmployed) : "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {!orphanAgentRows.length && <div className="manager-empty-state">No agents found for this branch yet.</div>}
               </section>
             )
           )}
