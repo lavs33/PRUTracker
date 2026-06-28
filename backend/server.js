@@ -776,6 +776,10 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
             displayPhoto: agent?.userId?.displayPhoto || "",
             dateEmployed: agent?.userId?.dateEmployed || null,
             agentType: agent?.agentType || "",
+            sex: agent?.userId?.sex || "",
+            birthday: agent?.userId?.birthday || null,
+            age: agent?.userId?.age || null,
+            promotionHistory: Array.isArray(agent?.promotionHistory) ? agent.promotionHistory : [],
             totalTasks: 0,
             completedApproaches: 0,
             completedAppointments: 0,
@@ -838,6 +842,10 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
         displayPhoto: metrics.displayPhoto,
         dateEmployed: metrics.dateEmployed,
         agentType: metrics.agentType,
+        sex: metrics.sex,
+        birthday: metrics.birthday,
+        age: metrics.age,
+        promotionHistory: metrics.promotionHistory,
         totalTasks: metrics.totalTasks,
         completedApproaches: metrics.completedApproaches,
         completedAppointments: metrics.completedAppointments,
@@ -954,7 +962,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
   const scopedAgents = await Agent.find(agentQuery)
     .populate({
       path: "userId",
-      select: "username firstName middleName lastName displayPhoto dateEmployed role",
+      select: "username firstName middleName lastName birthday sex age displayPhoto dateEmployed role",
     })
     .populate({
       path: "unitId",
@@ -1377,6 +1385,10 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       displayPhoto: row.displayPhoto,
       dateEmployed: row.dateEmployed,
       agentType: row.agentType,
+      sex: row.sex,
+      birthday: row.birthday,
+      age: row.age,
+      promotionHistory: row.promotionHistory,
       totalTasks: row.totalTasks,
       completedApproaches: row.completedApproaches,
       completedAppointments: row.completedAppointments,

@@ -225,6 +225,20 @@ function formatScopeLabel(scopeType) {
   return "Branch";
 }
 
+function getCurrentAgeFromBirthday(value) {
+  const birthday = new Date(value);
+  if (Number.isNaN(birthday.getTime())) return null;
+  const today = new Date();
+  let age = today.getFullYear() - birthday.getFullYear();
+  const monthDiff = today.getMonth() - birthday.getMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthday.getDate())) age -= 1;
+  return age >= 0 ? age : null;
+}
+
+function formatPromotionRole(role) {
+  return String(role || "").trim() || "—";
+}
+
 function formatDateTime(value) {
   const dt = new Date(value);
   return Number.isNaN(dt.getTime())
@@ -747,6 +761,7 @@ function ManagerPortal({ roleType }) {
       agents: "Branch Units",
       kpi_assignment: "Branch KPI Assignment",
       kpi_progress: "Branch KPI Progress",
+      orphan_clients: "Orphan Client Management",
     };
     const unitPageLabels = {
       dashboard: "Unit Overview",
@@ -754,7 +769,7 @@ function ManagerPortal({ roleType }) {
       kpi_progress: "Branch KPI Progress Dashboard",
     };
     const pageLabels = normalizedRole === "BM" ? branchPageLabels : unitPageLabels;
-    if (activeView === "agents" && selectedAgentId) {
+    if ((activeView === "agents" || activeView === "orphan_clients") && selectedAgentId) {
       document.title = `${portalData?.scope?.branchCode || user?.username || normalizedRole} | Agent Details`;
       return;
     }
@@ -762,7 +777,7 @@ function ManagerPortal({ roleType }) {
   }, [activeView, normalizedRole, portalData?.scope?.branchCode, selectedAgentId, user?.username]);
 
   useEffect(() => {
-    if (normalizedRole !== "BM" && activeView === "kpi_assignment") setActiveView("dashboard");
+    if (normalizedRole !== "BM" && (activeView === "kpi_assignment" || activeView === "orphan_clients")) setActiveView("dashboard");
   }, [activeView, normalizedRole]);
 
   useEffect(() => {
@@ -818,7 +833,7 @@ function ManagerPortal({ roleType }) {
 
   useEffect(() => {
     if (!user?.id || user.role !== normalizedRole) return;
-    const kpiViews = normalizedRole === "BM" ? ["dashboard", "agents", "kpi_assignment", "kpi_progress"] : ["dashboard", "agents", "kpi_progress"];
+    const kpiViews = normalizedRole === "BM" ? ["dashboard", "agents", "kpi_assignment", "kpi_progress", "orphan_clients"] : ["dashboard", "agents", "kpi_progress"];
     if (!kpiViews.includes(activeView)) return;
 
     const controller = new AbortController();
@@ -1422,6 +1437,16 @@ function ManagerPortal({ roleType }) {
     [portalData?.agents, selectedAgentId, selectedUnitRows],
   );
 
+  const orphanAgentRows = useMemo(() =>
+    [...(portalData?.agents || [])].sort((left, right) =>
+      String(left?.username || "").localeCompare(String(right?.username || ""), undefined, { numeric: true, sensitivity: "base" })
+    ),
+    [portalData?.agents],
+  );
+
+  const selectedAgentAge = selectedAgent?.birthday ? getCurrentAgeFromBirthday(selectedAgent.birthday) : selectedAgent?.age;
+  const selectedAgentPromotionHistory = Array.isArray(selectedAgent?.promotionHistory) ? selectedAgent.promotionHistory : [];
+
   const selectedAgentKpiCards = useMemo(() => {
     if (!selectedAgent || !selectedKpiPeriod) return [];
     const kpiKeysByTab = {
@@ -1488,7 +1513,7 @@ function ManagerPortal({ roleType }) {
 
   const openAgentDetails = (agentId) => {
     setSelectedAgentId(String(agentId || ""));
-    setActiveView("agents");
+    setActiveView(activeView === "orphan_clients" ? "orphan_clients" : "agents");
     window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
   };
 
@@ -3269,6 +3294,120 @@ function ManagerPortal({ roleType }) {
                     No agents matched this search yet.
                   </div>
                 )}
+              </section>
+            )
+          )}
+
+
+          {!isLoading && !loadError && activeView === "orphan_clients" && normalizedRole === "BM" && (
+            selectedAgent ? (
+              <section className="manager-panel">
+                <nav className="manager-breadcrumb manager-breadcrumb--agent" aria-label="Orphan client agent detail breadcrumb">
+                  <button type="button" onClick={() => { setSelectedAgentId(""); setActiveView("dashboard"); window.scrollTo({ top: 0, behavior: "smooth" }); }}>{scope.branchName || selectedAgent.branch || "Branch"}</button>
+                  <span>&gt;</span>
+                  <button type="button" onClick={() => { setSelectedAgentId(""); window.scrollTo({ top: 0, behavior: "smooth" }); }}>All Agents</button>
+                  <span>&gt;</span>
+                  <strong>{selectedAgent.username || selectedAgent.name}</strong>
+                </nav>
+
+                <div className="manager-panel__head manager-agent-profile-head">
+                  <div className="manager-agent-photo-wrap">
+                    {selectedAgent.displayPhoto ? (
+                      <img src={selectedAgent.displayPhoto} alt={`${selectedAgent.name || selectedAgent.username} display`} className="manager-agent-photo" />
+                    ) : (
+                      <div className="manager-agent-photo manager-agent-photo--placeholder">{String(selectedAgent.name || selectedAgent.username || "A").charAt(0).toUpperCase()}</div>
+                    )}
+                  </div>
+                  <div>
+                    <h2>{selectedAgent.name || "Agent Details"}</h2>
+                    <p>{selectedAgent.username || "—"} • {selectedAgent.agentType || "—"} • {selectedAgent.unit || "Unassigned Unit"}</p>
+                  </div>
+                </div>
+
+                <div className="manager-agent-detail-grid manager-agent-detail-grid--profile">
+                  <article><span>Username</span><strong>{selectedAgent.username || "—"}</strong></article>
+                  <article><span>Agent Name</span><strong>{selectedAgent.name || "—"}</strong></article>
+                  <article><span>Agent Type</span><strong>{selectedAgent.agentType || "—"}</strong></article>
+                  <article><span>Unit Name</span><strong>{selectedAgent.unit || "—"}</strong></article>
+                  <article><span>Date Employed</span><strong>{selectedAgent.dateEmployed ? formatDate(selectedAgent.dateEmployed) : "—"}</strong></article>
+                  <article><span>Sex</span><strong>{selectedAgent.sex || "—"}</strong></article>
+                  <article><span>Birthday</span><strong>{selectedAgent.birthday ? formatDate(selectedAgent.birthday) : "—"}</strong></article>
+                  <article><span>Age</span><strong>{selectedAgentAge ?? "—"}</strong></article>
+                </div>
+
+                <div className="manager-section-subhead">
+                  <h3>Promotion History</h3>
+                  <p>Full promotion history recorded for this agent.</p>
+                </div>
+                {selectedAgentPromotionHistory.length ? (
+                  <div className="manager-table-wrap">
+                    <table className="manager-table">
+                      <thead>
+                        <tr>
+                          <th>Promoted Role</th>
+                          <th>Previous Role</th>
+                          <th>Date Promoted</th>
+                          <th>Manager Username</th>
+                          <th>Previous Username</th>
+                          <th>Previous Date Employed</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selectedAgentPromotionHistory.map((promotion, index) => (
+                          <tr key={`${promotion?.datePromoted || index}-${promotion?.role || "role"}`}>
+                            <td>{formatPromotionRole(promotion?.role)}</td>
+                            <td>{formatPromotionRole(promotion?.previousRole)}</td>
+                            <td>{promotion?.datePromoted ? formatDate(promotion.datePromoted) : "—"}</td>
+                            <td>{promotion?.managerUsername || "—"}</td>
+                            <td>{promotion?.previousUsername || "—"}</td>
+                            <td>{promotion?.previousDateEmployed ? formatDate(promotion.previousDateEmployed) : "—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="manager-empty-state">No promotion history recorded for this agent.</div>
+                )}
+              </section>
+            ) : (
+              <section className="manager-panel">
+                <nav className="manager-breadcrumb manager-breadcrumb--agent" aria-label="Orphan client management breadcrumb">
+                  <button type="button" onClick={() => { setActiveView("dashboard"); window.scrollTo({ top: 0, behavior: "smooth" }); }}>{scope.branchName || "Branch"}</button>
+                  <span>&gt;</span>
+                  <strong>All Agents</strong>
+                </nav>
+                <div className="manager-panel__head">
+                  <div>
+                    <h2>Orphan Client Management</h2>
+                    <p>Review all agents under {scope.branchName || "this branch"} before assigning or managing orphan client relationships.</p>
+                  </div>
+                </div>
+                <div className="manager-table-wrap">
+                  <table className="manager-table manager-table--clickable">
+                    <thead>
+                      <tr>
+                        <th>Username</th>
+                        <th>Agent Name</th>
+                        <th>Agent Type</th>
+                        <th>Unit Name</th>
+                        <th>Date Employed</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {orphanAgentRows.map((agent) => (
+                        <tr key={agent.id} onClick={() => openAgentDetails(agent.id)} tabIndex={0} role="button" onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") openAgentDetails(agent.id); }}>
+                          <td>{agent.username || "—"}</td>
+                          <td>{agent.name || "—"}</td>
+                          <td>{agent.agentType || "—"}</td>
+                          <td>{agent.unit || "—"}</td>
+                          <td>{agent.dateEmployed ? formatDate(agent.dateEmployed) : "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {!orphanAgentRows.length && <div className="manager-empty-state">No agents found for this branch yet.</div>}
               </section>
             )
           )}

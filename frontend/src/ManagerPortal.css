@@ -1329,3 +1329,60 @@
     font-size: 20px;
   }
 }
+.manager-table--clickable tbody tr {
+  cursor: pointer;
+}
+
+.manager-table--clickable tbody tr:hover,
+.manager-table--clickable tbody tr:focus {
+  background: #fff1f0;
+  outline: 2px solid rgba(218, 41, 28, 0.25);
+  outline-offset: -2px;
+}
+
+.manager-agent-profile-head {
+  align-items: center;
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.manager-agent-photo-wrap {
+  display: flex;
+  align-items: center;
+}
+
+.manager-agent-photo {
+  width: 112px;
+  height: 112px;
+  border-radius: 28px;
+  object-fit: cover;
+  border: 4px solid #fff;
+  box-shadow: 0 16px 32px rgba(153, 27, 27, 0.16);
+  background: #fee2e2;
+}
+
+.manager-agent-photo--placeholder {
+  display: grid;
+  place-items: center;
+  color: #b91c1c;
+  font-size: 42px;
+  font-weight: 900;
+}
+
+.manager-agent-detail-grid--profile {
+  margin-bottom: 24px;
+}
+
+.manager-section-subhead {
+  margin: 26px 0 14px;
+}
+
+.manager-section-subhead h3 {
+  margin: 0;
+  color: #111827;
+  font-size: 22px;
+}
+
+.manager-section-subhead p {
+  margin: 4px 0 0;
+  color: #6b7280;
+}
