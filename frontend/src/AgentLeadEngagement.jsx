@@ -1769,6 +1769,9 @@ function AgentLeadEngagement() {
       setNeedsAssessmentOutcomeActivity(nextActivityKey);
       setNeedsAssessmentCurrentActivityKey(nextActivityKey);
       setNeedsAnalysisEditMode(false);
+      window.setTimeout(() => {
+        needsFollowUpSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 0);
     } catch (err) {
       setNeedsAssessmentError(err?.message || "Failed to save needs assessment.");
     } finally {
@@ -3100,6 +3103,51 @@ function AgentLeadEngagement() {
   const previousProposalCurrentActivityRef = useRef("");
   const previousApplicationCurrentActivityRef = useRef("");
   const previousPolicyCurrentActivityRef = useRef("");
+  const subactivityTrackerRef = useRef(null);
+  const needsFollowUpSectionRef = useRef(null);
+  const lastAutoScrolledSubactivityRef = useRef("");
+
+  const currentSubactivityScrollKey = useMemo(() => {
+    if (!isViewingCurrentStage || isHistoryView || isLeadTerminal) return "";
+
+    if (showContactingPanel) return `Contacting:${contactingCurrentActivityKey}`;
+    if (showNeedsAssessmentPanel) return `Needs Assessment:${needsActivityKeyRaw}`;
+    if (showProposalPanel) return `Proposal:${proposalUiActivityKey}`;
+    if (showApplicationPanel) return `Application:${applicationUiActivityKey}`;
+    if (showPolicyIssuancePanel) return `Policy Issuance:${policyIssuanceUiActivityKey}`;
+
+    return "";
+  }, [
+    applicationUiActivityKey,
+    contactingCurrentActivityKey,
+    isHistoryView,
+    isLeadTerminal,
+    isViewingCurrentStage,
+    needsActivityKeyRaw,
+    policyIssuanceUiActivityKey,
+    proposalUiActivityKey,
+    showApplicationPanel,
+    showContactingPanel,
+    showNeedsAssessmentPanel,
+    showPolicyIssuancePanel,
+    showProposalPanel,
+  ]);
+
+  useEffect(() => {
+    if (!currentSubactivityScrollKey) {
+      lastAutoScrolledSubactivityRef.current = "";
+      return;
+    }
+
+    const previousScrollKey = lastAutoScrolledSubactivityRef.current;
+    lastAutoScrolledSubactivityRef.current = currentSubactivityScrollKey;
+
+    if (!previousScrollKey || previousScrollKey === currentSubactivityScrollKey) return;
+
+    window.requestAnimationFrame(() => {
+      subactivityTrackerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }, [currentSubactivityScrollKey]);
 
   useEffect(() => {
     syncViewedStepWithCurrent(
@@ -4570,6 +4618,13 @@ function AgentLeadEngagement() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to schedule meeting.");
 
+      const shouldStayOnContactingSchedule = Boolean(
+        addNewNeedsMeetingMode ||
+        rescheduleFollowUpNeedsMeetingMode ||
+        rescheduleFromNeedsMode ||
+        contactingRescheduleMode
+      );
+
       await refreshCurrentProgressView();
       if (addNewNeedsMeetingMode) {
         setAddNewNeedsMeetingMode(false);
@@ -4589,11 +4644,14 @@ function AgentLeadEngagement() {
           attendanceProofImageDataUrl: "",
           attendanceProofFileName: "",
         }));
-        setSelectedStageView("CURRENT");
       }
       if (contactingRescheduleMode) {
         setContactingRescheduleMode(false);
         setRescheduleOriginalMeetingAt(null);
+      }
+      if (shouldStayOnContactingSchedule) {
+        setSelectedStageView("Contacting");
+        setContactingViewedActivityKey("Schedule Meeting");
       }
     } catch (err) {
       const msg = err?.message || "Cannot connect to server. Is backend running?";
@@ -6427,7 +6485,7 @@ function AgentLeadEngagement() {
 
               {/* Main + Sidebar */}
               <div className="le-mainRow">
-                <section className="le-card">
+                <section className="le-card" ref={subactivityTrackerRef}>
                   <div className="le-cardHeader">
                     <h2 className="le-cardTitle">{mainTitle}</h2>
                     <div style={{ marginLeft: "auto", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 10 }}>
@@ -6663,6 +6721,7 @@ function AgentLeadEngagement() {
                       allowAllSteps={isHistoryView || isViewingPastStage}
                     />
                   )}
+
 
                   {showApplicationPanel && (
                     <>
@@ -8320,7 +8379,7 @@ function AgentLeadEngagement() {
                                   }}
                                   disabled={validatingContact || uiLocked || isContactingReadOnly}
                                 >
-                                  Cancel
+                                  Clear
                                 </button>
                                 <button
                                   type="button"
@@ -8478,7 +8537,7 @@ function AgentLeadEngagement() {
                                   }
                                   disabled={savingInterest}
                                 >
-                                  Cancel
+                                  Clear
                                 </button>
                                 <button type="button" className="le-btn primary" onClick={submitAssessInterest} disabled={savingInterest}>
                                   {savingInterest ? "Saving..." : "Save"}
@@ -8544,7 +8603,7 @@ function AgentLeadEngagement() {
                                 ? "Reschedule Meeting"
                                 : "Schedule Meeting"}
                             </h4>
-                            {needsFollowUpDecisionSaved && savedNeedsFollowUpRequired === "YES" && !hasAddedFollowUpNeedsMeeting && !addNewNeedsMeetingMode ? (
+                            {!isHistoryView && needsFollowUpDecisionSaved && savedNeedsFollowUpRequired === "YES" && !hasAddedFollowUpNeedsMeeting && !addNewNeedsMeetingMode ? (
                               <button
                                 type="button"
                                 className="le-btn secondary"
@@ -8796,7 +8855,7 @@ function AgentLeadEngagement() {
                                   }}
                                   disabled={savingMeeting}
                                 >
-                                  Cancel
+                                  Clear
                                 </button>
                                 <button type="button" className="le-btn primary" onClick={submitScheduleMeeting} disabled={savingMeeting}>
                                   {savingMeeting ? "Saving..." : "Save Meeting"}
@@ -10065,19 +10124,29 @@ function AgentLeadEngagement() {
                                 <button
                                   type="button"
                                   className="le-btn secondary"
-                                  onClick={() => {
+                                  onClick={async () => {
                                     setNeedsAssessmentError("");
                                     setNeedsAssessmentSavedAt("");
-                                    setNeedsAttendanceProofEditMode(true);
+                                    if (canRequestNeedsAttendanceProofEdit) {
+                                      setNeedsAttendanceProofEditMode(false);
+                                      await refreshCurrentProgressView({ includeNeedsAssessment: true });
+                                      setNeedsAssessmentViewedActivityKey(needsActivityKeyRaw);
+                                      return;
+                                    }
+                                    setNeedsAttendanceProofEditMode(false);
+                                    if (needsAttendanceProofInputRef.current) {
+                                      needsAttendanceProofInputRef.current.value = "";
+                                    }
                                     setNeedsAssessmentForm((prev) => ({
                                       ...prev,
+                                      attendanceChoice: "",
                                       attendanceProofImageDataUrl: "",
                                       attendanceProofFileName: "",
                                     }));
                                   }}
                                   disabled={needsAssessmentSaving}
                                 >
-                                  Clear
+                                  {canRequestNeedsAttendanceProofEdit ? "Cancel" : "Clear"}
                                 </button>
                                 <button
                                   type="button"
@@ -10638,7 +10707,7 @@ function AgentLeadEngagement() {
                               ) : null}
 
                               <div className="le-subsectionCard">
-                                <div className="le-formRow"><label className="le-label">Requested Frequency of Premium Payment *</label><select className="le-input" value={needsAssessmentForm.needsPriorities?.productSelection?.requestedFrequency || "Monthly"} onChange={(e) => { const v = e.target.value; const currentRequested = String(needsAssessmentForm.needsPriorities?.productSelection?.requestedPremiumPayment ?? "").trim(); const nextRequested = currentRequested === "" ? computeRequestedPremiumFromMin(needsAssessmentForm.needsPriorities?.minPremium, v) : currentRequested; updateNeedsPriorities("productSelection", { ...(needsAssessmentForm.needsPriorities?.productSelection || {}), requestedFrequency: v, requestedPremiumPayment: nextRequested }); }} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}><option value="Monthly">Monthly</option><option value="Quarterly">Quarterly</option><option value="Half-yearly">Half-yearly</option><option value="Yearly">Yearly</option></select></div>
+                                <div className="le-formRow"><label className="le-label">Requested Frequency of Premium Payment *</label><select className="le-input" value={needsAssessmentForm.needsPriorities?.productSelection?.requestedFrequency || "Monthly"} onChange={(e) => { const v = e.target.value; updateNeedsPriorities("productSelection", { ...(needsAssessmentForm.needsPriorities?.productSelection || {}), requestedFrequency: v, requestedPremiumPayment: computeRequestedPremiumFromMin(needsAssessmentForm.needsPriorities?.minPremium, v) }); }} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}><option value="Monthly">Monthly</option><option value="Quarterly">Quarterly</option><option value="Half-yearly">Half-yearly</option><option value="Yearly">Yearly</option></select></div>
                                 {renderNeedsAssessmentError("requestedFrequency")}
                                 <div className="le-formRow"><label className="le-label">Requested Premium Payment (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.productSelection?.requestedPremiumPayment ?? ""} onChange={(e) => updateNeedsPriorities("productSelection", { ...(needsAssessmentForm.needsPriorities?.productSelection || {}), requestedPremiumPayment: e.target.value })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
                                 {renderNeedsAssessmentError("requestedPremiumPayment")}
@@ -10663,6 +10732,9 @@ function AgentLeadEngagement() {
                                   if (needsAnalysisDetailsSaved) {
                                     setNeedsAnalysisEditMode(false);
                                     fetchNeedsAssessment();
+                                    window.requestAnimationFrame(() => {
+                                      subactivityTrackerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+                                    });
                                     return;
                                   }
                                   setNeedsAssessmentSavedAt("");
@@ -10842,7 +10914,7 @@ function AgentLeadEngagement() {
                         <div className="le-block"><p className="le-muted" style={{ marginTop: 8 }}>No details were saved for this subactivity in the selected engagement cycle.</p></div>
                       ) : null}
                       {showNeedsAssessmentPanel && isNeedsAnalysisViewed && (!isHistoryView || hasNeedsAnalysisSaved) && !needsAnalysisEditMode && ["Perform Needs Analysis", "Schedule Proposal Presentation"].includes(String(needsAssessmentOutcomeActivity || "").trim()) && (
-                          <div className="le-block" style={{ marginTop: 16 }}>
+                          <div className="le-block" style={{ marginTop: 16 }} ref={needsFollowUpSectionRef}>
                             <div className="le-inlineActionRow">
                               <h4 className="le-blockTitle" style={{ fontSize: 16 }}>Schedule Further Needs Assessment Meet</h4>
                               {isNeedsAssessmentCurrentStageEditable && needsFollowUpDecisionSaved && !needsFollowUpDecisionEditMode ? (
