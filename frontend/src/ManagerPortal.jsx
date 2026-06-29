@@ -225,6 +225,27 @@ function formatScopeLabel(scopeType) {
   return "Branch";
 }
 
+function getCurrentAgeFromBirthday(value) {
+  const birthday = new Date(value);
+  if (Number.isNaN(birthday.getTime())) return null;
+  const today = new Date();
+  let age = today.getFullYear() - birthday.getFullYear();
+  const monthDiff = today.getMonth() - birthday.getMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthday.getDate())) age -= 1;
+  return age >= 0 ? age : null;
+}
+
+function formatPromotionRole(role) {
+  return String(role || "").trim() || "—";
+}
+
+function getAgentStatusClass(status) {
+  const normalized = String(status || "Active").trim().toLowerCase();
+  if (normalized === "on long leave") return "leave";
+  if (normalized === "retired") return "retired";
+  return "active";
+}
+
 function formatDateTime(value) {
   const dt = new Date(value);
   return Number.isNaN(dt.getTime())
@@ -675,9 +696,27 @@ function ManagerPortal({ roleType }) {
     .toUpperCase();
   const agentTableTopScrollRef = useRef(null);
   const agentTableScrollRef = useRef(null);
+  const orphanTableTopScrollRef = useRef(null);
+  const orphanTableScrollRef = useRef(null);
   const [activeView, setActiveView] = useState("dashboard");
   const [agentSearch, setAgentSearch] = useState("");
   const [agentSort, setAgentSort] = useState("usernameAsc");
+  const [orphanAgentSearch, setOrphanAgentSearch] = useState("");
+  const [orphanAgentSort, setOrphanAgentSort] = useState("usernameAsc");
+  const [orphanAgentTypeFilter, setOrphanAgentTypeFilter] = useState("ALL");
+  const [orphanUnitFilter, setOrphanUnitFilter] = useState("ALL");
+  const [orphanStatusFilter, setOrphanStatusFilter] = useState("ALL");
+  const [orphanAgentAction, setOrphanAgentAction] = useState("");
+  const [orphanLeaveStartDate, setOrphanLeaveStartDate] = useState("");
+  const [orphanLeaveEndDate, setOrphanLeaveEndDate] = useState("");
+  const [orphanLeaveApplicationForm, setOrphanLeaveApplicationForm] = useState(null);
+  const [orphanApprovedLeaveProof, setOrphanApprovedLeaveProof] = useState(null);
+  const [orphanLongLeaveFieldErrors, setOrphanLongLeaveFieldErrors] = useState({});
+  const [orphanLongLeaveId, setOrphanLongLeaveId] = useState("");
+  const [orphanLongLeaveSaving, setOrphanLongLeaveSaving] = useState(false);
+  const [orphanLongLeaveStep, setOrphanLongLeaveStep] = useState(1);
+  const [includeOngoingPolicyholders, setIncludeOngoingPolicyholders] = useState(false);
+  const [confirmOrphanTransfer, setConfirmOrphanTransfer] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState("");
   const [selectedUnitName, setSelectedUnitName] = useState("");
   const [unitPerformanceTab, setUnitPerformanceTab] = useState("clients");
@@ -707,9 +746,7 @@ function ManagerPortal({ roleType }) {
   const [sideNavCollapsed, setSideNavCollapsed] = useState(false);
   const [refreshCount, setRefreshCount] = useState(0);
 
-  const syncAgentTableScroll = (source) => {
-    const topScroller = agentTableTopScrollRef.current;
-    const tableScroller = agentTableScrollRef.current;
+  const syncScrollPair = (source, topScroller, tableScroller) => {
     if (!topScroller || !tableScroller) return;
     const sourceScroller = source === "top" ? topScroller : tableScroller;
     const targetScroller = source === "top" ? tableScroller : topScroller;
@@ -717,6 +754,14 @@ function ManagerPortal({ roleType }) {
     const targetMax = Math.max(0, targetScroller.scrollWidth - targetScroller.clientWidth);
     const nextLeft = (sourceScroller.scrollLeft / sourceMax) * targetMax;
     if (Math.abs(targetScroller.scrollLeft - nextLeft) > 1) targetScroller.scrollLeft = nextLeft;
+  };
+
+  const syncAgentTableScroll = (source) => {
+    syncScrollPair(source, agentTableTopScrollRef.current, agentTableScrollRef.current);
+  };
+
+  const syncOrphanTableScroll = (source) => {
+    syncScrollPair(source, orphanTableTopScrollRef.current, orphanTableScrollRef.current);
   };
 
   const user = useMemo(() => {
@@ -747,6 +792,7 @@ function ManagerPortal({ roleType }) {
       agents: "Branch Units",
       kpi_assignment: "Branch KPI Assignment",
       kpi_progress: "Branch KPI Progress",
+      orphan_clients: "Orphan Client Management",
     };
     const unitPageLabels = {
       dashboard: "Unit Overview",
@@ -754,7 +800,7 @@ function ManagerPortal({ roleType }) {
       kpi_progress: "Branch KPI Progress Dashboard",
     };
     const pageLabels = normalizedRole === "BM" ? branchPageLabels : unitPageLabels;
-    if (activeView === "agents" && selectedAgentId) {
+    if ((activeView === "agents" || activeView === "orphan_clients") && selectedAgentId) {
       document.title = `${portalData?.scope?.branchCode || user?.username || normalizedRole} | Agent Details`;
       return;
     }
@@ -762,7 +808,7 @@ function ManagerPortal({ roleType }) {
   }, [activeView, normalizedRole, portalData?.scope?.branchCode, selectedAgentId, user?.username]);
 
   useEffect(() => {
-    if (normalizedRole !== "BM" && activeView === "kpi_assignment") setActiveView("dashboard");
+    if (normalizedRole !== "BM" && (activeView === "kpi_assignment" || activeView === "orphan_clients")) setActiveView("dashboard");
   }, [activeView, normalizedRole]);
 
   useEffect(() => {
@@ -818,7 +864,7 @@ function ManagerPortal({ roleType }) {
 
   useEffect(() => {
     if (!user?.id || user.role !== normalizedRole) return;
-    const kpiViews = normalizedRole === "BM" ? ["dashboard", "agents", "kpi_assignment", "kpi_progress"] : ["dashboard", "agents", "kpi_progress"];
+    const kpiViews = normalizedRole === "BM" ? ["dashboard", "agents", "kpi_assignment", "kpi_progress", "orphan_clients"] : ["dashboard", "agents", "kpi_progress"];
     if (!kpiViews.includes(activeView)) return;
 
     const controller = new AbortController();
@@ -1422,6 +1468,187 @@ function ManagerPortal({ roleType }) {
     [portalData?.agents, selectedAgentId, selectedUnitRows],
   );
 
+  const orphanAgentTypeOptions = useMemo(() =>
+    [...new Set((portalData?.agents || []).map((agent) => String(agent?.agentType || "").trim()).filter(Boolean))]
+      .sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" })),
+    [portalData?.agents],
+  );
+
+  const orphanUnitOptions = useMemo(() =>
+    [...new Set((portalData?.agents || []).map((agent) => String(agent?.unit || "").trim()).filter(Boolean))]
+      .sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" })),
+    [portalData?.agents],
+  );
+
+  const orphanStatusOptions = ["Active", "On Long Leave", "Retired"];
+
+  const orphanAgentRows = useMemo(() => {
+    const searchedAgents = buildFilter(portalData?.agents || [], orphanAgentSearch, ["username", "name"]);
+    const filteredByDropdowns = searchedAgents.filter((agent) => {
+      const agentType = String(agent?.agentType || "");
+      const unit = String(agent?.unit || "");
+      const status = String(agent?.status || "Active");
+      return (orphanAgentTypeFilter === "ALL" || agentType === orphanAgentTypeFilter)
+        && (orphanUnitFilter === "ALL" || unit === orphanUnitFilter)
+        && (orphanStatusFilter === "ALL" || status === orphanStatusFilter);
+    });
+
+    const compareText = (left, right, key) => String(left?.[key] || "").localeCompare(String(right?.[key] || ""), undefined, { numeric: true, sensitivity: "base" });
+    const compareDate = (left, right, key) => {
+      const leftTime = new Date(left?.[key] || 0).getTime() || 0;
+      const rightTime = new Date(right?.[key] || 0).getTime() || 0;
+      return leftTime - rightTime;
+    };
+    const sorters = {
+      usernameAsc: (left, right) => compareText(left, right, "username"),
+      usernameDesc: (left, right) => compareText(left, right, "username") * -1,
+      nameAsc: (left, right) => compareText(left, right, "name"),
+      nameDesc: (left, right) => compareText(left, right, "name") * -1,
+      dateEmployedAsc: (left, right) => compareDate(left, right, "dateEmployed"),
+      dateEmployedDesc: (left, right) => compareDate(left, right, "dateEmployed") * -1,
+    };
+
+    return [...filteredByDropdowns].sort((left, right) => (sorters[orphanAgentSort] || sorters.usernameAsc)(left, right) || compareText(left, right, "username"));
+  }, [orphanAgentSearch, orphanAgentSort, orphanAgentTypeFilter, orphanStatusFilter, orphanUnitFilter, portalData?.agents]);
+
+  const clearOrphanAgentControls = () => {
+    setOrphanAgentSort("usernameAsc");
+    setOrphanAgentTypeFilter("ALL");
+    setOrphanUnitFilter("ALL");
+    setOrphanStatusFilter("ALL");
+  };
+
+  const todayDateInputValue = useMemo(() => new Date().toISOString().slice(0, 10), []);
+
+  const orphanLeaveEndDateError = useMemo(() => {
+    if (orphanAgentAction !== "long_leave" || !orphanLeaveStartDate || !orphanLeaveEndDate) return "";
+    const start = new Date(`${orphanLeaveStartDate}T00:00:00`);
+    const end = new Date(`${orphanLeaveEndDate}T00:00:00`);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return "";
+    const dayDifference = Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+    return dayDifference <= 7 ? "Leave end date should be beyond 7 days to be marked as on long leave." : "";
+  }, [orphanAgentAction, orphanLeaveEndDate, orphanLeaveStartDate]);
+
+  const isLongLeaveDetailsValid = orphanAgentAction === "long_leave"
+    && orphanLeaveStartDate
+    && orphanLeaveEndDate
+    && !orphanLeaveEndDateError;
+
+  const orphanProspectsWithActiveLeads = selectedAgent?.orphanTransferProspects || [];
+  const orphanPolicyholdersWithOngoingPolicies = selectedAgent?.orphanTransferPolicyholders || [];
+
+  const readOrphanLeaveFile = (file, field, validator) => {
+    if (!file) return;
+    const validationError = validator(file);
+    if (validationError) {
+      setOrphanLongLeaveFieldErrors((current) => ({ ...current, [field]: validationError }));
+      if (field === "leaveApplicationForm") setOrphanLeaveApplicationForm(null);
+      if (field === "approvedLeaveProof") setOrphanApprovedLeaveProof(null);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const nextFile = {
+        fileName: file.name,
+        mimeType: file.type,
+        dataUrl: String(reader.result || ""),
+        size: file.size,
+      };
+      if (field === "leaveApplicationForm") setOrphanLeaveApplicationForm(nextFile);
+      if (field === "approvedLeaveProof") setOrphanApprovedLeaveProof(nextFile);
+      setOrphanLongLeaveFieldErrors((current) => ({ ...current, [field]: "" }));
+    };
+    reader.onerror = () => setOrphanLongLeaveFieldErrors((current) => ({ ...current, [field]: "Failed to read uploaded file." }));
+    reader.readAsDataURL(file);
+  };
+
+  const validateLongLeaveDetails = () => {
+    const errors = {};
+    if (!orphanLeaveStartDate) errors.leaveStartDate = "Leave start date is required.";
+    if (!orphanLeaveEndDate) errors.leaveEndDate = "Leave end date is required.";
+    if (orphanLeaveEndDateError) errors.leaveEndDate = orphanLeaveEndDateError;
+    if (!orphanLeaveApplicationForm) errors.leaveApplicationForm = "Leave application form PDF is required.";
+    if (!orphanApprovedLeaveProof) errors.approvedLeaveProof = "Proof of approved leave image is required.";
+    setOrphanLongLeaveFieldErrors(errors);
+    return !Object.values(errors).some(Boolean);
+  };
+
+  const saveLongLeaveDetails = async () => {
+    if (!selectedAgent?.id || !validateLongLeaveDetails()) return false;
+    setOrphanLongLeaveSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/manager/agents/${selectedAgent.id}/long-leave`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          longLeaveId: orphanLongLeaveId || undefined,
+          leaveStartDate: orphanLeaveStartDate,
+          leaveEndDate: orphanLeaveEndDate,
+          leaveApplicationForm: orphanLeaveApplicationForm,
+          approvedLeaveProof: orphanApprovedLeaveProof,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        if (data?.field) setOrphanLongLeaveFieldErrors((current) => ({ ...current, [data.field]: data.message || "Invalid value." }));
+        throw new Error(data?.message || "Failed to save long leave details.");
+      }
+      setOrphanLongLeaveId(data?.longLeave?._id || orphanLongLeaveId);
+      return true;
+    } catch (err) {
+      if (!err?.message) setOrphanLongLeaveFieldErrors((current) => ({ ...current, form: "Failed to save long leave details." }));
+      else setOrphanLongLeaveFieldErrors((current) => ({ ...current, form: err.message }));
+      return false;
+    } finally {
+      setOrphanLongLeaveSaving(false);
+    }
+  };
+
+  const goToNextLongLeaveStep = async () => {
+    if (orphanLongLeaveStep === 1) {
+      const saved = await saveLongLeaveDetails();
+      if (!saved) return;
+    }
+    if (orphanLongLeaveStep === 2 && !confirmOrphanTransfer) return;
+    setOrphanLongLeaveStep((current) => Math.min(3, current + 1));
+  };
+
+  const openOrphanAgentAction = (action) => {
+    setOrphanAgentAction(action);
+    setOrphanLeaveStartDate("");
+    setOrphanLeaveEndDate("");
+    setOrphanLeaveApplicationForm(null);
+    setOrphanApprovedLeaveProof(null);
+    setOrphanLongLeaveFieldErrors({});
+    setOrphanLongLeaveId("");
+    setOrphanLongLeaveStep(1);
+    setIncludeOngoingPolicyholders(false);
+    setConfirmOrphanTransfer(false);
+    window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+  };
+
+  const closeOrphanAgentAction = () => {
+    setOrphanAgentAction("");
+    setOrphanLeaveStartDate("");
+    setOrphanLeaveEndDate("");
+    setOrphanLeaveApplicationForm(null);
+    setOrphanApprovedLeaveProof(null);
+    setOrphanLongLeaveFieldErrors({});
+    setOrphanLongLeaveId("");
+    setOrphanLongLeaveStep(1);
+    setIncludeOngoingPolicyholders(false);
+    setConfirmOrphanTransfer(false);
+    window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+  };
+
+  const selectedAgentAge = selectedAgent?.birthday ? getCurrentAgeFromBirthday(selectedAgent.birthday) : selectedAgent?.age;
+  const selectedAgentPromotionHistory = useMemo(() =>
+    (Array.isArray(selectedAgent?.promotionHistory) ? selectedAgent.promotionHistory : [])
+      .slice()
+      .sort((left, right) => (new Date(right?.datePromoted || 0).getTime() || 0) - (new Date(left?.datePromoted || 0).getTime() || 0)),
+    [selectedAgent?.promotionHistory],
+  );
+
   const selectedAgentKpiCards = useMemo(() => {
     if (!selectedAgent || !selectedKpiPeriod) return [];
     const kpiKeysByTab = {
@@ -1488,7 +1715,8 @@ function ManagerPortal({ roleType }) {
 
   const openAgentDetails = (agentId) => {
     setSelectedAgentId(String(agentId || ""));
-    setActiveView("agents");
+    setOrphanAgentAction("");
+    setActiveView(activeView === "orphan_clients" ? "orphan_clients" : "agents");
     window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
   };
 
@@ -2701,7 +2929,10 @@ function ManagerPortal({ roleType }) {
 
                 <div className="manager-panel__head">
                   <div>
-                    <h2>{selectedAgent.name}</h2>
+                    <h2 className="manager-agent-title">
+                      <span>{selectedAgent.name}</span>
+                      <span className={`manager-agent-status-pill manager-agent-status-pill--${getAgentStatusClass(selectedAgent.status)}`}>{selectedAgent.status || "Active"}</span>
+                    </h2>
                     <p>
                       Agent Type: {selectedAgent.agentType || "—"} • Date Employed: {selectedAgent.dateEmployed ? formatDate(selectedAgent.dateEmployed) : "—"}
                     </p>
@@ -3269,6 +3500,361 @@ function ManagerPortal({ roleType }) {
                     No agents matched this search yet.
                   </div>
                 )}
+              </section>
+            )
+          )}
+
+
+          {!isLoading && !loadError && activeView === "orphan_clients" && normalizedRole === "BM" && (
+            selectedAgent ? (
+              <section className="manager-panel">
+                <nav className="manager-breadcrumb manager-breadcrumb--agent" aria-label="Orphan client agent detail breadcrumb">
+                  <button type="button" onClick={() => { setSelectedAgentId(""); setActiveView("dashboard"); window.scrollTo({ top: 0, behavior: "smooth" }); }}>{scope.branchName || selectedAgent.branch || "Branch"}</button>
+                  <span>&gt;</span>
+                  <button type="button" onClick={() => { setSelectedAgentId(""); setOrphanAgentAction(""); window.scrollTo({ top: 0, behavior: "smooth" }); }}>All Agents</button>
+                  <span>&gt;</span>
+                  {orphanAgentAction ? (
+                    <>
+                      <button type="button" onClick={closeOrphanAgentAction}>{selectedAgent.username || selectedAgent.name}</button>
+                      <span>&gt;</span>
+                      <strong>{orphanAgentAction === "long_leave" ? "Mark as On Long Leave" : "Mark as Retired"}</strong>
+                    </>
+                  ) : (
+                    <strong>{selectedAgent.username || selectedAgent.name}</strong>
+                  )}
+                </nav>
+
+                {orphanAgentAction ? (
+                  <div className="manager-orphan-action-page">
+                    <div className="manager-panel__head">
+                      <div>
+                        <h2>{orphanAgentAction === "long_leave" ? "Mark as On Long Leave" : "Mark as Retired"}</h2>
+                        <p>{selectedAgent.name || selectedAgent.username} • {selectedAgent.username || "—"}</p>
+                      </div>
+                    </div>
+
+                    {orphanAgentAction === "long_leave" && (
+                      <>
+                        <div className="manager-stepper" aria-label="Mark as On Long Leave steps">
+                          {[
+                            [1, "Record Long Leave Details"],
+                            [2, "Confirm Orphan Clients"],
+                            [3, "Endorse Orphan Clients"],
+                          ].map(([step, label]) => (
+                            <button
+                              key={step}
+                              type="button"
+                              className={orphanLongLeaveStep === step ? "active" : ""}
+                              disabled={step > 1 && !isLongLeaveDetailsValid}
+                              onClick={() => setOrphanLongLeaveStep(step)}
+                            >
+                              <span>Step {step}</span>
+                              <strong>{label}</strong>
+                            </button>
+                          ))}
+                        </div>
+
+                        {orphanLongLeaveStep === 1 && (
+                          <div className="manager-orphan-action-form">
+                            <label>
+                              <span>Leave Start Date</span>
+                              <input type="date" min={todayDateInputValue} value={orphanLeaveStartDate} onChange={(e) => { setOrphanLeaveStartDate(e.target.value); setConfirmOrphanTransfer(false); setOrphanLongLeaveFieldErrors((current) => ({ ...current, leaveStartDate: "" })); }} required />
+                              {orphanLongLeaveFieldErrors.leaveStartDate && <small className="manager-field-error">{orphanLongLeaveFieldErrors.leaveStartDate}</small>}
+                            </label>
+                            <label>
+                              <span>Leave End Date</span>
+                              <input type="date" min={orphanLeaveStartDate || todayDateInputValue} value={orphanLeaveEndDate} onChange={(e) => { setOrphanLeaveEndDate(e.target.value); setConfirmOrphanTransfer(false); setOrphanLongLeaveFieldErrors((current) => ({ ...current, leaveEndDate: "" })); }} required />
+                              {(orphanLeaveEndDateError || orphanLongLeaveFieldErrors.leaveEndDate) && <small className="manager-field-error">{orphanLeaveEndDateError || orphanLongLeaveFieldErrors.leaveEndDate}</small>}
+                            </label>
+                            <label className="manager-file-upload">
+                              <span>Leave Application Form (PDF)</span>
+                              <input type="file" accept="application/pdf,.pdf" onChange={(e) => readOrphanLeaveFile(e.target.files?.[0], "leaveApplicationForm", (file) => (file.type === "application/pdf" || /\.pdf$/i.test(file.name || "")) ? "" : "Leave application form must be a PDF file.")} required />
+                              {orphanLongLeaveFieldErrors.leaveApplicationForm && <small className="manager-field-error">{orphanLongLeaveFieldErrors.leaveApplicationForm}</small>}
+                            </label>
+                            {orphanLeaveApplicationForm && (
+                              <div className="manager-file-preview manager-file-preview--wide">
+                                <strong>{orphanLeaveApplicationForm.fileName}</strong>
+                                <span>{orphanLeaveApplicationForm.mimeType || "application/pdf"}</span>
+                                <small>{(orphanLeaveApplicationForm.size / 1024).toFixed(1)} KB</small>
+                                <iframe title="Leave application form preview" src={orphanLeaveApplicationForm.dataUrl} />
+                              </div>
+                            )}
+                            <label className="manager-file-upload">
+                              <span>Proof of Approved Leave (JPG/JPEG/PNG)</span>
+                              <input type="file" accept="image/jpeg,image/png,.jpg,.jpeg,.png" onChange={(e) => readOrphanLeaveFile(e.target.files?.[0], "approvedLeaveProof", (file) => /^image\/(?:jpeg|png)$/i.test(file.type || "") || /\.(jpe?g|png)$/i.test(file.name || "") ? "" : "Proof of approved leave must be a JPG, JPEG, or PNG image.")} required />
+                              {orphanLongLeaveFieldErrors.approvedLeaveProof && <small className="manager-field-error">{orphanLongLeaveFieldErrors.approvedLeaveProof}</small>}
+                            </label>
+                            {orphanLongLeaveFieldErrors.form && <small className="manager-field-error">{orphanLongLeaveFieldErrors.form}</small>}
+                            {orphanApprovedLeaveProof && (
+                              <div className="manager-file-preview manager-file-preview--wide">
+                                <strong>{orphanApprovedLeaveProof.fileName}</strong>
+                                <span>{orphanApprovedLeaveProof.mimeType || "image"}</span>
+                                <small>{(orphanApprovedLeaveProof.size / 1024).toFixed(1)} KB</small>
+                                <img src={orphanApprovedLeaveProof.dataUrl} alt="Proof of approved leave preview" />
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {orphanLongLeaveStep === 2 && (
+                          <div className="manager-orphan-confirm-step">
+                            <div className="manager-section-subhead">
+                              <h3>Confirm Orphan Clients</h3>
+                              <p>Prospects and selected policyholders affected by this long leave.</p>
+                            </div>
+
+                            <h4>Prospects with Active Leads</h4>
+                            <div className="manager-promotion-table-wrap">
+                              <table className="manager-table manager-table--promotion-history">
+                                <thead>
+                                  <tr>
+                                    <th>Prospect Code</th>
+                                    <th>Name</th>
+                                    <th>Market Type</th>
+                                    <th>Prospect Type</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {orphanProspectsWithActiveLeads.map((prospect) => (
+                                    <tr key={prospect.id}>
+                                      <td>{prospect.prospectCode || "—"}</td>
+                                      <td>{prospect.name || "—"}</td>
+                                      <td>{prospect.marketType || "—"}</td>
+                                      <td>{prospect.prospectType || "—"}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                            {!orphanProspectsWithActiveLeads.length && <div className="manager-empty-state">No prospects with active leads found for this agent.</div>}
+
+                            <label className="manager-toggle-line">
+                              <input type="checkbox" checked={includeOngoingPolicyholders} onChange={(e) => { setIncludeOngoingPolicyholders(e.target.checked); setConfirmOrphanTransfer(false); }} />
+                              <span>Allow policyholders with ongoing policies transfer</span>
+                            </label>
+
+                            {includeOngoingPolicyholders && (
+                              <>
+                                <h4>Policyholders with Ongoing Policies</h4>
+                                <div className="manager-promotion-table-wrap">
+                                  <table className="manager-table manager-table--promotion-history">
+                                    <thead>
+                                      <tr>
+                                        <th>Policyholder Code</th>
+                                        <th>Product Name</th>
+                                        <th>Policy Number</th>
+                                        <th>Status</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {orphanPolicyholdersWithOngoingPolicies.map((policyholder) => (
+                                        <tr key={policyholder.id}>
+                                          <td>{policyholder.policyholderCode || "—"}</td>
+                                          <td>{policyholder.productName || "—"}</td>
+                                          <td>{policyholder.policyNumber || "—"}</td>
+                                          <td>{policyholder.status || "—"}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                                {!orphanPolicyholdersWithOngoingPolicies.length && <div className="manager-empty-state">No policyholders with ongoing policies found for this agent.</div>}
+                              </>
+                            )}
+
+                            <label className="manager-toggle-line manager-toggle-line--confirm">
+                              <input type="checkbox" checked={confirmOrphanTransfer} onChange={(e) => setConfirmOrphanTransfer(e.target.checked)} />
+                              <span>Confirm transfer of orphaned clients by prospects with active leads{includeOngoingPolicyholders ? " and policyholders with ongoing policies" : ""}.</span>
+                            </label>
+                          </div>
+                        )}
+
+                        {orphanLongLeaveStep === 3 && (
+                          <div className="manager-orphan-confirm-step">
+                            <div className="manager-section-subhead">
+                              <h3>Endorse Orphan Clients</h3>
+                              <p>Final step placeholder for the endorsement workflow.</p>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
+
+                    {orphanAgentAction === "retired" && (
+                      <div className="manager-orphan-action-form">
+                        <p className="manager-filter-note">Review the agent details before marking this agent as retired. No save behavior is attached yet.</p>
+                      </div>
+                    )}
+
+                    <div className="manager-orphan-action-buttons">
+                      <button type="button" className="manager-refresh-btn" onClick={closeOrphanAgentAction}>Cancel</button>
+                      {orphanAgentAction === "long_leave" && orphanLongLeaveStep < 3 ? (
+                        <button
+                          type="button"
+                          className="manager-refresh-btn"
+                          disabled={orphanLongLeaveSaving || (orphanLongLeaveStep === 1 ? Boolean(orphanLeaveEndDateError) : !confirmOrphanTransfer)}
+                          onClick={goToNextLongLeaveStep}
+                        >
+                          {orphanLongLeaveSaving ? "Saving..." : (orphanLongLeaveStep === 1 && orphanLongLeaveId ? "Save Details" : "Next")}
+                        </button>
+                      ) : (
+                        <button type="button" className="manager-refresh-btn" disabled={orphanAgentAction === "long_leave" && !confirmOrphanTransfer}>
+                          {orphanAgentAction === "long_leave" ? "Mark as On Long Leave" : "Mark as Retired"}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                <div className="manager-panel__head manager-agent-profile-head">
+                  <div className="manager-agent-photo-wrap">
+                    {selectedAgent.displayPhoto ? (
+                      <img src={selectedAgent.displayPhoto} alt={`${selectedAgent.name || selectedAgent.username} display`} className="manager-agent-photo" />
+                    ) : (
+                      <div className="manager-agent-photo manager-agent-photo--placeholder">{String(selectedAgent.name || selectedAgent.username || "A").charAt(0).toUpperCase()}</div>
+                    )}
+                  </div>
+                  <div>
+                    <h2 className="manager-agent-title">
+                      <span>{selectedAgent.name || "Agent Details"}</span>
+                      <span className={`manager-agent-status-pill manager-agent-status-pill--${getAgentStatusClass(selectedAgent.status)}`}>{selectedAgent.status || "Active"}</span>
+                    </h2>
+                    <p>{selectedAgent.username || "—"} • {selectedAgent.agentType || "—"} • {selectedAgent.unit || "Unassigned Unit"}</p>
+                  </div>
+                  <div className="manager-orphan-agent-actions">
+                    <button type="button" className="manager-refresh-btn" onClick={() => openOrphanAgentAction("long_leave")} disabled={selectedAgent.status === "On Long Leave" || selectedAgent.status === "Retired"}>Mark as On Long Leave</button>
+                    <button type="button" className="manager-refresh-btn" onClick={() => openOrphanAgentAction("retired")} disabled={selectedAgent.status === "Retired"}>Mark as Retired</button>
+                  </div>
+                </div>
+
+                <div className="manager-agent-detail-grid manager-agent-detail-grid--profile">
+                  <article><span>Sex</span><strong>{selectedAgent.sex || "—"}</strong></article>
+                  <article><span>Birthday</span><strong>{selectedAgent.birthday ? formatDate(selectedAgent.birthday) : "—"}</strong></article>
+                  <article><span>Age</span><strong>{selectedAgentAge ?? "—"}</strong></article>
+                  <article><span>Date Employed as Agent</span><strong>{selectedAgent.dateEmployed ? formatDate(selectedAgent.dateEmployed) : "—"}</strong></article>
+                </div>
+
+                <div className="manager-section-subhead">
+                  <h3>Promotion History</h3>
+                  <p>Full promotion history recorded for this agent.</p>
+                </div>
+                {selectedAgentPromotionHistory.length ? (
+                  <div className="manager-promotion-table-wrap">
+                    <table className="manager-table manager-table--promotion-history">
+                      <thead>
+                        <tr>
+                          <th>Promoted Role</th>
+                          <th>Date Promoted</th>
+                          <th>Manager Username</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selectedAgentPromotionHistory.map((promotion, index) => (
+                          <tr key={`${promotion?.datePromoted || index}-${promotion?.role || "role"}`}>
+                            <td>{formatPromotionRole(promotion?.role)}</td>
+                            <td>{promotion?.datePromoted ? formatDate(promotion.datePromoted) : "—"}</td>
+                            <td>{promotion?.managerUsername || "—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="manager-empty-state">No promotion history recorded for this agent.</div>
+                )}
+                  </>
+                )}
+              </section>
+            ) : (
+              <section className="manager-panel">
+                <nav className="manager-breadcrumb manager-breadcrumb--agent" aria-label="Orphan client management breadcrumb">
+                  <button type="button" onClick={() => { setActiveView("dashboard"); window.scrollTo({ top: 0, behavior: "smooth" }); }}>{scope.branchName || "Branch"}</button>
+                  <span>&gt;</span>
+                  <strong>All Agents</strong>
+                </nav>
+                <div className="manager-panel__head manager-panel__head--orphan">
+                  <div>
+                    <h2 className="manager-orphan-title">Orphan Client Management</h2>
+                    <p>Review all agents under {scope.branchName || "this branch"} before managing orphan client relationships.</p>
+                  </div>
+                </div>
+                <div className="manager-toolbar manager-toolbar--orphan">
+                  <div className="manager-toolbar__filters">
+                    <label className="manager-search manager-orphan-search" htmlFor="manager-orphan-agent-search">
+                      <FaSearch size={14} />
+                      <input
+                        id="manager-orphan-agent-search"
+                        type="search"
+                        placeholder="Search by username or agent name"
+                        value={orphanAgentSearch}
+                        onChange={(e) => setOrphanAgentSearch(e.target.value)}
+                      />
+                    </label>
+                    <label className="manager-select manager-orphan-control manager-orphan-control--type" htmlFor="manager-orphan-agent-type-filter">
+                      <span>Agent Type</span>
+                      <select id="manager-orphan-agent-type-filter" value={orphanAgentTypeFilter} onChange={(e) => setOrphanAgentTypeFilter(e.target.value)}>
+                        <option value="ALL">All Agent Types</option>
+                        {orphanAgentTypeOptions.map((agentType) => <option key={agentType} value={agentType}>{agentType}</option>)}
+                      </select>
+                    </label>
+                    <label className="manager-select manager-orphan-control manager-orphan-control--unit" htmlFor="manager-orphan-unit-filter">
+                      <span>Unit Name</span>
+                      <select id="manager-orphan-unit-filter" value={orphanUnitFilter} onChange={(e) => setOrphanUnitFilter(e.target.value)}>
+                        <option value="ALL">All Units</option>
+                        {orphanUnitOptions.map((unitName) => <option key={unitName} value={unitName}>{unitName}</option>)}
+                      </select>
+                    </label>
+                    <label className="manager-select manager-orphan-control manager-orphan-control--status" htmlFor="manager-orphan-status-filter">
+                      <span>Agent Status</span>
+                      <select id="manager-orphan-status-filter" value={orphanStatusFilter} onChange={(e) => setOrphanStatusFilter(e.target.value)}>
+                        <option value="ALL">All Statuses</option>
+                        {orphanStatusOptions.map((status) => <option key={status} value={status}>{status}</option>)}
+                      </select>
+                    </label>
+                    <label className="manager-select manager-orphan-control manager-orphan-control--sort" htmlFor="manager-orphan-sort">
+                      <span>Sort By</span>
+                      <select id="manager-orphan-sort" value={orphanAgentSort} onChange={(e) => setOrphanAgentSort(e.target.value)}>
+                        <option value="usernameAsc">Username (A → Z)</option>
+                        <option value="usernameDesc">Username (Z → A)</option>
+                        <option value="nameAsc">Agent Name (A → Z)</option>
+                        <option value="nameDesc">Agent Name (Z → A)</option>
+                        <option value="dateEmployedAsc">Date Employed (Oldest → Newest)</option>
+                        <option value="dateEmployedDesc">Date Employed (Newest → Oldest)</option>
+                      </select>
+                    </label>
+                    <button type="button" className="manager-clear-btn manager-clear-btn--orphan" onClick={clearOrphanAgentControls}>Clear</button>
+                  </div>
+                </div>
+                <div className="manager-table-scroll-top manager-table-scroll-top--orphan" ref={orphanTableTopScrollRef} onScroll={() => syncOrphanTableScroll("top")}>
+                  <div className="manager-table-scroll-top__inner manager-table-scroll-top__inner--orphan" />
+                </div>
+                <div className="manager-table-wrap manager-table-wrap--orphan" ref={orphanTableScrollRef} onScroll={() => syncOrphanTableScroll("table")}>
+                  <table className="manager-table manager-table--clickable manager-table--orphan">
+                    <thead>
+                      <tr>
+                        <th>Username</th>
+                        <th>Agent Name</th>
+                        <th>Agent Type</th>
+                        <th>Agent Status</th>
+                        <th>Unit Name</th>
+                        <th>Date Employed</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {orphanAgentRows.map((agent) => (
+                        <tr key={agent.id} onClick={() => openAgentDetails(agent.id)} tabIndex={0} role="button" onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") openAgentDetails(agent.id); }}>
+                          <td>{agent.username || "—"}</td>
+                          <td>{agent.name || "—"}</td>
+                          <td>{agent.agentType || "—"}</td>
+                          <td><span className={`manager-agent-status-pill manager-agent-status-pill--table manager-agent-status-pill--${getAgentStatusClass(agent.status)}`}>{agent.status || "Active"}</span></td>
+                          <td>{agent.unit || "—"}</td>
+                          <td>{agent.dateEmployed ? formatDate(agent.dateEmployed) : "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {!orphanAgentRows.length && <div className="manager-empty-state">No agents found for this branch yet.</div>}
               </section>
             )
           )}
