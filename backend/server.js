@@ -776,6 +776,11 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
             displayPhoto: agent?.userId?.displayPhoto || "",
             dateEmployed: agent?.userId?.dateEmployed || null,
             agentType: agent?.agentType || "",
+            status: agent?.status || "Active",
+            sex: agent?.userId?.sex || "",
+            birthday: agent?.userId?.birthday || null,
+            age: agent?.userId?.age || null,
+            promotionHistory: Array.isArray(agent?.promotionHistory) ? agent.promotionHistory : [],
             totalTasks: 0,
             completedApproaches: 0,
             completedAppointments: 0,
@@ -838,6 +843,11 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
         displayPhoto: metrics.displayPhoto,
         dateEmployed: metrics.dateEmployed,
         agentType: metrics.agentType,
+        status: metrics.status,
+        sex: metrics.sex,
+        birthday: metrics.birthday,
+        age: metrics.age,
+        promotionHistory: metrics.promotionHistory,
         totalTasks: metrics.totalTasks,
         completedApproaches: metrics.completedApproaches,
         completedAppointments: metrics.completedAppointments,
@@ -954,7 +964,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
   const scopedAgents = await Agent.find(agentQuery)
     .populate({
       path: "userId",
-      select: "username firstName middleName lastName displayPhoto dateEmployed role",
+      select: "username firstName middleName lastName birthday sex age displayPhoto dateEmployed role",
     })
     .populate({
       path: "unitId",
@@ -1009,7 +1019,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       : [],
     scopedUserIds.length
       ? Prospect.find({ assignedToUserId: { $in: scopedUserIds } })
-          .select("_id assignedToUserId status createdAt")
+          .select("_id assignedToUserId prospectCode firstName middleName lastName marketType prospectType status createdAt")
           .lean()
       : [],
   ]);
@@ -1088,6 +1098,32 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
     leads.map((lead) => [String(lead._id), prospectIdToAssignedUserId.get(String(lead.prospectId)) || ""])
   );
 
+
+  const prospectById = new Map(prospects.map((prospect) => [String(prospect._id), prospect]));
+  const activeLeadProspectIds = new Set(
+    leads
+      .filter((lead) => ["New", "In Progress"].includes(String(lead?.status || "")))
+      .map((lead) => String(lead.prospectId || ""))
+      .filter(Boolean)
+  );
+  const orphanTransferProspectsByUserId = new Map();
+  for (const prospectId of activeLeadProspectIds) {
+    const prospect = prospectById.get(prospectId);
+    if (!prospect) continue;
+    const assignedUserId = String(prospect.assignedToUserId || "");
+    if (!assignedUserId) continue;
+    const fullName = [prospect.firstName, prospect.middleName, prospect.lastName].filter(Boolean).join(" ").trim();
+    const rows = orphanTransferProspectsByUserId.get(assignedUserId) || [];
+    rows.push({
+      id: String(prospect._id),
+      prospectCode: prospect.prospectCode || "—",
+      name: fullName || "—",
+      marketType: prospect.marketType || "—",
+      prospectType: prospect.prospectType || "—",
+    });
+    orphanTransferProspectsByUserId.set(assignedUserId, rows);
+  }
+
   const engagements = leadIds.length
     ? await LeadEngagement.find({ leadId: { $in: leadIds } })
         .select("_id leadId")
@@ -1109,7 +1145,8 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
             ...(engagementIds.length ? [{ leadEngagementId: { $in: engagementIds } }] : []),
           ],
         })
-          .select("assignedToUserId leadEngagementId status createdAt")
+          .select("assignedToUserId leadEngagementId productId policyholderCode policyNumber status createdAt")
+          .populate({ path: "productId", select: "productName" })
           .lean()
       : [],
     engagementIds.length
@@ -1133,6 +1170,26 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
           .lean()
       : [],
   ]);
+
+
+  const ongoingPolicyholderStatuses = new Set(["Active", "At Risk", "Lapsed", "Paid-Up"]);
+  const orphanTransferPolicyholdersByUserId = new Map();
+  for (const policyholder of policyholders) {
+    if (!ongoingPolicyholderStatuses.has(String(policyholder?.status || ""))) continue;
+    const assignedUserId = String(
+      policyholder?.assignedToUserId || engagementIdToAssignedUserId.get(String(policyholder?.leadEngagementId || "")) || ""
+    );
+    if (!assignedUserId) continue;
+    const rows = orphanTransferPolicyholdersByUserId.get(assignedUserId) || [];
+    rows.push({
+      id: String(policyholder._id),
+      policyholderCode: policyholder.policyholderCode || "—",
+      productName: policyholder.productId?.productName || "—",
+      policyNumber: policyholder.policyNumber || "—",
+      status: policyholder.status || "—",
+    });
+    orphanTransferPolicyholdersByUserId.set(assignedUserId, rows);
+  }
 
   const engagementIdToFrequency = new Map(
     needsAssessments.map((needsAssessment) => [
@@ -1377,6 +1434,11 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       displayPhoto: row.displayPhoto,
       dateEmployed: row.dateEmployed,
       agentType: row.agentType,
+      status: row.status,
+      sex: row.sex,
+      birthday: row.birthday,
+      age: row.age,
+      promotionHistory: row.promotionHistory,
       totalTasks: row.totalTasks,
       completedApproaches: row.completedApproaches,
       completedAppointments: row.completedAppointments,
@@ -1410,6 +1472,8 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       latestLeadCreatedAt: row.latestLeadCreatedAt,
       latestPolicyIssuedAt: row.latestPolicyIssuedAt,
       latestPolicyStatus: row.latestPolicyStatus,
+      orphanTransferProspects: orphanTransferProspectsByUserId.get(String(row.userId)) || [],
+      orphanTransferPolicyholders: orphanTransferPolicyholdersByUserId.get(String(row.userId)) || [],
     }))
     .sort(byName);
 
