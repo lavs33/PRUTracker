@@ -66,6 +66,17 @@ const agentSchema = new mongoose.Schema(
     },
 
     /**
+     * status (String)
+     * ---------------
+     * Current employment availability/status for branch management workflows.
+     */
+    status: {
+      type: String,
+      enum: ["Active", "On Long Leave", "Retired"],
+      default: "Active",
+    },
+
+    /**
      * unitId (ObjectId reference to Unit)
      * -----------------------------------
      * Associates this agent with one organizational Unit.
