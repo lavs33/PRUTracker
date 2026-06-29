@@ -8320,7 +8320,7 @@ function AgentLeadEngagement() {
                                   }}
                                   disabled={validatingContact || uiLocked || isContactingReadOnly}
                                 >
-                                  Cancel
+                                  Clear
                                 </button>
                                 <button
                                   type="button"
@@ -8478,7 +8478,7 @@ function AgentLeadEngagement() {
                                   }
                                   disabled={savingInterest}
                                 >
-                                  Cancel
+                                  Clear
                                 </button>
                                 <button type="button" className="le-btn primary" onClick={submitAssessInterest} disabled={savingInterest}>
                                   {savingInterest ? "Saving..." : "Save"}
@@ -8796,7 +8796,7 @@ function AgentLeadEngagement() {
                                   }}
                                   disabled={savingMeeting}
                                 >
-                                  Cancel
+                                  Clear
                                 </button>
                                 <button type="button" className="le-btn primary" onClick={submitScheduleMeeting} disabled={savingMeeting}>
                                   {savingMeeting ? "Saving..." : "Save Meeting"}
