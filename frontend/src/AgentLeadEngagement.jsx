@@ -3100,6 +3100,50 @@ function AgentLeadEngagement() {
   const previousProposalCurrentActivityRef = useRef("");
   const previousApplicationCurrentActivityRef = useRef("");
   const previousPolicyCurrentActivityRef = useRef("");
+  const subactivityTrackerRef = useRef(null);
+  const lastAutoScrolledSubactivityRef = useRef("");
+
+  const currentSubactivityScrollKey = useMemo(() => {
+    if (!isViewingCurrentStage || isHistoryView || isLeadTerminal) return "";
+
+    if (showContactingPanel) return `Contacting:${contactingCurrentActivityKey}`;
+    if (showNeedsAssessmentPanel) return `Needs Assessment:${needsActivityKeyRaw}`;
+    if (showProposalPanel) return `Proposal:${proposalUiActivityKey}`;
+    if (showApplicationPanel) return `Application:${applicationUiActivityKey}`;
+    if (showPolicyIssuancePanel) return `Policy Issuance:${policyIssuanceUiActivityKey}`;
+
+    return "";
+  }, [
+    applicationUiActivityKey,
+    contactingCurrentActivityKey,
+    isHistoryView,
+    isLeadTerminal,
+    isViewingCurrentStage,
+    needsActivityKeyRaw,
+    policyIssuanceUiActivityKey,
+    proposalUiActivityKey,
+    showApplicationPanel,
+    showContactingPanel,
+    showNeedsAssessmentPanel,
+    showPolicyIssuancePanel,
+    showProposalPanel,
+  ]);
+
+  useEffect(() => {
+    if (!currentSubactivityScrollKey) {
+      lastAutoScrolledSubactivityRef.current = "";
+      return;
+    }
+
+    const previousScrollKey = lastAutoScrolledSubactivityRef.current;
+    lastAutoScrolledSubactivityRef.current = currentSubactivityScrollKey;
+
+    if (!previousScrollKey || previousScrollKey === currentSubactivityScrollKey) return;
+
+    window.requestAnimationFrame(() => {
+      subactivityTrackerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }, [currentSubactivityScrollKey]);
 
   useEffect(() => {
     syncViewedStepWithCurrent(
@@ -6427,7 +6471,7 @@ function AgentLeadEngagement() {
 
               {/* Main + Sidebar */}
               <div className="le-mainRow">
-                <section className="le-card">
+                <section className="le-card" ref={subactivityTrackerRef}>
                   <div className="le-cardHeader">
                     <h2 className="le-cardTitle">{mainTitle}</h2>
                     <div style={{ marginLeft: "auto", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 10 }}>
@@ -6663,6 +6707,7 @@ function AgentLeadEngagement() {
                       allowAllSteps={isHistoryView || isViewingPastStage}
                     />
                   )}
+
 
                   {showApplicationPanel && (
                     <>
@@ -8320,7 +8365,7 @@ function AgentLeadEngagement() {
                                   }}
                                   disabled={validatingContact || uiLocked || isContactingReadOnly}
                                 >
-                                  Cancel
+                                  Clear
                                 </button>
                                 <button
                                   type="button"
@@ -8478,7 +8523,7 @@ function AgentLeadEngagement() {
                                   }
                                   disabled={savingInterest}
                                 >
-                                  Cancel
+                                  Clear
                                 </button>
                                 <button type="button" className="le-btn primary" onClick={submitAssessInterest} disabled={savingInterest}>
                                   {savingInterest ? "Saving..." : "Save"}
@@ -8796,7 +8841,7 @@ function AgentLeadEngagement() {
                                   }}
                                   disabled={savingMeeting}
                                 >
-                                  Cancel
+                                  Clear
                                 </button>
                                 <button type="button" className="le-btn primary" onClick={submitScheduleMeeting} disabled={savingMeeting}>
                                   {savingMeeting ? "Saving..." : "Save Meeting"}
