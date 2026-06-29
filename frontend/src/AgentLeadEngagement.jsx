@@ -8320,7 +8320,7 @@ function AgentLeadEngagement() {
                                   }}
                                   disabled={validatingContact || uiLocked || isContactingReadOnly}
                                 >
-                                  Cancel
+                                  Clear
                                 </button>
                                 <button
                                   type="button"
