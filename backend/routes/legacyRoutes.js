@@ -820,7 +820,7 @@ function registerLegacyRoutes(app, deps) {
         .sort({ attemptCycle: -1, updatedAt: -1, createdAt: -1 })
         .select("recordCoverageDurationDetails")
         .lean(),
-      lead?.prospectId ? Prospect.findById(lead.prospectId).select("birthday").lean() : null,
+      lead?.prospectId ? Prospect.findById(lead.prospectId).select("firstName middleName lastName birthday").lean() : null,
       AnnualPayment.find({ leadEngagementId: policyholderDoc.leadEngagementId })
         .select("_id annualPaymentPeriod frequencyOfPayment paymentProgress status")
         .sort({ "annualPaymentPeriod.startDate": 1, createdAt: 1 })
@@ -10498,8 +10498,8 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
           .session(session);
       }
 
-      const appointmentTitle = `Meeting scheduled with ${prospect.firstName}`;
-      const appointmentDescription = `Attend scheduled meeting with ${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName} (Lead ${lead.leadCode || "—"}). Meeting window: ${formatDateTimeInManila(dt)} to ${formatDateTimeInManila(endAt)} (Asia/Manila).`;
+      const appointmentTitle = `Needs Assessment Meeting scheduled with ${prospect.firstName}`;
+      const appointmentDescription = `Attend needs assessment scheduled meeting with ${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName} (Lead ${lead.leadCode || "—"}). Meeting window: ${formatDateTimeInManila(dt)} to ${formatDateTimeInManila(endAt)} (Asia/Manila).`;
       const appointmentDueAt = new Date(endAt.getTime() + 15 * 60 * 1000);
       const prospectFullName = `${prospect.firstName}${prospect.middleName ? ` ${prospect.middleName}` : ""} ${prospect.lastName}`.trim();
 
@@ -13047,8 +13047,6 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/status", asyn
         issuanceDateValue = new Date(`${issuanceDateRaw}T00:00:00`);
         if (Number.isNaN(issuanceDateValue.getTime())) {
           fieldErrors.issuanceDate = "Issuance date is invalid.";
-        } else if (issuanceDateValue > today) {
-          fieldErrors.issuanceDate = "Issuance date cannot be in the future.";
         } else if (policyInitialEorReceiptDateStart && issuanceDateValue < policyInitialEorReceiptDateStart) {
           fieldErrors.issuanceDate = "Issuance date cannot be earlier than Initial Premium eOR receipt date.";
         }
@@ -13063,8 +13061,6 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/status", asyn
         declinedDateValue = new Date(`${declinedDateRaw}T00:00:00`);
         if (Number.isNaN(declinedDateValue.getTime())) {
           fieldErrors.declinedDate = "Date declined is invalid.";
-        } else if (declinedDateValue > today) {
-          fieldErrors.declinedDate = "Date declined cannot be in the future.";
         } else if (policyInitialEorReceiptDateStart && declinedDateValue < policyInitialEorReceiptDateStart) {
           fieldErrors.declinedDate = "Date declined cannot be earlier than Initial Premium eOR receipt date.";
         }
@@ -13232,6 +13228,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/initial-premi
     })
       .select("recordPolicyApplicationStatus.status recordPolicyApplicationStatus.issuanceDate uploadInitialPremiumEor.paymentId")
       .lean();
+    const isEditingInitialPremiumEor = Boolean(policyDoc?.uploadInitialPremiumEor?.paymentId);
 
     const uploadedAt = new Date();
 
@@ -13295,6 +13292,15 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/initial-premi
             paymentId: paymentDoc._id,
           },
         },
+        ...(isEditingInitialPremiumEor
+          ? {
+              $unset: {
+                recordPolicyApplicationStatus: "",
+                uploadPolicySummary: "",
+                recordCoverageDurationDetails: "",
+              },
+            }
+          : {}),
       },
       { upsert: true }
     );
@@ -13430,7 +13436,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-dura
 
     await session.withTransaction(async () => {
       const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId })
-        .select("_id birthday")
+        .select("_id firstName middleName lastName birthday")
         .session(session)
         .lean();
       if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
@@ -13482,7 +13488,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-dura
       }
 
       const product = await Product.findById(productId)
-        .select("paymentTermOptions coverageDurationRule")
+        .select("productName paymentTermOptions coverageDurationRule")
         .session(session)
         .lean();
       if (!product) throw Object.assign(new Error("Chosen product not found."), { status: 404 });
@@ -13706,6 +13712,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-dura
       );
 
       const policyStatus = String(policyDoc?.recordPolicyApplicationStatus?.status || "").trim();
+      let policyholderForResponse = null;
       if (policyStatus === "Issued") {
         lead.status = "Closed";
         await lead.save({ session });
@@ -13718,6 +13725,43 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-dura
           throw Object.assign(new Error("Policy number is required to create policyholder."), { status: 409 });
         }
 
+        let nextAnnualPaymentDoc = null;
+        if (
+          requestedFrequency === "Yearly"
+          && annualPaymentDoc?._id
+          && String(annualPaymentDoc.status || "") === "Completed"
+        ) {
+          const nextAnnualStartDate = nextDay(annualPaymentDoc.annualPaymentPeriod?.endDate);
+          if (nextAnnualStartDate && isBeforePaymentTermEnd(nextAnnualStartDate, paymentTermEndDate)) {
+            await ensureAnnualPaymentLeadEngagementIndex();
+            const nextAnnualPeriod = deriveAnnualPaymentPeriod(nextAnnualStartDate);
+            const nextAnnualMetrics = buildAnnualPaymentMetrics({
+              totalAnnualPremiumPhp: annualPaymentDoc.totalAnnualPremiumPhp,
+              amountPaidSoFarPhp: 0,
+              paidCount: 0,
+              frequencyOfPayment: annualPaymentDoc.frequencyOfPayment || requestedFrequency,
+            });
+            nextAnnualPaymentDoc = await AnnualPayment.findOneAndUpdate(
+              {
+                leadEngagementId: engagement._id,
+                "annualPaymentPeriod.startDate": nextAnnualPeriod.startDate,
+              },
+              {
+                $setOnInsert: {
+                  leadEngagementId: engagement._id,
+                  annualPaymentPeriod: nextAnnualPeriod,
+                  totalAnnualPremiumPhp: annualPaymentDoc.totalAnnualPremiumPhp,
+                  frequencyOfPayment: annualPaymentDoc.frequencyOfPayment || requestedFrequency,
+                  ...nextAnnualMetrics,
+                },
+                $set: { attemptCycle: currentAttemptCycle },
+              },
+              { upsert: true, new: true, session }
+            );
+            nextPaymentDate = nextAnnualStartDate;
+          }
+        }
+
         let existingPolicyholder = await Policyholder.findOne({ leadEngagementId: engagement._id }).session(session);
         if (existingPolicyholder) {
           existingPolicyholder.assignedToUserId = userObjectId;
@@ -13726,20 +13770,21 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-dura
           existingPolicyholder.lastPaidDate = paymentDate;
           existingPolicyholder.nextPaymentDate = nextPaymentDate;
           existingPolicyholder.status = "Active";
-          if (annualPaymentDoc?._id) {
-            const alreadyRecorded = (existingPolicyholder.annualPaymentRecords || []).some((record) => String(record?.annualPaymentId || "") === String(annualPaymentDoc._id));
+          for (const recordAnnualPaymentDoc of [annualPaymentDoc, nextAnnualPaymentDoc].filter(Boolean)) {
+            const alreadyRecorded = (existingPolicyholder.annualPaymentRecords || []).some((record) => String(record?.annualPaymentId || "") === String(recordAnnualPaymentDoc._id));
             if (!alreadyRecorded) {
-              existingPolicyholder.annualPaymentRecords.push({ annualPaymentId: annualPaymentDoc._id, recordedAt: now });
+              existingPolicyholder.annualPaymentRecords.push({ annualPaymentId: recordAnnualPaymentDoc._id, recordedAt: now });
             }
           }
           await existingPolicyholder.save({ session });
+          policyholderForResponse = existingPolicyholder;
         } else {
           const MAX_TRIES = 5;
           let lastErr = null;
           for (let i = 0; i < MAX_TRIES; i += 1) {
             try {
               const policyholderCode = await getNextPolicyholderCode();
-              await Policyholder.create([
+              const createdPolicyholders = await Policyholder.create([
                 {
                   policyholderCode,
                   assignedToUserId: userObjectId,
@@ -13749,9 +13794,12 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-dura
                   lastPaidDate: paymentDate,
                   nextPaymentDate,
                   status: "Active",
-                  annualPaymentRecords: annualPaymentDoc?._id ? [{ annualPaymentId: annualPaymentDoc._id, recordedAt: now }] : [],
+                  annualPaymentRecords: [annualPaymentDoc, nextAnnualPaymentDoc]
+                    .filter((recordAnnualPaymentDoc) => recordAnnualPaymentDoc?._id)
+                    .map((recordAnnualPaymentDoc) => ({ annualPaymentId: recordAnnualPaymentDoc._id, recordedAt: now })),
                 },
               ], { session });
+              policyholderForResponse = createdPolicyholders[0] || null;
               lastErr = null;
               break;
             } catch (err) {
@@ -13765,11 +13813,22 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-dura
         }
       }
 
+      const prospectFullName = `${prospect?.firstName || ""}${prospect?.middleName ? ` ${prospect.middleName}` : ""} ${prospect?.lastName || ""}`.trim();
       responsePayload = {
         message: "Coverage duration details saved.",
         currentActivityKey: "Record Coverage Duration Details",
         policyEndDate,
         nextPaymentDate,
+        leadClosed: policyStatus === "Issued",
+        policyholder: policyholderForResponse
+          ? {
+              _id: policyholderForResponse._id,
+              policyholderCode: policyholderForResponse.policyholderCode || "",
+              name: prospectFullName,
+              productName: String(product?.productName || ""),
+              policyNumber: String(policyholderForResponse.policyNumber || policyDoc?.uploadPolicySummary?.policyNumber || ""),
+            }
+          : null,
       };
     });
 
