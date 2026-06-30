@@ -8492,7 +8492,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
       leadEngagementId: engagement._id,
       attemptCycle: targetAttemptCycle,
     })
-      .select("attemptCycle needsPriorities.productSelection.selectedProductId needsPriorities.productSelection.requestedFrequency")
+      .select("attemptCycle needsPriorities.productSelection.selectedProductId needsPriorities.productSelection.requestedFrequency needsPriorities.productSelection.requestedPremiumPayment")
       .lean();
 
     await ensureProposalAttemptCycleIndex();
@@ -8945,6 +8945,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
           },
           needsAssessmentProductSelection: {
             requestedFrequency: String(currentCycleNeedsAssessment?.needsPriorities?.productSelection?.requestedFrequency || ""),
+            requestedPremiumPayment: currentCycleNeedsAssessment?.needsPriorities?.productSelection?.requestedPremiumPayment ?? "",
           },
         },
 
@@ -12514,12 +12515,6 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/premium-payment-t
     if (Number.isNaN(paymentDateValue.getTime())) {
       return res.status(400).json({ message: "Payment date is invalid." });
     }
-    const todayEnd = new Date();
-    todayEnd.setHours(23, 59, 59, 999);
-    if (paymentDateValue > todayEnd) {
-      return res.status(400).json({ message: "Payment date cannot be in the future." });
-    }
-
     const allowedPaymentMethods = ["Credit Card / Debit Card", "Mobile Wallet / GCash", "Dated Check", "Bills Payments"];
     if (!allowedPaymentMethods.includes(initialPaymentMethod)) {
       return res.status(400).json({ message: "Method for initial payment is required." });
@@ -12656,6 +12651,54 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/premium-payment-t
   }
 });
 
+
+app.get("/api/prospects/:prospectId/leads/:leadId/application/submission/validate", async (req, res) => {
+  try {
+    const { userId, pruOneTransactionId } = req.query;
+    const { prospectId, leadId } = req.params;
+
+    if (!userId) return res.status(400).json({ message: "Missing userId." });
+    if (!mongoose.isValidObjectId(userId) || !mongoose.isValidObjectId(prospectId) || !mongoose.isValidObjectId(leadId)) {
+      return res.status(400).json({ message: "Invalid id(s)." });
+    }
+
+    const txId = String(pruOneTransactionId || "").trim();
+    if (!txId) return res.status(400).json({ message: "PRUOnePH Transaction ID is required." });
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
+    const leadObjectId = new mongoose.Types.ObjectId(leadId);
+
+    const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).select("_id").lean();
+    if (!prospect) return res.status(404).json({ message: "Prospect not found." });
+
+    const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).select("_id").lean();
+    if (!lead) return res.status(404).json({ message: "Lead not found." });
+
+    const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).select("_id currentStage").lean();
+    if (!engagement) return res.status(404).json({ message: "Lead engagement not found." });
+    if (engagement.currentStage !== "Application") {
+      return res.status(409).json({ message: "Lead is not in Application stage." });
+    }
+
+    const existingTxApplication = await Application.findOne({
+      "recordApplicationSubmission.pruOneTransactionId": txId,
+      leadEngagementId: { $ne: engagement._id },
+    })
+      .select("_id")
+      .lean();
+
+    if (existingTxApplication) {
+      return res.status(409).json({ message: "Record already exists for this Transaction ID." });
+    }
+
+    return res.json({ valid: true });
+  } catch (err) {
+    console.error("Validate application submission error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
 app.post("/api/prospects/:prospectId/leads/:leadId/application/submission", async (req, res) => {
   const session = await mongoose.startSession();
   try {
@@ -12782,13 +12825,18 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/submission", asyn
         await applicationMeeting.save({ session });
       }
 
+      const applicationTaskDedupeKeys = [
+        `APPLICATION_SUBMISSION:${engagement._id}`,
+        `APPLICATION_SUBMISSION:${engagement._id}:${currentAttemptCycle}`,
+      ];
+
       const openApplicationTasks = await Task.find({
         assignedToUserId: userObjectId,
         prospectId: prospectObjectId,
         leadEngagementId: engagement._id,
         type: "APPOINTMENT",
-        status: "Open",
-        dedupeKey: `APPLICATION_SUBMISSION:${engagement._id}`,
+        status: { $in: ["Open", "Overdue"] },
+        dedupeKey: { $in: applicationTaskDedupeKeys },
       }).session(session);
 
       for (const t of openApplicationTasks) {
@@ -14006,7 +14054,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/schedule-application
       }
       applicationTaskIdForNotif = applicationTask?._id || null;
       engagement.currentStage = "Application";
-      engagement.currentActivityKey = "Schedule Application Submission";
+      engagement.currentActivityKey = "Record Prospect Attendance";
       engagement.stageCompletedAt = now;
       engagement.stageHistory = Array.isArray(engagement.stageHistory) ? engagement.stageHistory : [];
 
@@ -14067,7 +14115,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/schedule-application
 
     return res.json({
       message: "Application submission meeting scheduled.",
-      currentActivityKey: "Schedule Application Submission",
+      currentActivityKey: "Record Prospect Attendance",
       currentStage: "Application",
     });
   } catch (err) {
