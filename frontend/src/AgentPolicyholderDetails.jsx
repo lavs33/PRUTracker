@@ -165,6 +165,8 @@ function AgentPolicyholderDetails() {
     return `${age} ${age === 1 ? "year old" : "years old"}`;
   };
 
+  const hideNextPaymentDue = ["Paid-Up", "Matured"].includes(String(policyholder.status || ""));
+
   const detailSections = [
     {
       title: "Policy Overview",
@@ -188,7 +190,7 @@ function AgentPolicyholderDetails() {
           ),
         ],
         ["Last Paid Date", formatDateOnly(policyholder.lastPaidDate)],
-        ["Next Payment Due", formatDateOnly(policyholder.nextPaymentDate)],
+        ...(!hideNextPaymentDue ? [["Next Payment Due", formatDateOnly(policyholder.nextPaymentDate)]] : []),
       ],
     },
   ];
