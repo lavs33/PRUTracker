@@ -13047,8 +13047,6 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/status", asyn
         issuanceDateValue = new Date(`${issuanceDateRaw}T00:00:00`);
         if (Number.isNaN(issuanceDateValue.getTime())) {
           fieldErrors.issuanceDate = "Issuance date is invalid.";
-        } else if (issuanceDateValue > today) {
-          fieldErrors.issuanceDate = "Issuance date cannot be in the future.";
         } else if (policyInitialEorReceiptDateStart && issuanceDateValue < policyInitialEorReceiptDateStart) {
           fieldErrors.issuanceDate = "Issuance date cannot be earlier than Initial Premium eOR receipt date.";
         }
@@ -13063,8 +13061,6 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/status", asyn
         declinedDateValue = new Date(`${declinedDateRaw}T00:00:00`);
         if (Number.isNaN(declinedDateValue.getTime())) {
           fieldErrors.declinedDate = "Date declined is invalid.";
-        } else if (declinedDateValue > today) {
-          fieldErrors.declinedDate = "Date declined cannot be in the future.";
         } else if (policyInitialEorReceiptDateStart && declinedDateValue < policyInitialEorReceiptDateStart) {
           fieldErrors.declinedDate = "Date declined cannot be earlier than Initial Premium eOR receipt date.";
         }

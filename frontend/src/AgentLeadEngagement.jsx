@@ -326,6 +326,8 @@ function AgentLeadEngagement() {
   const [policySummarySaving, setPolicySummarySaving] = useState(false);
   const [policySummaryError, setPolicySummaryError] = useState("");
   const [policySummaryInputKey, setPolicySummaryInputKey] = useState(0);
+  const [policySummaryEditMode, setPolicySummaryEditMode] = useState(false);
+  const [policySummaryEditSnapshot, setPolicySummaryEditSnapshot] = useState(null);
   const [policyChosenProduct, setPolicyChosenProduct] = useState(null);
   const [policyIssuanceAge, setPolicyIssuanceAge] = useState(null);
   const [policyCoverageForm, setPolicyCoverageForm] = useState({
@@ -5569,7 +5571,6 @@ function AgentLeadEngagement() {
     }
   };
 
-  const todayDateInput = useMemo(() => toDateInputValue(new Date()), []);
   const policyStatusDecisionDateMinInput = String(policyInitialEorForm.receiptDate || "").trim();
   const applicationPaymentDateMinInput = useMemo(
     () => (applicationMeetingSaved?.startAt ? toDateInputValue(applicationMeetingSaved.startAt) : ""),
@@ -5693,8 +5694,6 @@ function AgentLeadEngagement() {
           nextFieldErrors.issuanceDate = "Issuance date is required for Issued status.";
         } else if (policyStatusDecisionDateMinInput && issuanceDate < policyStatusDecisionDateMinInput) {
           nextFieldErrors.issuanceDate = "Issuance date cannot be earlier than Initial Premium eOR receipt date.";
-        } else if (issuanceDate > todayDateInput) {
-          nextFieldErrors.issuanceDate = "Issuance date cannot be in the future.";
         }
       }
 
@@ -5703,8 +5702,6 @@ function AgentLeadEngagement() {
           nextFieldErrors.declinedDate = "Date declined is required for Declined status.";
         } else if (policyStatusDecisionDateMinInput && declinedDate < policyStatusDecisionDateMinInput) {
           nextFieldErrors.declinedDate = "Date declined cannot be earlier than Initial Premium eOR receipt date.";
-        } else if (declinedDate > todayDateInput) {
-          nextFieldErrors.declinedDate = "Date declined cannot be in the future.";
         }
         if (!declinationLetterFileDataUrl) {
           nextFieldErrors.declinationLetterFileDataUrl = "Declination letter PDF is required.";
@@ -5935,6 +5932,15 @@ function AgentLeadEngagement() {
   const shouldDisplayPolicySummaryDetails =
     hasSavedPolicySummary ||
     (isLeadTerminal && hasAnyPolicySummaryDetails);
+  const canEditSavedPolicySummary =
+    !isHistoryView &&
+    !isLeadTerminal &&
+    isViewingCurrentStage &&
+    showPolicyIssuancePanel &&
+    policyViewedActivityKey === "Upload Policy Summary" &&
+    policyIssuanceUiActivityKey === "Record Coverage Duration Details" &&
+    hasSavedPolicySummary;
+  const isPolicySummaryFormEditable = !shouldDisplayPolicySummaryDetails || policySummaryEditMode;
 
   const policyPaymentTermOptions = useMemo(() => {
     const list = Array.isArray(policyChosenProduct?.paymentTermOptions) ? policyChosenProduct.paymentTermOptions : [];
@@ -6036,6 +6042,18 @@ function AgentLeadEngagement() {
   const hasSavedPolicyCoverageDetails = useMemo(() => {
     return Boolean(String(policyCoverageForm.savedAt || "").trim());
   }, [policyCoverageForm.savedAt]);
+  const hasOpenPolicyCoverageInput = Boolean(
+    !hasSavedPolicyCoverageDetails &&
+    (
+      policyPaymentTermOptions.length > 1 ||
+      !String(policyCoverageForm.selectedPaymentTermLabel || "").trim() ||
+      !String(policyCoverageForm.selectedPaymentTermType || "").trim() ||
+      (policyCoverageForm.selectedPaymentTermType === "RANGE_TO_AGE" && !String(policyCoverageForm.selectedPaymentTermUntilAge || "").trim()) ||
+      !String(policyCoverageForm.coverageDurationLabel || "").trim() ||
+      !String(policyCoverageForm.coverageDurationType || "").trim() ||
+      (policyCoverageRule?.type === "RANGE_TO_AGE" && !String(policyCoverageForm.coverageDurationUntilAge || "").trim())
+    )
+  );
 
   const isViewedStageFullyFinished = useMemo(() => {
     if (!isViewingCurrentStage) return true;
@@ -6107,7 +6125,13 @@ function AgentLeadEngagement() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to save policy summary.");
+      const wasEditingPolicySummary = policySummaryEditMode;
+      setPolicySummaryEditMode(false);
+      setPolicySummaryEditSnapshot(null);
       await refreshCurrentProgressView();
+      if (wasEditingPolicySummary) {
+        setPolicyViewedActivityKey("Record Coverage Duration Details");
+      }
     } catch (err) {
       const msg = String(err?.message || "Failed to save policy summary.");
       if (msg.includes("8 digits")) setPolicySummaryFieldErrors({ policyNumber: "Policy number must be exactly 8 digits." });
@@ -7719,7 +7743,6 @@ function AgentLeadEngagement() {
                                       setPolicyStatusFieldErrors((prev) => ({ ...prev, issuanceDate: "" }));
                                     }}
                                     min={policyStatusDecisionDateMinInput || undefined}
-                                    max={todayDateInput}
                                     disabled={policyStatusSaving}
                                   />
                                   {policyStatusFieldErrors.issuanceDate ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyStatusFieldErrors.issuanceDate}</p> : null}
@@ -7739,7 +7762,6 @@ function AgentLeadEngagement() {
                                         setPolicyStatusFieldErrors((prev) => ({ ...prev, declinedDate: "" }));
                                       }}
                                       min={policyStatusDecisionDateMinInput || undefined}
-                                      max={todayDateInput}
                                       disabled={policyStatusSaving}
                                     />
                                     {policyStatusFieldErrors.declinedDate ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyStatusFieldErrors.declinedDate}</p> : null}
@@ -8009,9 +8031,26 @@ function AgentLeadEngagement() {
 
                       {isPolicySummaryViewed && ((isHistoryView && shouldDisplayPolicySummaryDetails) || (!isHistoryView && (hasSavedPolicyInitialPremiumEor || (isLeadTerminal && hasAnyPolicySummaryDetails)))) ? (
                         <div className="le-block">
-                          <h4 className="le-blockTitle">{shouldDisplayPolicySummaryDetails ? "Policy Summary Details" : "Upload Policy Summary"}</h4>
+                          <div className="le-inlineActionRow" style={{ alignItems: "center", gap: 12 }}>
+                            <h4 className="le-blockTitle" style={{ margin: 0 }}>{shouldDisplayPolicySummaryDetails && !policySummaryEditMode ? "Policy Summary Details" : "Upload Policy Summary"}</h4>
+                            {canEditSavedPolicySummary && !policySummaryEditMode ? (
+                              <button
+                                type="button"
+                                className="le-btn secondary"
+                                onClick={() => {
+                                  setPolicySummaryEditSnapshot({ ...policySummaryForm });
+                                  setPolicySummaryEditMode(true);
+                                  setPolicySummaryError("");
+                                  setPolicySummaryFieldErrors({});
+                                }}
+                                disabled={policySummarySaving}
+                              >
+                                Edit
+                              </button>
+                            ) : null}
+                          </div>
 
-                          {shouldDisplayPolicySummaryDetails ? (
+                          {!isPolicySummaryFormEditable ? (
                             <>
                               <div className="le-formRow">
                                 <label className="le-label">Policy Number</label>
@@ -8085,12 +8124,18 @@ function AgentLeadEngagement() {
                                   onClick={() => {
                                     setPolicySummaryError("");
                                     setPolicySummaryFieldErrors({});
-                                    setPolicySummaryForm({ policyNumber: "", policySummaryFileDataUrl: "", policySummaryFileName: "", uploadedAt: "" });
-                                    setPolicySummaryInputKey((k) => k + 1);
+                                    if (policySummaryEditMode) {
+                                      if (policySummaryEditSnapshot) setPolicySummaryForm(policySummaryEditSnapshot);
+                                      setPolicySummaryEditMode(false);
+                                      setPolicySummaryEditSnapshot(null);
+                                    } else {
+                                      setPolicySummaryForm({ policyNumber: "", policySummaryFileDataUrl: "", policySummaryFileName: "", uploadedAt: "" });
+                                      setPolicySummaryInputKey((k) => k + 1);
+                                    }
                                   }}
                                   disabled={policySummarySaving}
                                 >
-                                  Cancel
+                                  {policySummaryEditMode ? "Cancel" : "Clear"}
                                 </button>
                                 <button
                                   type="button"
@@ -8098,7 +8143,7 @@ function AgentLeadEngagement() {
                                   onClick={submitPolicySummary}
                                   disabled={policySummarySaving}
                                 >
-                                  {policySummarySaving ? "Saving..." : "Save Policy Summary"}
+                                  {policySummarySaving ? "Saving..." : policySummaryEditMode ? "Save" : "Save Policy Summary"}
                                 </button>
                               </div>
                             </>
@@ -8262,37 +8307,39 @@ function AgentLeadEngagement() {
                               {policyCoverageError ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyCoverageError}</p> : null}
 
                               <div className="le-actions" style={{ marginTop: 10 }}>
-                                <button
-                                  type="button"
-                                  className="le-btn secondary"
-                                  onClick={() => {
-                                    setPolicyCoverageError("");
-                                    setPolicyCoverageFieldErrors({});
-                                    setPolicyCoverageForm((f) => ({
-                                      ...f,
-                                      selectedPaymentTermLabel: "",
-                                      selectedPaymentTermType: "",
-                                      selectedPaymentTermYears: "",
-                                      selectedPaymentTermUntilAge: "",
-                                      coverageDurationLabel: String(policyCoverageRule?.label || ""),
-                                      coverageDurationType: String(policyCoverageRule?.type || ""),
-                                      coverageDurationYears: policyCoverageRule?.type === "FIXED_YEARS" ? String(policyCoverageRule?.years ?? "") : "",
-                                      coverageDurationUntilAge: policyCoverageRule?.type === "UNTIL_AGE" ? String(policyCoverageRule?.untilAge ?? "") : "",
-                                      policyEndDate: "",
-                                      savedAt: "",
-                                    }));
-                                  }}
-                                  disabled={policyCoverageSaving}
-                                >
-                                  Cancel
-                                </button>
+                                {hasOpenPolicyCoverageInput ? (
+                                  <button
+                                    type="button"
+                                    className="le-btn secondary"
+                                    onClick={() => {
+                                      setPolicyCoverageError("");
+                                      setPolicyCoverageFieldErrors({});
+                                      setPolicyCoverageForm((f) => ({
+                                        ...f,
+                                        selectedPaymentTermLabel: "",
+                                        selectedPaymentTermType: "",
+                                        selectedPaymentTermYears: "",
+                                        selectedPaymentTermUntilAge: "",
+                                        coverageDurationLabel: String(policyCoverageRule?.label || ""),
+                                        coverageDurationType: String(policyCoverageRule?.type || ""),
+                                        coverageDurationYears: policyCoverageRule?.type === "FIXED_YEARS" ? String(policyCoverageRule?.years ?? "") : "",
+                                        coverageDurationUntilAge: policyCoverageRule?.type === "UNTIL_AGE" ? String(policyCoverageRule?.untilAge ?? "") : "",
+                                        policyEndDate: "",
+                                        savedAt: "",
+                                      }));
+                                    }}
+                                    disabled={policyCoverageSaving}
+                                  >
+                                    Clear
+                                  </button>
+                                ) : null}
                                 <button
                                   type="button"
                                   className="le-btn primary"
                                   onClick={submitPolicyCoverageDetails}
                                   disabled={policyCoverageSaving}
                                 >
-                                  {policyCoverageSaving ? "Saving..." : "Save Coverage Duration Details"}
+                                  {policyCoverageSaving ? "Saving..." : hasOpenPolicyCoverageInput ? "Save Coverage Duration Details" : "Confirm"}
                                 </button>
                               </div>
                             </>
