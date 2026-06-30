@@ -87,6 +87,7 @@ function AgentLeadEngagement() {
   const [validatingContact, setValidatingContact] = useState(false);
   const [validateError, setValidateError] = useState("");
   const [validateFieldErrors, setValidateFieldErrors] = useState({});
+  const [validateContactEditMode, setValidateContactEditMode] = useState(false);
 
   const [interestForm, setInterestForm] = useState({
     interestLevel: "",
@@ -96,6 +97,7 @@ function AgentLeadEngagement() {
   const [savingInterest, setSavingInterest] = useState(false);
   const [interestError, setInterestError] = useState("");
   const [interestFieldErrors, setInterestFieldErrors] = useState({});
+  const [assessInterestEditMode, setAssessInterestEditMode] = useState(false);
   const [confirmNotInterestedModalOpen, setConfirmNotInterestedModalOpen] = useState(false);
   const [dropOutcomeModal, setDropOutcomeModal] = useState(null);
 
@@ -3319,10 +3321,24 @@ function AgentLeadEngagement() {
   const isScheduleMeetingViewed = contactingViewedActivityKey === "Schedule Meeting";
   const isContactingCurrentViewEditable =
     isViewingCurrentStage && !isContactingReadOnly && contactingViewedActivityKey === contactingCurrentActivityKey;
+  const canEditSavedCorrectContact =
+    isViewingCurrentStage && !isContactingReadOnly &&
+    ["Assess Interest", "Schedule Meeting"].includes(contactingCurrentActivityKey) &&
+    savedPhoneValidationResult === "CORRECT" &&
+    !isEngagementBlocked &&
+    !isLeadTerminal;
   const isValidateContactEditable =
-    isContactingCurrentViewEditable && contactingCurrentActivityKey === "Validate Contact" && !isEngagementBlocked;
+    (isContactingCurrentViewEditable && contactingCurrentActivityKey === "Validate Contact" && !isEngagementBlocked) ||
+    validateContactEditMode;
+  const canEditSavedInterestedAssessment =
+    isViewingCurrentStage && !isContactingReadOnly &&
+    contactingCurrentActivityKey === "Schedule Meeting" &&
+    savedInterestLevel === "INTERESTED" &&
+    !isEngagementBlocked &&
+    !isLeadTerminal;
   const isAssessInterestEditable =
-    isContactingCurrentViewEditable && contactingCurrentActivityKey === "Assess Interest" && !savedInterestLevel;
+    (isContactingCurrentViewEditable && contactingCurrentActivityKey === "Assess Interest" && !savedInterestLevel) ||
+    assessInterestEditMode;
   const isScheduleMeetingEditable =
     (isContactingCurrentViewEditable && contactingCurrentActivityKey === "Schedule Meeting") ||
     rescheduleFromNeedsMode ||
@@ -4384,6 +4400,7 @@ function AgentLeadEngagement() {
 
       await refreshCurrentProgressView();
 
+      setValidateContactEditMode(false);
       setValidateForm({ phoneValidation: "" });
     } catch (err) {
       setValidateError(err?.message || "Cannot connect to server. Is backend running?");
@@ -4417,6 +4434,7 @@ function AgentLeadEngagement() {
       if (!res.ok) throw new Error(data?.message || "Failed to save assess interest.");
 
       await refreshCurrentProgressView();
+      setAssessInterestEditMode(false);
       if (data?.leadDropped && data?.droppedLead) {
         setDropOutcomeModal({
           title: "Lead Dropped",
@@ -4471,7 +4489,8 @@ function AgentLeadEngagement() {
 
   const requestMarkAsNotInterested = () => {
     setInterestError("");
-    setConfirmNotInterestedModalOpen(true);
+    setInterestForm({ interestLevel: "NOT_INTERESTED", preferredChannel: "", preferredChannelOther: "" });
+    setAssessInterestEditMode(true);
   };
 
   const goToScheduleMeetingFromNeedsAttendanceNo = () => {
@@ -5569,7 +5588,6 @@ function AgentLeadEngagement() {
     }
   };
 
-  const todayDateInput = useMemo(() => toDateInputValue(new Date()), []);
   const policyStatusDecisionDateMinInput = String(policyInitialEorForm.receiptDate || "").trim();
   const applicationPaymentDateMinInput = useMemo(
     () => (applicationMeetingSaved?.startAt ? toDateInputValue(applicationMeetingSaved.startAt) : ""),
@@ -5693,8 +5711,6 @@ function AgentLeadEngagement() {
           nextFieldErrors.issuanceDate = "Issuance date is required for Issued status.";
         } else if (policyStatusDecisionDateMinInput && issuanceDate < policyStatusDecisionDateMinInput) {
           nextFieldErrors.issuanceDate = "Issuance date cannot be earlier than Initial Premium eOR receipt date.";
-        } else if (issuanceDate > todayDateInput) {
-          nextFieldErrors.issuanceDate = "Issuance date cannot be in the future.";
         }
       }
 
@@ -5703,8 +5719,6 @@ function AgentLeadEngagement() {
           nextFieldErrors.declinedDate = "Date declined is required for Declined status.";
         } else if (policyStatusDecisionDateMinInput && declinedDate < policyStatusDecisionDateMinInput) {
           nextFieldErrors.declinedDate = "Date declined cannot be earlier than Initial Premium eOR receipt date.";
-        } else if (declinedDate > todayDateInput) {
-          nextFieldErrors.declinedDate = "Date declined cannot be in the future.";
         }
         if (!declinationLetterFileDataUrl) {
           nextFieldErrors.declinationLetterFileDataUrl = "Declination letter PDF is required.";
@@ -7719,7 +7733,6 @@ function AgentLeadEngagement() {
                                       setPolicyStatusFieldErrors((prev) => ({ ...prev, issuanceDate: "" }));
                                     }}
                                     min={policyStatusDecisionDateMinInput || undefined}
-                                    max={todayDateInput}
                                     disabled={policyStatusSaving}
                                   />
                                   {policyStatusFieldErrors.issuanceDate ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyStatusFieldErrors.issuanceDate}</p> : null}
@@ -7739,7 +7752,6 @@ function AgentLeadEngagement() {
                                         setPolicyStatusFieldErrors((prev) => ({ ...prev, declinedDate: "" }));
                                       }}
                                       min={policyStatusDecisionDateMinInput || undefined}
-                                      max={todayDateInput}
                                       disabled={policyStatusSaving}
                                     />
                                     {policyStatusFieldErrors.declinedDate ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyStatusFieldErrors.declinedDate}</p> : null}
@@ -8590,13 +8602,14 @@ function AgentLeadEngagement() {
                                   type="button"
                                   className="le-btn secondary"
                                   onClick={() => {
+                                    setValidateContactEditMode(false);
                                     setValidateForm({ phoneValidation: "" });
                                     setValidateError("");
                                     setValidateFieldErrors({});
                                   }}
                                   disabled={validatingContact || uiLocked || isContactingReadOnly}
                                 >
-                                  Clear
+                                  {validateContactEditMode ? "Cancel" : "Clear"}
                                 </button>
                                 <button
                                   type="button"
@@ -8616,8 +8629,7 @@ function AgentLeadEngagement() {
                                   <span className="le-metaValue">{savedPhoneValidationResult === "CORRECT" ? "Correct" : "Wrong"}</span>
                                 </div>
 
-                                {savedPhoneValidationResult === "CORRECT" &&
-                                isValidateContactEditable &&
+                                {canEditSavedCorrectContact &&
                                 !validatingContact &&
                                 !isEngagementBlocked &&
                                 !isLeadTerminal ? (
@@ -8625,12 +8637,15 @@ function AgentLeadEngagement() {
                                     type="button"
                                     className="le-btn secondary"
                                     style={{ padding: "4px 8px" }}
-                                    onClick={() => submitValidateContact("WRONG_CONTACT")}
+                                    onClick={() => {
+                                      setValidateForm({ phoneValidation: "WRONG_CONTACT" });
+                                      setValidateContactEditMode(true);
+                                    }}
                                     disabled={validatingContact}
                                     title="Mark as Wrong Contact"
                                   >
                                     <FaEdit style={{ marginRight: 6 }} />
-                                    Mark as Wrong Contact
+                                    Edit
                                   </button>
                                 ) : null}
                               </div>
@@ -8748,13 +8763,19 @@ function AgentLeadEngagement() {
                                   className="le-btn secondary"
                                   onClick={() =>
                                     {
-                                      setInterestForm({ interestLevel: "", preferredChannel: "", preferredChannelOther: "" });
+                                      if (assessInterestEditMode) {
+                                        setAssessInterestEditMode(false);
+                                        setInterestForm({ interestLevel: "", preferredChannel: "", preferredChannelOther: "" });
+                                        setInterestError("");
+                                      } else {
+                                        setInterestForm({ interestLevel: "", preferredChannel: "", preferredChannelOther: "" });
+                                      }
                                       setInterestFieldErrors({});
                                     }
                                   }
                                   disabled={savingInterest}
                                 >
-                                  Clear
+                                  {assessInterestEditMode ? "Cancel" : "Clear"}
                                 </button>
                                 <button type="button" className="le-btn primary" onClick={submitAssessInterest} disabled={savingInterest}>
                                   {savingInterest ? "Saving..." : "Save"}
@@ -8769,8 +8790,7 @@ function AgentLeadEngagement() {
                                   <span className="le-metaValue">{savedInterestLevel}</span>
                                 </div>
 
-                                {savedInterestLevel === "INTERESTED" &&
-                                isContactingCurrentViewEditable &&
+                                {canEditSavedInterestedAssessment &&
                                 !savingInterest &&
                                 !isEngagementBlocked &&
                                 !isLeadTerminal ? (
