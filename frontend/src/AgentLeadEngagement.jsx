@@ -326,6 +326,8 @@ function AgentLeadEngagement() {
   const [policySummarySaving, setPolicySummarySaving] = useState(false);
   const [policySummaryError, setPolicySummaryError] = useState("");
   const [policySummaryInputKey, setPolicySummaryInputKey] = useState(0);
+  const [policySummaryEditMode, setPolicySummaryEditMode] = useState(false);
+  const [policySummaryEditSnapshot, setPolicySummaryEditSnapshot] = useState(null);
   const [policyChosenProduct, setPolicyChosenProduct] = useState(null);
   const [policyIssuanceAge, setPolicyIssuanceAge] = useState(null);
   const [policyCoverageForm, setPolicyCoverageForm] = useState({
@@ -344,6 +346,7 @@ function AgentLeadEngagement() {
   const [policyCoverageFieldErrors, setPolicyCoverageFieldErrors] = useState({});
   const [policyCoverageSaving, setPolicyCoverageSaving] = useState(false);
   const [policyCoverageError, setPolicyCoverageError] = useState("");
+  const [policyholderCreatedModal, setPolicyholderCreatedModal] = useState(null);
   const [unavailablePriorityCategories, setUnavailablePriorityCategories] = useState([]);
   const priorityOptions = ["Protection", "Health", "Investment"].filter((priority) => !unavailablePriorityCategories.includes(priority));
   const [needsSectionOpen, setNeedsSectionOpen] = useState({
@@ -1273,9 +1276,13 @@ function AgentLeadEngagement() {
 
       const wasEditingProof = needsAttendanceProofEditMode;
       setNeedsAttendanceProofEditMode(false);
-      await refreshCurrentProgressView({ includeNeedsAssessment: true });
       if (wasEditingProof) {
-        setNeedsAssessmentViewedActivityKey("Schedule Proposal Presentation");
+        await fetchNeedsAssessment();
+        await fetchEngagement();
+        setNeedsAssessmentViewedActivityKey("Record Prospect Attendance");
+        window.requestAnimationFrame(() => subactivityTrackerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+      } else {
+        await refreshCurrentProgressView({ includeNeedsAssessment: true });
       }
     } catch (err) {
       setNeedsAssessmentError(err?.message || "Failed to record attendance.");
@@ -1783,7 +1790,7 @@ function AgentLeadEngagement() {
       setNeedsAnalysisDetailsSaved(true);
       setNeedsAssessmentOutcomeActivity(nextActivityKey);
       setNeedsAssessmentCurrentActivityKey(nextActivityKey);
-      if (isViewingPastStage) {
+      if (isViewingPastStage || needsViewedStepIndex < needsCurrentStepIndex) {
         setPendingSavedNeedsDetailsScroll(true);
       } else {
         setPendingNeedsFollowUpScroll(true);
@@ -3151,6 +3158,8 @@ function AgentLeadEngagement() {
   const previousApplicationCurrentActivityRef = useRef("");
   const previousPolicyCurrentActivityRef = useRef("");
   const subactivityTrackerRef = useRef(null);
+  const policySummaryBlockRef = useRef(null);
+  const policyCoverageBlockRef = useRef(null);
   const proposalScheduleApplicationRef = useRef(null);
   const savedNeedsDetailsRef = useRef(null);
   const needsFollowUpSectionRef = useRef(null);
@@ -3214,6 +3223,39 @@ function AgentLeadEngagement() {
       subactivityTrackerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
   }, [currentSubactivityScrollKey]);
+  const scrollToLeadEngagementTop = useCallback(() => {
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
+  }, []);
+
+  const scrollToPolicySummaryBlock = useCallback(() => {
+    window.requestAnimationFrame(() => {
+      const sectionTop = policySummaryBlockRef.current?.getBoundingClientRect?.().top;
+      if (Number.isFinite(sectionTop)) {
+        window.scrollTo({ top: window.scrollY + sectionTop - 120, behavior: "smooth" });
+      } else {
+        policySummaryBlockRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    });
+  }, []);
+
+  const scrollToPolicyCoverageBlock = useCallback(() => {
+    window.requestAnimationFrame(() => {
+      const sectionTop = policyCoverageBlockRef.current?.getBoundingClientRect?.().top;
+      if (Number.isFinite(sectionTop)) {
+        window.scrollTo({ top: window.scrollY + sectionTop - 120, behavior: "smooth" });
+      } else {
+        policyCoverageBlockRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    });
+  }, []);
+
+  const closePolicyholderCreatedModal = useCallback(() => {
+    setPolicyholderCreatedModal(null);
+    scrollToLeadEngagementTop();
+  }, [scrollToLeadEngagementTop]);
+
 
   useEffect(() => {
     syncViewedStepWithCurrent(
@@ -3225,20 +3267,30 @@ function AgentLeadEngagement() {
   }, [CONTACTING_STEPS_UI, contactingCurrentActivityKey, syncViewedStepWithCurrent]);
 
   useEffect(() => {
-    syncViewedStepWithCurrent(
-      NEEDS_ASSESSMENT_STEPS_UI,
-      needsActivityKeyRaw,
-      setNeedsAssessmentViewedActivityKey,
-      previousNeedsCurrentActivityRef
-    );
-  }, [NEEDS_ASSESSMENT_STEPS_UI, needsActivityKeyRaw, syncViewedStepWithCurrent]);
+    const fallbackKey = NEEDS_ASSESSMENT_STEPS_UI[0]?.key || "";
+    const nextCurrentKey = NEEDS_ASSESSMENT_STEPS_UI.some((step) => step.key === needsActivityKeyRaw) ? needsActivityKeyRaw : fallbackKey;
+    const currentIndex = NEEDS_ASSESSMENT_STEPS_UI.findIndex((step) => step.key === nextCurrentKey);
+
+    setNeedsAssessmentViewedActivityKey((existing) => {
+      const existingIndex = NEEDS_ASSESSMENT_STEPS_UI.findIndex((step) => step.key === existing);
+      if (!existing || existingIndex < 0 || existingIndex > currentIndex) return nextCurrentKey;
+      return existing;
+    });
+
+    previousNeedsCurrentActivityRef.current = nextCurrentKey;
+  }, [NEEDS_ASSESSMENT_STEPS_UI, needsActivityKeyRaw]);
 
   useEffect(() => {
     const isNeedsStageCurrent = String(engagement?.currentStage || "").trim() === "Needs Assessment";
     if (!showNeedsAssessmentPanel || isHistoryView) return;
     if (!isViewingCurrentStage && !isNeedsStageCurrent) return;
-    setNeedsAssessmentViewedActivityKey(needsActivityKeyRaw);
-  }, [showNeedsAssessmentPanel, isViewingCurrentStage, isHistoryView, needsActivityKeyRaw, engagement?.currentStage]);
+    setNeedsAssessmentViewedActivityKey((existing) => {
+      const currentIndex = NEEDS_ASSESSMENT_STEPS_UI.findIndex((step) => step.key === needsActivityKeyRaw);
+      const existingIndex = NEEDS_ASSESSMENT_STEPS_UI.findIndex((step) => step.key === existing);
+      if (!existing || existingIndex < 0 || existingIndex > currentIndex) return needsActivityKeyRaw;
+      return existing;
+    });
+  }, [showNeedsAssessmentPanel, isViewingCurrentStage, isHistoryView, needsActivityKeyRaw, engagement?.currentStage, NEEDS_ASSESSMENT_STEPS_UI]);
 
   useEffect(() => {
     const previousViewedKey = previousNeedsViewedActivityRef.current;
@@ -4164,7 +4216,8 @@ function AgentLeadEngagement() {
       : "";
 
   const showCurrentSubactivityStatus = isViewingCurrentStage && !isHistoryView && !isLeadTerminal;
-  const closedLeadSubactivityHelperText = "";
+  const terminalLeadStatusLabel = isLeadClosed ? "closed" : isLeadDropped ? "dropped" : isLeadPolicyDeclined ? "policy declined" : "";
+  const closedLeadSubactivityHelperText = terminalLeadStatusLabel ? `This lead is ${terminalLeadStatusLabel}. Subactivities are view-only.` : "";
 
   const setStageViewIfAllowed = useCallback(
     (nextStage) => {
@@ -5569,7 +5622,6 @@ function AgentLeadEngagement() {
     }
   };
 
-  const todayDateInput = useMemo(() => toDateInputValue(new Date()), []);
   const policyStatusDecisionDateMinInput = String(policyInitialEorForm.receiptDate || "").trim();
   const applicationPaymentDateMinInput = useMemo(
     () => (applicationMeetingSaved?.startAt ? toDateInputValue(applicationMeetingSaved.startAt) : ""),
@@ -5693,8 +5745,6 @@ function AgentLeadEngagement() {
           nextFieldErrors.issuanceDate = "Issuance date is required for Issued status.";
         } else if (policyStatusDecisionDateMinInput && issuanceDate < policyStatusDecisionDateMinInput) {
           nextFieldErrors.issuanceDate = "Issuance date cannot be earlier than Initial Premium eOR receipt date.";
-        } else if (issuanceDate > todayDateInput) {
-          nextFieldErrors.issuanceDate = "Issuance date cannot be in the future.";
         }
       }
 
@@ -5703,8 +5753,6 @@ function AgentLeadEngagement() {
           nextFieldErrors.declinedDate = "Date declined is required for Declined status.";
         } else if (policyStatusDecisionDateMinInput && declinedDate < policyStatusDecisionDateMinInput) {
           nextFieldErrors.declinedDate = "Date declined cannot be earlier than Initial Premium eOR receipt date.";
-        } else if (declinedDate > todayDateInput) {
-          nextFieldErrors.declinedDate = "Date declined cannot be in the future.";
         }
         if (!declinationLetterFileDataUrl) {
           nextFieldErrors.declinationLetterFileDataUrl = "Declination letter PDF is required.";
@@ -5935,6 +5983,15 @@ function AgentLeadEngagement() {
   const shouldDisplayPolicySummaryDetails =
     hasSavedPolicySummary ||
     (isLeadTerminal && hasAnyPolicySummaryDetails);
+  const canEditSavedPolicySummary =
+    !isHistoryView &&
+    !isLeadTerminal &&
+    isViewingCurrentStage &&
+    showPolicyIssuancePanel &&
+    policyViewedActivityKey === "Upload Policy Summary" &&
+    policyIssuanceUiActivityKey === "Record Coverage Duration Details" &&
+    hasSavedPolicySummary;
+  const isPolicySummaryFormEditable = !shouldDisplayPolicySummaryDetails || policySummaryEditMode;
 
   const policyPaymentTermOptions = useMemo(() => {
     const list = Array.isArray(policyChosenProduct?.paymentTermOptions) ? policyChosenProduct.paymentTermOptions : [];
@@ -6036,6 +6093,18 @@ function AgentLeadEngagement() {
   const hasSavedPolicyCoverageDetails = useMemo(() => {
     return Boolean(String(policyCoverageForm.savedAt || "").trim());
   }, [policyCoverageForm.savedAt]);
+  const hasOpenPolicyCoverageInput = Boolean(
+    !hasSavedPolicyCoverageDetails &&
+    (
+      policyPaymentTermOptions.length > 1 ||
+      !String(policyCoverageForm.selectedPaymentTermLabel || "").trim() ||
+      !String(policyCoverageForm.selectedPaymentTermType || "").trim() ||
+      (policyCoverageForm.selectedPaymentTermType === "RANGE_TO_AGE" && !String(policyCoverageForm.selectedPaymentTermUntilAge || "").trim()) ||
+      !String(policyCoverageForm.coverageDurationLabel || "").trim() ||
+      !String(policyCoverageForm.coverageDurationType || "").trim() ||
+      (policyCoverageRule?.type === "RANGE_TO_AGE" && !String(policyCoverageForm.coverageDurationUntilAge || "").trim())
+    )
+  );
 
   const isViewedStageFullyFinished = useMemo(() => {
     if (!isViewingCurrentStage) return true;
@@ -6107,7 +6176,14 @@ function AgentLeadEngagement() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to save policy summary.");
+      const wasEditingPolicySummary = policySummaryEditMode;
+      setPolicySummaryEditMode(false);
+      setPolicySummaryEditSnapshot(null);
       await refreshCurrentProgressView();
+      if (wasEditingPolicySummary) {
+        setPolicyViewedActivityKey("Record Coverage Duration Details");
+        scrollToPolicyCoverageBlock();
+      }
     } catch (err) {
       const msg = String(err?.message || "Failed to save policy summary.");
       if (msg.includes("8 digits")) setPolicySummaryFieldErrors({ policyNumber: "Policy number must be exactly 8 digits." });
@@ -6171,6 +6247,9 @@ function AgentLeadEngagement() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to save coverage duration details.");
       await refreshCurrentProgressView();
+      if (data?.leadClosed && data?.policyholder) {
+        setPolicyholderCreatedModal(data.policyholder);
+      }
     } catch (err) {
       const msg = String(err?.message || "Failed to save coverage duration details.");
       if (msg.toLowerCase().includes("payment term")) {
@@ -6726,9 +6805,9 @@ function AgentLeadEngagement() {
                     </p>
                   )}
 
-                  {(isLeadTerminal) && (
+                  {(isLeadTerminal && !isHistoryView) && (
                     <p className="le-muted" style={{ marginTop: 8, marginBottom: 10 }}>
-                      This lead is closed, dropped, or policy declined. Subactivities are view-only.
+                      {closedLeadSubactivityHelperText}
                     </p>
                   )}
 
@@ -6753,7 +6832,7 @@ function AgentLeadEngagement() {
                       }
                       helperText={
                         isLeadTerminal
-                          ? closedLeadSubactivityHelperText
+                          ? ""
                           : contactingViewedStepIndex < contactingCurrentStepIndex
                           ? previouslySavedSubactivityHelperText
                           : "Click any unlocked subactivity to review saved details."
@@ -6797,7 +6876,7 @@ function AgentLeadEngagement() {
                             ? futureStageSubactivityHelperText
                             : ""
                           : isLeadTerminal
-                          ? closedLeadSubactivityHelperText
+                          ? ""
                           : needsViewedStepIndex < needsCurrentStepIndex
                           ? previouslySavedSubactivityHelperText
                           : "Click any unlocked subactivity to review saved details."
@@ -6830,7 +6909,7 @@ function AgentLeadEngagement() {
                             ? futureStageSubactivityHelperText
                             : ""
                           : isLeadTerminal
-                          ? closedLeadSubactivityHelperText
+                          ? ""
                           : proposalViewedStepIndex < proposalCurrentStepIndex
                           ? previouslySavedSubactivityHelperText
                           : "Click any unlocked subactivity to review saved details."
@@ -6863,7 +6942,7 @@ function AgentLeadEngagement() {
                             ? futureStageSubactivityHelperText
                             : ""
                           : isLeadTerminal
-                          ? closedLeadSubactivityHelperText
+                          ? ""
                           : applicationViewedStepIndex < applicationCurrentStepIndex
                           ? previouslySavedSubactivityHelperText
                           : "Click any unlocked subactivity to review saved details."
@@ -6896,7 +6975,7 @@ function AgentLeadEngagement() {
                             ? futureStageSubactivityHelperText
                             : ""
                           : isLeadTerminal
-                          ? closedLeadSubactivityHelperText
+                          ? ""
                           : policyViewedStepIndex < policyCurrentStepIndex
                           ? previouslySavedSubactivityHelperText
                           : "Click any unlocked subactivity to review saved details."
@@ -7719,7 +7798,6 @@ function AgentLeadEngagement() {
                                       setPolicyStatusFieldErrors((prev) => ({ ...prev, issuanceDate: "" }));
                                     }}
                                     min={policyStatusDecisionDateMinInput || undefined}
-                                    max={todayDateInput}
                                     disabled={policyStatusSaving}
                                   />
                                   {policyStatusFieldErrors.issuanceDate ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyStatusFieldErrors.issuanceDate}</p> : null}
@@ -7739,7 +7817,6 @@ function AgentLeadEngagement() {
                                         setPolicyStatusFieldErrors((prev) => ({ ...prev, declinedDate: "" }));
                                       }}
                                       min={policyStatusDecisionDateMinInput || undefined}
-                                      max={todayDateInput}
                                       disabled={policyStatusSaving}
                                     />
                                     {policyStatusFieldErrors.declinedDate ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyStatusFieldErrors.declinedDate}</p> : null}
@@ -8008,10 +8085,27 @@ function AgentLeadEngagement() {
                       ) : null}
 
                       {isPolicySummaryViewed && ((isHistoryView && shouldDisplayPolicySummaryDetails) || (!isHistoryView && (hasSavedPolicyInitialPremiumEor || (isLeadTerminal && hasAnyPolicySummaryDetails)))) ? (
-                        <div className="le-block">
-                          <h4 className="le-blockTitle">{shouldDisplayPolicySummaryDetails ? "Policy Summary Details" : "Upload Policy Summary"}</h4>
+                        <div className="le-block" ref={policySummaryBlockRef}>
+                          <div className="le-inlineActionRow" style={{ alignItems: "center", gap: 12 }}>
+                            <h4 className="le-blockTitle" style={{ margin: 0 }}>{shouldDisplayPolicySummaryDetails && !policySummaryEditMode ? "Policy Summary Details" : "Upload Policy Summary"}</h4>
+                            {canEditSavedPolicySummary && !policySummaryEditMode ? (
+                              <button
+                                type="button"
+                                className="le-btn secondary"
+                                onClick={() => {
+                                  setPolicySummaryEditSnapshot({ ...policySummaryForm });
+                                  setPolicySummaryEditMode(true);
+                                  setPolicySummaryError("");
+                                  setPolicySummaryFieldErrors({});
+                                }}
+                                disabled={policySummarySaving}
+                              >
+                                Edit
+                              </button>
+                            ) : null}
+                          </div>
 
-                          {shouldDisplayPolicySummaryDetails ? (
+                          {!isPolicySummaryFormEditable ? (
                             <>
                               <div className="le-formRow">
                                 <label className="le-label">Policy Number</label>
@@ -8085,12 +8179,19 @@ function AgentLeadEngagement() {
                                   onClick={() => {
                                     setPolicySummaryError("");
                                     setPolicySummaryFieldErrors({});
-                                    setPolicySummaryForm({ policyNumber: "", policySummaryFileDataUrl: "", policySummaryFileName: "", uploadedAt: "" });
-                                    setPolicySummaryInputKey((k) => k + 1);
+                                    if (policySummaryEditMode) {
+                                      if (policySummaryEditSnapshot) setPolicySummaryForm(policySummaryEditSnapshot);
+                                      setPolicySummaryEditMode(false);
+                                      setPolicySummaryEditSnapshot(null);
+                                      scrollToPolicySummaryBlock();
+                                    } else {
+                                      setPolicySummaryForm({ policyNumber: "", policySummaryFileDataUrl: "", policySummaryFileName: "", uploadedAt: "" });
+                                      setPolicySummaryInputKey((k) => k + 1);
+                                    }
                                   }}
                                   disabled={policySummarySaving}
                                 >
-                                  Cancel
+                                  {policySummaryEditMode ? "Cancel" : "Clear"}
                                 </button>
                                 <button
                                   type="button"
@@ -8098,7 +8199,7 @@ function AgentLeadEngagement() {
                                   onClick={submitPolicySummary}
                                   disabled={policySummarySaving}
                                 >
-                                  {policySummarySaving ? "Saving..." : "Save Policy Summary"}
+                                  {policySummarySaving ? "Saving..." : policySummaryEditMode ? "Save" : "Save Policy Summary"}
                                 </button>
                               </div>
                             </>
@@ -8112,7 +8213,7 @@ function AgentLeadEngagement() {
                       ) : null}
 
                       {isPolicyCoverageViewed && ((isHistoryView && hasSavedPolicyCoverageDetails) || (!isHistoryView && hasSavedPolicySummary)) ? (
-                        <div className="le-block">
+                        <div className="le-block" ref={policyCoverageBlockRef}>
                           <h4 className="le-blockTitle">{hasSavedPolicyCoverageDetails ? "Coverage Duration Details" : "Record Coverage Duration Details"}</h4>
 
                           <div className="le-formRow">
@@ -8262,37 +8363,39 @@ function AgentLeadEngagement() {
                               {policyCoverageError ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyCoverageError}</p> : null}
 
                               <div className="le-actions" style={{ marginTop: 10 }}>
-                                <button
-                                  type="button"
-                                  className="le-btn secondary"
-                                  onClick={() => {
-                                    setPolicyCoverageError("");
-                                    setPolicyCoverageFieldErrors({});
-                                    setPolicyCoverageForm((f) => ({
-                                      ...f,
-                                      selectedPaymentTermLabel: "",
-                                      selectedPaymentTermType: "",
-                                      selectedPaymentTermYears: "",
-                                      selectedPaymentTermUntilAge: "",
-                                      coverageDurationLabel: String(policyCoverageRule?.label || ""),
-                                      coverageDurationType: String(policyCoverageRule?.type || ""),
-                                      coverageDurationYears: policyCoverageRule?.type === "FIXED_YEARS" ? String(policyCoverageRule?.years ?? "") : "",
-                                      coverageDurationUntilAge: policyCoverageRule?.type === "UNTIL_AGE" ? String(policyCoverageRule?.untilAge ?? "") : "",
-                                      policyEndDate: "",
-                                      savedAt: "",
-                                    }));
-                                  }}
-                                  disabled={policyCoverageSaving}
-                                >
-                                  Cancel
-                                </button>
+                                {hasOpenPolicyCoverageInput ? (
+                                  <button
+                                    type="button"
+                                    className="le-btn secondary"
+                                    onClick={() => {
+                                      setPolicyCoverageError("");
+                                      setPolicyCoverageFieldErrors({});
+                                      setPolicyCoverageForm((f) => ({
+                                        ...f,
+                                        selectedPaymentTermLabel: "",
+                                        selectedPaymentTermType: "",
+                                        selectedPaymentTermYears: "",
+                                        selectedPaymentTermUntilAge: "",
+                                        coverageDurationLabel: String(policyCoverageRule?.label || ""),
+                                        coverageDurationType: String(policyCoverageRule?.type || ""),
+                                        coverageDurationYears: policyCoverageRule?.type === "FIXED_YEARS" ? String(policyCoverageRule?.years ?? "") : "",
+                                        coverageDurationUntilAge: policyCoverageRule?.type === "UNTIL_AGE" ? String(policyCoverageRule?.untilAge ?? "") : "",
+                                        policyEndDate: "",
+                                        savedAt: "",
+                                      }));
+                                    }}
+                                    disabled={policyCoverageSaving}
+                                  >
+                                    Clear
+                                  </button>
+                                ) : null}
                                 <button
                                   type="button"
                                   className="le-btn primary"
                                   onClick={submitPolicyCoverageDetails}
                                   disabled={policyCoverageSaving}
                                 >
-                                  {policyCoverageSaving ? "Saving..." : "Save Coverage Duration Details"}
+                                  {policyCoverageSaving ? "Saving..." : hasOpenPolicyCoverageInput ? "Save Coverage Duration Details" : "Confirm"}
                                 </button>
                               </div>
                             </>
@@ -10395,8 +10498,10 @@ function AgentLeadEngagement() {
                                     setNeedsAssessmentSavedAt("");
                                     if (canRequestNeedsAttendanceProofEdit) {
                                       setNeedsAttendanceProofEditMode(false);
-                                      await refreshCurrentProgressView({ includeNeedsAssessment: true });
-                                      setNeedsAssessmentViewedActivityKey(needsActivityKeyRaw);
+                                      await fetchNeedsAssessment();
+                                      await fetchEngagement();
+                                      setNeedsAssessmentViewedActivityKey("Record Prospect Attendance");
+                                      window.requestAnimationFrame(() => subactivityTrackerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
                                       return;
                                     }
                                     setNeedsAttendanceProofEditMode(false);
@@ -11272,6 +11377,7 @@ function AgentLeadEngagement() {
                                           );
                                           const data = await res.json().catch(() => ({}));
                                           if (!res.ok) throw new Error(data?.message || "Failed to save follow-up decision.");
+                                          const shouldStayOnViewedNeedsSubactivity = needsViewedStepIndex < needsCurrentStepIndex;
                                           setNeedsFollowUpDecisionSaved(true);
                                           setSavedNeedsFollowUpRequired(String(needsFollowUpRequired || "").toUpperCase());
                                           setNeedsFollowUpDecisionDecidedAt(data?.followUpNeedsAssessmentDecidedAt || new Date().toISOString());
@@ -11280,7 +11386,7 @@ function AgentLeadEngagement() {
                                           if (String(needsFollowUpRequired || "").toUpperCase() === "YES") {
                                             setNeedsAssessmentCurrentActivityKey("Perform Needs Analysis");
                                             setNeedsAssessmentOutcomeActivity("Perform Needs Analysis");
-                                            setNeedsAssessmentViewedActivityKey("Perform Needs Analysis");
+                                            if (!shouldStayOnViewedNeedsSubactivity) setNeedsAssessmentViewedActivityKey("Perform Needs Analysis");
                                             setSelectedStageView("CURRENT");
                                             setShowAddAttempt(false);
                                             setProposalMeetingSaved(null);
@@ -11290,11 +11396,16 @@ function AgentLeadEngagement() {
                                             setRescheduleFollowUpNeedsMeetingOriginalAt(null);
                                             await fetchEngagement();
                                             await fetchNeedsAssessment();
-                                            setNeedsAssessmentViewedActivityKey("Perform Needs Analysis");
+                                            if (shouldStayOnViewedNeedsSubactivity) {
+                                              setNeedsAssessmentViewedActivityKey("Perform Needs Analysis");
+                                              setPendingSavedNeedsDetailsScroll(true);
+                                            } else {
+                                              setNeedsAssessmentViewedActivityKey("Perform Needs Analysis");
+                                            }
                                           } else if (String(needsFollowUpRequired || "").toUpperCase() === "NO") {
                                             setNeedsAssessmentCurrentActivityKey("Schedule Proposal Presentation");
                                             setNeedsAssessmentOutcomeActivity("Schedule Proposal Presentation");
-                                            setNeedsAssessmentViewedActivityKey("Schedule Proposal Presentation");
+                                            if (!shouldStayOnViewedNeedsSubactivity) setNeedsAssessmentViewedActivityKey("Schedule Proposal Presentation");
                                             setSelectedStageView("CURRENT");
                                             setShowAddAttempt(false);
                                             setAddNewNeedsMeetingMode(false);
@@ -11303,7 +11414,12 @@ function AgentLeadEngagement() {
                                             setRescheduleFollowUpNeedsMeetingOriginalAt(null);
                                             await fetchEngagement();
                                             await fetchNeedsAssessment();
-                                            setNeedsAssessmentViewedActivityKey("Schedule Proposal Presentation");
+                                            if (shouldStayOnViewedNeedsSubactivity) {
+                                              setNeedsAssessmentViewedActivityKey("Perform Needs Analysis");
+                                              setPendingSavedNeedsDetailsScroll(true);
+                                            } else {
+                                              setNeedsAssessmentViewedActivityKey("Schedule Proposal Presentation");
+                                            }
                                           }
                                         } catch (err) {
                                           setNeedsFollowUpDecisionError(err?.message || "Failed to save follow-up decision.");
@@ -11784,6 +11900,49 @@ function AgentLeadEngagement() {
               >
                 {savingInterest ? "Confirming..." : "Confirm"}
               </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {policyholderCreatedModal ? (
+        <div className="le-modalOverlay" role="dialog" aria-modal="true" aria-labelledby="le-policyholder-created-title">
+          <div className="le-modalCard">
+            <button type="button" className="le-modalClose" aria-label="Close policyholder creation modal" onClick={closePolicyholderCreatedModal}>
+              ×
+            </button>
+            <h3 className="le-modalTitle" id="le-policyholder-created-title">Lead successfully closed and new policyholder record created.</h3>
+            <div className="le-attemptMeta" style={{ marginBottom: 16 }}>
+              <div>
+                <span className="le-metaLabel">Policyholder Code</span>
+                <span className="le-metaValue">{policyholderCreatedModal.policyholderCode || "—"}</span>
+              </div>
+              <div>
+                <span className="le-metaLabel">Name</span>
+                <span className="le-metaValue">{policyholderCreatedModal.name || "—"}</span>
+              </div>
+              <div>
+                <span className="le-metaLabel">Product Name</span>
+                <span className="le-metaValue">{policyholderCreatedModal.productName || "—"}</span>
+              </div>
+              <div>
+                <span className="le-metaLabel">Policy Number</span>
+                <span className="le-metaValue">{policyholderCreatedModal.policyNumber || "—"}</span>
+              </div>
+            </div>
+            <div className="le-modalActions">
+              <button type="button" className="le-btn secondary" onClick={closePolicyholderCreatedModal}>
+                Close
+              </button>
+              {policyholderCreatedModal._id ? (
+                <button
+                  type="button"
+                  className="le-btn primary"
+                  onClick={() => navigate(`/agent/${user.username}/policyholders/${policyholderCreatedModal._id}`)}
+                >
+                  View Policyholder
+                </button>
+              ) : null}
             </div>
           </div>
         </div>
