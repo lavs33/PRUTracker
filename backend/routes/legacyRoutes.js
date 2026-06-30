@@ -8492,7 +8492,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
       leadEngagementId: engagement._id,
       attemptCycle: targetAttemptCycle,
     })
-      .select("attemptCycle needsPriorities.productSelection.selectedProductId needsPriorities.productSelection.requestedFrequency")
+      .select("attemptCycle needsPriorities.productSelection.selectedProductId needsPriorities.productSelection.requestedFrequency needsPriorities.productSelection.requestedPremiumPayment")
       .lean();
 
     await ensureProposalAttemptCycleIndex();
@@ -8945,6 +8945,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
           },
           needsAssessmentProductSelection: {
             requestedFrequency: String(currentCycleNeedsAssessment?.needsPriorities?.productSelection?.requestedFrequency || ""),
+            requestedPremiumPayment: currentCycleNeedsAssessment?.needsPriorities?.productSelection?.requestedPremiumPayment ?? "",
           },
         },
 
@@ -12514,12 +12515,6 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/premium-payment-t
     if (Number.isNaN(paymentDateValue.getTime())) {
       return res.status(400).json({ message: "Payment date is invalid." });
     }
-    const todayEnd = new Date();
-    todayEnd.setHours(23, 59, 59, 999);
-    if (paymentDateValue > todayEnd) {
-      return res.status(400).json({ message: "Payment date cannot be in the future." });
-    }
-
     const allowedPaymentMethods = ["Credit Card / Debit Card", "Mobile Wallet / GCash", "Dated Check", "Bills Payments"];
     if (!allowedPaymentMethods.includes(initialPaymentMethod)) {
       return res.status(400).json({ message: "Method for initial payment is required." });
@@ -14006,7 +14001,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/schedule-application
       }
       applicationTaskIdForNotif = applicationTask?._id || null;
       engagement.currentStage = "Application";
-      engagement.currentActivityKey = "Schedule Application Submission";
+      engagement.currentActivityKey = "Record Prospect Attendance";
       engagement.stageCompletedAt = now;
       engagement.stageHistory = Array.isArray(engagement.stageHistory) ? engagement.stageHistory : [];
 
@@ -14067,7 +14062,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/schedule-application
 
     return res.json({
       message: "Application submission meeting scheduled.",
-      currentActivityKey: "Schedule Application Submission",
+      currentActivityKey: "Record Prospect Attendance",
       currentStage: "Application",
     });
   } catch (err) {
