@@ -8,6 +8,16 @@ import { logout } from "./utils/logout";
 
 const API_BASE = "http://localhost:5000";
 
+const KPI_PREVIEW_DATE_PRESETS_BY_PERIOD = {
+  Daily: "1d",
+  Weekly: "7d",
+  Monthly: "30d",
+  Quarterly: "90d",
+  "Semi-Annually": "6m",
+  Annually: "12m",
+};
+const KPI_PREVIEW_DATE_PRESETS = Object.values(KPI_PREVIEW_DATE_PRESETS_BY_PERIOD);
+
 const DEFAULT_HOME_DATA = {
   clients: {
     totalProspects: 0,
@@ -68,22 +78,45 @@ function AgentHome() {
   const fetchHomeData = useCallback(async (signal) => {
     if (!user?.id) return;
 
-    const [homeResponse, kpiResponse] = await Promise.all([
+    const [homeResponse, ...kpiResponses] = await Promise.all([
       fetch(
         `${API_BASE}/api/agent/home?${new URLSearchParams({ userId: user.id }).toString()}`,
         signal ? { signal } : undefined
       ),
-      fetch(
-        `${API_BASE}/api/agent/kpi-progress?${new URLSearchParams({ userId: user.id, datePreset: "1d" }).toString()}`,
-        signal ? { signal } : undefined
+      ...KPI_PREVIEW_DATE_PRESETS.map((datePreset) =>
+        fetch(
+          `${API_BASE}/api/agent/kpi-progress?${new URLSearchParams({ userId: user.id, datePreset }).toString()}`,
+          signal ? { signal } : undefined
+        )
       ),
     ]);
 
     const payload = await homeResponse.json();
-    const kpiPayload = await kpiResponse.json();
+    const kpiPayloads = await Promise.all(kpiResponses.map((response) => response.json()));
 
     if (!homeResponse.ok) throw new Error(payload?.message || "Failed to load agent home preview.");
-    if (!kpiResponse.ok) throw new Error(kpiPayload?.message || "Failed to load KPI progress preview.");
+    const failedKpiIndex = kpiResponses.findIndex((response) => !response.ok);
+    if (failedKpiIndex >= 0) {
+      throw new Error(kpiPayloads[failedKpiIndex]?.message || "Failed to load KPI progress preview.");
+    }
+
+    const kpiPayloadByFrequency = new Map(
+      kpiPayloads.map((kpiPayload) => [String(kpiPayload?.filters?.frequency || ""), kpiPayload])
+    );
+    const baseKpiPayload = kpiPayloads[0] || {};
+    const assignedKpiPreview = (Array.isArray(baseKpiPayload?.kpis) ? baseKpiPayload.kpis : [])
+      .slice(0, 3)
+      .map((kpi) => {
+        const defaultPeriod = String(kpi.defaultPeriod || kpi.period || "");
+        const matchingPayload = kpiPayloadByFrequency.get(defaultPeriod) || baseKpiPayload;
+        const matchingKpi = (Array.isArray(matchingPayload?.kpis) ? matchingPayload.kpis : [])
+          .find((item) => item.key === kpi.key) || kpi;
+        return {
+          ...matchingKpi,
+          defaultPeriod: defaultPeriod || matchingKpi.defaultPeriod || matchingKpi.period,
+          period: defaultPeriod || matchingKpi.period,
+        };
+      });
 
     setHomeData({
       tasks: {
@@ -104,8 +137,8 @@ function AgentHome() {
         bestSource: payload?.sales?.bestSource || null,
       },
       kpiProgress: {
-        assignedKpis: Array.isArray(kpiPayload?.kpis) ? kpiPayload.kpis.slice(0, 3) : [],
-        periodLabel: kpiPayload?.reportContext?.periodLabel || "This Day",
+        assignedKpis: assignedKpiPreview,
+        periodLabel: "Default Frequency",
       },
     });
   }, [user?.id]);
