@@ -332,7 +332,7 @@ function AgentAddPaymentRecord() {
     if (form.paymentDate && paymentDateBounds.min && form.paymentDate < paymentDateBounds.min) {
       nextErrors.paymentDate = isMissedPaymentRecord
         ? "Payment date must be on or after the day the policyholder became at risk."
-        : "Payment date must be after the last payment date.";
+        : "Payment date must be on or after the last payment date.";
     }
     if (form.paymentDate && paymentDateBounds.max && form.paymentDate > paymentDateBounds.max) {
       nextErrors.paymentDate = "Payment date cannot be in the future.";
