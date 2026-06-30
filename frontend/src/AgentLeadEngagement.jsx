@@ -136,6 +136,10 @@ function AgentLeadEngagement() {
   const [, setNeedsAssessmentSavedAt] = useState("");
   const [needsAnalysisDetailsSaved, setNeedsAnalysisDetailsSaved] = useState(false);
   const [needsAnalysisEditMode, setNeedsAnalysisEditMode] = useState(true);
+  const [needsAnalysisEditRequested, setNeedsAnalysisEditRequested] = useState(false);
+  const [pendingNeedsFollowUpScroll, setPendingNeedsFollowUpScroll] = useState(false);
+  const [pendingSavedNeedsDetailsScroll, setPendingSavedNeedsDetailsScroll] = useState(false);
+  const [pendingApplicationScheduleScroll, setPendingApplicationScheduleScroll] = useState(false);
   const [needsFollowUpRequired, setNeedsFollowUpRequired] = useState("");
   const [savedNeedsFollowUpRequired, setSavedNeedsFollowUpRequired] = useState("");
   const [needsFollowUpDecisionSaved, setNeedsFollowUpDecisionSaved] = useState(false);
@@ -258,11 +262,13 @@ function AgentLeadEngagement() {
   const [applicationPremiumPaymentSaving, setApplicationPremiumPaymentSaving] = useState(false);
   const [applicationPremiumPaymentFieldErrors, setApplicationPremiumPaymentFieldErrors] = useState({});
   const [applicationAnnualPremiumManuallyEdited, setApplicationAnnualPremiumManuallyEdited] = useState(false);
+  const [applicationFrequencyPremiumManuallyEdited, setApplicationFrequencyPremiumManuallyEdited] = useState(false);
   const [applicationPremiumPaymentEditMode, setApplicationPremiumPaymentEditMode] = useState(false);
   const [applicationPremiumPaymentEditSnapshot, setApplicationPremiumPaymentEditSnapshot] = useState(null);
   const [applicationPaymentProofInputKey, setApplicationPaymentProofInputKey] = useState(0);
   const [applicationNeedsPaymentSelection, setApplicationNeedsPaymentSelection] = useState({
     requestedFrequency: "",
+    requestedPremiumPayment: "",
   });
   const [applicationSubmissionForm, setApplicationSubmissionForm] = useState({
     pruOneTransactionId: "",
@@ -683,10 +689,15 @@ function AgentLeadEngagement() {
       setApplicationPremiumPaymentError("");
       setApplicationPremiumPaymentFieldErrors({});
       setApplicationAnnualPremiumManuallyEdited(false);
+      setApplicationFrequencyPremiumManuallyEdited(false);
       setApplicationPremiumPaymentEditMode(false);
       setApplicationPremiumPaymentEditSnapshot(null);
       setApplicationNeedsPaymentSelection({
         requestedFrequency: String(appNeedsSelection?.requestedFrequency || ""),
+        requestedPremiumPayment:
+          appNeedsSelection?.requestedPremiumPayment !== null && appNeedsSelection?.requestedPremiumPayment !== undefined
+            ? String(appNeedsSelection.requestedPremiumPayment)
+            : "",
       });
       setApplicationSubmissionForm({
         pruOneTransactionId: String(appSubmission?.pruOneTransactionId || ""),
@@ -1768,6 +1779,12 @@ function AgentLeadEngagement() {
       setNeedsAnalysisDetailsSaved(true);
       setNeedsAssessmentOutcomeActivity(nextActivityKey);
       setNeedsAssessmentCurrentActivityKey(nextActivityKey);
+      if (isViewingPastStage) {
+        setPendingSavedNeedsDetailsScroll(true);
+      } else {
+        setPendingNeedsFollowUpScroll(true);
+      }
+      setNeedsAnalysisEditRequested(false);
       setNeedsAnalysisEditMode(false);
     } catch (err) {
       setNeedsAssessmentError(err?.message || "Failed to save needs assessment.");
@@ -2681,11 +2698,17 @@ function AgentLeadEngagement() {
   const previouslySavedSubactivityHelperText =
     "Viewing a previously saved subactivity. Click the current subactivity to resume editing.";
 
+  const canEditNeedsAssessmentFromProposal =
+    !isHistoryView &&
+    stage === "Proposal" &&
+    isViewingPastStage &&
+    ["Generate Proposal", "Record Prospect Attendance", "Present Proposal"].includes(String(proposalCurrentActivityKey || "").trim());
+
   const isNeedsAssessmentEditableNow =
     showNeedsAssessmentPanel &&
     (
       (isViewingCurrentStage && stage === "Needs Assessment") ||
-      (!isHistoryView && stage === "Proposal" && isViewingPastStage)
+      canEditNeedsAssessmentFromProposal
     ) &&
     !isLeadTerminal;
   const isNeedsAssessmentCurrentStageEditable =
@@ -2896,6 +2919,34 @@ function AgentLeadEngagement() {
       needsAssessmentForm?.needsPriorities?.productSelection?.requestedFrequency ||
       ""
   ).trim();
+  const requestedPremiumPaymentFromNeedsAssessment = String(
+    applicationNeedsPaymentSelection?.requestedPremiumPayment ||
+      needsAssessmentForm?.needsPriorities?.productSelection?.requestedPremiumPayment ||
+      ""
+  ).trim();
+  const premiumPaymentsPerYearByFrequency = useMemo(() => ({
+    Monthly: 12,
+    Quarterly: 4,
+    "Half-yearly": 2,
+    Yearly: 1,
+  }), []);
+  const computeAnnualPremiumFromRequestedPremium = useCallback((requestedPremium, requestedFrequency) => {
+    const premium = toNonNegativeNumber(requestedPremium);
+    const paymentsPerYear = premiumPaymentsPerYearByFrequency[String(requestedFrequency || "").trim()] || 0;
+    if (premium === null || paymentsPerYear <= 0) return "";
+    const computed = premium * paymentsPerYear;
+    return Number.isFinite(computed) ? String(Math.round(computed * 100) / 100) : "";
+  }, [premiumPaymentsPerYearByFrequency, toNonNegativeNumber]);
+  const computeFrequencyPremiumFromAnnual = useCallback((annualPremium, frequency) => {
+    const annual = toNonNegativeNumber(annualPremium);
+    const paymentsPerYear = premiumPaymentsPerYearByFrequency[String(frequency || "").trim()] || 0;
+    if (annual === null || paymentsPerYear <= 0) return "";
+    const computed = annual / paymentsPerYear;
+    return Number.isFinite(computed) ? String(Math.round(computed * 100) / 100) : "";
+  }, [premiumPaymentsPerYearByFrequency, toNonNegativeNumber]);
+  const computedAnnualPremiumFromNeedsAssessment = useMemo(() => (
+    computeAnnualPremiumFromRequestedPremium(requestedPremiumPaymentFromNeedsAssessment, requestedFrequencyFromNeedsAssessment)
+  ), [computeAnnualPremiumFromRequestedPremium, requestedFrequencyFromNeedsAssessment, requestedPremiumPaymentFromNeedsAssessment]);
   const initialPaymentMethodFromApplication = String(
     applicationPremiumPaymentForm.methodForInitialPayment || ""
   ).trim();
@@ -3045,16 +3096,9 @@ function AgentLeadEngagement() {
     return String(selectedApplicationPaymentFrequency || "").trim().toLowerCase() !== "yearly";
   }, [selectedApplicationPaymentFrequency]);
 
-  const computedFrequencyPremiumValue = useMemo(() => {
-    const annualRaw = String(applicationPremiumPaymentForm.totalAnnualPremiumPhp ?? "").trim();
-    const annual = toNonNegativeNumber(annualRaw);
-    if (annual === null) return "";
-
-    const freq = String(selectedApplicationPaymentFrequency || "").trim().toLowerCase();
-    const divisor = freq === "monthly" ? 12 : freq === "quarterly" ? 4 : freq === "half-yearly" ? 2 : 1;
-    const computed = annual / divisor;
-    return Number.isFinite(computed) ? String(Math.round(computed * 100) / 100) : "";
-  }, [applicationPremiumPaymentForm.totalAnnualPremiumPhp, selectedApplicationPaymentFrequency, toNonNegativeNumber]);
+  const computedFrequencyPremiumValue = useMemo(() => (
+    computeFrequencyPremiumFromAnnual(applicationPremiumPaymentForm.totalAnnualPremiumPhp, selectedApplicationPaymentFrequency)
+  ), [applicationPremiumPaymentForm.totalAnnualPremiumPhp, computeFrequencyPremiumFromAnnual, selectedApplicationPaymentFrequency]);
 
   const applicationPaymentPeriodLabel = derivePaymentPeriodLabel(
     applicationPremiumPaymentForm.paymentDate,
@@ -3097,9 +3141,75 @@ function AgentLeadEngagement() {
   }, [shouldRefreshMeetingAvailability, fetchMeetingAvailability]);
   const previousContactingCurrentActivityRef = useRef("");
   const previousNeedsCurrentActivityRef = useRef("");
+  const previousNeedsViewedActivityRef = useRef("");
+  const previousPastNeedsPanelVisibleRef = useRef(false);
   const previousProposalCurrentActivityRef = useRef("");
   const previousApplicationCurrentActivityRef = useRef("");
   const previousPolicyCurrentActivityRef = useRef("");
+  const subactivityTrackerRef = useRef(null);
+  const proposalScheduleApplicationRef = useRef(null);
+  const savedNeedsDetailsRef = useRef(null);
+  const needsFollowUpSectionRef = useRef(null);
+  const lastAutoScrolledSubactivityRef = useRef("");
+
+  const currentSubactivityScrollKey = useMemo(() => {
+    if (!isViewingCurrentStage || isHistoryView || isLeadTerminal) return "";
+
+    if (showContactingPanel) return `Contacting:${contactingCurrentActivityKey}`;
+    if (showNeedsAssessmentPanel) return `Needs Assessment:${needsActivityKeyRaw}`;
+    if (showProposalPanel) return `Proposal:${proposalUiActivityKey}`;
+    if (showApplicationPanel) return `Application:${applicationUiActivityKey}`;
+    if (showPolicyIssuancePanel) return `Policy Issuance:${policyIssuanceUiActivityKey}`;
+
+    return "";
+  }, [
+    applicationUiActivityKey,
+    contactingCurrentActivityKey,
+    isHistoryView,
+    isLeadTerminal,
+    isViewingCurrentStage,
+    needsActivityKeyRaw,
+    policyIssuanceUiActivityKey,
+    proposalUiActivityKey,
+    showApplicationPanel,
+    showContactingPanel,
+    showNeedsAssessmentPanel,
+    showPolicyIssuancePanel,
+    showProposalPanel,
+  ]);
+
+  useEffect(() => {
+    if ((!pendingNeedsFollowUpScroll && !pendingSavedNeedsDetailsScroll) || needsAnalysisEditMode) return;
+
+    window.requestAnimationFrame(() => {
+      const targetRef = pendingSavedNeedsDetailsScroll ? savedNeedsDetailsRef : needsFollowUpSectionRef;
+      const sectionTop = targetRef.current?.getBoundingClientRect?.().top;
+      if (Number.isFinite(sectionTop)) {
+        window.scrollTo({ top: window.scrollY + sectionTop - 120, behavior: "smooth" });
+      } else {
+        targetRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+      setPendingNeedsFollowUpScroll(false);
+      setPendingSavedNeedsDetailsScroll(false);
+    });
+  }, [needsAnalysisEditMode, pendingNeedsFollowUpScroll, pendingSavedNeedsDetailsScroll]);
+
+
+  useEffect(() => {
+    if (!currentSubactivityScrollKey) {
+      lastAutoScrolledSubactivityRef.current = "";
+      return;
+    }
+
+    const previousScrollKey = lastAutoScrolledSubactivityRef.current;
+    lastAutoScrolledSubactivityRef.current = currentSubactivityScrollKey;
+
+    if (!previousScrollKey || previousScrollKey === currentSubactivityScrollKey) return;
+
+    window.requestAnimationFrame(() => {
+      subactivityTrackerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }, [currentSubactivityScrollKey]);
 
   useEffect(() => {
     syncViewedStepWithCurrent(
@@ -3125,6 +3235,23 @@ function AgentLeadEngagement() {
     if (!isViewingCurrentStage && !isNeedsStageCurrent) return;
     setNeedsAssessmentViewedActivityKey(needsActivityKeyRaw);
   }, [showNeedsAssessmentPanel, isViewingCurrentStage, isHistoryView, needsActivityKeyRaw, engagement?.currentStage]);
+
+  useEffect(() => {
+    const previousViewedKey = previousNeedsViewedActivityRef.current;
+    const wasPastNeedsPanelVisible = previousPastNeedsPanelVisibleRef.current;
+    const isPastNeedsPanelVisible = showNeedsAssessmentPanel && isViewingPastStage && !isHistoryView;
+
+    previousNeedsViewedActivityRef.current = needsAssessmentViewedActivityKey;
+    previousPastNeedsPanelVisibleRef.current = isPastNeedsPanelVisible;
+
+    if (!isPastNeedsPanelVisible) return;
+    if (wasPastNeedsPanelVisible && previousViewedKey === needsAssessmentViewedActivityKey) return;
+
+    setNeedsAnalysisEditRequested(false);
+    setNeedsAnalysisEditMode(false);
+    setNeedsAttendanceProofEditMode(false);
+  }, [isHistoryView, isViewingPastStage, needsAssessmentViewedActivityKey, showNeedsAssessmentPanel]);
+
 
   useEffect(() => {
     syncViewedStepWithCurrent(
@@ -3217,7 +3344,8 @@ function AgentLeadEngagement() {
     isNeedsAssessmentEditableNow &&
     (needsAssessmentViewedActivityKey === needsActivityKeyRaw ||
       (needsAssessmentViewedActivityKey === "Perform Needs Analysis" &&
-        ["Perform Needs Analysis", "Schedule Proposal Presentation"].includes(needsActivityKeyRaw)));
+        ["Perform Needs Analysis", "Schedule Proposal Presentation"].includes(needsActivityKeyRaw)) ||
+      (needsAnalysisEditRequested && needsAssessmentViewedActivityKey === "Perform Needs Analysis"));
   const isNeedsAttendanceChoiceLocked =
     needsAssessmentViewedActivityKey === "Record Prospect Attendance" &&
     needsActivityKeyRaw !== "Record Prospect Attendance";
@@ -3345,6 +3473,12 @@ function AgentLeadEngagement() {
   const canEditProposalScheduleForm = isNeedsScheduleEditable || isProposalPresentationRescheduleInProgress || isProposalPresentationAddFurtherInProgress;
   const isNeedsAnalysisViewed = needsAssessmentViewedActivityKey === "Perform Needs Analysis";
   const isNeedsScheduleViewed = needsAssessmentViewedActivityKey === "Schedule Proposal Presentation";
+  const canManageProposalPresentationMeeting =
+    !isHistoryView &&
+    showNeedsAssessmentPanel &&
+    isNeedsScheduleViewed &&
+    !isLeadTerminal &&
+    (isNeedsScheduleEditable || canEditNeedsAssessmentFromProposal || isProposalPresentationRescheduleInProgress || isProposalPresentationAddFurtherInProgress);
   const hasNeedsAttendanceSaved = ["YES", "NO"].includes(String(needsAssessmentForm.attendanceChoice || "").trim().toUpperCase());
   const hasNeedsAnalysisSaved = Boolean(
     String(needsAssessmentForm?.needsPriorities?.currentPriority || "").trim() ||
@@ -3411,21 +3545,48 @@ function AgentLeadEngagement() {
   }, [needsAssessmentForm?.basicInformation?.age, needsAssessmentForm?.basicInformation?.birthday, selectedProposalProduct]);
 
   useEffect(() => {
-    if (!Number.isFinite(selectedProductMinimumAnnualPremiumAmount) || selectedProductMinimumAnnualPremiumAmount <= 0) return;
-    if (applicationAnnualPremiumManuallyEdited) return;
     if (hasSavedApplicationPremiumPaymentTransfer) return;
-    if (String(applicationPremiumPaymentForm.totalAnnualPremiumPhp || "").trim()) return;
 
-    setApplicationPremiumPaymentForm((form) => ({
-      ...form,
-      totalAnnualPremiumPhp: String(selectedProductMinimumAnnualPremiumAmount),
-      totalFrequencyPremiumPhp: "",
-    }));
-    setApplicationPremiumPaymentFieldErrors((prev) => ({ ...prev, totalAnnualPremiumPhp: "", totalFrequencyPremiumPhp: "" }));
+    const fallbackAnnualPremium = Number.isFinite(selectedProductMinimumAnnualPremiumAmount) && selectedProductMinimumAnnualPremiumAmount > 0
+      ? String(selectedProductMinimumAnnualPremiumAmount)
+      : "";
+    const autoAnnualPremium = computedAnnualPremiumFromNeedsAssessment || fallbackAnnualPremium;
+    const selectedFrequency = String(applicationPremiumPaymentForm.frequencyOfPremiumPayment || requestedFrequencyFromNeedsAssessment || "").trim();
+    if (!autoAnnualPremium && !selectedFrequency) return;
+
+    setApplicationPremiumPaymentForm((form) => {
+      const nextAnnualPremium = applicationAnnualPremiumManuallyEdited
+        ? form.totalAnnualPremiumPhp
+        : (autoAnnualPremium || form.totalAnnualPremiumPhp);
+      const nextFrequency = form.frequencyOfPremiumPayment || selectedFrequency;
+      const nextFrequencyPremium = applicationFrequencyPremiumManuallyEdited
+        ? form.totalFrequencyPremiumPhp
+        : computeFrequencyPremiumFromAnnual(nextAnnualPremium, nextFrequency);
+
+      if (
+        form.totalAnnualPremiumPhp === nextAnnualPremium &&
+        form.frequencyOfPremiumPayment === nextFrequency &&
+        form.totalFrequencyPremiumPhp === nextFrequencyPremium
+      ) {
+        return form;
+      }
+
+      return {
+        ...form,
+        frequencyOfPremiumPayment: nextFrequency,
+        totalAnnualPremiumPhp: nextAnnualPremium,
+        totalFrequencyPremiumPhp: nextFrequency === "Yearly" ? "" : nextFrequencyPremium,
+      };
+    });
+    setApplicationPremiumPaymentFieldErrors((prev) => ({ ...prev, frequencyOfPremiumPayment: "", totalAnnualPremiumPhp: "", totalFrequencyPremiumPhp: "" }));
   }, [
     applicationAnnualPremiumManuallyEdited,
-    applicationPremiumPaymentForm.totalAnnualPremiumPhp,
+    applicationFrequencyPremiumManuallyEdited,
+    applicationPremiumPaymentForm.frequencyOfPremiumPayment,
+    computedAnnualPremiumFromNeedsAssessment,
+    computeFrequencyPremiumFromAnnual,
     hasSavedApplicationPremiumPaymentTransfer,
+    requestedFrequencyFromNeedsAssessment,
     selectedProductMinimumAnnualPremiumAmount,
   ]);
   const proposalMeetingMinimumDate = useMemo(() => {
@@ -3445,6 +3606,14 @@ function AgentLeadEngagement() {
     const minimumExistingDate = existingMeetingDate && existingMeetingDate > today ? existingMeetingDate : today;
     return latestCompletedDate && latestCompletedDate > minimumExistingDate ? latestCompletedDate : minimumExistingDate;
   }, [latestCompletedProposalMeetingEndAt, latestScheduledMeeting, proposalMeetingRescheduleOriginal?.startAt, proposalMeetingSaved?.startAt]);
+  const proposalMeetingDateMinimum = proposalMeetingScheduleMode === "ADD_FURTHER" && addFurtherProposalMeetingDate
+    ? addFurtherProposalMeetingDate
+    : proposalMeetingMinimumDate;
+
+  const proposalMeetingDateOptions = useMemo(() => (
+    (availableDateOptions || []).filter((option) => String(option?.value || "") >= String(proposalMeetingDateMinimum || ""))
+  ), [availableDateOptions, proposalMeetingDateMinimum]);
+
   const proposalNeedsPrefillKey = latestScheduledMeeting?.meetingAt
     ? String(latestScheduledMeeting?.attemptId || latestScheduledMeeting?.meetingCreatedAt || latestScheduledMeeting?.createdAt || latestScheduledMeeting.meetingAt)
     : "";
@@ -3552,6 +3721,20 @@ function AgentLeadEngagement() {
   const isProposalPresentationViewed = proposalViewedActivityKey === "Present Proposal";
   const isProposalScheduleApplicationViewed = proposalViewedActivityKey === "Schedule Application Submission";
   const isApplicationAttendanceViewed = applicationActiveViewedActivityKey === "Record Prospect Attendance";
+
+  useEffect(() => {
+    if (!pendingApplicationScheduleScroll || !showProposalPanel || !isProposalScheduleApplicationViewed) return;
+
+    window.requestAnimationFrame(() => {
+      const sectionTop = proposalScheduleApplicationRef.current?.getBoundingClientRect?.().top;
+      if (Number.isFinite(sectionTop)) {
+        window.scrollTo({ top: window.scrollY + sectionTop - 150, behavior: "smooth" });
+      } else {
+        proposalScheduleApplicationRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+      setPendingApplicationScheduleScroll(false);
+    });
+  }, [isProposalScheduleApplicationViewed, pendingApplicationScheduleScroll, showProposalPanel]);
   const isApplicationPremiumViewed = applicationActiveViewedActivityKey === "Record Premium Payment Transfer";
   const isApplicationSubmissionViewed = applicationActiveViewedActivityKey === "Record Application Submission";
   const canRequestApplicationAttendanceProofEdit =
@@ -3940,6 +4123,21 @@ function AgentLeadEngagement() {
     needsAssessmentFieldErrors.fundChoiceTotalAllocation ||
     needsAssessmentFieldErrors.mismatchReason
   );
+  const savedNeedsPriority = String(needsAssessmentForm.needsPriorities?.currentPriority || needsPrioritiesDerived.priority || "").trim();
+  const showSavedProtectionDetails = savedNeedsPriority === "Protection" || Boolean(
+    String(needsAssessmentForm.needsPriorities?.protection?.monthlySpend ?? "").trim() ||
+    String(needsAssessmentForm.needsPriorities?.protection?.savingsForProtection ?? "").trim()
+  );
+  const showSavedHealthDetails = savedNeedsPriority === "Health" || Boolean(
+    String(needsAssessmentForm.needsPriorities?.health?.amountToCoverCriticalIllness ?? "").trim() ||
+    String(needsAssessmentForm.needsPriorities?.health?.savingsForCriticalIllness ?? "").trim()
+  );
+  const showSavedInvestmentDetails = savedNeedsPriority === "Investment" || Boolean(
+    String(needsAssessmentForm.needsPriorities?.investment?.savingsPlan ?? "").trim() ||
+    String(needsAssessmentForm.needsPriorities?.investment?.targetSavingsAmount ?? "").trim() ||
+    String(needsAssessmentForm.needsPriorities?.investment?.savingsForInvestment ?? "").trim() ||
+    (needsPrioritiesDerived.selectedFunds || []).length > 0
+  );
   const shouldShowProtectionPriorityFields = needsPrioritiesDerived.priority === "Protection" || hasProtectionPriorityFieldErrors;
   const shouldShowHealthPriorityFields = needsPrioritiesDerived.priority === "Health" || hasHealthPriorityFieldErrors;
   const shouldShowInvestmentPriorityFields = needsPrioritiesDerived.priority === "Investment" || hasInvestmentPriorityFieldErrors;
@@ -4302,9 +4500,9 @@ function AgentLeadEngagement() {
     setRescheduleFromNeedsMode(true);
   };
 
-  const startRescheduleProposalPresentation = () => {
-    if (!proposalMeetingSaved?.startAt) return;
-    const originalMeeting = proposalMeetingSaved;
+  const startRescheduleProposalPresentation = (meetingOverride = null) => {
+    const originalMeeting = meetingOverride?.startAt ? meetingOverride : proposalMeetingSaved;
+    if (!originalMeeting?.startAt) return;
     setProposalMeetingError("");
     setProposalMeetingFieldErrors({});
     setProposalMeetingRescheduleOriginal(originalMeeting);
@@ -4570,6 +4768,13 @@ function AgentLeadEngagement() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to schedule meeting.");
 
+      const shouldStayOnContactingSchedule = Boolean(
+        addNewNeedsMeetingMode ||
+        rescheduleFollowUpNeedsMeetingMode ||
+        rescheduleFromNeedsMode ||
+        contactingRescheduleMode
+      );
+
       await refreshCurrentProgressView();
       if (addNewNeedsMeetingMode) {
         setAddNewNeedsMeetingMode(false);
@@ -4589,11 +4794,14 @@ function AgentLeadEngagement() {
           attendanceProofImageDataUrl: "",
           attendanceProofFileName: "",
         }));
-        setSelectedStageView("CURRENT");
       }
       if (contactingRescheduleMode) {
         setContactingRescheduleMode(false);
         setRescheduleOriginalMeetingAt(null);
+      }
+      if (shouldStayOnContactingSchedule) {
+        setSelectedStageView("Contacting");
+        setContactingViewedActivityKey("Schedule Meeting");
       }
     } catch (err) {
       const msg = err?.message || "Cannot connect to server. Is backend running?";
@@ -4747,6 +4955,7 @@ function AgentLeadEngagement() {
       }
 
       setSavingProposalMeeting(true);
+      const shouldStayOnScheduleProposalPresentation = ["ADD_FURTHER", "RESCHEDULE_EXISTING"].includes(proposalMeetingScheduleMode);
 
       const res = await fetch(
         `${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/needs-assessment/schedule-proposal?userId=${user.id}`,
@@ -4790,6 +4999,10 @@ function AgentLeadEngagement() {
         attendedAt: "",
       });
       await refreshCurrentProgressView({ includeNeedsAssessment: true });
+      if (shouldStayOnScheduleProposalPresentation) {
+        setSelectedStageView("Needs Assessment");
+        setNeedsAssessmentViewedActivityKey("Schedule Proposal Presentation");
+      }
     } catch (err) {
       const msg = err?.message || "Cannot connect to server. Is backend running?";
       if (!applyMeetingServerFieldError(msg, setProposalMeetingFieldErrors, { conflictMessage: "Selected start time conflicts with an existing meeting." })) {
@@ -5174,7 +5387,7 @@ function AgentLeadEngagement() {
 
       const frequencyOfPremiumPayment = String(applicationPremiumPaymentForm.frequencyOfPremiumPayment || "").trim();
       const totalAnnualPremiumRaw = String(applicationPremiumPaymentForm.totalAnnualPremiumPhp ?? "").trim();
-      const totalFrequencyPremiumRaw = String(computedFrequencyPremiumValue || applicationPremiumPaymentForm.totalFrequencyPremiumPhp || "").trim();
+      const totalFrequencyPremiumRaw = String(applicationPremiumPaymentForm.totalFrequencyPremiumPhp || "").trim();
       const totalAnnualPremiumPhp = toNonNegativeNumber(totalAnnualPremiumRaw);
       const totalFrequencyPremiumPhp = toNonNegativeNumber(totalFrequencyPremiumRaw);
       const paymentDate = String(applicationPremiumPaymentForm.paymentDate || "").trim();
@@ -6021,6 +6234,7 @@ function AgentLeadEngagement() {
       }
 
       setSavingApplicationMeeting(true);
+      const shouldStayOnScheduleApplicationSubmission = Boolean(applicationMeetingRescheduleOriginal?.startAt);
 
       const res = await fetch(
         `${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/proposal/schedule-application?userId=${user.id}`,
@@ -6048,6 +6262,12 @@ function AgentLeadEngagement() {
       if (!res.ok) throw new Error(data?.message || "Failed to schedule application submission.");
 
       await refreshCurrentProgressView();
+      if (shouldStayOnScheduleApplicationSubmission) {
+        setSelectedStageView("Proposal");
+        setProposalViewedActivityKey("Schedule Application Submission");
+        setPendingApplicationScheduleScroll(true);
+      }
+      setApplicationMeetingRescheduleOriginal(null);
       setApplicationAttendanceForm({
         attendanceChoice: "",
         attendanceProofImageDataUrl: "",
@@ -6097,7 +6317,17 @@ function AgentLeadEngagement() {
     });
   }, [tasksAll]);
 
-  const doneTasks = useMemo(() => tasksAll.filter((t) => t.status === "Done"), [tasksAll]);
+  const doneTasks = useMemo(() => (
+    tasksAll
+      .filter((t) => t.status === "Done")
+      .sort((a, b) => {
+        const da = new Date(a?.completedAt).getTime();
+        const db = new Date(b?.completedAt).getTime();
+        const na = Number.isFinite(da) ? da : -Infinity;
+        const nb = Number.isFinite(db) ? db : -Infinity;
+        return nb - na;
+      })
+  ), [tasksAll]);
 
   const taskTypeClass = (type) => {
     const t = String(type || "").toUpperCase();
@@ -6427,7 +6657,7 @@ function AgentLeadEngagement() {
 
               {/* Main + Sidebar */}
               <div className="le-mainRow">
-                <section className="le-card">
+                <section className="le-card" ref={subactivityTrackerRef}>
                   <div className="le-cardHeader">
                     <h2 className="le-cardTitle">{mainTitle}</h2>
                     <div style={{ marginLeft: "auto", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 10 }}>
@@ -6663,6 +6893,7 @@ function AgentLeadEngagement() {
                       allowAllSteps={isHistoryView || isViewingPastStage}
                     />
                   )}
+
 
                   {showApplicationPanel && (
                     <>
@@ -7010,12 +7241,21 @@ function AgentLeadEngagement() {
                                   value={applicationPremiumPaymentForm.frequencyOfPremiumPayment}
                                   onChange={(e) => {
                                     const frequencyOfPremiumPayment = e.target.value;
-                                    setApplicationPremiumPaymentForm((f) => ({
-                                      ...f,
-                                      frequencyOfPremiumPayment,
-                                      totalFrequencyPremiumPhp: "",
-                                    }));
-                                    setApplicationPremiumPaymentFieldErrors((prev) => ({ ...prev, frequencyOfPremiumPayment: "", totalFrequencyPremiumPhp: "" }));
+                                    setApplicationFrequencyPremiumManuallyEdited(false);
+                                    setApplicationPremiumPaymentForm((f) => {
+                                      const nextAnnualPremium = !applicationAnnualPremiumManuallyEdited && computedAnnualPremiumFromNeedsAssessment
+                                        ? computedAnnualPremiumFromNeedsAssessment
+                                        : f.totalAnnualPremiumPhp;
+                                      return {
+                                        ...f,
+                                        frequencyOfPremiumPayment,
+                                        totalAnnualPremiumPhp: nextAnnualPremium,
+                                        totalFrequencyPremiumPhp: frequencyOfPremiumPayment === "Yearly"
+                                          ? ""
+                                          : computeFrequencyPremiumFromAnnual(nextAnnualPremium, frequencyOfPremiumPayment),
+                                      };
+                                    });
+                                    setApplicationPremiumPaymentFieldErrors((prev) => ({ ...prev, frequencyOfPremiumPayment: "", totalAnnualPremiumPhp: "", totalFrequencyPremiumPhp: "" }));
                                   }}
                                   disabled={applicationPremiumPaymentSaving}
                                 >
@@ -7061,8 +7301,15 @@ function AgentLeadEngagement() {
                                   inputMode="decimal"
                                   value={applicationPremiumPaymentForm.totalAnnualPremiumPhp}
                                   onChange={(e) => {
+                                    const totalAnnualPremiumPhp = e.target.value;
                                     setApplicationAnnualPremiumManuallyEdited(true);
-                                    setApplicationPremiumPaymentForm((f) => ({ ...f, totalAnnualPremiumPhp: e.target.value }));
+                                    setApplicationPremiumPaymentForm((f) => ({
+                                      ...f,
+                                      totalAnnualPremiumPhp,
+                                      totalFrequencyPremiumPhp: applicationFrequencyPremiumManuallyEdited || selectedApplicationPaymentFrequency === "Yearly"
+                                        ? f.totalFrequencyPremiumPhp
+                                        : computeFrequencyPremiumFromAnnual(totalAnnualPremiumPhp, selectedApplicationPaymentFrequency),
+                                    }));
                                     setApplicationPremiumPaymentFieldErrors((prev) => ({ ...prev, totalAnnualPremiumPhp: "", totalFrequencyPremiumPhp: "" }));
                                   }}
                                   disabled={applicationPremiumPaymentSaving}
@@ -7075,7 +7322,18 @@ function AgentLeadEngagement() {
                               {shouldShowFrequencyPremiumField ? (
                                 <div className="le-formRow">
                                   <label className="le-label">{totalFrequencyPremiumLabel} *</label>
-                                  <input className="le-input" value={computedFrequencyPremiumValue} disabled />
+                                  <input
+                                    className="le-input"
+                                    inputMode="decimal"
+                                    value={applicationPremiumPaymentForm.totalFrequencyPremiumPhp}
+                                    onChange={(e) => {
+                                      setApplicationFrequencyPremiumManuallyEdited(true);
+                                      setApplicationPremiumPaymentForm((f) => ({ ...f, totalFrequencyPremiumPhp: e.target.value }));
+                                      setApplicationPremiumPaymentFieldErrors((prev) => ({ ...prev, totalFrequencyPremiumPhp: "" }));
+                                    }}
+                                    placeholder={computedFrequencyPremiumValue || ""}
+                                    disabled={applicationPremiumPaymentSaving}
+                                  />
                                   {applicationPremiumPaymentFieldErrors.totalFrequencyPremiumPhp ? (
                                     <p className="le-smallNote" style={{ color: "#DA291C", marginTop: 6 }}>{applicationPremiumPaymentFieldErrors.totalFrequencyPremiumPhp}</p>
                                   ) : null}
@@ -7171,16 +7429,23 @@ function AgentLeadEngagement() {
                                     setApplicationPremiumPaymentFieldErrors({});
                                     if (applicationPremiumPaymentEditMode) {
                                       if (applicationPremiumPaymentEditSnapshot) setApplicationPremiumPaymentForm(applicationPremiumPaymentEditSnapshot);
+                                      setApplicationAnnualPremiumManuallyEdited(false);
+                                      setApplicationFrequencyPremiumManuallyEdited(false);
                                       setApplicationPremiumPaymentEditMode(false);
                                       setApplicationPremiumPaymentEditSnapshot(null);
                                       return;
                                     }
-                                    setApplicationPremiumPaymentForm((f) => ({
+                                    setApplicationAnnualPremiumManuallyEdited(false);
+                                    setApplicationFrequencyPremiumManuallyEdited(false);
+                                    setApplicationPremiumPaymentForm((f) => {
+                                      const nextFrequency = requestedFrequencyFromNeedsAssessment || "";
+                                      const nextAnnualPremium = computedAnnualPremiumFromNeedsAssessment || "";
+                                      return {
                                       ...f,
                                       paymentId: "",
-                                      frequencyOfPremiumPayment: requestedFrequencyFromNeedsAssessment || "",
-                                      totalAnnualPremiumPhp: "",
-                                      totalFrequencyPremiumPhp: "",
+                                      frequencyOfPremiumPayment: nextFrequency,
+                                      totalAnnualPremiumPhp: nextAnnualPremium,
+                                      totalFrequencyPremiumPhp: nextFrequency === "Yearly" ? "" : computeFrequencyPremiumFromAnnual(nextAnnualPremium, nextFrequency),
                                       paymentDate: toDateInputValue(new Date()),
                                       paymentPeriodLabel: "",
                                       paymentPeriodStartDate: "",
@@ -7190,7 +7455,8 @@ function AgentLeadEngagement() {
                                       paymentProofImageDataUrl: "",
                                       paymentProofFileName: "",
                                       savedAt: "",
-                                    }));
+                                    };
+                                    });
                                     setApplicationPaymentProofInputKey((k) => k + 1);
                                   }}
                                   disabled={applicationPremiumPaymentSaving}
@@ -8320,7 +8586,7 @@ function AgentLeadEngagement() {
                                   }}
                                   disabled={validatingContact || uiLocked || isContactingReadOnly}
                                 >
-                                  Cancel
+                                  Clear
                                 </button>
                                 <button
                                   type="button"
@@ -8478,7 +8744,7 @@ function AgentLeadEngagement() {
                                   }
                                   disabled={savingInterest}
                                 >
-                                  Cancel
+                                  Clear
                                 </button>
                                 <button type="button" className="le-btn primary" onClick={submitAssessInterest} disabled={savingInterest}>
                                   {savingInterest ? "Saving..." : "Save"}
@@ -8544,7 +8810,7 @@ function AgentLeadEngagement() {
                                 ? "Reschedule Meeting"
                                 : "Schedule Meeting"}
                             </h4>
-                            {needsFollowUpDecisionSaved && savedNeedsFollowUpRequired === "YES" && !hasAddedFollowUpNeedsMeeting && !addNewNeedsMeetingMode ? (
+                            {!isHistoryView && needsFollowUpDecisionSaved && savedNeedsFollowUpRequired === "YES" && !hasAddedFollowUpNeedsMeeting && !addNewNeedsMeetingMode ? (
                               <button
                                 type="button"
                                 className="le-btn secondary"
@@ -8764,6 +9030,19 @@ function AgentLeadEngagement() {
                                   type="button"
                                   className="le-btn secondary"
                                   onClick={() => {
+                                    const isNeedsMeetingAdjustment = addNewNeedsMeetingMode || rescheduleFollowUpNeedsMeetingMode || rescheduleFromNeedsMode;
+                                    if (isNeedsMeetingAdjustment) {
+                                      setAddNewNeedsMeetingMode(false);
+                                      setAddNewNeedsMeetingOriginalAt(null);
+                                      setRescheduleFollowUpNeedsMeetingMode(false);
+                                      setRescheduleFollowUpNeedsMeetingOriginalAt(null);
+                                      setRescheduleFromNeedsMode(false);
+                                      setRescheduleOriginalMeetingAt(null);
+                                      setNeedsAttendanceRescheduleLock(false);
+                                      setSelectedStageView("Contacting");
+                                      setContactingViewedActivityKey("Schedule Meeting");
+                                      return;
+                                    }
                                     setMeetingForm({
                                       meetingDate: "",
                                       meetingStartTime: "",
@@ -8775,20 +9054,6 @@ function AgentLeadEngagement() {
                                       meetingInviteSent: false,
                                       meetingPlace: "",
                                     });
-                                    if (addNewNeedsMeetingMode) {
-                                      setAddNewNeedsMeetingMode(false);
-                                      setAddNewNeedsMeetingOriginalAt(null);
-                                    }
-                                    if (rescheduleFollowUpNeedsMeetingMode) {
-                                      setRescheduleFollowUpNeedsMeetingMode(false);
-                                      setRescheduleFollowUpNeedsMeetingOriginalAt(null);
-                                    }
-                                    if (rescheduleFromNeedsMode) {
-                                      setRescheduleFromNeedsMode(false);
-                                      setRescheduleOriginalMeetingAt(null);
-                                      setNeedsAttendanceRescheduleLock(false);
-                                      setSelectedStageView("CURRENT");
-                                    }
                                     if (contactingRescheduleMode) {
                                       setContactingRescheduleMode(false);
                                       setRescheduleOriginalMeetingAt(null);
@@ -8796,7 +9061,7 @@ function AgentLeadEngagement() {
                                   }}
                                   disabled={savingMeeting}
                                 >
-                                  Cancel
+                                  {addNewNeedsMeetingMode || rescheduleFollowUpNeedsMeetingMode || rescheduleFromNeedsMode ? "Cancel" : "Clear"}
                                 </button>
                                 <button type="button" className="le-btn primary" onClick={submitScheduleMeeting} disabled={savingMeeting}>
                                   {savingMeeting ? "Saving..." : "Save Meeting"}
@@ -9438,7 +9703,7 @@ function AgentLeadEngagement() {
                                   {proposalPresentationError && !proposalPresentationError.includes("Please select if further proposal presentation meet is required") && !isProposalPresentationNotesRequiredError
                                     ? <p className="le-smallNote" style={{ color: "#DA291C", marginTop: 8 }}>{proposalPresentationError}</p>
                                     : null}
-                                  {!proposalPresentationDecisionEditMode && !proposalPresentationDecisionPending && canScheduleFurtherProposalPresentation ? (
+                                  {!isHistoryView && !proposalPresentationDecisionEditMode && !proposalPresentationDecisionPending && canScheduleFurtherProposalPresentation ? (
                                     <p className="le-muted le-presentationFurtherPrompt">
                                       Further Proposal Presentation can be scheduled.{" "}
                                       <button
@@ -9597,7 +9862,7 @@ function AgentLeadEngagement() {
                                 )}
                               </div>
                               {proposalPresentationError ? <p className="le-smallNote" style={{ color: "#DA291C", marginTop: 8 }}>{proposalPresentationError}</p> : null}
-                              {!proposalPresentationDecisionEditMode && !proposalPresentationDecisionPending && canScheduleFurtherProposalPresentation ? (
+                              {!isHistoryView && !proposalPresentationDecisionEditMode && !proposalPresentationDecisionPending && canScheduleFurtherProposalPresentation ? (
                                 <p className="le-muted le-presentationFurtherPrompt">
                                   Further Proposal Presentation can be scheduled.{" "}
                                   <button
@@ -9620,7 +9885,7 @@ function AgentLeadEngagement() {
                         <div className="le-block"><p className="le-muted" style={{ marginTop: 8 }}>No details were saved for this subactivity in the selected engagement cycle.</p></div>
                       ) : null}
                       {showProposalPanel && isProposalScheduleApplicationViewed && (!isHistoryView || hasProposalScheduleApplicationSaved) ? (
-                        <div className="le-block">
+                        <div className="le-block" ref={proposalScheduleApplicationRef}>
                           {!displayedApplicationMeetingSaved ? <h4 className="le-blockTitle">Schedule Application Submission</h4> : null}
 
                           {displayedApplicationMeetingSaved ? (
@@ -9923,6 +10188,56 @@ function AgentLeadEngagement() {
                           <>
                         {needsAssessmentLoading ? <p className="le-muted">Loading needs assessment...</p> : null}
                         {showTopNeedsAssessmentError ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{needsAssessmentError}</p> : null}
+                        {isViewingPastStage && !isHistoryView ? (
+                          <>
+                            <div className="le-formRow" style={{ alignItems: "center" }}>
+                              <label className="le-label">Prospect Attended? *</label>
+                              <div className="le-checkboxGrid">
+                                <label className="le-check">
+                                  <input type="radio" checked={needsAssessmentForm.attendanceChoice === "YES"} disabled readOnly />
+                                  <span>Yes</span>
+                                </label>
+                                <label className="le-check">
+                                  <input type="radio" checked={needsAssessmentForm.attendanceChoice === "NO"} disabled readOnly />
+                                  <span>No</span>
+                                </label>
+                              </div>
+                            </div>
+
+                            {needsAssessmentForm.attendanceChoice === "YES" ? (
+                              <>
+                                <div className="le-formRow" style={{ marginTop: 8 }}>
+                                  <label className="le-label">Proof of Attendance (JPG, JPEG, PNG) *</label>
+                                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                                    <button type="button" className="le-btn secondary" disabled>
+                                      Choose File
+                                    </button>
+                                    <span className="le-smallNote" style={{ margin: 0 }}>
+                                      {needsAssessmentForm.attendanceProofFileName ? needsAssessmentForm.attendanceProofFileName : "No file chosen"}
+                                    </span>
+                                  </div>
+                                </div>
+
+                                {String(needsAssessmentForm.attendanceProofImageDataUrl || "").trim() ? (
+                                  <div className="le-formRow" style={{ marginTop: 8 }}>
+                                    <label className="le-label">Preview</label>
+                                    {String(needsAssessmentForm.attendanceProofFileName || "").trim() ? (
+                                      <p className="le-smallNote" style={{ marginTop: 0, marginBottom: 8 }}>
+                                        File Name: {needsAssessmentForm.attendanceProofFileName}
+                                      </p>
+                                    ) : null}
+                                    <img
+                                      src={needsAssessmentForm.attendanceProofImageDataUrl}
+                                      alt="Proof of attendance preview"
+                                      style={{ maxWidth: 260, width: "100%", borderRadius: 8, border: "1px solid #e5e7eb" }}
+                                    />
+                                  </div>
+                                ) : null}
+                              </>
+                            ) : null}
+                          </>
+                        ) : (
+                          <>
                                                 <div className="le-formRow" style={{ alignItems: "center" }}>
                           <label className="le-label">Prospect Attended? *</label>
                           <div className="le-checkboxGrid">
@@ -10065,19 +10380,29 @@ function AgentLeadEngagement() {
                                 <button
                                   type="button"
                                   className="le-btn secondary"
-                                  onClick={() => {
+                                  onClick={async () => {
                                     setNeedsAssessmentError("");
                                     setNeedsAssessmentSavedAt("");
-                                    setNeedsAttendanceProofEditMode(true);
+                                    if (canRequestNeedsAttendanceProofEdit) {
+                                      setNeedsAttendanceProofEditMode(false);
+                                      await refreshCurrentProgressView({ includeNeedsAssessment: true });
+                                      setNeedsAssessmentViewedActivityKey(needsActivityKeyRaw);
+                                      return;
+                                    }
+                                    setNeedsAttendanceProofEditMode(false);
+                                    if (needsAttendanceProofInputRef.current) {
+                                      needsAttendanceProofInputRef.current.value = "";
+                                    }
                                     setNeedsAssessmentForm((prev) => ({
                                       ...prev,
+                                      attendanceChoice: "",
                                       attendanceProofImageDataUrl: "",
                                       attendanceProofFileName: "",
                                     }));
                                   }}
                                   disabled={needsAssessmentSaving}
                                 >
-                                  Clear
+                                  {canRequestNeedsAttendanceProofEdit ? "Cancel" : "Clear"}
                                 </button>
                                 <button
                                   type="button"
@@ -10092,11 +10417,13 @@ function AgentLeadEngagement() {
                           </>
                         )}
                           </>
+                        )}
+                          </>
                         ) : null}
                       </div>
                       ) : null}
 
-                      {!isHistoryView && isNeedsAnalysisViewed && needsAnalysisEditMode && needsAssessmentForm.attendanceChoice === "YES" && String(needsAssessmentForm.attendanceProofImageDataUrl || "").trim() && (
+                      {!isHistoryView && isNeedsAnalysisViewed && needsAnalysisEditMode && (!isViewingPastStage || needsAnalysisEditRequested) && needsAssessmentForm.attendanceChoice === "YES" && String(needsAssessmentForm.attendanceProofImageDataUrl || "").trim() && (
                         <div className="le-block">
                           <div className="le-blockHeader le-sectionHeader">
                             <h4 className="le-blockTitle">Prospect&apos;s Basic Information</h4>
@@ -10638,7 +10965,7 @@ function AgentLeadEngagement() {
                               ) : null}
 
                               <div className="le-subsectionCard">
-                                <div className="le-formRow"><label className="le-label">Requested Frequency of Premium Payment *</label><select className="le-input" value={needsAssessmentForm.needsPriorities?.productSelection?.requestedFrequency || "Monthly"} onChange={(e) => { const v = e.target.value; const currentRequested = String(needsAssessmentForm.needsPriorities?.productSelection?.requestedPremiumPayment ?? "").trim(); const nextRequested = currentRequested === "" ? computeRequestedPremiumFromMin(needsAssessmentForm.needsPriorities?.minPremium, v) : currentRequested; updateNeedsPriorities("productSelection", { ...(needsAssessmentForm.needsPriorities?.productSelection || {}), requestedFrequency: v, requestedPremiumPayment: nextRequested }); }} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}><option value="Monthly">Monthly</option><option value="Quarterly">Quarterly</option><option value="Half-yearly">Half-yearly</option><option value="Yearly">Yearly</option></select></div>
+                                <div className="le-formRow"><label className="le-label">Requested Frequency of Premium Payment *</label><select className="le-input" value={needsAssessmentForm.needsPriorities?.productSelection?.requestedFrequency || "Monthly"} onChange={(e) => { const v = e.target.value; updateNeedsPriorities("productSelection", { ...(needsAssessmentForm.needsPriorities?.productSelection || {}), requestedFrequency: v, requestedPremiumPayment: computeRequestedPremiumFromMin(needsAssessmentForm.needsPriorities?.minPremium, v) }); }} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving}><option value="Monthly">Monthly</option><option value="Quarterly">Quarterly</option><option value="Half-yearly">Half-yearly</option><option value="Yearly">Yearly</option></select></div>
                                 {renderNeedsAssessmentError("requestedFrequency")}
                                 <div className="le-formRow"><label className="le-label">Requested Premium Payment (Php) *</label><input className="le-input" inputMode="decimal" value={needsAssessmentForm.needsPriorities?.productSelection?.requestedPremiumPayment ?? ""} onChange={(e) => updateNeedsPriorities("productSelection", { ...(needsAssessmentForm.needsPriorities?.productSelection || {}), requestedPremiumPayment: e.target.value })} disabled={!isNeedsAssessmentCurrentViewEditable || needsAssessmentSaving} /></div>
                                 {renderNeedsAssessmentError("requestedPremiumPayment")}
@@ -10661,8 +10988,12 @@ function AgentLeadEngagement() {
                                   setNeedsAssessmentFieldErrors({});
                                   try { sessionStorage.removeItem(needsDraftStorageKey); } catch {}
                                   if (needsAnalysisDetailsSaved) {
+                                    setNeedsAnalysisEditRequested(false);
                                     setNeedsAnalysisEditMode(false);
                                     fetchNeedsAssessment();
+                                    window.requestAnimationFrame(() => {
+                                      subactivityTrackerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+                                    });
                                     return;
                                   }
                                   setNeedsAssessmentSavedAt("");
@@ -10681,16 +11012,19 @@ function AgentLeadEngagement() {
                         </div>
                       )}
 
-                      {isNeedsAnalysisViewed && (!isHistoryView || hasNeedsAnalysisSaved) && !needsAnalysisEditMode && (
+                      {isNeedsAnalysisViewed && (!isHistoryView || hasNeedsAnalysisSaved) && (!needsAnalysisEditMode || (isViewingPastStage && !needsAnalysisEditRequested)) && (
                         <div>
-                          <div className="le-block le-savedNeedsBlock" style={{ marginTop: 16 }}>
+                          <div className="le-block le-savedNeedsBlock" style={{ marginTop: 16 }} ref={savedNeedsDetailsRef}>
                             <div className="le-inlineActionRow">
                               <h4 className="le-blockTitle">Saved Needs Assessment Details</h4>
-                              {isNeedsAssessmentCurrentViewEditable ? (
+                              {isNeedsAssessmentEditableNow ? (
                                 <button
                                   type="button"
                                   className="le-btn secondary"
-                                  onClick={() => setNeedsAnalysisEditMode(true)}
+                                  onClick={() => {
+                                    setNeedsAnalysisEditRequested(true);
+                                    setNeedsAnalysisEditMode(true);
+                                  }}
                                 >
                                   Edit Needs Analysis
                                 </button>
@@ -10757,7 +11091,7 @@ function AgentLeadEngagement() {
                             </div>
                             </div>
 
-                            {needsPrioritiesDerived.priority === "Protection" ? (
+                            {showSavedProtectionDetails ? (
                               <div className="le-savedNeedsSection">
                                 <p className="le-smallNote">Protection Details</p>
                                 <div className="le-attemptMeta">
@@ -10770,7 +11104,7 @@ function AgentLeadEngagement() {
                               </div>
                             ) : null}
 
-                            {needsPrioritiesDerived.priority === "Health" ? (
+                            {showSavedHealthDetails ? (
                               <div className="le-savedNeedsSection">
                                 <p className="le-smallNote">Health Details</p>
                                 <div className="le-attemptMeta">
@@ -10781,7 +11115,7 @@ function AgentLeadEngagement() {
                               </div>
                             ) : null}
 
-                            {needsPrioritiesDerived.priority === "Investment" ? (
+                            {showSavedInvestmentDetails ? (
                               <div className="le-savedNeedsSection">
                                 <p className="le-smallNote">Investment Details</p>
                                 <div className="le-attemptMeta">
@@ -10842,7 +11176,7 @@ function AgentLeadEngagement() {
                         <div className="le-block"><p className="le-muted" style={{ marginTop: 8 }}>No details were saved for this subactivity in the selected engagement cycle.</p></div>
                       ) : null}
                       {showNeedsAssessmentPanel && isNeedsAnalysisViewed && (!isHistoryView || hasNeedsAnalysisSaved) && !needsAnalysisEditMode && ["Perform Needs Analysis", "Schedule Proposal Presentation"].includes(String(needsAssessmentOutcomeActivity || "").trim()) && (
-                          <div className="le-block" style={{ marginTop: 16 }}>
+                          <div className="le-block" style={{ marginTop: 16 }} ref={needsFollowUpSectionRef}>
                             <div className="le-inlineActionRow">
                               <h4 className="le-blockTitle" style={{ fontSize: 16 }}>Schedule Further Needs Assessment Meet</h4>
                               {isNeedsAssessmentCurrentStageEditable && needsFollowUpDecisionSaved && !needsFollowUpDecisionEditMode ? (
@@ -10898,12 +11232,18 @@ function AgentLeadEngagement() {
                                       type="button"
                                       className="le-btn secondary"
                                       onClick={() => {
-                                        setNeedsFollowUpRequired("");
                                         setNeedsFollowUpDecisionError("");
+                                        if (needsFollowUpDecisionSaved) {
+                                          setNeedsFollowUpRequired(savedNeedsFollowUpRequired);
+                                          setNeedsFollowUpDecisionEditMode(false);
+                                          setNeedsFollowUpDecisionDismissed(false);
+                                          return;
+                                        }
+                                        setNeedsFollowUpRequired("");
                                       }}
                                       disabled={needsFollowUpDecisionSaving}
                                     >
-                                      Clear
+                                      {needsFollowUpDecisionSaved ? "Cancel" : "Clear"}
                                     </button>
                                     <button
                                       type="button"
@@ -10996,7 +11336,7 @@ function AgentLeadEngagement() {
                           <div className="le-block" style={{ marginTop: 16 }}>
                             {!proposalMeetingSaved ? <h4 className="le-blockTitle">Schedule Proposal Presentation</h4> : null}
                             {isHistoryView && !hasNeedsScheduleSaved ? <p className="le-muted" style={{ marginTop: 8 }}>No details were saved for this subactivity in the selected engagement cycle.</p> : null}
-                            {proposalMeetingSaved && canScheduleFurtherProposalPresentation ? (
+                            {!isHistoryView && proposalMeetingSaved && canScheduleFurtherProposalPresentation ? (
                               <div className="le-actions" style={{ marginTop: 8, marginBottom: 12, justifyContent: "flex-end" }}>
                                 <button
                                   type="button"
@@ -11027,12 +11367,12 @@ function AgentLeadEngagement() {
                                         {meeting?.place ? <div><span className="le-metaLabel">Meeting Place</span><span className="le-metaValue">{meeting.place}</span></div> : null}
                                         {meeting?.status ? <div><span className="le-metaLabel">Status</span><span className="le-metaValue">{meeting.status}</span></div> : null}
                                       </div>
-                                      {idx === 0 && isNeedsScheduleEditable && String(meeting?.status || "").trim() !== "Completed" ? (
+                                      {idx === 0 && canManageProposalPresentationMeeting && !canScheduleFurtherProposalPresentation && String(meeting?.status || "").trim() !== "Completed" ? (
                                         <div className="le-actions" style={{ marginTop: 12 }}>
                                           <button
                                             type="button"
                                             className="le-btn secondary"
-                                            onClick={startRescheduleProposalPresentation}
+                                            onClick={() => startRescheduleProposalPresentation(meeting)}
                                             disabled={savingProposalMeeting}
                                           >
                                             Reschedule Meeting
@@ -11049,18 +11389,21 @@ function AgentLeadEngagement() {
                               <>
                             <div className="le-formRow">
                               <label className="le-label">Meeting Date *</label>
-                              <input
-                                type="date"
+                              <select
                                 className="le-input"
                                 value={proposalMeetingForm.meetingDate}
-                                min={proposalMeetingScheduleMode === "ADD_FURTHER" && addFurtherProposalMeetingDate ? addFurtherProposalMeetingDate : proposalMeetingMinimumDate}
                                 onChange={(e) => {
                                   const v = e.target.value;
-                                  setProposalMeetingForm((f) => ({ ...f, meetingDate: v }));
+                                  setProposalMeetingForm((f) => ({ ...f, meetingDate: v, meetingStartTime: "" }));
                                   setProposalMeetingFieldErrors((prev) => ({ ...prev, meetingDate: "", meetingStartTime: "" }));
                                 }}
                                 disabled={!canEditProposalScheduleForm || savingProposalMeeting}
-                              />
+                              >
+                                <option value="">Select date</option>
+                                {proposalMeetingDateOptions.map((d) => (
+                                  <option key={d.value} value={d.value}>{d.label}</option>
+                                ))}
+                              </select>
                               {proposalMeetingFieldErrors.meetingDate ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{proposalMeetingFieldErrors.meetingDate}</p> : null}
                             </div>
                             <div className="le-formRow">
