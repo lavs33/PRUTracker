@@ -14006,7 +14006,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/schedule-application
       }
       applicationTaskIdForNotif = applicationTask?._id || null;
       engagement.currentStage = "Application";
-      engagement.currentActivityKey = "Schedule Application Submission";
+      engagement.currentActivityKey = "Record Prospect Attendance";
       engagement.stageCompletedAt = now;
       engagement.stageHistory = Array.isArray(engagement.stageHistory) ? engagement.stageHistory : [];
 
@@ -14067,7 +14067,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/schedule-application
 
     return res.json({
       message: "Application submission meeting scheduled.",
-      currentActivityKey: "Schedule Application Submission",
+      currentActivityKey: "Record Prospect Attendance",
       currentStage: "Application",
     });
   } catch (err) {
