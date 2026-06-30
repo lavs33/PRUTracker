@@ -9785,6 +9785,27 @@ app.post("/api/prospects/:prospectId/leads/:leadId/validate-contact", async (req
         attempt.interestLevel = undefined;
         attempt.preferredChannel = undefined;
         attempt.preferredChannelOther = "";
+        await ScheduledMeeting.updateMany(
+          {
+            leadEngagementId: engagement._id,
+            attemptCycle: currentAttemptCycle,
+            meetingType: "Needs Assessment",
+            status: "Scheduled",
+          },
+          { $set: { status: "Cancelled" } },
+          { session }
+        );
+        await Task.updateMany(
+          {
+            assignedToUserId: userObjectId,
+            prospectId: prospectObjectId,
+            leadEngagementId: engagement._id,
+            type: "APPOINTMENT",
+            status: { $in: ["Open", "Overdue"] },
+          },
+          { $set: { status: "Done", completedAt: new Date() } },
+          { session }
+        );
       }
       await attempt.save({ session });
 
@@ -9990,6 +10011,27 @@ app.post("/api/prospects/:prospectId/leads/:leadId/assess-interest", async (req,
       } else {
         attempt.preferredChannel = undefined;
         attempt.preferredChannelOther = undefined;
+        await ScheduledMeeting.updateMany(
+          {
+            leadEngagementId: engagement._id,
+            attemptCycle: Number(engagement.contactAttemptCycle || 1),
+            meetingType: "Needs Assessment",
+            status: "Scheduled",
+          },
+          { $set: { status: "Cancelled" } },
+          { session }
+        );
+        await Task.updateMany(
+          {
+            assignedToUserId: userObjectId,
+            prospectId: prospect._id,
+            leadEngagementId: engagement._id,
+            type: "APPOINTMENT",
+            status: { $in: ["Open", "Overdue"] },
+          },
+          { $set: { status: "Done", completedAt: new Date() } },
+          { session }
+        );
         // Keep the engagement parked on "Assess Interest" so the UI/history
         // still reflects which activity produced the not-interested outcome.
         engagement.currentActivityKey = "Assess Interest";
@@ -13047,8 +13089,6 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/status", asyn
         issuanceDateValue = new Date(`${issuanceDateRaw}T00:00:00`);
         if (Number.isNaN(issuanceDateValue.getTime())) {
           fieldErrors.issuanceDate = "Issuance date is invalid.";
-        } else if (issuanceDateValue > today) {
-          fieldErrors.issuanceDate = "Issuance date cannot be in the future.";
         } else if (policyInitialEorReceiptDateStart && issuanceDateValue < policyInitialEorReceiptDateStart) {
           fieldErrors.issuanceDate = "Issuance date cannot be earlier than Initial Premium eOR receipt date.";
         }
@@ -13063,8 +13103,6 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/status", asyn
         declinedDateValue = new Date(`${declinedDateRaw}T00:00:00`);
         if (Number.isNaN(declinedDateValue.getTime())) {
           fieldErrors.declinedDate = "Date declined is invalid.";
-        } else if (declinedDateValue > today) {
-          fieldErrors.declinedDate = "Date declined cannot be in the future.";
         } else if (policyInitialEorReceiptDateStart && declinedDateValue < policyInitialEorReceiptDateStart) {
           fieldErrors.declinedDate = "Date declined cannot be earlier than Initial Premium eOR receipt date.";
         }
