@@ -13047,8 +13047,6 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/status", asyn
         issuanceDateValue = new Date(`${issuanceDateRaw}T00:00:00`);
         if (Number.isNaN(issuanceDateValue.getTime())) {
           fieldErrors.issuanceDate = "Issuance date is invalid.";
-        } else if (issuanceDateValue > today) {
-          fieldErrors.issuanceDate = "Issuance date cannot be in the future.";
         } else if (policyInitialEorReceiptDateStart && issuanceDateValue < policyInitialEorReceiptDateStart) {
           fieldErrors.issuanceDate = "Issuance date cannot be earlier than Initial Premium eOR receipt date.";
         }
@@ -13063,8 +13061,6 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/status", asyn
         declinedDateValue = new Date(`${declinedDateRaw}T00:00:00`);
         if (Number.isNaN(declinedDateValue.getTime())) {
           fieldErrors.declinedDate = "Date declined is invalid.";
-        } else if (declinedDateValue > today) {
-          fieldErrors.declinedDate = "Date declined cannot be in the future.";
         } else if (policyInitialEorReceiptDateStart && declinedDateValue < policyInitialEorReceiptDateStart) {
           fieldErrors.declinedDate = "Date declined cannot be earlier than Initial Premium eOR receipt date.";
         }
@@ -13232,6 +13228,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/initial-premi
     })
       .select("recordPolicyApplicationStatus.status recordPolicyApplicationStatus.issuanceDate uploadInitialPremiumEor.paymentId")
       .lean();
+    const isEditingInitialPremiumEor = Boolean(policyDoc?.uploadInitialPremiumEor?.paymentId);
 
     const uploadedAt = new Date();
 
@@ -13295,6 +13292,15 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/initial-premi
             paymentId: paymentDoc._id,
           },
         },
+        ...(isEditingInitialPremiumEor
+          ? {
+              $unset: {
+                recordPolicyApplicationStatus: "",
+                uploadPolicySummary: "",
+                recordCoverageDurationDetails: "",
+              },
+            }
+          : {}),
       },
       { upsert: true }
     );
@@ -13430,7 +13436,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-dura
 
     await session.withTransaction(async () => {
       const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId })
-        .select("_id birthday")
+        .select("_id firstName middleName lastName birthday")
         .session(session)
         .lean();
       if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
@@ -13482,7 +13488,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-dura
       }
 
       const product = await Product.findById(productId)
-        .select("paymentTermOptions coverageDurationRule")
+        .select("productName paymentTermOptions coverageDurationRule")
         .session(session)
         .lean();
       if (!product) throw Object.assign(new Error("Chosen product not found."), { status: 404 });
@@ -13706,6 +13712,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-dura
       );
 
       const policyStatus = String(policyDoc?.recordPolicyApplicationStatus?.status || "").trim();
+      let policyholderForResponse = null;
       if (policyStatus === "Issued") {
         lead.status = "Closed";
         await lead.save({ session });
@@ -13733,13 +13740,14 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-dura
             }
           }
           await existingPolicyholder.save({ session });
+          policyholderForResponse = existingPolicyholder;
         } else {
           const MAX_TRIES = 5;
           let lastErr = null;
           for (let i = 0; i < MAX_TRIES; i += 1) {
             try {
               const policyholderCode = await getNextPolicyholderCode();
-              await Policyholder.create([
+              const createdPolicyholders = await Policyholder.create([
                 {
                   policyholderCode,
                   assignedToUserId: userObjectId,
@@ -13752,6 +13760,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-dura
                   annualPaymentRecords: annualPaymentDoc?._id ? [{ annualPaymentId: annualPaymentDoc._id, recordedAt: now }] : [],
                 },
               ], { session });
+              policyholderForResponse = createdPolicyholders[0] || null;
               lastErr = null;
               break;
             } catch (err) {
@@ -13765,11 +13774,22 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-dura
         }
       }
 
+      const prospectFullName = `${prospect?.firstName || ""}${prospect?.middleName ? ` ${prospect.middleName}` : ""} ${prospect?.lastName || ""}`.trim();
       responsePayload = {
         message: "Coverage duration details saved.",
         currentActivityKey: "Record Coverage Duration Details",
         policyEndDate,
         nextPaymentDate,
+        leadClosed: policyStatus === "Issued",
+        policyholder: policyholderForResponse
+          ? {
+              _id: policyholderForResponse._id,
+              policyholderCode: policyholderForResponse.policyholderCode || "",
+              name: prospectFullName,
+              productName: String(product?.productName || ""),
+              policyNumber: String(policyholderForResponse.policyNumber || policyDoc?.uploadPolicySummary?.policyNumber || ""),
+            }
+          : null,
       };
     });
 
