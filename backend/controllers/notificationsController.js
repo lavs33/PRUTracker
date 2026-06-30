@@ -186,7 +186,7 @@ function createNotificationsController({
       assignedToUserId: uid,
       status: { $in: ["Active", "At Risk", "Lapsed", "Paid-Up"] },
     })
-      .select("policyholderCode policyNumber productId leadEngagementId nextPaymentDate status annualPaymentRecords")
+      .select("policyholderCode policyNumber productId leadEngagementId lastPaidDate nextPaymentDate status annualPaymentRecords")
       .sort({ nextPaymentDate: 1, policyholderCode: -1 })
       .lean();
 
