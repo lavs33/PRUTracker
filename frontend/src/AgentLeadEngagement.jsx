@@ -5569,7 +5569,6 @@ function AgentLeadEngagement() {
     }
   };
 
-  const todayDateInput = useMemo(() => toDateInputValue(new Date()), []);
   const policyStatusDecisionDateMinInput = String(policyInitialEorForm.receiptDate || "").trim();
   const applicationPaymentDateMinInput = useMemo(
     () => (applicationMeetingSaved?.startAt ? toDateInputValue(applicationMeetingSaved.startAt) : ""),
@@ -5693,8 +5692,6 @@ function AgentLeadEngagement() {
           nextFieldErrors.issuanceDate = "Issuance date is required for Issued status.";
         } else if (policyStatusDecisionDateMinInput && issuanceDate < policyStatusDecisionDateMinInput) {
           nextFieldErrors.issuanceDate = "Issuance date cannot be earlier than Initial Premium eOR receipt date.";
-        } else if (issuanceDate > todayDateInput) {
-          nextFieldErrors.issuanceDate = "Issuance date cannot be in the future.";
         }
       }
 
@@ -5703,8 +5700,6 @@ function AgentLeadEngagement() {
           nextFieldErrors.declinedDate = "Date declined is required for Declined status.";
         } else if (policyStatusDecisionDateMinInput && declinedDate < policyStatusDecisionDateMinInput) {
           nextFieldErrors.declinedDate = "Date declined cannot be earlier than Initial Premium eOR receipt date.";
-        } else if (declinedDate > todayDateInput) {
-          nextFieldErrors.declinedDate = "Date declined cannot be in the future.";
         }
         if (!declinationLetterFileDataUrl) {
           nextFieldErrors.declinationLetterFileDataUrl = "Declination letter PDF is required.";
@@ -7719,7 +7714,6 @@ function AgentLeadEngagement() {
                                       setPolicyStatusFieldErrors((prev) => ({ ...prev, issuanceDate: "" }));
                                     }}
                                     min={policyStatusDecisionDateMinInput || undefined}
-                                    max={todayDateInput}
                                     disabled={policyStatusSaving}
                                   />
                                   {policyStatusFieldErrors.issuanceDate ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyStatusFieldErrors.issuanceDate}</p> : null}
@@ -7739,7 +7733,6 @@ function AgentLeadEngagement() {
                                         setPolicyStatusFieldErrors((prev) => ({ ...prev, declinedDate: "" }));
                                       }}
                                       min={policyStatusDecisionDateMinInput || undefined}
-                                      max={todayDateInput}
                                       disabled={policyStatusSaving}
                                     />
                                     {policyStatusFieldErrors.declinedDate ? <p className="le-smallNote" style={{ color: "#DA291C" }}>{policyStatusFieldErrors.declinedDate}</p> : null}
