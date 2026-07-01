@@ -88,6 +88,28 @@ function paymentHasEor(payment) {
   );
 }
 
+
+function annualPaymentTotalCountForFrequency(frequency) {
+  const countsByFrequency = {
+    Monthly: 12,
+    Quarterly: 4,
+    "Half-yearly": 2,
+    Yearly: 1,
+  };
+  return countsByFrequency[String(frequency || "").trim()] || 0;
+}
+
+function paymentCoveredCount(payment = {}) {
+  if (!paymentHasTransfer(payment)) return 0;
+  const count = Number(payment?.recordPremiumPaymentTransfer?.paymentCountCovered || 1);
+  return Number.isFinite(count) && count > 0 ? Math.max(1, Math.floor(count)) : 1;
+}
+
+function paymentProcessedCoveredCount(payment = {}) {
+  if (!paymentHasEor(payment)) return 0;
+  return paymentCoveredCount(payment);
+}
+
 function isPaymentNotification(notification) {
   return PAYMENT_NOTIFICATION_TYPES.includes(String(notification?.type || "").toUpperCase());
 }
@@ -186,7 +208,7 @@ function createNotificationsController({
       assignedToUserId: uid,
       status: { $in: ["Active", "At Risk", "Lapsed", "Paid-Up"] },
     })
-      .select("policyholderCode policyNumber productId leadEngagementId nextPaymentDate status annualPaymentRecords")
+      .select("policyholderCode policyNumber productId leadEngagementId lastPaidDate nextPaymentDate status annualPaymentRecords")
       .sort({ nextPaymentDate: 1, policyholderCode: -1 })
       .lean();
 
@@ -373,6 +395,26 @@ function createNotificationsController({
       }
 
       const linkedPayments = linkedAnnualPaymentIds.flatMap((id) => paymentsByAnnualPaymentId.get(id) || []);
+      const waitingForFinalEorProcessing = linkedAnnualPayments.some((record) => {
+        if (!record || !["Not Started", "Ongoing"].includes(String(record.status || ""))) return false;
+        const annualPaymentsForRecord = paymentsByAnnualPaymentId.get(String(record._id || "")) || [];
+        const expectedCount = annualPaymentTotalCountForFrequency(record.frequencyOfPayment);
+        const coveredCount = annualPaymentsForRecord.reduce((sum, payment) => sum + paymentCoveredCount(payment), 0);
+        const processedCount = annualPaymentsForRecord.reduce((sum, payment) => sum + paymentProcessedCoveredCount(payment), 0);
+        return expectedCount > 0 && coveredCount >= expectedCount && processedCount < expectedCount;
+      });
+      if (waitingForFinalEorProcessing) {
+        if (["At Risk", "Lapsed"].includes(String(policyholder.status || "")) || policyholder.nextPaymentDate) {
+          policyholderWrites.push({
+            updateOne: {
+              filter: { _id: policyholder._id, assignedToUserId: uid },
+              update: { $set: { status: "Active", nextPaymentDate: null } },
+            },
+          });
+        }
+        continue;
+      }
+
       const pendingPayment = linkedPayments
         .filter((payment) => paymentHasTransfer(payment) && !paymentHasEor(payment) && payment?.recordPremiumPaymentTransfer?.eorReminderEnabled === true)
         .sort((a, b) => new Date(b?.recordPremiumPaymentTransfer?.paymentDate || b?.createdAt || 0) - new Date(a?.recordPremiumPaymentTransfer?.paymentDate || a?.createdAt || 0))[0];
@@ -393,10 +435,10 @@ function createNotificationsController({
         if (!annualPayment) continue;
         annualPayments = paymentsByAnnualPaymentId.get(annualPaymentId) || [];
         paymentDateKey = paymentDateKey || dateKeyInTZ(pendingPayment?.recordPremiumPaymentTransfer?.paymentDate) || todayKey;
-        if (String(policyholder.status || "") === "At Risk") {
+        if (["At Risk", "Lapsed"].includes(String(policyholder.status || ""))) {
           policyholderWrites.push({
             updateOne: {
-              filter: { _id: policyholder._id, assignedToUserId: uid, status: "At Risk" },
+              filter: { _id: policyholder._id, assignedToUserId: uid, status: { $in: ["At Risk", "Lapsed"] } },
               update: { $set: { status: "Active" } },
             },
           });
@@ -438,10 +480,10 @@ function createNotificationsController({
           return loggedPaymentDateKey === paymentDateKey && paymentHasTransfer(payment);
         });
         if (paymentAlreadyProcessedForDate || transferAlreadyLoggedForDate) {
-          if (String(policyholder.status || "") === "At Risk") {
+          if (["At Risk", "Lapsed"].includes(String(policyholder.status || ""))) {
             policyholderWrites.push({
               updateOne: {
-                filter: { _id: policyholder._id, assignedToUserId: uid, status: "At Risk" },
+                filter: { _id: policyholder._id, assignedToUserId: uid, status: { $in: ["At Risk", "Lapsed"] } },
                 update: { $set: { status: "Active" } },
               },
             });
