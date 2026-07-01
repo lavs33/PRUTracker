@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import TopNav from "./components/TopNav";
 import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
+import { normalizePolicyholderStatus, policyholderStatusClass } from "./utils/policyholderStatus";
 import "./AgentClients.css";
 
 function AgentClients() {
@@ -414,11 +415,14 @@ const handleSideNav = (key) => {
                         <td>{c.lastName || "—"}</td>
                         <td className="mono">{c.policyNumber || "—"}</td>
                         <td>
-                          <span
-                            className={`status-pill ${c.status === "Active" ? "active" : (c.status === "At Risk" ? "at-risk" : (c.status === "Lapsed" ? "lapsed" : (c.status === "Paid-Up" ? "paid-up" : (c.status === "Matured" ? "matured" : (c.status === "Cancelled" ? "cancelled" : "nurture")))))}`}
-                          >
-                            {c.status || "—"}
-                          </span>
+                          {(() => {
+                            const displayStatus = normalizePolicyholderStatus(c.status, c.nextPaymentDate);
+                            return (
+                              <span className={`status-pill ${policyholderStatusClass(displayStatus)}`}>
+                                {displayStatus || "—"}
+                              </span>
+                            );
+                          })()}
                         </td>
                         <td>{formatDateOnly(c.lastPaidDate)}</td>
                         <td>{formatDateOnly(c.nextPaymentDate)}</td>
