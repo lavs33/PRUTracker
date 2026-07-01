@@ -124,7 +124,7 @@ function AgentAddPaymentRecord() {
   const [apiError, setApiError] = useState("");
   const [details, setDetails] = useState(null);
   const [fieldErrors, setFieldErrors] = useState({});
-  const [paymentDateBounds, setPaymentDateBounds] = useState({ min: "", max: toDateInputValue(new Date()) });
+  const [paymentDateBounds, setPaymentDateBounds] = useState({ min: "", max: "" });
   const [paymentPeriodStartDate, setPaymentPeriodStartDate] = useState("");
   const [basePremiumAmount, setBasePremiumAmount] = useState(0);
   const [activePreview, setActivePreview] = useState(null);
@@ -214,10 +214,9 @@ function AgentAddPaymentRecord() {
         const atRiskPaymentDate = nextPaymentPeriodStart ? addDays(nextPaymentPeriodStart, 1) : null;
         const minPaymentDate = isMissedPaymentRecord
           ? toDateInputValue(atRiskPaymentDate)
-          : (lastActualPaymentDate ? toDateInputValue(addDays(lastActualPaymentDate, 1)) : "");
-        const maxPaymentDate = toDateInputValue(new Date());
-        const defaultPaymentDate = maxPaymentDate;
-        setPaymentDateBounds({ min: minPaymentDate, max: maxPaymentDate });
+          : (lastActualPaymentDate ? toDateInputValue(lastActualPaymentDate) : "");
+        const defaultPaymentDate = minPaymentDate || toDateInputValue(new Date());
+        setPaymentDateBounds({ min: minPaymentDate, max: "" });
         setPaymentPeriodStartDate(toDateInputValue(nextPaymentPeriodStart));
         const methodForRenewalPayment = String(data?.application?.methodForRenewalPayment || "");
         setForm((prev) => ({
@@ -332,10 +331,7 @@ function AgentAddPaymentRecord() {
     if (form.paymentDate && paymentDateBounds.min && form.paymentDate < paymentDateBounds.min) {
       nextErrors.paymentDate = isMissedPaymentRecord
         ? "Payment date must be on or after the day the policyholder became at risk."
-        : "Payment date must be after the last payment date.";
-    }
-    if (form.paymentDate && paymentDateBounds.max && form.paymentDate > paymentDateBounds.max) {
-      nextErrors.paymentDate = "Payment date cannot be in the future.";
+        : "Payment date must be on or after the last payment date.";
     }
     if (!form.methodForPayment) nextErrors.methodForPayment = "Method of payment is required.";
     if (!form.proofOfPaymentFileDataUrl) nextErrors.proofOfPaymentFileDataUrl = "Proof of payment file is required.";
@@ -386,9 +382,6 @@ function AgentAddPaymentRecord() {
     if (!eorForm.receiptDate) nextErrors.receiptDate = "Receipt date is required.";
     if (eorForm.receiptDate && form.paymentDate && eorForm.receiptDate < form.paymentDate) {
       nextErrors.receiptDate = "Receipt date cannot be before the payment date.";
-    }
-    if (eorForm.receiptDate && paymentDateBounds.max && eorForm.receiptDate > paymentDateBounds.max) {
-      nextErrors.receiptDate = "Receipt date cannot be in the future.";
     }
     if (!eorForm.eorFileDataUrl) nextErrors.eorFileDataUrl = "eOR PDF file is required.";
     setEorFieldErrors(nextErrors);
@@ -498,7 +491,6 @@ function AgentAddPaymentRecord() {
   const isProofImage = String(proofMimeType || "").startsWith("image/");
   const isTransferDirty = savedPaymentId ? !areTransferFormsEqual(form, savedTransferForm) : true;
   const eorReceiptDateMin = form.paymentDate || "";
-  const eorReceiptDateMax = paymentDateBounds.max || toDateInputValue(new Date());
   const preview = activePreview === "policy"
     ? {
         title: "Policy Summary Preview",
@@ -657,7 +649,6 @@ function AgentAddPaymentRecord() {
                       type="date"
                       value={form.paymentDate}
                       min={paymentDateBounds.min || undefined}
-                      max={paymentDateBounds.max || undefined}
                       onChange={(event) => setForm((prev) => ({ ...prev, paymentDate: event.target.value }))}
                     />
                     {fieldErrors.paymentDate ? <small>{fieldErrors.paymentDate}</small> : null}
@@ -763,7 +754,6 @@ function AgentAddPaymentRecord() {
                       type="date"
                       value={eorForm.receiptDate}
                       min={eorReceiptDateMin || undefined}
-                      max={eorReceiptDateMax || undefined}
                       onChange={(event) => setEorForm((prev) => ({ ...prev, receiptDate: event.target.value }))}
                     />
                     {eorFieldErrors.receiptDate ? <small>{eorFieldErrors.receiptDate}</small> : null}
