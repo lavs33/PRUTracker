@@ -181,14 +181,10 @@ function AgentPaymentRecordDetails() {
   const validateEor = () => {
     const nextErrors = {};
     const paymentDateValue = details?.payment?.paymentDate ? toDateInputValue(details.payment.paymentDate) : "";
-    const todayValue = toDateInputValue(new Date());
     if (!String(eorForm.eorNumber || "").trim()) nextErrors.eorNumber = "eOR number is required.";
     if (!eorForm.receiptDate) nextErrors.receiptDate = "Receipt date is required.";
     if (eorForm.receiptDate && paymentDateValue && eorForm.receiptDate < paymentDateValue) {
       nextErrors.receiptDate = "Receipt date cannot be before the payment date.";
-    }
-    if (eorForm.receiptDate && todayValue && eorForm.receiptDate > todayValue) {
-      nextErrors.receiptDate = "Receipt date cannot be in the future.";
     }
     if (!eorForm.eorFileDataUrl) nextErrors.eorFileDataUrl = "eOR PDF file is required.";
     setEorFieldErrors(nextErrors);
@@ -242,7 +238,6 @@ function AgentPaymentRecordDetails() {
   const hasUploadedEor = Boolean(payment.eorNumber || payment.eorFileDataUrl || payment.uploadedAt || paymentStatus === "Processed");
   const canEditEor = Boolean(payment._id && !hasUploadedEor);
   const receiptDateMin = payment.paymentDate ? toDateInputValue(payment.paymentDate) : "";
-  const receiptDateMax = toDateInputValue(new Date());
   const paymentNumber = payment.paymentNumber ? `#${payment.paymentNumber}` : "—";
   const frequencyLabel = (payment.frequencyOfPremiumPayment || annualPayment.frequencyOfPayment) === "Half-yearly"
     ? "Half-Yearly"
@@ -481,7 +476,6 @@ function AgentPaymentRecordDetails() {
                             type="date"
                             value={eorForm.receiptDate}
                             min={receiptDateMin || undefined}
-                            max={receiptDateMax || undefined}
                             onChange={(event) => setEorForm((prev) => ({ ...prev, receiptDate: event.target.value }))}
                             disabled={savingEor}
                           />
