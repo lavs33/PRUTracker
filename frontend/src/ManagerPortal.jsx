@@ -715,6 +715,7 @@ function ManagerPortal({ roleType }) {
   const [orphanLongLeaveId, setOrphanLongLeaveId] = useState("");
   const [orphanLongLeaveSaving, setOrphanLongLeaveSaving] = useState(false);
   const [orphanLongLeaveDetailsDirty, setOrphanLongLeaveDetailsDirty] = useState(false);
+  const [orphanSavedLongLeaveDetails, setOrphanSavedLongLeaveDetails] = useState(null);
   const [orphanLongLeaveStep, setOrphanLongLeaveStep] = useState(1);
   const [includeOngoingPolicyholders, setIncludeOngoingPolicyholders] = useState(false);
   const [confirmOrphanTransfer, setConfirmOrphanTransfer] = useState(false);
@@ -1532,6 +1533,9 @@ function ManagerPortal({ roleType }) {
 
   const orphanProspectsWithActiveLeads = selectedAgent?.orphanTransferProspects || [];
   const orphanPolicyholdersWithOngoingPolicies = selectedAgent?.orphanTransferPolicyholders || [];
+  const canAccessLongLeaveStep2 = Boolean(orphanLongLeaveId) && !orphanLongLeaveDetailsDirty;
+  const canAccessLongLeaveStep3 = orphanLongLeaveStep === 3 && canAccessLongLeaveStep2 && confirmOrphanTransfer;
+  const isEditingSavedLongLeaveDetails = orphanAgentAction === "long_leave" && orphanLongLeaveStep === 1 && Boolean(orphanLongLeaveId);
 
   const readOrphanLeaveFile = (file, field, validator) => {
     if (!file) return;
@@ -1590,6 +1594,12 @@ function ManagerPortal({ roleType }) {
         throw new Error(data?.message || "Failed to save long leave details.");
       }
       setOrphanLongLeaveId(data?.longLeave?._id || orphanLongLeaveId);
+      setOrphanSavedLongLeaveDetails({
+        leaveStartDate: orphanLeaveStartDate,
+        leaveEndDate: orphanLeaveEndDate,
+        leaveApplicationForm: orphanLeaveApplicationForm,
+        approvedLeaveProof: orphanApprovedLeaveProof,
+      });
       setOrphanLongLeaveDetailsDirty(false);
       return true;
     } catch (err) {
@@ -1605,9 +1615,24 @@ function ManagerPortal({ roleType }) {
     if (orphanLongLeaveStep === 1) {
       const saved = await saveLongLeaveDetails();
       if (!saved) return;
+      setConfirmOrphanTransfer(false);
+      setOrphanLongLeaveStep(2);
+      return;
     }
     if (orphanLongLeaveStep === 2 && !confirmOrphanTransfer) return;
     setOrphanLongLeaveStep((current) => Math.min(3, current + 1));
+  };
+
+  const cancelLongLeaveDetailEdits = () => {
+    if (!orphanLongLeaveId || !orphanSavedLongLeaveDetails) return;
+    setOrphanLeaveStartDate(orphanSavedLongLeaveDetails.leaveStartDate || "");
+    setOrphanLeaveEndDate(orphanSavedLongLeaveDetails.leaveEndDate || "");
+    setOrphanLeaveApplicationForm(orphanSavedLongLeaveDetails.leaveApplicationForm || null);
+    setOrphanApprovedLeaveProof(orphanSavedLongLeaveDetails.approvedLeaveProof || null);
+    setOrphanLongLeaveFieldErrors({});
+    setOrphanLongLeaveDetailsDirty(false);
+    setConfirmOrphanTransfer(false);
+    setOrphanLongLeaveStep(2);
   };
 
   const openOrphanAgentAction = (action) => {
@@ -1619,6 +1644,7 @@ function ManagerPortal({ roleType }) {
     setOrphanLongLeaveFieldErrors({});
     setOrphanLongLeaveId("");
     setOrphanLongLeaveDetailsDirty(false);
+    setOrphanSavedLongLeaveDetails(null);
     setOrphanLongLeaveStep(1);
     setIncludeOngoingPolicyholders(false);
     setConfirmOrphanTransfer(false);
@@ -1634,6 +1660,7 @@ function ManagerPortal({ roleType }) {
     setOrphanLongLeaveFieldErrors({});
     setOrphanLongLeaveId("");
     setOrphanLongLeaveDetailsDirty(false);
+    setOrphanSavedLongLeaveDetails(null);
     setOrphanLongLeaveStep(1);
     setIncludeOngoingPolicyholders(false);
     setConfirmOrphanTransfer(false);
@@ -3544,7 +3571,7 @@ function ManagerPortal({ roleType }) {
                               key={step}
                               type="button"
                               className={orphanLongLeaveStep === step ? "active" : ""}
-                              disabled={step > 1 && (!orphanLongLeaveId || orphanLongLeaveDetailsDirty)}
+                              disabled={(step === 2 && !canAccessLongLeaveStep2) || (step === 3 && !canAccessLongLeaveStep3)}
                               onClick={() => setOrphanLongLeaveStep(step)}
                             >
                               <span>Step {step}</span>
@@ -3608,7 +3635,10 @@ function ManagerPortal({ roleType }) {
                                 <thead>
                                   <tr>
                                     <th>Prospect Code</th>
+                                    <th>Lead Code</th>
                                     <th>Name</th>
+                                    <th>Source</th>
+                                    <th>Status</th>
                                     <th>Market Type</th>
                                     <th>Prospect Type</th>
                                   </tr>
@@ -3617,7 +3647,10 @@ function ManagerPortal({ roleType }) {
                                   {orphanProspectsWithActiveLeads.map((prospect) => (
                                     <tr key={prospect.id}>
                                       <td>{prospect.prospectCode || "—"}</td>
+                                      <td>{prospect.leadCode || "—"}</td>
                                       <td>{prospect.name || "—"}</td>
+                                      <td>{prospect.source || "—"}</td>
+                                      <td>{prospect.status || "—"}</td>
                                       <td>{prospect.marketType || "—"}</td>
                                       <td>{prospect.prospectType || "—"}</td>
                                     </tr>
@@ -3640,8 +3673,10 @@ function ManagerPortal({ roleType }) {
                                     <thead>
                                       <tr>
                                         <th>Policyholder Code</th>
+                                        <th>Policyholder Name</th>
                                         <th>Product Name</th>
                                         <th>Policy Number</th>
+                                        <th>Policy Issuance Date</th>
                                         <th>Status</th>
                                       </tr>
                                     </thead>
@@ -3649,8 +3684,10 @@ function ManagerPortal({ roleType }) {
                                       {orphanPolicyholdersWithOngoingPolicies.map((policyholder) => (
                                         <tr key={policyholder.id}>
                                           <td>{policyholder.policyholderCode || "—"}</td>
+                                          <td>{policyholder.policyholderName || "—"}</td>
                                           <td>{policyholder.productName || "—"}</td>
                                           <td>{policyholder.policyNumber || "—"}</td>
+                                          <td>{formatDate(policyholder.policyIssuanceDate)}</td>
                                           <td>{policyholder.status || "—"}</td>
                                         </tr>
                                       ))}
@@ -3686,12 +3723,21 @@ function ManagerPortal({ roleType }) {
                     )}
 
                     <div className="manager-orphan-action-buttons">
-                      <button type="button" className="manager-refresh-btn" onClick={closeOrphanAgentAction}>Cancel</button>
+                      {!(orphanAgentAction === "long_leave" && orphanLongLeaveStep === 2) && (
+                        <button
+                          type="button"
+                          className="manager-refresh-btn"
+                          disabled={isEditingSavedLongLeaveDetails && !orphanLongLeaveDetailsDirty}
+                          onClick={isEditingSavedLongLeaveDetails ? cancelLongLeaveDetailEdits : closeOrphanAgentAction}
+                        >
+                          Cancel
+                        </button>
+                      )}
                       {orphanAgentAction === "long_leave" && orphanLongLeaveStep < 3 ? (
                         <button
                           type="button"
                           className="manager-refresh-btn manager-long-leave-next-btn"
-                          disabled={orphanLongLeaveSaving || (orphanLongLeaveStep === 1 ? Boolean(orphanLeaveEndDateError) : !confirmOrphanTransfer)}
+                          disabled={orphanLongLeaveSaving || (orphanLongLeaveStep === 1 ? (Boolean(orphanLeaveEndDateError) || (Boolean(orphanLongLeaveId) && !orphanLongLeaveDetailsDirty)) : !confirmOrphanTransfer)}
                           onClick={goToNextLongLeaveStep}
                         >
                           {orphanLongLeaveSaving && !orphanLeaveEndDateError ? "Saving..." : (orphanLongLeaveStep === 1 && orphanLongLeaveId ? "Save Details" : "Next")}
