@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import TopNav from "./components/TopNav";
 import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
+import { normalizePolicyholderStatus, policyholderStatusClass } from "./utils/policyholderStatus";
 import "./AgentPolicyholdersAll.css";
 
 function AgentPolicyholdersAll() {
@@ -294,7 +295,10 @@ function AgentPolicyholdersAll() {
                         <td>{p.productName || "—"}</td>
                         <td className="allpol-mono allpol-cell-nowrap">{p.policyNumber || "—"}</td>
                         <td className="allpol-cell-nowrap">
-                          <span className={`allpol-status ${p.status === "Active" ? "active" : (p.status === "At Risk" ? "at-risk" : (p.status === "Lapsed" ? "lapsed" : (p.status === "Paid-Up" ? "paid-up" : (p.status === "Matured" ? "matured" : (p.status === "Cancelled" ? "cancelled" : "nurture")))))}`}>{p.status || "—"}</span>
+                          {(() => {
+                            const displayStatus = normalizePolicyholderStatus(p.status, p.nextPaymentDate);
+                            return <span className={`allpol-status ${policyholderStatusClass(displayStatus)}`}>{displayStatus || "—"}</span>;
+                          })()}
                         </td>
                         <td className="allpol-cell-date">{formatDateOnly(p.lastPaidDate)}</td>
                         <td className="allpol-cell-date">{formatDateOnly(p.nextPaymentDate)}</td>
