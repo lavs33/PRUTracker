@@ -124,7 +124,7 @@ function AgentAddPaymentRecord() {
   const [apiError, setApiError] = useState("");
   const [details, setDetails] = useState(null);
   const [fieldErrors, setFieldErrors] = useState({});
-  const [paymentDateBounds, setPaymentDateBounds] = useState({ min: "", max: toDateInputValue(new Date()) });
+  const [paymentDateBounds, setPaymentDateBounds] = useState({ min: "", max: "" });
   const [paymentPeriodStartDate, setPaymentPeriodStartDate] = useState("");
   const [basePremiumAmount, setBasePremiumAmount] = useState(0);
   const [activePreview, setActivePreview] = useState(null);
@@ -214,10 +214,9 @@ function AgentAddPaymentRecord() {
         const atRiskPaymentDate = nextPaymentPeriodStart ? addDays(nextPaymentPeriodStart, 1) : null;
         const minPaymentDate = isMissedPaymentRecord
           ? toDateInputValue(atRiskPaymentDate)
-          : (lastActualPaymentDate ? toDateInputValue(addDays(lastActualPaymentDate, 1)) : "");
-        const maxPaymentDate = toDateInputValue(new Date());
-        const defaultPaymentDate = maxPaymentDate;
-        setPaymentDateBounds({ min: minPaymentDate, max: maxPaymentDate });
+          : (lastActualPaymentDate ? toDateInputValue(lastActualPaymentDate) : "");
+        const defaultPaymentDate = minPaymentDate || toDateInputValue(new Date());
+        setPaymentDateBounds({ min: minPaymentDate, max: "" });
         setPaymentPeriodStartDate(toDateInputValue(nextPaymentPeriodStart));
         const methodForRenewalPayment = String(data?.application?.methodForRenewalPayment || "");
         setForm((prev) => ({
@@ -332,10 +331,7 @@ function AgentAddPaymentRecord() {
     if (form.paymentDate && paymentDateBounds.min && form.paymentDate < paymentDateBounds.min) {
       nextErrors.paymentDate = isMissedPaymentRecord
         ? "Payment date must be on or after the day the policyholder became at risk."
-        : "Payment date must be after the last payment date.";
-    }
-    if (form.paymentDate && paymentDateBounds.max && form.paymentDate > paymentDateBounds.max) {
-      nextErrors.paymentDate = "Payment date cannot be in the future.";
+        : "Payment date must be on or after the last payment date.";
     }
     if (!form.methodForPayment) nextErrors.methodForPayment = "Method of payment is required.";
     if (!form.proofOfPaymentFileDataUrl) nextErrors.proofOfPaymentFileDataUrl = "Proof of payment file is required.";
@@ -387,9 +383,6 @@ function AgentAddPaymentRecord() {
     if (eorForm.receiptDate && form.paymentDate && eorForm.receiptDate < form.paymentDate) {
       nextErrors.receiptDate = "Receipt date cannot be before the payment date.";
     }
-    if (eorForm.receiptDate && paymentDateBounds.max && eorForm.receiptDate > paymentDateBounds.max) {
-      nextErrors.receiptDate = "Receipt date cannot be in the future.";
-    }
     if (!eorForm.eorFileDataUrl) nextErrors.eorFileDataUrl = "eOR PDF file is required.";
     setEorFieldErrors(nextErrors);
     return Object.keys(nextErrors).length === 0;
@@ -398,7 +391,28 @@ function AgentAddPaymentRecord() {
   const handleEorSubmit = async (event) => {
     event.preventDefault();
     if (!savedPaymentId || !validateEor() || !user?.id) return;
-    setIsEorConfirmOpen(true);
+    try {
+      setSaving(true);
+      setApiError("");
+      const encodedEorNumber = encodeURIComponent(String(eorForm.eorNumber || "").trim());
+      const res = await fetch(`${API_BASE}/api/policyholders/${policyholderId}/annual-payments/${annualPaymentId}/payments/${savedPaymentId}/eor-duplicate?userId=${user.id}&eorNumber=${encodedEorNumber}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const message = data.message || "Failed to validate eOR number.";
+        if (message.includes("eOR number")) setEorFieldErrors((prev) => ({ ...prev, eorNumber: message }));
+        else setApiError(message);
+        return;
+      }
+      if (data.duplicate) {
+        setEorFieldErrors((prev) => ({ ...prev, eorNumber: "Record already exists for this eOR number." }));
+        return;
+      }
+      setIsEorConfirmOpen(true);
+    } catch {
+      setApiError("Cannot connect to server. Is backend running?");
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleConfirmEorSave = async () => {
@@ -498,7 +512,6 @@ function AgentAddPaymentRecord() {
   const isProofImage = String(proofMimeType || "").startsWith("image/");
   const isTransferDirty = savedPaymentId ? !areTransferFormsEqual(form, savedTransferForm) : true;
   const eorReceiptDateMin = form.paymentDate || "";
-  const eorReceiptDateMax = paymentDateBounds.max || toDateInputValue(new Date());
   const preview = activePreview === "policy"
     ? {
         title: "Policy Summary Preview",
@@ -657,7 +670,6 @@ function AgentAddPaymentRecord() {
                       type="date"
                       value={form.paymentDate}
                       min={paymentDateBounds.min || undefined}
-                      max={paymentDateBounds.max || undefined}
                       onChange={(event) => setForm((prev) => ({ ...prev, paymentDate: event.target.value }))}
                     />
                     {fieldErrors.paymentDate ? <small>{fieldErrors.paymentDate}</small> : null}
@@ -752,7 +764,10 @@ function AgentAddPaymentRecord() {
                     <input
                       type="text"
                       value={eorForm.eorNumber}
-                      onChange={(event) => setEorForm((prev) => ({ ...prev, eorNumber: event.target.value }))}
+                      onChange={(event) => {
+                        setEorForm((prev) => ({ ...prev, eorNumber: event.target.value }));
+                        setEorFieldErrors((prev) => ({ ...prev, eorNumber: "" }));
+                      }}
                     />
                     {eorFieldErrors.eorNumber ? <small>{eorFieldErrors.eorNumber}</small> : null}
                   </label>
@@ -763,7 +778,6 @@ function AgentAddPaymentRecord() {
                       type="date"
                       value={eorForm.receiptDate}
                       min={eorReceiptDateMin || undefined}
-                      max={eorReceiptDateMax || undefined}
                       onChange={(event) => setEorForm((prev) => ({ ...prev, receiptDate: event.target.value }))}
                     />
                     {eorFieldErrors.receiptDate ? <small>{eorFieldErrors.receiptDate}</small> : null}
