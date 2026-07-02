@@ -15,14 +15,13 @@ function getDataUrlMimeType(dataUrl) {
 function isSupportedProofFile(file) {
   const mimeType = String(file?.type || "");
   const fileName = String(file?.name || "");
-  return /^(image\/(jpeg|png)|application\/pdf)$/i.test(mimeType) || /\.(jpe?g|png|pdf)$/i.test(fileName);
+  return /^image\/(jpeg|png)$/i.test(mimeType) || /\.(jpe?g|png)$/i.test(fileName);
 }
 
 function getProofFileMimeType(file, dataUrl = "") {
   const mimeType = String(file?.type || "");
-  if (/^(image\/(jpeg|png)|application\/pdf)$/i.test(mimeType)) return mimeType;
+  if (/^image\/(jpeg|png)$/i.test(mimeType)) return mimeType;
   const fileName = String(file?.name || "").toLowerCase();
-  if (fileName.endsWith(".pdf")) return "application/pdf";
   if (fileName.endsWith(".png")) return "image/png";
   if (fileName.endsWith(".jpg") || fileName.endsWith(".jpeg")) return "image/jpeg";
   return getDataUrlMimeType(dataUrl);
@@ -124,7 +123,7 @@ function AgentAddPaymentRecord() {
   const [apiError, setApiError] = useState("");
   const [details, setDetails] = useState(null);
   const [fieldErrors, setFieldErrors] = useState({});
-  const [paymentDateBounds, setPaymentDateBounds] = useState({ min: "", max: toDateInputValue(new Date()) });
+  const [paymentDateBounds, setPaymentDateBounds] = useState({ min: "", max: "" });
   const [paymentPeriodStartDate, setPaymentPeriodStartDate] = useState("");
   const [basePremiumAmount, setBasePremiumAmount] = useState(0);
   const [activePreview, setActivePreview] = useState(null);
@@ -214,10 +213,9 @@ function AgentAddPaymentRecord() {
         const atRiskPaymentDate = nextPaymentPeriodStart ? addDays(nextPaymentPeriodStart, 1) : null;
         const minPaymentDate = isMissedPaymentRecord
           ? toDateInputValue(atRiskPaymentDate)
-          : (lastActualPaymentDate ? toDateInputValue(addDays(lastActualPaymentDate, 1)) : "");
-        const maxPaymentDate = toDateInputValue(new Date());
-        const defaultPaymentDate = maxPaymentDate;
-        setPaymentDateBounds({ min: minPaymentDate, max: maxPaymentDate });
+          : (lastActualPaymentDate ? toDateInputValue(lastActualPaymentDate) : "");
+        const defaultPaymentDate = minPaymentDate || toDateInputValue(new Date());
+        setPaymentDateBounds({ min: minPaymentDate, max: "" });
         setPaymentPeriodStartDate(toDateInputValue(nextPaymentPeriodStart));
         const methodForRenewalPayment = String(data?.application?.methodForRenewalPayment || "");
         setForm((prev) => ({
@@ -281,13 +279,18 @@ function AgentAddPaymentRecord() {
     const file = event.target.files?.[0];
     if (!file) return;
     if (!isSupportedProofFile(file)) {
-      setFieldErrors((prev) => ({ ...prev, proofOfPaymentFileDataUrl: "Proof of payment must be a JPG, PNG, or PDF file." }));
+      setFieldErrors((prev) => ({ ...prev, proofOfPaymentFileDataUrl: "Proof of payment must be a JPG, JPEG, or PNG file." }));
       event.target.value = "";
       return;
     }
     const reader = new FileReader();
     reader.onload = () => {
       const dataUrl = String(reader.result || "");
+      if (!/^data:image\/(?:jpeg|png);base64,/i.test(dataUrl)) {
+        setFieldErrors((prev) => ({ ...prev, proofOfPaymentFileDataUrl: "Proof of payment must be a JPG, JPEG, or PNG file." }));
+        event.target.value = "";
+        return;
+      }
       setForm((prev) => ({
         ...prev,
         proofOfPaymentFileDataUrl: dataUrl,
@@ -332,10 +335,7 @@ function AgentAddPaymentRecord() {
     if (form.paymentDate && paymentDateBounds.min && form.paymentDate < paymentDateBounds.min) {
       nextErrors.paymentDate = isMissedPaymentRecord
         ? "Payment date must be on or after the day the policyholder became at risk."
-        : "Payment date must be after the last payment date.";
-    }
-    if (form.paymentDate && paymentDateBounds.max && form.paymentDate > paymentDateBounds.max) {
-      nextErrors.paymentDate = "Payment date cannot be in the future.";
+        : "Payment date must be on or after the last payment date.";
     }
     if (!form.methodForPayment) nextErrors.methodForPayment = "Method of payment is required.";
     if (!form.proofOfPaymentFileDataUrl) nextErrors.proofOfPaymentFileDataUrl = "Proof of payment file is required.";
@@ -387,9 +387,6 @@ function AgentAddPaymentRecord() {
     if (eorForm.receiptDate && form.paymentDate && eorForm.receiptDate < form.paymentDate) {
       nextErrors.receiptDate = "Receipt date cannot be before the payment date.";
     }
-    if (eorForm.receiptDate && paymentDateBounds.max && eorForm.receiptDate > paymentDateBounds.max) {
-      nextErrors.receiptDate = "Receipt date cannot be in the future.";
-    }
     if (!eorForm.eorFileDataUrl) nextErrors.eorFileDataUrl = "eOR PDF file is required.";
     setEorFieldErrors(nextErrors);
     return Object.keys(nextErrors).length === 0;
@@ -398,7 +395,28 @@ function AgentAddPaymentRecord() {
   const handleEorSubmit = async (event) => {
     event.preventDefault();
     if (!savedPaymentId || !validateEor() || !user?.id) return;
-    setIsEorConfirmOpen(true);
+    try {
+      setSaving(true);
+      setApiError("");
+      const encodedEorNumber = encodeURIComponent(String(eorForm.eorNumber || "").trim());
+      const res = await fetch(`${API_BASE}/api/policyholders/${policyholderId}/annual-payments/${annualPaymentId}/payments/${savedPaymentId}/eor-duplicate?userId=${user.id}&eorNumber=${encodedEorNumber}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const message = data.message || "Failed to validate eOR number.";
+        if (message.includes("eOR number")) setEorFieldErrors((prev) => ({ ...prev, eorNumber: message }));
+        else setApiError(message);
+        return;
+      }
+      if (data.duplicate) {
+        setEorFieldErrors((prev) => ({ ...prev, eorNumber: "Record already exists for this eOR number." }));
+        return;
+      }
+      setIsEorConfirmOpen(true);
+    } catch {
+      setApiError("Cannot connect to server. Is backend running?");
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleConfirmEorSave = async () => {
@@ -498,7 +516,6 @@ function AgentAddPaymentRecord() {
   const isProofImage = String(proofMimeType || "").startsWith("image/");
   const isTransferDirty = savedPaymentId ? !areTransferFormsEqual(form, savedTransferForm) : true;
   const eorReceiptDateMin = form.paymentDate || "";
-  const eorReceiptDateMax = paymentDateBounds.max || toDateInputValue(new Date());
   const preview = activePreview === "policy"
     ? {
         title: "Policy Summary Preview",
@@ -657,7 +674,6 @@ function AgentAddPaymentRecord() {
                       type="date"
                       value={form.paymentDate}
                       min={paymentDateBounds.min || undefined}
-                      max={paymentDateBounds.max || undefined}
                       onChange={(event) => setForm((prev) => ({ ...prev, paymentDate: event.target.value }))}
                     />
                     {fieldErrors.paymentDate ? <small>{fieldErrors.paymentDate}</small> : null}
@@ -678,8 +694,8 @@ function AgentAddPaymentRecord() {
                   </label>
 
                   <div className="addpay-field addpay-fileField">
-                    <span>Proof of Payment *</span>
-                    <input type="file" accept="image/jpeg,image/png,application/pdf" onChange={handleFileChange} />
+                    <span>Proof of Payment (JPG, JPEG, PNG) *</span>
+                    <input type="file" accept=".jpg,.jpeg,.png,image/jpeg,image/png" onChange={handleFileChange} />
                     {form.proofOfPaymentFileName ? (
                       <p className="addpay-fileName">Selected file: {form.proofOfPaymentFileName}</p>
                     ) : null}
@@ -731,7 +747,7 @@ function AgentAddPaymentRecord() {
                       <strong>{form.methodForPayment || "—"}</strong>
                     </div>
                     <div>
-                      <span>Proof of Payment</span>
+                      <span>Proof of Payment (JPG, JPEG, PNG)</span>
                       {form.proofOfPaymentFileName ? (
                         <button
                           type="button"
@@ -752,7 +768,10 @@ function AgentAddPaymentRecord() {
                     <input
                       type="text"
                       value={eorForm.eorNumber}
-                      onChange={(event) => setEorForm((prev) => ({ ...prev, eorNumber: event.target.value }))}
+                      onChange={(event) => {
+                        setEorForm((prev) => ({ ...prev, eorNumber: event.target.value }));
+                        setEorFieldErrors((prev) => ({ ...prev, eorNumber: "" }));
+                      }}
                     />
                     {eorFieldErrors.eorNumber ? <small>{eorFieldErrors.eorNumber}</small> : null}
                   </label>
@@ -763,7 +782,6 @@ function AgentAddPaymentRecord() {
                       type="date"
                       value={eorForm.receiptDate}
                       min={eorReceiptDateMin || undefined}
-                      max={eorReceiptDateMax || undefined}
                       onChange={(event) => setEorForm((prev) => ({ ...prev, receiptDate: event.target.value }))}
                     />
                     {eorFieldErrors.receiptDate ? <small>{eorFieldErrors.receiptDate}</small> : null}
@@ -826,7 +844,7 @@ function AgentAddPaymentRecord() {
                         <div><span>Payment Date</span><strong>{form.paymentDate || "—"}</strong></div>
                         <div><span>Payment Period Covered</span><strong>{paymentPeriodLabel || "—"}</strong></div>
                         <div><span>Method of Payment</span><strong>{form.methodForPayment || "—"}</strong></div>
-                        <div><span>Proof of Payment</span><strong>{form.proofOfPaymentFileName || "—"}</strong></div>
+                        <div><span>Proof of Payment (JPG, JPEG, PNG)</span><strong>{form.proofOfPaymentFileName || "—"}</strong></div>
                       </div>
                       <div className="addpay-confirmActions">
                         <button type="button" className="addpay-secondary" onClick={() => setIsPendingTransferConfirmOpen(false)} disabled={saving}>Cancel</button>
@@ -856,7 +874,7 @@ function AgentAddPaymentRecord() {
                         <div><span>Payment Date</span><strong>{form.paymentDate || "—"}</strong></div>
                         <div><span>Payment Period Covered</span><strong>{paymentPeriodLabel || "—"}</strong></div>
                         <div><span>Method of Payment</span><strong>{form.methodForPayment || "—"}</strong></div>
-                        <div><span>Proof of Payment</span><strong>{form.proofOfPaymentFileName || "—"}</strong></div>
+                        <div><span>Proof of Payment (JPG, JPEG, PNG)</span><strong>{form.proofOfPaymentFileName || "—"}</strong></div>
                         <div><span>eOR Number</span><strong>{eorForm.eorNumber || "—"}</strong></div>
                         <div><span>Receipt Date</span><strong>{eorForm.receiptDate || "—"}</strong></div>
                         <div><span>eOR File</span><strong>{eorForm.eorFileName || "—"}</strong></div>
