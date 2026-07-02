@@ -151,17 +151,14 @@ function AgentCancelPolicy() {
     return `${yyyy}-${mm}-${dd}`;
   };
 
-  const addDaysToDateInput = (dateInputValue, days) => {
-    if (!dateInputValue) return "";
-    const date = new Date(`${dateInputValue}T00:00:00`);
-    if (Number.isNaN(date.getTime())) return "";
-    date.setDate(date.getDate() + days);
-    return toDateInputValue(date);
-  };
+  const maxDateInputValue = (...values) => values
+    .filter(Boolean)
+    .sort()
+    .at(-1) || "";
 
-  const todayInputValue = toDateInputValue(new Date());
+  const lastPaymentDateInputValue = toDateInputValue(policyholder.lastPaidDate);
   const issuanceDateInputValue = toDateInputValue(coverage.policyIssuanceDate);
-  const minCancellationDate = addDaysToDateInput(issuanceDateInputValue, 1);
+  const minCancellationDate = maxDateInputValue(lastPaymentDateInputValue, issuanceDateInputValue);
 
   const readFileAsDataUrl = (file) => new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -264,11 +261,9 @@ function AgentCancelPolicy() {
     if (!form.approvedCancellationDate) {
       next.approvedCancellationDate = "Cancellation date is required.";
     } else if (!minCancellationDate) {
-      next.approvedCancellationDate = "Policy issuance date is unavailable.";
+      next.approvedCancellationDate = "Last payment or policy issuance date is unavailable.";
     } else if (form.approvedCancellationDate < minCancellationDate) {
-      next.approvedCancellationDate = "Approved cancellation date must be after the policy issuance date.";
-    } else if (form.approvedCancellationDate > todayInputValue) {
-      next.approvedCancellationDate = "Approved cancellation date cannot be in the future.";
+      next.approvedCancellationDate = "Cancellation date must be on or after the later of the last payment date and policy issuance date.";
     }
 
     if (!String(form.cancellationReason || "").trim()) {
@@ -401,7 +396,6 @@ function AgentCancelPolicy() {
                       id="approvedCancellationDate"
                       type="date"
                       min={minCancellationDate}
-                      max={todayInputValue}
                       value={form.approvedCancellationDate}
                       onChange={(event) => {
                         setForm((prev) => ({ ...prev, approvedCancellationDate: event.target.value }));
