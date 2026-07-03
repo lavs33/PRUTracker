@@ -10,7 +10,6 @@ const MANAGER_NOTIF_TYPES = ["ORPHAN_ENDORSEMENT"];
 function ManagerNotifications({ roleType }) {
   const navigate = useNavigate();
   const { username } = useParams();
-  const normalizedRole = String(roleType || "").trim().toLowerCase();
   const [tab, setTab] = useState("unread");
   const [typeFilter, setTypeFilter] = useState("");
   const [loading, setLoading] = useState(true);
@@ -21,14 +20,24 @@ function ManagerNotifications({ roleType }) {
   const [markingNotifId, setMarkingNotifId] = useState("");
 
   const user = useMemo(() => {
-    try { return JSON.parse(localStorage.getItem("user")); } catch { return null; }
+    try { return JSON.parse(localStorage.getItem("managerPortalUser") || "null"); } catch { return null; }
   }, []);
+  const normalizedRole = String(roleType || user?.role || "UM").trim().toLowerCase();
 
   useEffect(() => {
-    if (!user || user.username !== username) {
-      navigate("/", { replace: true });
+    const isUmRoute = normalizedRole === "um";
+    const isUmSession = String(user?.role || "").trim().toUpperCase() === "UM";
+
+    if (!user || !isUmRoute || !isUmSession) {
+      localStorage.setItem("role", "UM");
+      navigate("/login", { replace: true });
+      return;
     }
-  }, [user, username, navigate]);
+
+    if (user.username !== username) {
+      navigate(`/um/${user.username}/notifications`, { replace: true });
+    }
+  }, [user, username, normalizedRole, navigate]);
 
   useEffect(() => { document.title = `${username} | Notifications`; }, [username]);
 
@@ -122,7 +131,7 @@ function ManagerNotifications({ roleType }) {
       <TopNav
         user={user}
         onLogoClick={() => navigate(`/${normalizedRole}/${username}`)}
-        onLogout={logout}
+        onLogout={() => logout(navigate, "UM")}
         onProfileClick={() => navigate(`/${normalizedRole}/${username}/profile`)}
         onNotificationsClick={() => navigate(`/${normalizedRole}/${username}/notifications`)}
       />
