@@ -44,6 +44,18 @@ const longLeaveSchema = new mongoose.Schema(
       default: "Recorded",
       index: true,
     },
+    includeOngoingPolicyholders: {
+      type: Boolean,
+      default: false,
+    },
+    affectedProspects: {
+      type: [mongoose.Schema.Types.Mixed],
+      default: [],
+    },
+    affectedPolicyholders: {
+      type: [mongoose.Schema.Types.Mixed],
+      default: [],
+    },
   },
   { timestamps: true }
 );
