@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { FaFilePdf, FaSearch } from "react-icons/fa";
 import TopNav from "./components/TopNav";
 import ManagerSideNav from "./components/ManagerSideNav";
@@ -268,6 +268,17 @@ function formatDate(value) {
         month: "long",
         day: "numeric",
       });
+}
+
+
+const REASSIGNMENT_KPI_TARGETS = {
+  weeklyDoneApproaches: 50,
+  monthlyClosingRatio: 20,
+  monthlyActivePolicies: 2,
+};
+
+function normalizeAgentType(value) {
+  return String(value || "").trim().toLowerCase().replace(/[\s_-]+/g, " ");
 }
 
 function toDateInputValue(value) {
@@ -695,6 +706,7 @@ function Toolbar({
 
 function ManagerPortal({ roleType }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const { username } = useParams();
   const normalizedRole = String(roleType || "")
     .trim()
@@ -703,8 +715,9 @@ function ManagerPortal({ roleType }) {
   const agentTableScrollRef = useRef(null);
   const orphanTableTopScrollRef = useRef(null);
   const orphanTableScrollRef = useRef(null);
+  const orphanActionTopRef = useRef(null);
   const longLeaveStepperRef = useRef(null);
-  const [activeView, setActiveView] = useState("dashboard");
+  const [activeView, setActiveView] = useState(() => location.state?.activeView || "dashboard");
   const [agentSearch, setAgentSearch] = useState("");
   const [agentSort, setAgentSort] = useState("usernameAsc");
   const [orphanAgentSearch, setOrphanAgentSearch] = useState("");
@@ -722,6 +735,9 @@ function ManagerPortal({ roleType }) {
   const [orphanLongLeaveSaving, setOrphanLongLeaveSaving] = useState(false);
   const [orphanLongLeaveDetailsDirty, setOrphanLongLeaveDetailsDirty] = useState(false);
   const [orphanSavedLongLeaveDetails, setOrphanSavedLongLeaveDetails] = useState(null);
+  const [orphanViewingSavedLongLeave, setOrphanViewingSavedLongLeave] = useState(false);
+  const [orphanLongLeaveStatus, setOrphanLongLeaveStatus] = useState("Recorded");
+  const [scrollToLongLeaveRecordId, setScrollToLongLeaveRecordId] = useState("");
   const [orphanLongLeaveStep, setOrphanLongLeaveStep] = useState(1);
   const [includeOngoingPolicyholders, setIncludeOngoingPolicyholders] = useState(false);
   const [confirmOrphanTransfer, setConfirmOrphanTransfer] = useState(false);
@@ -733,6 +749,9 @@ function ManagerPortal({ roleType }) {
   const [selectedUnitName, setSelectedUnitName] = useState("");
   const [unitPerformanceTab, setUnitPerformanceTab] = useState("clients");
   const [orphanEndorsementTab, setOrphanEndorsementTab] = useState("long_leaves");
+  const [selectedUmLongLeaveRecordId, setSelectedUmLongLeaveRecordId] = useState("");
+  const [selectedUmAffectedClient, setSelectedUmAffectedClient] = useState(null);
+  const [selectedReassignmentAgentId, setSelectedReassignmentAgentId] = useState("");
   // eslint-disable-next-line no-unused-vars
   const [taskSearch, setTaskSearch] = useState("");
   // eslint-disable-next-line no-unused-vars
@@ -762,10 +781,10 @@ function ManagerPortal({ roleType }) {
   useLayoutEffect(() => {
     if (!longLeaveStepperScrollSignal) return;
     const scrollToStepper = (behavior = "smooth") => {
-      const stepper = longLeaveStepperRef.current;
-      if (!stepper) return;
-      stepper.scrollIntoView({ behavior, block: "start", inline: "nearest" });
-      const top = Math.max(0, stepper.getBoundingClientRect().top + window.scrollY - 12);
+      const formStart = orphanActionTopRef.current || longLeaveStepperRef.current;
+      if (!formStart) return;
+      formStart.scrollIntoView({ behavior, block: "start", inline: "nearest" });
+      const top = Math.max(0, formStart.getBoundingClientRect().top + window.scrollY - 12);
       window.scrollTo({ top, behavior });
       document.documentElement.scrollTop = top;
       document.body.scrollTop = top;
@@ -780,6 +799,14 @@ function ManagerPortal({ roleType }) {
       window.clearTimeout(secondTimeoutId);
     };
   }, [longLeaveStepperScrollSignal, orphanLongLeaveStep]);
+
+  useLayoutEffect(() => {
+    if (!scrollToLongLeaveRecordId || orphanAgentAction) return;
+    const target = document.querySelector(`[data-long-leave-id="${scrollToLongLeaveRecordId}"]`);
+    if (!target) return;
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+    setScrollToLongLeaveRecordId("");
+  }, [scrollToLongLeaveRecordId, orphanAgentAction]);
 
   const syncScrollPair = (source, topScroller, tableScroller) => {
     if (!topScroller || !tableScroller) return;
@@ -822,6 +849,10 @@ function ManagerPortal({ roleType }) {
   }, [navigate, normalizedRole, user, username]);
 
   useEffect(() => {
+    if (location.state?.activeView) setActiveView(location.state.activeView);
+  }, [location.state]);
+
+  useEffect(() => {
     const branchPageLabels = {
       dashboard: "Branch Overview",
       agents: "Branch Units",
@@ -833,6 +864,7 @@ function ManagerPortal({ roleType }) {
       dashboard: "Unit Overview",
       agents: "Unit Details",
       kpi_progress: "Branch KPI Progress Dashboard",
+      orphan_endorsements: "Orphan Clients Endorsements",
     };
     const pageLabels = normalizedRole === "BM" ? branchPageLabels : unitPageLabels;
     if ((activeView === "agents" || activeView === "orphan_clients") && selectedAgentId) {
@@ -1225,19 +1257,72 @@ function ManagerPortal({ roleType }) {
   );
 
   const unitLongLeaveEndorsementRows = useMemo(() =>
-    selectedUnitRows
-      .flatMap((agent) => (Array.isArray(agent?.leaveRecords) ? agent.leaveRecords : []).map((leaveRecord) => ({
-        ...leaveRecord,
-        agentCode: agent?.username || "—",
-        agentName: agent?.name || agent?.username || "—",
-      })))
+    (portalData?.agents || [])
+      .filter((agent) => (selectedUnit?.name && !isAllUnitsSelected ? String(agent?.unit || "") === selectedUnit.name : true))
+      .flatMap((agent) => (Array.isArray(agent?.leaveRecords) ? agent.leaveRecords : [])
+        .filter((leaveRecord) => String(leaveRecord?.status || "").trim() === "Endorsed")
+        .map((leaveRecord) => ({
+          ...leaveRecord,
+          agentId: agent?.id || "",
+          agentCode: agent?.username || "—",
+          agentName: agent?.name || agent?.username || "—",
+          unitName: agent?.unit || "",
+        })))
       .sort((left, right) => {
         const leftTime = new Date(left?.leaveStartDate || 0).getTime() || 0;
         const rightTime = new Date(right?.leaveStartDate || 0).getTime() || 0;
         return leftTime - rightTime;
       }),
-    [selectedUnitRows],
+    [isAllUnitsSelected, portalData?.agents, selectedUnit?.name],
   );
+
+
+
+  const selectedUmLongLeaveRecord = useMemo(() =>
+    unitLongLeaveEndorsementRows.find((record) => String(record?.id || "") === String(selectedUmLongLeaveRecordId || "")) || null,
+    [selectedUmLongLeaveRecordId, unitLongLeaveEndorsementRows],
+  );
+
+  const reassignmentAgentRows = useMemo(() =>
+    (portalData?.agents || [])
+      .filter((agent) => String(agent?.unit || "") === String(selectedUmLongLeaveRecord?.unitName || selectedUnit?.name || ""))
+      .filter((agent) => String(agent?.id || "") !== String(selectedUmLongLeaveRecord?.agentId || ""))
+      .map((agent) => {
+        const completedApproaches = Number(agent?.completedApproaches || 0);
+        const openApproachTasks = Number(agent?.openApproachTasksDueThisWeek ?? agent?.openApproachTasks ?? 0);
+        const closingRatio = Number(agent?.conversionRate || 0);
+        const activePolicies = Number(agent?.activePolicies || 0);
+        return {
+          ...agent,
+          reassignmentMetrics: {
+            completedApproaches,
+            openApproachTasks,
+            projectedApproaches: completedApproaches + openApproachTasks,
+            weeklyDoneApproachesTarget: REASSIGNMENT_KPI_TARGETS.weeklyDoneApproaches,
+            closingRatio,
+            monthlyClosingRatioTarget: REASSIGNMENT_KPI_TARGETS.monthlyClosingRatio,
+            activePolicies,
+            monthlyActivePoliciesTarget: REASSIGNMENT_KPI_TARGETS.monthlyActivePolicies,
+          },
+        };
+      })
+      .filter((agent) => String(agent?.status || "").trim() === "Active")
+      .filter((agent) => normalizeAgentType(agent?.agentType) === "full time" || normalizeAgentType(agent?.agentType) === "full-time")
+      .filter((agent) => agent.reassignmentMetrics.completedApproaches < agent.reassignmentMetrics.weeklyDoneApproachesTarget)
+      .filter((agent) => agent.reassignmentMetrics.projectedApproaches < agent.reassignmentMetrics.weeklyDoneApproachesTarget)
+      .filter((agent) => agent.reassignmentMetrics.closingRatio >= agent.reassignmentMetrics.monthlyClosingRatioTarget)
+      .filter((agent) => agent.reassignmentMetrics.activePolicies >= agent.reassignmentMetrics.monthlyActivePoliciesTarget)
+      .sort((left, right) => String(left?.name || left?.username || "").localeCompare(String(right?.name || right?.username || ""))),
+    [portalData?.agents, selectedUmLongLeaveRecord?.agentId, selectedUmLongLeaveRecord?.unitName, selectedUnit?.name],
+  );
+
+
+
+  const openAffectedClientDetail = (client) => {
+    setSelectedUmAffectedClient(client);
+    setSelectedReassignmentAgentId("");
+    window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+  };
 
   const filteredAgents = useMemo(() => {
     const searchedAgents = buildFilter(selectedUnitRows, agentSearch, ["username", "name"]);
@@ -1573,15 +1658,28 @@ function ManagerPortal({ roleType }) {
   };
 
   const todayDateInputValue = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const minimumOrphanLeaveStartDate = useMemo(() => {
+    const records = Array.isArray(selectedAgent?.leaveRecords) ? selectedAgent.leaveRecords : [];
+    const latestEndTime = records.reduce((latest, record) => {
+      const endTime = new Date(record?.leaveEndDate || 0).getTime() || 0;
+      return Math.max(latest, endTime);
+    }, 0);
+    if (!latestEndTime) return todayDateInputValue;
+    const nextAvailableDate = new Date(latestEndTime);
+    nextAvailableDate.setDate(nextAvailableDate.getDate() + 1);
+    return nextAvailableDate.toISOString().slice(0, 10) > todayDateInputValue ? nextAvailableDate.toISOString().slice(0, 10) : todayDateInputValue;
+  }, [selectedAgent?.leaveRecords, todayDateInputValue]);
 
   const orphanLeaveEndDateError = useMemo(() => {
-    if (orphanAgentAction !== "long_leave" || !orphanLeaveStartDate || !orphanLeaveEndDate) return "";
+    if (orphanAgentAction !== "long_leave" || orphanViewingSavedLongLeave || orphanLongLeaveStatus === "Endorsed" || !orphanLeaveStartDate || !orphanLeaveEndDate) return "";
     const start = new Date(`${orphanLeaveStartDate}T00:00:00`);
     const end = new Date(`${orphanLeaveEndDate}T00:00:00`);
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return "";
+    const minimumStart = new Date(`${minimumOrphanLeaveStartDate}T00:00:00`);
+    if (!Number.isNaN(minimumStart.getTime()) && start < minimumStart) return `Leave start date must be on or after ${formatDate(minimumOrphanLeaveStartDate)}.`;
     const dayDifference = Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
     return dayDifference <= 7 ? "Leave end date should be beyond 7 days to be marked as on long leave." : "";
-  }, [orphanAgentAction, orphanLeaveEndDate, orphanLeaveStartDate]);
+  }, [minimumOrphanLeaveStartDate, orphanAgentAction, orphanLeaveEndDate, orphanLeaveStartDate, orphanLongLeaveStatus, orphanViewingSavedLongLeave]);
 
   const orphanProspectsWithActiveLeads = selectedAgent?.orphanTransferProspects || [];
   const orphanPolicyholdersWithOngoingPolicies = selectedAgent?.orphanTransferPolicyholders || [];
@@ -1589,9 +1687,13 @@ function ManagerPortal({ roleType }) {
   const displayedConfirmedPolicyholders = includeOngoingPolicyholders
     ? (orphanConfirmedPolicyholders.length ? orphanConfirmedPolicyholders : orphanPolicyholdersWithOngoingPolicies)
     : [];
+  const hasPendingLongLeaveRecord = (Array.isArray(selectedAgent?.leaveRecords) ? selectedAgent.leaveRecords : []).some((record) => ["Recorded", "Confirmed Orphans"].includes(String(record?.status || "").trim()));
   const canAccessLongLeaveStep2 = Boolean(orphanLongLeaveId) && !orphanLongLeaveDetailsDirty;
-  const canAccessLongLeaveStep3 = canAccessLongLeaveStep2 && confirmOrphanTransfer;
-  const isEditingSavedLongLeaveDetails = orphanAgentAction === "long_leave" && orphanLongLeaveStep === 1 && Boolean(orphanLongLeaveId);
+  const canAccessLongLeaveStep3 = canAccessLongLeaveStep2 && ["Confirmed Orphans", "Endorsed"].includes(orphanLongLeaveStatus);
+  const isEditingSavedLongLeaveDetails = orphanAgentAction === "long_leave" && orphanLongLeaveStep === 1 && Boolean(orphanLongLeaveId) && !orphanViewingSavedLongLeave;
+  const isLongLeaveReadOnly = orphanViewingSavedLongLeave || orphanLongLeaveStatus === "Endorsed";
+  const step2Prospects = isLongLeaveReadOnly && orphanConfirmedProspects.length ? orphanConfirmedProspects : orphanProspectsWithActiveLeads;
+  const step2Policyholders = isLongLeaveReadOnly && orphanConfirmedPolicyholders.length ? orphanConfirmedPolicyholders : orphanPolicyholdersWithOngoingPolicies;
 
   const readOrphanLeaveFile = (file, field, validator) => {
     if (!file) return;
@@ -1651,6 +1753,7 @@ function ManagerPortal({ roleType }) {
       }
       const savedRecord = normalizeLongLeaveRecord(data?.longLeave);
       setOrphanLongLeaveId(savedRecord?.id || orphanLongLeaveId);
+      setOrphanLongLeaveStatus(savedRecord?.status || "Recorded");
       const savedSnapshot = savedRecord ? buildLongLeaveSnapshot(savedRecord) : {
         leaveStartDate: orphanLeaveStartDate,
         leaveEndDate: orphanLeaveEndDate,
@@ -1674,8 +1777,13 @@ function ManagerPortal({ roleType }) {
     }
   };
 
-  const scrollLongLeaveStepperIntoView = () => {
+  const scrollLongLeaveFormStartIntoView = () => {
     setLongLeaveStepperScrollSignal((current) => current + 1);
+  };
+
+  const setLongLeaveStepAndScroll = (step) => {
+    setOrphanLongLeaveStep(step);
+    scrollLongLeaveFormStartIntoView();
   };
 
   const goToNextLongLeaveStep = async () => {
@@ -1684,7 +1792,7 @@ function ManagerPortal({ roleType }) {
       if (!saved) return;
       setConfirmOrphanTransfer(false);
       setOrphanLongLeaveStep(2);
-      scrollLongLeaveStepperIntoView();
+      scrollLongLeaveFormStartIntoView();
       return;
     }
     if (orphanLongLeaveStep === 2) {
@@ -1708,9 +1816,10 @@ function ManagerPortal({ roleType }) {
           upsertSelectedAgentLeaveRecord(updatedRecord);
           setOrphanConfirmedProspects(updatedRecord.affectedProspects || []);
           setOrphanConfirmedPolicyholders(updatedRecord.affectedPolicyholders || []);
+          setOrphanLongLeaveStatus(updatedRecord.status || "Confirmed Orphans");
         }
         setOrphanLongLeaveStep(3);
-        scrollLongLeaveStepperIntoView();
+        scrollLongLeaveFormStartIntoView();
       } catch (err) {
         setOrphanLongLeaveFieldErrors((current) => ({ ...current, form: err?.message || "Failed to confirm orphan clients." }));
       } finally {
@@ -1746,7 +1855,15 @@ function ManagerPortal({ roleType }) {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to endorse orphan clients.");
       const updatedRecord = normalizeLongLeaveRecord(data?.longLeave);
-      if (updatedRecord) upsertSelectedAgentLeaveRecord(updatedRecord);
+      if (updatedRecord) {
+        upsertSelectedAgentLeaveRecord(updatedRecord);
+        setOrphanLongLeaveStatus(updatedRecord.status || "Endorsed");
+        setScrollToLongLeaveRecordId(updatedRecord.id);
+      }
+      setPortalData((current) => ({
+        ...current,
+        agents: (current?.agents || []).map((agent) => (agent.id === selectedAgent?.id ? { ...agent, status: "On Long Leave" } : agent)),
+      }));
       setShowEndorseOrphansModal(false);
       closeOrphanAgentAction();
     } catch (err) {
@@ -1766,7 +1883,7 @@ function ManagerPortal({ roleType }) {
     setOrphanLongLeaveDetailsDirty(false);
     setConfirmOrphanTransfer(false);
     setOrphanLongLeaveStep(2);
-    scrollLongLeaveStepperIntoView();
+    scrollLongLeaveFormStartIntoView();
   };
 
   const openOrphanAgentAction = (action) => {
@@ -1779,13 +1896,15 @@ function ManagerPortal({ roleType }) {
     setOrphanLongLeaveId("");
     setOrphanLongLeaveDetailsDirty(false);
     setOrphanSavedLongLeaveDetails(null);
+    setOrphanViewingSavedLongLeave(false);
+    setOrphanLongLeaveStatus("Recorded");
     setOrphanLongLeaveStep(1);
     setIncludeOngoingPolicyholders(false);
     setConfirmOrphanTransfer(false);
     setShowEndorseOrphansModal(false);
     setOrphanConfirmedProspects([]);
     setOrphanConfirmedPolicyholders([]);
-    scrollLongLeaveStepperIntoView();
+    scrollLongLeaveFormStartIntoView();
   };
 
   const closeOrphanAgentAction = () => {
@@ -1798,6 +1917,8 @@ function ManagerPortal({ roleType }) {
     setOrphanLongLeaveId("");
     setOrphanLongLeaveDetailsDirty(false);
     setOrphanSavedLongLeaveDetails(null);
+    setOrphanViewingSavedLongLeave(false);
+    setOrphanLongLeaveStatus("Recorded");
     setOrphanLongLeaveStep(1);
     setIncludeOngoingPolicyholders(false);
     setConfirmOrphanTransfer(false);
@@ -1818,16 +1939,18 @@ function ManagerPortal({ roleType }) {
     setOrphanLeaveApplicationForm(savedSnapshot.leaveApplicationForm);
     setOrphanApprovedLeaveProof(savedSnapshot.approvedLeaveProof);
     setOrphanSavedLongLeaveDetails(savedSnapshot);
+    setOrphanViewingSavedLongLeave(true);
     setOrphanLongLeaveFieldErrors({});
     setOrphanLongLeaveDetailsDirty(false);
     const normalizedStatus = String(normalizedRecord.status || "Recorded").trim();
-    setOrphanLongLeaveStep(normalizedStatus === "Recorded" ? 2 : 3);
+    setOrphanLongLeaveStatus(normalizedStatus);
+    setOrphanLongLeaveStep(normalizedStatus === "Endorsed" ? 1 : (normalizedStatus === "Recorded" ? 2 : 3));
     setIncludeOngoingPolicyholders(normalizedRecord.includeOngoingPolicyholders === true);
     setConfirmOrphanTransfer(normalizedStatus !== "Recorded");
     setShowEndorseOrphansModal(false);
     setOrphanConfirmedProspects(Array.isArray(normalizedRecord.affectedProspects) ? normalizedRecord.affectedProspects : []);
     setOrphanConfirmedPolicyholders(Array.isArray(normalizedRecord.affectedPolicyholders) ? normalizedRecord.affectedPolicyholders : []);
-    scrollLongLeaveStepperIntoView();
+    scrollLongLeaveFormStartIntoView();
   };
 
   const selectedAgentAge = selectedAgent?.birthday ? getCurrentAgeFromBirthday(selectedAgent.birthday) : selectedAgent?.age;
@@ -1891,6 +2014,31 @@ function ManagerPortal({ roleType }) {
     leaveApplicationForm: normalizeLongLeaveFile(record?.leaveApplicationForm, "application/pdf"),
     approvedLeaveProof: normalizeLongLeaveFile(record?.approvedLeaveProof, "image/jpeg"),
   });
+
+
+  const getLongLeaveStatusHint = (agent = {}) => {
+    if (String(agent?.status || "").trim() !== "On Long Leave") return "";
+    const records = Array.isArray(agent?.leaveRecords) ? agent.leaveRecords : [];
+    const record = records.find((item) => String(item?.status || "") === "Endorsed") || records[0];
+    if (!record?.leaveStartDate || !record?.leaveEndDate) return "";
+    const start = new Date(record.leaveStartDate);
+    const now = new Date();
+    return start <= now
+      ? `Started: ${formatDate(record.leaveStartDate)}. Will End: ${formatDate(record.leaveEndDate)}.`
+      : `Starts: ${formatDate(record.leaveStartDate)}. Ends: ${formatDate(record.leaveEndDate)}.`;
+  };
+
+
+
+  const renderAgentStatusPill = (agent = {}, { table = false } = {}) => {
+    const hint = getLongLeaveStatusHint(agent);
+    const className = `manager-agent-status-pill ${table ? "manager-agent-status-pill--table " : ""}manager-agent-status-pill--${getAgentStatusClass(agent?.status)}`;
+    return (
+      <span className={`${className}${hint ? " manager-status-hint" : ""}`} data-hint={hint || undefined}>
+        {agent?.status || "Active"}
+      </span>
+    );
+  };
 
   const upsertSelectedAgentLeaveRecord = (record) => {
     if (!record?.id || !selectedAgent?.id) return;
@@ -3198,7 +3346,7 @@ function ManagerPortal({ roleType }) {
                   <div>
                     <h2 className="manager-agent-title">
                       <span>{selectedAgent.name}</span>
-                      <span className={`manager-agent-status-pill manager-agent-status-pill--${getAgentStatusClass(selectedAgent.status)}`}>{selectedAgent.status || "Active"}</span>
+                      {renderAgentStatusPill(selectedAgent)}
                     </h2>
                     <p>
                       Agent Type: {selectedAgent.agentType || "—"} • Date Employed: {selectedAgent.dateEmployed ? formatDate(selectedAgent.dateEmployed) : "—"}
@@ -3774,24 +3922,144 @@ function ManagerPortal({ roleType }) {
 
           {!isLoading && !loadError && activeView === "orphan_endorsements" && normalizedRole === "UM" && (
             <section className="manager-panel">
-              <div className="manager-panel__head">
-                <div>
-                  <h2>Orphan Clients Endorsements</h2>
-                  <p>Review long leave and retirement orphan endorsements involving agents in {selectedUnit?.name || "your unit"}.</p>
-                </div>
-              </div>
+              {!selectedUmLongLeaveRecord && (
+                <>
+                  <div className="manager-panel__head">
+                    <div>
+                      <h2>Orphan Clients Endorsements</h2>
+                      <p>Review long leave and retirement orphan endorsements involving agents in {selectedUnit?.name || "your unit"}.</p>
+                    </div>
+                  </div>
 
-              <div className="manager-tab-row manager-orphan-endorsement-tabs">
-                <div className="manager-tab-buttons">
-                  <button type="button" className={orphanEndorsementTab === "long_leaves" ? "active" : ""} onClick={() => setOrphanEndorsementTab("long_leaves")}>From Long Leaves</button>
-                  <button type="button" className={orphanEndorsementTab === "retirements" ? "active" : ""} onClick={() => setOrphanEndorsementTab("retirements")}>From Retirements</button>
-                </div>
-              </div>
+                  <div className="manager-tab-row manager-orphan-endorsement-tabs">
+                    <div className="manager-tab-buttons">
+                      <button type="button" className={orphanEndorsementTab === "long_leaves" ? "active" : ""} onClick={() => { setSelectedUmLongLeaveRecordId(""); setSelectedUmAffectedClient(null); setSelectedReassignmentAgentId(""); setOrphanEndorsementTab("long_leaves"); }}>From Long Leaves</button>
+                      <button type="button" className={orphanEndorsementTab === "retirements" ? "active" : ""} onClick={() => { setSelectedUmLongLeaveRecordId(""); setSelectedUmAffectedClient(null); setSelectedReassignmentAgentId(""); setOrphanEndorsementTab("retirements"); }}>From Retirements</button>
+                    </div>
+                  </div>
+                </>
+              )}
 
-              {orphanEndorsementTab === "long_leaves" ? (
+              {selectedUmLongLeaveRecord ? (
+                selectedUmAffectedClient ? (
+                  <>
+                    <nav className="manager-breadcrumb manager-breadcrumb--agent" aria-label="Affected client reassignment breadcrumb">
+                      <button type="button" onClick={() => { setSelectedUmLongLeaveRecordId(""); setSelectedUmAffectedClient(null); setSelectedReassignmentAgentId(""); }}>Orphan Clients Endorsements</button>
+                      <span>&gt;</span>
+                      <button type="button" onClick={() => { setSelectedUmAffectedClient(null); setSelectedReassignmentAgentId(""); }}>Long Leave Record for {selectedUmLongLeaveRecord.agentCode || "—"} - {selectedUmLongLeaveRecord.agentName || "—"}</button>
+                      <span>&gt;</span>
+                      <strong>{selectedUmAffectedClient.code || "—"} - {selectedUmAffectedClient.name || "—"}</strong>
+                    </nav>
+
+                    <div className="manager-section-subhead">
+                      <h3>{selectedUmAffectedClient.kind === "policyholder" ? "Policyholder Details" : "Prospect Details"}</h3>
+                      <p>Review the recorded orphan client details before choosing a reassignment agent.</p>
+                    </div>
+                    <div className="manager-agent-detail-grid manager-agent-detail-grid--profile">
+                      {Object.entries(selectedUmAffectedClient.details || {}).map(([label, value]) => (
+                        <article key={label}><span>{label}</span><strong>{value || "—"}</strong></article>
+                      ))}
+                    </div>
+
+                    <div className="manager-section-subhead">
+                      <h3>Recommended Agents for Reassignment</h3>
+                    </div>
+                    <div className="manager-table-wrap">
+                      <table className="manager-table manager-table--promotion-history">
+                        <thead>
+                          <tr><th>Agent Code</th><th>Agent Name</th><th>Agent Type</th><th>Status</th><th>Weekly Done Approaches</th><th>Open Approach Tasks Due This Week</th><th>Projected Weekly Approaches</th><th>Monthly Closing Ratio</th><th>Monthly Active Policies</th><th>Select</th></tr>
+                        </thead>
+                        <tbody>
+                          {reassignmentAgentRows.map((agent) => (
+                            <tr key={agent.id}>
+                              <td>{agent.username || "—"}</td>
+                              <td>{agent.name || "—"}</td>
+                              <td>{agent.agentType || "—"}</td>
+                              <td>{renderAgentStatusPill(agent, { table: true })}</td>
+                              <td>{agent.reassignmentMetrics.completedApproaches} / {agent.reassignmentMetrics.weeklyDoneApproachesTarget}</td>
+                              <td>{agent.reassignmentMetrics.openApproachTasks}</td>
+                              <td>{agent.reassignmentMetrics.projectedApproaches} / {agent.reassignmentMetrics.weeklyDoneApproachesTarget}</td>
+                              <td>{agent.reassignmentMetrics.closingRatio}% / {agent.reassignmentMetrics.monthlyClosingRatioTarget}%</td>
+                              <td>{agent.reassignmentMetrics.activePolicies} / {agent.reassignmentMetrics.monthlyActivePoliciesTarget}</td>
+                              <td><button type="button" className="manager-refresh-btn" onClick={() => setSelectedReassignmentAgentId(agent.id)}>{selectedReassignmentAgentId === agent.id ? "Selected" : "Select"}</button></td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    {!reassignmentAgentRows.length && <div className="manager-empty-state">No recommended agents matched all reassignment criteria for this unit.</div>}
+                    <div className="manager-orphan-action-buttons">
+                      <button type="button" className="manager-refresh-btn manager-long-leave-next-btn" disabled={!selectedReassignmentAgentId}>Confirm Reassignment</button>
+                    </div>
+                  </>
+                ) : (
+                <>
+                  <nav className="manager-breadcrumb manager-breadcrumb--agent" aria-label="Long leave endorsement breadcrumb">
+                    <button type="button" onClick={() => setSelectedUmLongLeaveRecordId("")}>Orphan Clients Endorsements</button>
+                    <span>&gt;</span>
+                    <strong>Long Leave Record for {selectedUmLongLeaveRecord.agentCode || "—"} - {selectedUmLongLeaveRecord.agentName || "—"}</strong>
+                  </nav>
+
+                  <div className="manager-agent-detail-grid manager-agent-detail-grid--profile">
+                    <article><span>Leave Start Date</span><strong>{formatDate(selectedUmLongLeaveRecord.leaveStartDate)}</strong></article>
+                    <article><span>Leave End Date</span><strong>{formatDate(selectedUmLongLeaveRecord.leaveEndDate)}</strong></article>
+                    <article><span>Status</span><strong>{selectedUmLongLeaveRecord.status || "Endorsed"}</strong></article>
+                  </div>
+
+                  <div className="manager-section-subhead">
+                    <h3>Affected Prospects with Active Leads</h3>
+                    <p>Prospects endorsed from this long leave record.</p>
+                  </div>
+                  {Array.isArray(selectedUmLongLeaveRecord.affectedProspects) && selectedUmLongLeaveRecord.affectedProspects.length ? (
+                    <div className="manager-table-wrap">
+                      <table className="manager-table manager-table--promotion-history manager-table--clickable">
+                        <thead>
+                          <tr><th>Prospect Code</th><th>Lead Code</th><th>Name</th><th>Status</th></tr>
+                        </thead>
+                        <tbody>
+                          {selectedUmLongLeaveRecord.affectedProspects.map((prospect) => (
+                            <tr key={prospect.id || `${prospect.prospectCode}:${prospect.leadCode}`} onClick={() => openAffectedClientDetail({ kind: "prospect", code: prospect.prospectCode || "—", name: prospect.name || "—", details: { "Prospect Code": prospect.prospectCode, "Lead Code": prospect.leadCode, Name: prospect.name, Source: prospect.source, Status: prospect.status, "Market Type": prospect.marketType, "Prospect Type": prospect.prospectType } })} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") openAffectedClientDetail({ kind: "prospect", code: prospect.prospectCode || "—", name: prospect.name || "—", details: { "Prospect Code": prospect.prospectCode, "Lead Code": prospect.leadCode, Name: prospect.name, Source: prospect.source, Status: prospect.status, "Market Type": prospect.marketType, "Prospect Type": prospect.prospectType } }); }}>
+                              <td>{prospect.prospectCode || "—"}</td>
+                              <td>{prospect.leadCode || "—"}</td>
+                              <td>{prospect.name || "—"}</td>
+                              <td>{prospect.status || "—"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : <div className="manager-empty-state">No affected prospects recorded for this endorsement.</div>}
+
+                  <div className="manager-section-subhead">
+                    <h3>Affected Policyholders with Ongoing Policies</h3>
+                    <p>Policyholders endorsed from this long leave record, if selected.</p>
+                  </div>
+                  {Array.isArray(selectedUmLongLeaveRecord.affectedPolicyholders) && selectedUmLongLeaveRecord.affectedPolicyholders.length ? (
+                    <div className="manager-table-wrap">
+                      <table className="manager-table manager-table--promotion-history manager-table--clickable">
+                        <thead>
+                          <tr><th>Policyholder Code</th><th>Policyholder Name</th><th>Product Name</th><th>Policy Number</th><th>Status</th></tr>
+                        </thead>
+                        <tbody>
+                          {selectedUmLongLeaveRecord.affectedPolicyholders.map((policyholder) => (
+                            <tr key={policyholder.id || `${policyholder.policyholderCode}:${policyholder.policyNumber}`} onClick={() => openAffectedClientDetail({ kind: "policyholder", code: policyholder.policyholderCode || "—", name: policyholder.policyholderName || "—", details: { "Policyholder Code": policyholder.policyholderCode, "Policyholder Name": policyholder.policyholderName, "Product Name": policyholder.productName, "Policy Number": policyholder.policyNumber, Status: policyholder.status } })} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") openAffectedClientDetail({ kind: "policyholder", code: policyholder.policyholderCode || "—", name: policyholder.policyholderName || "—", details: { "Policyholder Code": policyholder.policyholderCode, "Policyholder Name": policyholder.policyholderName, "Product Name": policyholder.productName, "Policy Number": policyholder.policyNumber, Status: policyholder.status } }); }}>
+                              <td>{policyholder.policyholderCode || "—"}</td>
+                              <td>{policyholder.policyholderName || "—"}</td>
+                              <td>{policyholder.productName || "—"}</td>
+                              <td>{policyholder.policyNumber || "—"}</td>
+                              <td>{policyholder.status || "—"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : <div className="manager-empty-state">No affected policyholders recorded for this endorsement.</div>}
+                </>
+                )
+              ) : orphanEndorsementTab === "long_leaves" ? (
                 <>
                   <div className="manager-table-wrap">
-                    <table className="manager-table manager-table--promotion-history">
+                    <table className="manager-table manager-table--promotion-history manager-table--clickable">
                       <thead>
                         <tr>
                           <th>Agent Code</th>
@@ -3802,7 +4070,7 @@ function ManagerPortal({ roleType }) {
                       </thead>
                       <tbody>
                         {unitLongLeaveEndorsementRows.map((record) => (
-                          <tr key={record.id || `${record.agentCode}:${record.leaveStartDate}:${record.leaveEndDate}`}>
+                          <tr key={record.id || `${record.agentCode}:${record.leaveStartDate}:${record.leaveEndDate}`} onClick={() => setSelectedUmLongLeaveRecordId(record.id)} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setSelectedUmLongLeaveRecordId(record.id); }}>
                             <td>{record.agentCode || "—"}</td>
                             <td>{record.agentName || "—"}</td>
                             <td>{formatDate(record.leaveStartDate)}</td>
@@ -3812,7 +4080,7 @@ function ManagerPortal({ roleType }) {
                       </tbody>
                     </table>
                   </div>
-                  {!unitLongLeaveEndorsementRows.length && <div className="manager-empty-state">No long leave orphan endorsements recorded for this unit.</div>}
+                  {!unitLongLeaveEndorsementRows.length && <div className="manager-empty-state">No endorsed long leave orphan endorsements recorded for this unit.</div>}
                 </>
               ) : (
                 <div className="manager-empty-state">No retirement orphan endorsements recorded for this unit yet.</div>
@@ -3840,7 +4108,7 @@ function ManagerPortal({ roleType }) {
                 </nav>
 
                 {orphanAgentAction ? (
-                  <div className="manager-orphan-action-page">
+                  <div className="manager-orphan-action-page" ref={orphanActionTopRef}>
                     <div className="manager-panel__head">
                       <div>
                         <h2>{orphanAgentAction === "long_leave" ? "Mark as On Long Leave" : "Mark as Retired"}</h2>
@@ -3861,7 +4129,7 @@ function ManagerPortal({ roleType }) {
                               type="button"
                               className={orphanLongLeaveStep === step ? "active" : ""}
                               disabled={(step === 2 && !canAccessLongLeaveStep2) || (step === 3 && !canAccessLongLeaveStep3)}
-                              onClick={() => setOrphanLongLeaveStep(step)}
+                              onClick={() => setLongLeaveStepAndScroll(step)}
                             >
                               <span>Step {step}</span>
                               <strong>{label}</strong>
@@ -3873,17 +4141,17 @@ function ManagerPortal({ roleType }) {
                           <div className="manager-orphan-action-form">
                             <label>
                               <span>Leave Start Date <em>*</em></span>
-                              <input type="date" min={todayDateInputValue} value={orphanLeaveStartDate} onChange={(e) => { setOrphanLeaveStartDate(e.target.value); setConfirmOrphanTransfer(false); setOrphanLongLeaveDetailsDirty(Boolean(orphanLongLeaveId)); setOrphanLongLeaveFieldErrors((current) => ({ ...current, leaveStartDate: "" })); }} required />
+                              <input type="date" disabled={isLongLeaveReadOnly} min={minimumOrphanLeaveStartDate} value={orphanLeaveStartDate} onChange={(e) => { setOrphanLeaveStartDate(e.target.value); setConfirmOrphanTransfer(false); setOrphanLongLeaveDetailsDirty(Boolean(orphanLongLeaveId)); setOrphanLongLeaveFieldErrors((current) => ({ ...current, leaveStartDate: "" })); }} required />
                               {orphanLongLeaveFieldErrors.leaveStartDate && <small className="manager-field-error">{orphanLongLeaveFieldErrors.leaveStartDate}</small>}
                             </label>
                             <label>
                               <span>Leave End Date <em>*</em></span>
-                              <input type="date" min={orphanLeaveStartDate || todayDateInputValue} value={orphanLeaveEndDate} onChange={(e) => { setOrphanLeaveEndDate(e.target.value); setConfirmOrphanTransfer(false); setOrphanLongLeaveDetailsDirty(Boolean(orphanLongLeaveId)); setOrphanLongLeaveFieldErrors((current) => ({ ...current, leaveEndDate: "" })); }} required />
+                              <input type="date" disabled={isLongLeaveReadOnly} min={orphanLeaveStartDate || todayDateInputValue} value={orphanLeaveEndDate} onChange={(e) => { setOrphanLeaveEndDate(e.target.value); setConfirmOrphanTransfer(false); setOrphanLongLeaveDetailsDirty(Boolean(orphanLongLeaveId)); setOrphanLongLeaveFieldErrors((current) => ({ ...current, leaveEndDate: "" })); }} required />
                               {(orphanLeaveEndDateError || orphanLongLeaveFieldErrors.leaveEndDate) && <small className="manager-field-error">{orphanLeaveEndDateError || orphanLongLeaveFieldErrors.leaveEndDate}</small>}
                             </label>
                             <label className="manager-file-upload">
                               <span>Leave Application Form (PDF) <em>*</em></span>
-                              <input type="file" accept="application/pdf,.pdf" onChange={(e) => { setOrphanLongLeaveDetailsDirty(Boolean(orphanLongLeaveId)); readOrphanLeaveFile(e.target.files?.[0], "leaveApplicationForm", (file) => (file.type === "application/pdf" || /\.pdf$/i.test(file.name || "")) ? "" : "Leave application form must be a PDF file."); }} required />
+                              <input type="file" disabled={isLongLeaveReadOnly} accept="application/pdf,.pdf" onChange={(e) => { setOrphanLongLeaveDetailsDirty(Boolean(orphanLongLeaveId)); readOrphanLeaveFile(e.target.files?.[0], "leaveApplicationForm", (file) => (file.type === "application/pdf" || /\.pdf$/i.test(file.name || "")) ? "" : "Leave application form must be a PDF file."); }} required />
                               {orphanLongLeaveFieldErrors.leaveApplicationForm && <small className="manager-field-error">{orphanLongLeaveFieldErrors.leaveApplicationForm}</small>}
                             </label>
                             {orphanLeaveApplicationForm && (
@@ -3896,7 +4164,7 @@ function ManagerPortal({ roleType }) {
                             )}
                             <label className="manager-file-upload">
                               <span>Proof of Approved Leave (JPG/JPEG/PNG) <em>*</em></span>
-                              <input type="file" accept="image/jpeg,image/png,.jpg,.jpeg,.png" onChange={(e) => { setOrphanLongLeaveDetailsDirty(Boolean(orphanLongLeaveId)); readOrphanLeaveFile(e.target.files?.[0], "approvedLeaveProof", (file) => /^image\/(?:jpeg|png)$/i.test(file.type || "") || /\.(jpe?g|png)$/i.test(file.name || "") ? "" : "Proof of approved leave must be a JPG, JPEG, or PNG image."); }} required />
+                              <input type="file" disabled={isLongLeaveReadOnly} accept="image/jpeg,image/png,.jpg,.jpeg,.png" onChange={(e) => { setOrphanLongLeaveDetailsDirty(Boolean(orphanLongLeaveId)); readOrphanLeaveFile(e.target.files?.[0], "approvedLeaveProof", (file) => /^image\/(?:jpeg|png)$/i.test(file.type || "") || /\.(jpe?g|png)$/i.test(file.name || "") ? "" : "Proof of approved leave must be a JPG, JPEG, or PNG image."); }} required />
                               {orphanLongLeaveFieldErrors.approvedLeaveProof && <small className="manager-field-error">{orphanLongLeaveFieldErrors.approvedLeaveProof}</small>}
                             </label>
                             {orphanLongLeaveFieldErrors.form && <small className="manager-field-error">{orphanLongLeaveFieldErrors.form}</small>}
@@ -3933,7 +4201,7 @@ function ManagerPortal({ roleType }) {
                                   </tr>
                                 </thead>
                                 <tbody>
-                                  {orphanProspectsWithActiveLeads.map((prospect) => (
+                                  {step2Prospects.map((prospect) => (
                                     <tr key={prospect.id}>
                                       <td>{prospect.prospectCode || "—"}</td>
                                       <td>{prospect.leadCode || "—"}</td>
@@ -3954,10 +4222,10 @@ function ManagerPortal({ roleType }) {
                                 </tbody>
                               </table>
                             </div>
-                            {!orphanProspectsWithActiveLeads.length && <div className="manager-empty-state">No prospects with active leads found for this agent.</div>}
+                            {!step2Prospects.length && <div className="manager-empty-state">No prospects with active leads found for this agent.</div>}
 
                             <label className="manager-toggle-line manager-toggle-line--optional">
-                              <input type="checkbox" checked={includeOngoingPolicyholders} onChange={(e) => { setIncludeOngoingPolicyholders(e.target.checked); setConfirmOrphanTransfer(false); }} />
+                              <input type="checkbox" disabled={isLongLeaveReadOnly} checked={includeOngoingPolicyholders} onChange={(e) => { setIncludeOngoingPolicyholders(e.target.checked); setConfirmOrphanTransfer(false); }} />
                               <span>Allow policyholders with ongoing policies transfer</span>
                             </label>
 
@@ -3977,7 +4245,7 @@ function ManagerPortal({ roleType }) {
                                       </tr>
                                     </thead>
                                     <tbody>
-                                      {orphanPolicyholdersWithOngoingPolicies.map((policyholder) => (
+                                      {step2Policyholders.map((policyholder) => (
                                         <tr key={policyholder.id}>
                                           <td>{policyholder.policyholderCode || "—"}</td>
                                           <td>{policyholder.policyholderName || "—"}</td>
@@ -3990,12 +4258,12 @@ function ManagerPortal({ roleType }) {
                                     </tbody>
                                   </table>
                                 </div>
-                                {!orphanPolicyholdersWithOngoingPolicies.length && <div className="manager-empty-state">No policyholders with ongoing policies found for this agent.</div>}
+                                {!step2Policyholders.length && <div className="manager-empty-state">No policyholders with ongoing policies found for this agent.</div>}
                               </>
                             )}
 
                             <label className="manager-toggle-line manager-toggle-line--confirm manager-toggle-line--confirm-orphans">
-                              <input type="checkbox" checked={confirmOrphanTransfer} onChange={(e) => { setConfirmOrphanTransfer(e.target.checked); setOrphanLongLeaveFieldErrors((current) => ({ ...current, form: "" })); }} />
+                              <input type="checkbox" disabled={isLongLeaveReadOnly} checked={confirmOrphanTransfer} onChange={(e) => { setConfirmOrphanTransfer(e.target.checked); setOrphanLongLeaveFieldErrors((current) => ({ ...current, form: "" })); }} />
                               <span>Confirm transfer of orphaned clients by prospects with active leads{includeOngoingPolicyholders ? " and policyholders with ongoing policies" : ""}.</span>
                             </label>
                             {orphanLongLeaveFieldErrors.form && <small className="manager-field-error">{orphanLongLeaveFieldErrors.form}</small>}
@@ -4102,7 +4370,7 @@ function ManagerPortal({ roleType }) {
                         <button
                           type="button"
                           className="manager-refresh-btn"
-                          disabled={isEditingSavedLongLeaveDetails && !orphanLongLeaveDetailsDirty}
+                          disabled={isLongLeaveReadOnly || (isEditingSavedLongLeaveDetails && !orphanLongLeaveDetailsDirty)}
                           onClick={isEditingSavedLongLeaveDetails ? cancelLongLeaveDetailEdits : closeOrphanAgentAction}
                         >
                           Cancel
@@ -4112,7 +4380,7 @@ function ManagerPortal({ roleType }) {
                         <button
                           type="button"
                           className="manager-refresh-btn manager-long-leave-next-btn"
-                          disabled={orphanLongLeaveSaving || (orphanLongLeaveStep === 1 ? (Boolean(orphanLeaveEndDateError) || (Boolean(orphanLongLeaveId) && !orphanLongLeaveDetailsDirty)) : !confirmOrphanTransfer)}
+                          disabled={orphanLongLeaveSaving || isLongLeaveReadOnly || (orphanLongLeaveStep === 1 ? (Boolean(orphanLeaveEndDateError) || (Boolean(orphanLongLeaveId) && !orphanLongLeaveDetailsDirty)) : !confirmOrphanTransfer)}
                           onClick={goToNextLongLeaveStep}
                         >
                           {orphanLongLeaveSaving && !orphanLeaveEndDateError ? "Saving..." : (orphanLongLeaveStep === 1 && orphanLongLeaveId ? "Save Details" : (orphanLongLeaveStep === 2 ? "Confirm Orphans" : "Next"))}
@@ -4121,7 +4389,7 @@ function ManagerPortal({ roleType }) {
                         <button
                           type="button"
                           className="manager-refresh-btn"
-                          disabled={orphanAgentAction === "long_leave" && (!confirmOrphanTransfer || orphanLongLeaveSaving)}
+                          disabled={orphanAgentAction === "long_leave" && (!canAccessLongLeaveStep3 || orphanLongLeaveStatus === "Endorsed" || orphanLongLeaveSaving)}
                           onClick={orphanAgentAction === "long_leave" ? endorseLongLeaveOrphans : undefined}
                         >
                           {orphanAgentAction === "long_leave" ? (orphanLongLeaveSaving ? "Endorsing..." : "Endorse Orphans") : "Mark as Retired"}
@@ -4142,13 +4410,13 @@ function ManagerPortal({ roleType }) {
                   <div>
                     <h2 className="manager-agent-title">
                       <span>{selectedAgent.name || "Agent Details"}</span>
-                      <span className={`manager-agent-status-pill manager-agent-status-pill--${getAgentStatusClass(selectedAgent.status)}`}>{selectedAgent.status || "Active"}</span>
+                      {renderAgentStatusPill(selectedAgent)}
                     </h2>
                     <p>{selectedAgent.username || "—"} • {selectedAgent.agentType || "—"} • {selectedAgent.unit || "Unassigned Unit"}</p>
                   </div>
                   <div className="manager-orphan-agent-actions">
-                    <button type="button" className="manager-refresh-btn" onClick={() => openOrphanAgentAction("long_leave")} disabled={selectedAgent.status === "On Long Leave" || selectedAgent.status === "Retired"}>Mark as On Long Leave</button>
-                    <button type="button" className="manager-refresh-btn" onClick={() => openOrphanAgentAction("retired")} disabled={selectedAgent.status === "Retired"}>Mark as Retired</button>
+                    <button type="button" className="manager-refresh-btn" onClick={() => openOrphanAgentAction("long_leave")} disabled={selectedAgent.status === "Retired" || hasPendingLongLeaveRecord}>Mark as On Long Leave</button>
+                    <button type="button" className="manager-refresh-btn" onClick={() => openOrphanAgentAction("retired")} disabled={selectedAgent.status === "Retired" || hasPendingLongLeaveRecord}>Mark as Retired</button>
                   </div>
                 </div>
 
@@ -4190,7 +4458,7 @@ function ManagerPortal({ roleType }) {
 
                 <div className="manager-section-subhead">
                   <h3>Long Leave Records</h3>
-                  <p>Initial long-leave details recorded for this agent.</p>
+                  <p>Initial long-leave details and orphan clients endorsement status recorded for this agent.</p>
                 </div>
                 {selectedAgentLeaveRecords.length ? (
                   <div className="manager-promotion-table-wrap">
@@ -4204,7 +4472,7 @@ function ManagerPortal({ roleType }) {
                       </thead>
                       <tbody>
                         {selectedAgentLeaveRecords.map((leaveRecord) => (
-                          <tr key={leaveRecord.id} onClick={() => openSavedLongLeaveRecord(leaveRecord)} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") openSavedLongLeaveRecord(leaveRecord); }}>
+                          <tr key={leaveRecord.id} data-long-leave-id={leaveRecord.id} onClick={() => openSavedLongLeaveRecord(leaveRecord)} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") openSavedLongLeaveRecord(leaveRecord); }}>
                             <td>{formatDate(leaveRecord.leaveStartDate)}</td>
                             <td>{formatDate(leaveRecord.leaveEndDate)}</td>
                             <td>{leaveRecord.status || "Recorded"}</td>
@@ -4300,7 +4568,7 @@ function ManagerPortal({ roleType }) {
                           <td>{agent.username || "—"}</td>
                           <td>{agent.name || "—"}</td>
                           <td>{agent.agentType || "—"}</td>
-                          <td><span className={`manager-agent-status-pill manager-agent-status-pill--table manager-agent-status-pill--${getAgentStatusClass(agent.status)}`}>{agent.status || "Active"}</span></td>
+                          <td>{renderAgentStatusPill(agent, { table: true })}</td>
                           <td>{agent.unit || "—"}</td>
                           <td>{agent.dateEmployed ? formatDate(agent.dateEmployed) : "—"}</td>
                         </tr>
