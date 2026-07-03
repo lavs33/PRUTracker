@@ -552,6 +552,16 @@
   white-space: nowrap;
 }
 
+.manager-table-subtext {
+  display: block;
+  margin-top: 6px;
+  max-width: 520px;
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: normal;
+}
+
 .manager-table th {
   font-size: 11px;
   text-transform: uppercase;
