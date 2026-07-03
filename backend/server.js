@@ -616,6 +616,7 @@ function parseOptionalNumber(value) {
 }
 
 async function buildKpiAssignmentPayload(user) {
+  await reactivateEndedLongLeaveAgents();
   const context = await getManagerScopeContext(user);
   if (context.error) return context;
 
@@ -708,7 +709,41 @@ async function buildKpiAssignmentPayload(user) {
   };
 }
 
+
+async function reactivateEndedLongLeaveAgents(referenceDate = new Date()) {
+  const endedLeaves = await LongLeave.find({
+    status: "Endorsed",
+    leaveEndDate: { $lt: referenceDate },
+  }).select("agentId").lean();
+  const agentIds = [...new Set(endedLeaves.map((leave) => String(leave.agentId || "")).filter(Boolean))];
+  if (!agentIds.length) return 0;
+  const result = await Agent.updateMany(
+    { _id: { $in: agentIds }, status: "On Long Leave" },
+    { $set: { status: "Active" } },
+  );
+  return Number(result?.modifiedCount || 0);
+}
+
+function formatLongLeaveNotificationDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric", timeZone: "Asia/Manila" });
+}
+
+function buildLongLeaveEndorsementNotificationMessage(longLeave = {}) {
+  const prospects = Array.isArray(longLeave.affectedProspects) ? longLeave.affectedProspects : [];
+  const policyholders = Array.isArray(longLeave.affectedPolicyholders) ? longLeave.affectedPolicyholders : [];
+  const prospectText = prospects.length
+    ? `Prospects with active leads endorsed: ${prospects.map((prospect) => `${prospect.prospectCode || "—"} / ${prospect.leadCode || "—"} / ${prospect.name || "—"}`).join("; ")}.`
+    : "Prospects with active leads endorsed: None.";
+  const policyholderText = policyholders.length
+    ? `Policyholders with ongoing policies endorsed: ${policyholders.map((policyholder) => `${policyholder.policyholderCode || "—"} / ${policyholder.productName || "—"} / ${policyholder.policyNumber || "—"} / ${policyholder.status || "—"}`).join("; ")}.`
+    : "Policyholders with ongoing policies endorsed: None.";
+  return `${prospectText} ${policyholderText}`;
+}
+
 async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDatePreset = "ALL", unitPerformanceDatePreset = "ALL" } = {}) {
+  await reactivateEndedLongLeaveAgents();
   const context = await getManagerScopeContext(user);
   if (context.error) return context;
 
@@ -1640,8 +1675,15 @@ app.use(express.urlencoded({ extended: true, limit: "6mb" }));
  */
 mongoose
   .connect(process.env.MONGO_URI)
-  .then(() => console.log("MongoDB Atlas connected"))
+  .then(async () => {
+    console.log("MongoDB Atlas connected");
+    await reactivateEndedLongLeaveAgents();
+  })
   .catch((err) => console.error("MongoDB error:", err));
+
+setInterval(() => {
+  reactivateEndedLongLeaveAgents().catch((err) => console.error("Long leave reactivation check failed:", err));
+}, 60 * 60 * 1000);
 
 /**
  * =========================
@@ -1710,6 +1752,17 @@ app.post("/api/manager/agents/:agentId/long-leave", async (req, res) => {
       return res.status(400).json({ field: "approvedLeaveProof", message: "Proof of approved leave image is required." });
     }
 
+    const existingId = req.body?.longLeaveId;
+    if (!existingId) {
+      const existingOpenLongLeave = await LongLeave.findOne({
+        agentId: agent._id,
+        status: { $in: ["Recorded", "Confirmed Orphans"] },
+      }).select("_id status").lean();
+      if (existingOpenLongLeave) {
+        return res.status(409).json({ message: `This agent already has a ${existingOpenLongLeave.status} long leave record.` });
+      }
+    }
+
     const payload = {
       agentId: agent._id,
       userId: agent.userId,
@@ -1731,7 +1784,6 @@ app.post("/api/manager/agents/:agentId/long-leave", async (req, res) => {
       affectedPolicyholders: [],
     };
 
-    const existingId = req.body?.longLeaveId;
     const longLeave = existingId && mongoose.Types.ObjectId.isValid(existingId)
       ? await LongLeave.findOneAndUpdate({ _id: existingId, agentId: agent._id }, { $set: payload }, { new: true, runValidators: true })
       : await LongLeave.create(payload);
@@ -1772,7 +1824,11 @@ app.patch("/api/manager/long-leave/:longLeaveId/status", async (req, res) => {
     if (!longLeave) return res.status(404).json({ message: "Long leave record not found." });
 
     if (status === "Endorsed") {
-      const agent = await Agent.findById(longLeave.agentId)
+      const agent = await Agent.findByIdAndUpdate(
+        longLeave.agentId,
+        { $set: { status: "On Long Leave" } },
+        { new: true },
+      )
         .populate({ path: "userId", select: "username firstName middleName lastName" })
         .populate({ path: "unitId", select: "unitName" })
         .lean();
@@ -1787,9 +1843,9 @@ app.patch("/api/manager/long-leave/:longLeaveId/status", async (req, res) => {
           {
             $set: {
               assignedToUserId: unitManager.userId,
-              type: "ORPHAN_ENDORSEMENT",
-              title: "Orphan clients endorsed",
-              message: `Orphan clients for ${agentName} (${agentUser.username || "—"}) have been endorsed to your unit${agent?.unitId?.unitName ? ` (${agent.unitId.unitName})` : ""}.`,
+              type: "ORPHANS_ENDORSEMENTS",
+              title: `${agentUser.username || "—"} - ${agentName} marked as on long leave (${formatLongLeaveNotificationDate(longLeave.leaveStartDate)} to ${formatLongLeaveNotificationDate(longLeave.leaveEndDate)})`,
+              message: buildLongLeaveEndorsementNotificationMessage(longLeave),
               status: "Unread",
               readAt: null,
               entityType: "LongLeave",
@@ -1800,11 +1856,14 @@ app.patch("/api/manager/long-leave/:longLeaveId/status", async (req, res) => {
                 agentCode: agentUser.username || "",
                 agentName,
                 unitName: agent?.unitId?.unitName || "",
+                leaveStartDate: longLeave.leaveStartDate || null,
+                leaveEndDate: longLeave.leaveEndDate || null,
               },
               softDeletedAt: null,
               softDeleteReason: "",
               softDeletedByUserId: null,
             },
+            $setOnInsert: { createdAt: new Date() },
           },
           { upsert: true },
         );
