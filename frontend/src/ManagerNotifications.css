@@ -5,12 +5,15 @@
 
 .notifs-body {
   display: flex;
+  gap: 20px;
+  align-items: flex-start;
+  padding: 24px 28px 40px;
   font-family: "FSAlbertArabic", sans-serif;
 }
 
 .notifs-content {
   flex: 1;
-  padding: 24px 28px;
+  padding: 0;
   background: #da291c;
 }
 
