@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import TopNav from "./components/TopNav";
 import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
+import { normalizePolicyholderStatus } from "./utils/policyholderStatus";
 import "./AgentAnnualPaymentRecord.css";
 
 function AgentAnnualPaymentRecord() {
@@ -141,8 +142,9 @@ function AgentAnnualPaymentRecord() {
   const policyNumber = policyholder.policyNumber || policySummary.policyNumber || "";
   const policySummaryFileDataUrl = String(policySummary.fileDataUrl || "").trim();
   const frequencyLabel = annualPayment.frequencyOfPayment === "Half-yearly" ? "Half-Yearly" : (annualPayment.frequencyOfPayment || "Payment");
-  const isPolicyholderLapsed = String(policyholder.status || "") === "Lapsed";
-  const isPolicyholderPaymentTrackingEnded = ["Cancelled", "Paid-Up", "Matured"].includes(String(policyholder.status || ""));
+  const displayPolicyholderStatus = normalizePolicyholderStatus(policyholder.status, policyholder.nextPaymentDate);
+  const isPolicyholderLapsed = displayPolicyholderStatus === "Lapsed";
+  const isPolicyholderPaymentTrackingEnded = ["Cancelled", "Paid-Up", "Matured"].includes(displayPolicyholderStatus);
   const canAddPaymentRecord = !isPolicyholderPaymentTrackingEnded && ["Not Started", "Ongoing"].includes(annualStatus) && (!totalCount || paidCount < totalCount);
 
   return (
