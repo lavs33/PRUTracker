@@ -137,6 +137,7 @@ function AgentLeadEngagement() {
   const [needsAnalysisDetailsSaved, setNeedsAnalysisDetailsSaved] = useState(false);
   const [needsAnalysisEditMode, setNeedsAnalysisEditMode] = useState(true);
   const [needsAnalysisEditRequested, setNeedsAnalysisEditRequested] = useState(false);
+  const [pendingNeedsAnalysisAutoOpen, setPendingNeedsAnalysisAutoOpen] = useState(false);
   const [pendingNeedsFollowUpScroll, setPendingNeedsFollowUpScroll] = useState(false);
   const [pendingSavedNeedsDetailsScroll, setPendingSavedNeedsDetailsScroll] = useState(false);
   const [pendingApplicationScheduleScroll, setPendingApplicationScheduleScroll] = useState(false);
@@ -928,7 +929,8 @@ function AgentLeadEngagement() {
         String(savedNeedsPriorities?.currentPriority || "").trim() ||
         String(savedNeedsPriorities?.productSelection?.selectedProductId || "").trim()
       );
-      const outcomeNAActivity = hasSavedNeedsAnalysisDetails && rawOutcomeNAActivity === "Record Prospect Attendance"
+      const hasSavedAttendance = Boolean(data?.needsAssessment?.attendanceConfirmed);
+      const outcomeNAActivity = (hasSavedAttendance || hasSavedNeedsAnalysisDetails) && rawOutcomeNAActivity === "Record Prospect Attendance"
         ? "Perform Needs Analysis"
         : rawOutcomeNAActivity;
       const rawFollowUpRequired = String(data?.needsAssessment?.followUpNeedsAssessmentRequired || "").trim().toUpperCase();
@@ -1280,18 +1282,21 @@ function AgentLeadEngagement() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to record attendance.");
 
-      const wasEditingProof = needsAttendanceProofEditMode;
+      const wasEditingSavedProof = canRequestNeedsAttendanceProofEdit && needsAttendanceProofEditMode;
       setNeedsAttendanceProofEditMode(false);
-      if (wasEditingProof) {
+      if (wasEditingSavedProof) {
         await fetchNeedsAssessment();
         await fetchEngagement();
         setNeedsAssessmentViewedActivityKey("Record Prospect Attendance");
         window.requestAnimationFrame(() => subactivityTrackerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
       } else {
         await refreshCurrentProgressView({ includeNeedsAssessment: true });
+        setNeedsAssessmentCurrentActivityKey("Perform Needs Analysis");
+        setNeedsAssessmentOutcomeActivity("Perform Needs Analysis");
         setNeedsAssessmentViewedActivityKey("Perform Needs Analysis");
         setNeedsAnalysisEditMode(true);
         expandAllNeedsAnalysisSections();
+        setPendingNeedsAnalysisAutoOpen(true);
         scrollToSubactivityTracker();
       }
     } catch (err) {
@@ -3352,6 +3357,30 @@ function AgentLeadEngagement() {
     });
   }, []);
 
+  useEffect(() => {
+    if (!pendingNeedsAnalysisAutoOpen) return;
+    if (!showNeedsAssessmentPanel || isHistoryView) return;
+    const hasSavedAttendanceProof = needsAssessmentForm.attendanceChoice === "YES" && String(needsAssessmentForm.attendanceProofImageDataUrl || "").trim();
+    if (!hasSavedAttendanceProof) return;
+
+    setNeedsAssessmentCurrentActivityKey("Perform Needs Analysis");
+    setNeedsAssessmentOutcomeActivity("Perform Needs Analysis");
+    setNeedsAssessmentViewedActivityKey("Perform Needs Analysis");
+    setNeedsAnalysisEditMode(true);
+    expandAllNeedsAnalysisSections();
+    window.requestAnimationFrame(() => {
+      subactivityTrackerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    setPendingNeedsAnalysisAutoOpen(false);
+  }, [
+    expandAllNeedsAnalysisSections,
+    isHistoryView,
+    needsAssessmentForm.attendanceChoice,
+    needsAssessmentForm.attendanceProofImageDataUrl,
+    pendingNeedsAnalysisAutoOpen,
+    showNeedsAssessmentPanel,
+  ]);
+
   const closePolicyDeclinedModal = useCallback(() => {
     setPolicyDeclinedModalOpen(false);
     scrollToLeadEngagementTop();
@@ -3426,6 +3455,13 @@ function AgentLeadEngagement() {
   }, [PROPOSAL_STEPS_UI, proposalUiActivityKey, syncViewedStepWithCurrent]);
 
   useEffect(() => {
+    const isProposalStageCurrent = String(engagement?.currentStage || "").trim() === "Proposal";
+    if (!showProposalPanel || isHistoryView || !isViewingCurrentStage || !isProposalStageCurrent) return;
+    if (proposalUiActivityKey !== "Generate Proposal") return;
+    setProposalViewedActivityKey("Generate Proposal");
+  }, [engagement?.currentStage, isHistoryView, isViewingCurrentStage, proposalUiActivityKey, showProposalPanel]);
+
+  useEffect(() => {
     syncViewedStepWithCurrent(
       APPLICATION_STEPS_UI,
       applicationUiActivityKey,
@@ -3442,6 +3478,13 @@ function AgentLeadEngagement() {
       previousPolicyCurrentActivityRef
     );
   }, [POLICY_ISSUANCE_STEPS_UI, policyIssuanceUiActivityKey, syncViewedStepWithCurrent]);
+
+  useEffect(() => {
+    const isPolicyIssuanceStageCurrent = String(engagement?.currentStage || "").trim() === "Policy Issuance";
+    if (!showPolicyIssuancePanel || isHistoryView || !isViewingCurrentStage || !isPolicyIssuanceStageCurrent) return;
+    if (policyIssuanceUiActivityKey !== "Upload Initial Premium eOR") return;
+    setPolicyViewedActivityKey("Upload Initial Premium eOR");
+  }, [engagement?.currentStage, isHistoryView, isViewingCurrentStage, policyIssuanceUiActivityKey, showPolicyIssuancePanel]);
 
   const getStepIndex = useCallback(
     (steps, key) => {
@@ -12108,7 +12151,7 @@ function AgentLeadEngagement() {
             <button type="button" className="le-modalClose" aria-label="Close policyholder creation modal" onClick={closePolicyholderCreatedModal}>
               ×
             </button>
-            <h3 className="le-modalTitle" id="le-policyholder-created-title" style={{ fontSize: "1.05rem", lineHeight: 1.3, paddingRight: 32 }}>Lead successfully closed and new policyholder record created.</h3>
+            <h3 className="le-modalTitle" id="le-policyholder-created-title" style={{ fontSize: "1.05rem", lineHeight: 1.3, paddingRight: 32 }}>New Policyholder created.</h3>
             <div className="le-attemptMeta" style={{ marginBottom: 16 }}>
               <div>
                 <span className="le-metaLabel">Policyholder Code</span>

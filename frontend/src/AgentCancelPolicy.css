@@ -392,11 +392,12 @@
 .cancelpol-modal {
   width: min(560px, 94vw);
   max-height: 88vh;
-  overflow-y: auto;
+  overflow: hidden;
   background: #ffffff;
-  border-radius: 14px;
+  border-radius: 16px;
   box-shadow: 0 20px 56px rgba(0, 0, 0, 0.22);
-  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
 }
 
 .cancelpol-modalHeader {
@@ -405,7 +406,8 @@
   justify-content: space-between;
   gap: 12px;
   border-bottom: 1px solid #eef0f2;
-  padding-bottom: 10px;
+  padding: 14px 16px 10px;
+  flex: 0 0 auto;
 }
 
 .cancelpol-modalHeader h2 {
@@ -434,10 +436,20 @@
 }
 
 .cancelpol-confirmGrid {
-  margin-top: 12px;
+  margin: 0;
+  padding: 12px 16px;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 9px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.cancelpol-modalActions {
+  flex: 0 0 auto;
+  margin-top: 0;
+  padding: 0 16px 14px;
 }
 
 .cancelpol-confirmGrid > div {

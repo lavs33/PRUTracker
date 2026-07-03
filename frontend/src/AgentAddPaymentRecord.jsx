@@ -15,14 +15,13 @@ function getDataUrlMimeType(dataUrl) {
 function isSupportedProofFile(file) {
   const mimeType = String(file?.type || "");
   const fileName = String(file?.name || "");
-  return /^(image\/(jpeg|png)|application\/pdf)$/i.test(mimeType) || /\.(jpe?g|png|pdf)$/i.test(fileName);
+  return /^image\/(jpeg|png)$/i.test(mimeType) || /\.(jpe?g|png)$/i.test(fileName);
 }
 
 function getProofFileMimeType(file, dataUrl = "") {
   const mimeType = String(file?.type || "");
-  if (/^(image\/(jpeg|png)|application\/pdf)$/i.test(mimeType)) return mimeType;
+  if (/^image\/(jpeg|png)$/i.test(mimeType)) return mimeType;
   const fileName = String(file?.name || "").toLowerCase();
-  if (fileName.endsWith(".pdf")) return "application/pdf";
   if (fileName.endsWith(".png")) return "image/png";
   if (fileName.endsWith(".jpg") || fileName.endsWith(".jpeg")) return "image/jpeg";
   return getDataUrlMimeType(dataUrl);
@@ -280,13 +279,18 @@ function AgentAddPaymentRecord() {
     const file = event.target.files?.[0];
     if (!file) return;
     if (!isSupportedProofFile(file)) {
-      setFieldErrors((prev) => ({ ...prev, proofOfPaymentFileDataUrl: "Proof of payment must be a JPG, PNG, or PDF file." }));
+      setFieldErrors((prev) => ({ ...prev, proofOfPaymentFileDataUrl: "Proof of payment must be a JPG, JPEG, or PNG file." }));
       event.target.value = "";
       return;
     }
     const reader = new FileReader();
     reader.onload = () => {
       const dataUrl = String(reader.result || "");
+      if (!/^data:image\/(?:jpeg|png);base64,/i.test(dataUrl)) {
+        setFieldErrors((prev) => ({ ...prev, proofOfPaymentFileDataUrl: "Proof of payment must be a JPG, JPEG, or PNG file." }));
+        event.target.value = "";
+        return;
+      }
       setForm((prev) => ({
         ...prev,
         proofOfPaymentFileDataUrl: dataUrl,
@@ -690,8 +694,8 @@ function AgentAddPaymentRecord() {
                   </label>
 
                   <div className="addpay-field addpay-fileField">
-                    <span>Proof of Payment *</span>
-                    <input type="file" accept="image/jpeg,image/png,application/pdf" onChange={handleFileChange} />
+                    <span>Proof of Payment (JPG, JPEG, PNG) *</span>
+                    <input type="file" accept=".jpg,.jpeg,.png,image/jpeg,image/png" onChange={handleFileChange} />
                     {form.proofOfPaymentFileName ? (
                       <p className="addpay-fileName">Selected file: {form.proofOfPaymentFileName}</p>
                     ) : null}
@@ -743,7 +747,7 @@ function AgentAddPaymentRecord() {
                       <strong>{form.methodForPayment || "—"}</strong>
                     </div>
                     <div>
-                      <span>Proof of Payment</span>
+                      <span>Proof of Payment (JPG, JPEG, PNG)</span>
                       {form.proofOfPaymentFileName ? (
                         <button
                           type="button"
@@ -840,7 +844,7 @@ function AgentAddPaymentRecord() {
                         <div><span>Payment Date</span><strong>{form.paymentDate || "—"}</strong></div>
                         <div><span>Payment Period Covered</span><strong>{paymentPeriodLabel || "—"}</strong></div>
                         <div><span>Method of Payment</span><strong>{form.methodForPayment || "—"}</strong></div>
-                        <div><span>Proof of Payment</span><strong>{form.proofOfPaymentFileName || "—"}</strong></div>
+                        <div><span>Proof of Payment (JPG, JPEG, PNG)</span><strong>{form.proofOfPaymentFileName || "—"}</strong></div>
                       </div>
                       <div className="addpay-confirmActions">
                         <button type="button" className="addpay-secondary" onClick={() => setIsPendingTransferConfirmOpen(false)} disabled={saving}>Cancel</button>
@@ -870,7 +874,7 @@ function AgentAddPaymentRecord() {
                         <div><span>Payment Date</span><strong>{form.paymentDate || "—"}</strong></div>
                         <div><span>Payment Period Covered</span><strong>{paymentPeriodLabel || "—"}</strong></div>
                         <div><span>Method of Payment</span><strong>{form.methodForPayment || "—"}</strong></div>
-                        <div><span>Proof of Payment</span><strong>{form.proofOfPaymentFileName || "—"}</strong></div>
+                        <div><span>Proof of Payment (JPG, JPEG, PNG)</span><strong>{form.proofOfPaymentFileName || "—"}</strong></div>
                         <div><span>eOR Number</span><strong>{eorForm.eorNumber || "—"}</strong></div>
                         <div><span>Receipt Date</span><strong>{eorForm.receiptDate || "—"}</strong></div>
                         <div><span>eOR File</span><strong>{eorForm.eorFileName || "—"}</strong></div>

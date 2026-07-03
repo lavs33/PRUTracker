@@ -483,7 +483,9 @@ function registerLegacyRoutes(app, deps) {
     const expectedAnnualCount = deriveSelectedPaymentTermAnnualCount(policy, prospect);
     const completedAnnualCount = completedAnnualPaymentCount(annualPayments);
     const paymentTermCompleteByCount = expectedAnnualCount !== null && completedAnnualCount >= expectedAnnualCount;
-    const paymentTermComplete = (!nextPaymentDate && noOpenAnnualPayments) || paymentTermCompleteByCount;
+    const paymentTermComplete = expectedAnnualCount !== null
+      ? paymentTermCompleteByCount
+      : (!nextPaymentDate && noOpenAnnualPayments);
 
     if (coverageReached) return { status: "Matured", isPaidUp: paymentTermComplete, isMatured: true };
     if (paymentTermComplete) return { status: "Paid-Up", isPaidUp: true, isMatured: false };
@@ -734,6 +736,23 @@ function registerLegacyRoutes(app, deps) {
       },
       status,
     };
+  }
+
+  function validateProofOfPaymentImageFile(proofDataUrl, proofFileName, proofMimeType = "") {
+    const dataUrl = String(proofDataUrl || "").trim();
+    const fileName = String(proofFileName || "").trim();
+    const mimeType = String(proofMimeType || "").trim().toLowerCase();
+    if (!dataUrl || !fileName) return "Proof of payment file is required.";
+    if (!/^data:image\/(?:jpeg|png);base64,/i.test(dataUrl)) {
+      return "Proof of payment must be a JPG, JPEG, or PNG file.";
+    }
+    if (!/\.(?:jpe?g|png)$/i.test(fileName)) {
+      return "Proof of payment file type must be JPG, JPEG, or PNG.";
+    }
+    if (mimeType && !["image/jpeg", "image/png"].includes(mimeType)) {
+      return "Proof of payment file type must be JPG, JPEG, or PNG.";
+    }
+    return "";
   }
 
   function paymentHasCompletedPremiumTransfer(payment = {}) {
@@ -3957,8 +3976,13 @@ app.get("/api/sales/performance", async (req, res) => {
 
     const policyholders = engagementIds.length
       ? await Policyholder.find({ leadEngagementId: { $in: engagementIds } })
-          .select("leadEngagementId status createdAt")
+          .select("leadEngagementId status createdAt productId")
           .lean()
+      : [];
+
+    const productIds = [...new Set(policyholders.map((policyholder) => String(policyholder?.productId || "")).filter(Boolean))];
+    const products = productIds.length
+      ? await Product.find({ _id: { $in: productIds } }).select("productName").lean()
       : [];
 
     const applications = engagementIds.length
@@ -4101,6 +4125,7 @@ app.get("/api/sales/performance", async (req, res) => {
 
     const leadById = new Map(reportingLeads.map((lead) => [String(lead._id), lead]));
     const prospectById = new Map(prospects.map((prospect) => [String(prospect._id), prospect]));
+    const productById = new Map(products.map((product) => [String(product._id), product]));
     const normalizeLeadSourceLabel = (lead) => {
       const rawSource = String(lead?.source || "").trim();
       if (rawSource === "Other") return "Other";
@@ -4317,6 +4342,7 @@ app.get("/api/sales/performance", async (req, res) => {
           leadStatus: String(lead.status || "—"),
           leadCreatedAt: lead.createdAt || null,
           policies: relatedPolicies.length,
+          policyName: latestPolicy?.productId ? (productById.get(String(latestPolicy.productId))?.productName || "—") : "—",
           policyStatus: latestPolicy?.status || "—",
           convertedAt: latestPolicy?.createdAt || null,
           requestedFrequency,
@@ -6729,7 +6755,7 @@ app.post("/api/policyholders/:policyholderId/cancellation", async (req, res) => 
     const policyholder = await Policyholder.findOne({
       _id: policyholderObjectId,
       assignedToUserId: userObjectId,
-    }).select("assignedToUserId policyholderCode policyNumber productId leadEngagementId status nextPaymentDate cancellationDetails");
+    }).select("assignedToUserId policyholderCode policyNumber productId leadEngagementId status lastPaidDate nextPaymentDate cancellationDetails");
 
     if (!policyholder) return res.status(404).json({ message: "Policyholder not found." });
     if (TERMINAL_POLICYHOLDER_STATUSES.includes(String(policyholder.status || ""))) {
@@ -6738,12 +6764,10 @@ app.post("/api/policyholders/:policyholderId/cancellation", async (req, res) => 
 
     const policy = await Policy.findOne({ leadEngagementId: policyholder.leadEngagementId })
       .sort({ attemptCycle: -1, updatedAt: -1, createdAt: -1 })
-      .select("recordPolicyApplicationStatus.issuanceDate")
+      .select("recordPolicyApplicationStatus.issuanceDate recordCoverageDurationDetails.coverageStartDate")
       .lean();
+    const policyIssuanceDate = policy?.recordPolicyApplicationStatus?.issuanceDate || policy?.recordCoverageDurationDetails?.coverageStartDate || null;
 
-    const issuanceDate = policy?.recordPolicyApplicationStatus?.issuanceDate
-      ? new Date(policy.recordPolicyApplicationStatus.issuanceDate)
-      : null;
     const leadEngagement = await LeadEngagement.findById(policyholder.leadEngagementId).select("leadId").lean();
     const lead = leadEngagement?.leadId ? await Lead.findById(leadEngagement.leadId).select("prospectId").lean() : null;
     const prospect = lead?.prospectId ? await Prospect.findById(lead.prospectId).select("firstName middleName lastName").lean() : null;
@@ -6790,19 +6814,23 @@ app.post("/api/policyholders/:policyholderId/cancellation", async (req, res) => 
       if (Number.isNaN(cancellationDate.getTime())) {
         fieldErrors.approvedCancellationDate = "Approved cancellation date is invalid.";
       } else {
-        const today = new Date();
-        const todayOnly = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
         const cancelOnly = new Date(Date.UTC(cancellationDate.getUTCFullYear(), cancellationDate.getUTCMonth(), cancellationDate.getUTCDate()));
+        const lastPaidDate = policyholder.lastPaidDate ? new Date(policyholder.lastPaidDate) : null;
+        const issuanceDate = policyIssuanceDate ? new Date(policyIssuanceDate) : null;
+        const lastPaidOnly = lastPaidDate && !Number.isNaN(lastPaidDate.getTime())
+          ? new Date(Date.UTC(lastPaidDate.getUTCFullYear(), lastPaidDate.getUTCMonth(), lastPaidDate.getUTCDate()))
+          : null;
         const issuanceOnly = issuanceDate && !Number.isNaN(issuanceDate.getTime())
           ? new Date(Date.UTC(issuanceDate.getUTCFullYear(), issuanceDate.getUTCMonth(), issuanceDate.getUTCDate()))
           : null;
+        const minimumCancellationDate = [lastPaidOnly, issuanceOnly]
+          .filter(Boolean)
+          .sort((left, right) => right.getTime() - left.getTime())[0] || null;
 
-        if (!issuanceOnly) {
-          fieldErrors.approvedCancellationDate = "Policy issuance date is unavailable.";
-        } else if (cancelOnly <= issuanceOnly) {
-          fieldErrors.approvedCancellationDate = "Approved cancellation date must be after the policy issuance date.";
-        } else if (cancelOnly > todayOnly) {
-          fieldErrors.approvedCancellationDate = "Approved cancellation date cannot be in the future.";
+        if (!minimumCancellationDate) {
+          fieldErrors.approvedCancellationDate = "Last payment or policy issuance date is unavailable.";
+        } else if (cancelOnly < minimumCancellationDate) {
+          fieldErrors.approvedCancellationDate = "Cancellation date must be on or after the later of the last payment date and policy issuance date.";
         }
       }
     }
@@ -7266,11 +7294,9 @@ app.post("/api/policyholders/:policyholderId/annual-payments/:annualPaymentId/pa
     const proofDataUrl = String(proofOfPaymentFileDataUrl || "").trim();
     const proofFileName = String(proofOfPaymentFileName || "").trim();
     const proofMimeType = String(proofOfPaymentFileMimeType || "").trim();
-    if (!proofDataUrl || !proofFileName) {
-      return res.status(400).json({ message: "Proof of payment file is required." });
-    }
-    if (!/^data:(?:image\/(?:jpeg|png)|application\/pdf);base64,/i.test(proofDataUrl)) {
-      return res.status(400).json({ message: "Proof of payment must be a JPG, PNG, or PDF file." });
+    const proofValidationError = validateProofOfPaymentImageFile(proofDataUrl, proofFileName, proofMimeType);
+    if (proofValidationError) {
+      return res.status(400).json({ message: proofValidationError });
     }
 
     const userObjectId = new mongoose.Types.ObjectId(userId);
@@ -7732,11 +7758,9 @@ app.put("/api/policyholders/:policyholderId/annual-payments/:annualPaymentId/pay
     const proofDataUrl = String(proofOfPaymentFileDataUrl || "").trim();
     const proofFileName = String(proofOfPaymentFileName || "").trim();
     const proofMimeType = String(proofOfPaymentFileMimeType || "").trim();
-    if (!proofDataUrl || !proofFileName) {
-      return res.status(400).json({ message: "Proof of payment file is required." });
-    }
-    if (!/^data:(?:image\/(?:jpeg|png)|application\/pdf);base64,/i.test(proofDataUrl)) {
-      return res.status(400).json({ message: "Proof of payment must be a JPG, PNG, or PDF file." });
+    const proofValidationError = validateProofOfPaymentImageFile(proofDataUrl, proofFileName, proofMimeType);
+    if (proofValidationError) {
+      return res.status(400).json({ message: proofValidationError });
     }
 
     const submittedPaymentDate = paymentDate ? new Date(`${String(paymentDate).slice(0, 10)}T00:00:00`) : null;
@@ -11192,8 +11216,8 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/attendance",
       na.attendanceProofImageDataUrl = proofDataUrl;
       na.attendanceProofFileName = proofFileName;
       const existingOutcomeActivity = String(na.outcomeActivity || "").trim();
-      if (!["Perform Needs Analysis", "Schedule Proposal Presentation"].includes(existingOutcomeActivity)) {
-        na.outcomeActivity = "Record Prospect Attendance";
+      if (existingOutcomeActivity !== "Schedule Proposal Presentation") {
+        na.outcomeActivity = "Perform Needs Analysis";
       }
       await na.save({ session });
 
@@ -13021,7 +13045,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/submission", asyn
         leadEngagementId: engagement._id,
         attemptCycle: currentAttemptCycle,
       })
-        .select("chosenProductId")
+        .select("chosenProductId recordPremiumPaymentTransfer.paymentId recordPremiumPaymentTransfer.paymentDate")
         .session(session);
 
       await ensureNeedsAssessmentAttemptCycleIndex();
@@ -13094,7 +13118,27 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/submission", asyn
         await t.save({ session });
       }
 
-      const followUpDueAt = addWorkingDays(now, 3);
+      let policyApplicationPaymentDate = existingApplication?.recordPremiumPaymentTransfer?.paymentDate
+        ? new Date(existingApplication.recordPremiumPaymentTransfer.paymentDate)
+        : null;
+      const applicationPaymentId = existingApplication?.recordPremiumPaymentTransfer?.paymentId || null;
+      if ((!policyApplicationPaymentDate || Number.isNaN(policyApplicationPaymentDate.getTime())) && applicationPaymentId && mongoose.isValidObjectId(applicationPaymentId)) {
+        const applicationPayment = await Payment.findOne({
+          _id: applicationPaymentId,
+          leadEngagementId: engagement._id,
+          ...attemptCycleFilterForCycle(currentAttemptCycle),
+        })
+          .select("recordPremiumPaymentTransfer.paymentDate")
+          .session(session)
+          .lean();
+        policyApplicationPaymentDate = applicationPayment?.recordPremiumPaymentTransfer?.paymentDate
+          ? new Date(applicationPayment.recordPremiumPaymentTransfer.paymentDate)
+          : null;
+      }
+      const followUpBaseDate = policyApplicationPaymentDate && !Number.isNaN(policyApplicationPaymentDate.getTime())
+        ? policyApplicationPaymentDate
+        : now;
+      const followUpDueAt = addWorkingDays(followUpBaseDate, 7);
       followUpDueAt.setHours(18, 0, 0, 0);
       const followUpDedupeKey = `POLICY_APPLICATION_STATUS_FOLLOW_UP:${engagement._id}`;
       let followUpTask = await Task.findOne({
@@ -13742,11 +13786,11 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-dura
 
       const annualPaymentDoc = paymentDoc?.annualPaymentId && mongoose.isValidObjectId(paymentDoc.annualPaymentId)
         ? await AnnualPayment.findById(paymentDoc.annualPaymentId)
-            .select("_id frequencyOfPayment")
+            .select("_id frequencyOfPayment status annualPaymentPeriod totalAnnualPremiumPhp paymentProgress amountPaidSoFarPhp remainingBalancePhp attemptCycle")
             .session(session)
             .lean()
         : await AnnualPayment.findOne({ leadEngagementId: engagement._id, ...attemptCycleFilterForCycle(currentAttemptCycle) })
-            .select("_id frequencyOfPayment")
+            .select("_id frequencyOfPayment status annualPaymentPeriod totalAnnualPremiumPhp paymentProgress amountPaidSoFarPhp remainingBalancePhp attemptCycle")
             .session(session)
             .lean();
       if (!annualPaymentDoc?._id) {
@@ -13997,7 +14041,22 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-dura
         }
 
         let nextAnnualPaymentDoc = null;
-        const policyForInitialLifecycle = { recordCoverageDurationDetails: { ...policyDoc?.recordCoverageDurationDetails, policyEndDate } };
+        const policyForInitialLifecycle = {
+          recordCoverageDurationDetails: {
+            policyNumber,
+            selectedPaymentTermLabel: normalizedPaymentLabel,
+            selectedPaymentTermType: normalizedPaymentType,
+            selectedPaymentTermYears: paymentYears,
+            selectedPaymentTermUntilAge: paymentUntilAge,
+            coverageDurationLabel: normalizedCoverageLabel,
+            coverageDurationType: normalizedCoverageType,
+            coverageDurationYears: computedCoverageYears,
+            coverageDurationUntilAge: computedCoverageUntilAge,
+            coverageStartDate: issuanceDate,
+            coverageEndDate: policyEndDate,
+            policyEndDate,
+          },
+        };
         const expectedInitialAnnualPaymentCount = deriveSelectedPaymentTermAnnualCount(policyForInitialLifecycle, prospect);
         const initialPaymentTermCompleteByAnnualCount = expectedInitialAnnualPaymentCount !== null
           && completedAnnualPaymentCount([annualPaymentDoc].filter(Boolean)) >= expectedInitialAnnualPaymentCount;
