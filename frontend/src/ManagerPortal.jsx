@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { FaFilePdf, FaSearch } from "react-icons/fa";
 import TopNav from "./components/TopNav";
 import ManagerSideNav from "./components/ManagerSideNav";
@@ -695,6 +695,7 @@ function Toolbar({
 
 function ManagerPortal({ roleType }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const { username } = useParams();
   const normalizedRole = String(roleType || "")
     .trim()
@@ -703,8 +704,9 @@ function ManagerPortal({ roleType }) {
   const agentTableScrollRef = useRef(null);
   const orphanTableTopScrollRef = useRef(null);
   const orphanTableScrollRef = useRef(null);
+  const orphanActionTopRef = useRef(null);
   const longLeaveStepperRef = useRef(null);
-  const [activeView, setActiveView] = useState("dashboard");
+  const [activeView, setActiveView] = useState(() => location.state?.activeView || "dashboard");
   const [agentSearch, setAgentSearch] = useState("");
   const [agentSort, setAgentSort] = useState("usernameAsc");
   const [orphanAgentSearch, setOrphanAgentSearch] = useState("");
@@ -762,10 +764,10 @@ function ManagerPortal({ roleType }) {
   useLayoutEffect(() => {
     if (!longLeaveStepperScrollSignal) return;
     const scrollToStepper = (behavior = "smooth") => {
-      const stepper = longLeaveStepperRef.current;
-      if (!stepper) return;
-      stepper.scrollIntoView({ behavior, block: "start", inline: "nearest" });
-      const top = Math.max(0, stepper.getBoundingClientRect().top + window.scrollY - 12);
+      const formStart = orphanActionTopRef.current || longLeaveStepperRef.current;
+      if (!formStart) return;
+      formStart.scrollIntoView({ behavior, block: "start", inline: "nearest" });
+      const top = Math.max(0, formStart.getBoundingClientRect().top + window.scrollY - 12);
       window.scrollTo({ top, behavior });
       document.documentElement.scrollTop = top;
       document.body.scrollTop = top;
@@ -820,6 +822,10 @@ function ManagerPortal({ roleType }) {
       });
     }
   }, [navigate, normalizedRole, user, username]);
+
+  useEffect(() => {
+    if (location.state?.activeView) setActiveView(location.state.activeView);
+  }, [location.state]);
 
   useEffect(() => {
     const branchPageLabels = {
@@ -1674,8 +1680,13 @@ function ManagerPortal({ roleType }) {
     }
   };
 
-  const scrollLongLeaveStepperIntoView = () => {
+  const scrollLongLeaveFormStartIntoView = () => {
     setLongLeaveStepperScrollSignal((current) => current + 1);
+  };
+
+  const setLongLeaveStepAndScroll = (step) => {
+    setOrphanLongLeaveStep(step);
+    scrollLongLeaveFormStartIntoView();
   };
 
   const goToNextLongLeaveStep = async () => {
@@ -1684,7 +1695,7 @@ function ManagerPortal({ roleType }) {
       if (!saved) return;
       setConfirmOrphanTransfer(false);
       setOrphanLongLeaveStep(2);
-      scrollLongLeaveStepperIntoView();
+      scrollLongLeaveFormStartIntoView();
       return;
     }
     if (orphanLongLeaveStep === 2) {
@@ -1710,7 +1721,7 @@ function ManagerPortal({ roleType }) {
           setOrphanConfirmedPolicyholders(updatedRecord.affectedPolicyholders || []);
         }
         setOrphanLongLeaveStep(3);
-        scrollLongLeaveStepperIntoView();
+        scrollLongLeaveFormStartIntoView();
       } catch (err) {
         setOrphanLongLeaveFieldErrors((current) => ({ ...current, form: err?.message || "Failed to confirm orphan clients." }));
       } finally {
@@ -1766,7 +1777,7 @@ function ManagerPortal({ roleType }) {
     setOrphanLongLeaveDetailsDirty(false);
     setConfirmOrphanTransfer(false);
     setOrphanLongLeaveStep(2);
-    scrollLongLeaveStepperIntoView();
+    scrollLongLeaveFormStartIntoView();
   };
 
   const openOrphanAgentAction = (action) => {
@@ -1785,7 +1796,7 @@ function ManagerPortal({ roleType }) {
     setShowEndorseOrphansModal(false);
     setOrphanConfirmedProspects([]);
     setOrphanConfirmedPolicyholders([]);
-    scrollLongLeaveStepperIntoView();
+    scrollLongLeaveFormStartIntoView();
   };
 
   const closeOrphanAgentAction = () => {
@@ -1827,7 +1838,7 @@ function ManagerPortal({ roleType }) {
     setShowEndorseOrphansModal(false);
     setOrphanConfirmedProspects(Array.isArray(normalizedRecord.affectedProspects) ? normalizedRecord.affectedProspects : []);
     setOrphanConfirmedPolicyholders(Array.isArray(normalizedRecord.affectedPolicyholders) ? normalizedRecord.affectedPolicyholders : []);
-    scrollLongLeaveStepperIntoView();
+    scrollLongLeaveFormStartIntoView();
   };
 
   const selectedAgentAge = selectedAgent?.birthday ? getCurrentAgeFromBirthday(selectedAgent.birthday) : selectedAgent?.age;
@@ -3840,7 +3851,7 @@ function ManagerPortal({ roleType }) {
                 </nav>
 
                 {orphanAgentAction ? (
-                  <div className="manager-orphan-action-page">
+                  <div className="manager-orphan-action-page" ref={orphanActionTopRef}>
                     <div className="manager-panel__head">
                       <div>
                         <h2>{orphanAgentAction === "long_leave" ? "Mark as On Long Leave" : "Mark as Retired"}</h2>
@@ -3861,7 +3872,7 @@ function ManagerPortal({ roleType }) {
                               type="button"
                               className={orphanLongLeaveStep === step ? "active" : ""}
                               disabled={(step === 2 && !canAccessLongLeaveStep2) || (step === 3 && !canAccessLongLeaveStep3)}
-                              onClick={() => setOrphanLongLeaveStep(step)}
+                              onClick={() => setLongLeaveStepAndScroll(step)}
                             >
                               <span>Step {step}</span>
                               <strong>{label}</strong>

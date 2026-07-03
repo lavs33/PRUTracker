@@ -1787,7 +1787,7 @@ app.patch("/api/manager/long-leave/:longLeaveId/status", async (req, res) => {
           {
             $set: {
               assignedToUserId: unitManager.userId,
-              type: "ORPHAN_ENDORSEMENT",
+              type: "ORPHANS_ENDORSEMENTS",
               title: "Orphan clients endorsed",
               message: `Orphan clients for ${agentName} (${agentUser.username || "—"}) have been endorsed to your unit${agent?.unitId?.unitName ? ` (${agent.unitId.unitName})` : ""}.`,
               status: "Unread",
