@@ -270,6 +270,17 @@ function formatDate(value) {
       });
 }
 
+
+const REASSIGNMENT_KPI_TARGETS = {
+  weeklyDoneApproaches: 50,
+  monthlyClosingRatio: 20,
+  monthlyActivePolicies: 2,
+};
+
+function normalizeAgentType(value) {
+  return String(value || "").trim().toLowerCase().replace(/[\s_-]+/g, " ");
+}
+
 function toDateInputValue(value) {
   const dt = new Date(value);
   return Number.isNaN(dt.getTime()) ? "" : dt.toISOString().slice(0, 10);
@@ -1276,10 +1287,42 @@ function ManagerPortal({ roleType }) {
     (portalData?.agents || [])
       .filter((agent) => String(agent?.unit || "") === String(selectedUmLongLeaveRecord?.unitName || selectedUnit?.name || ""))
       .filter((agent) => String(agent?.id || "") !== String(selectedUmLongLeaveRecord?.agentId || ""))
-      .filter((agent) => String(agent?.status || "").trim() !== "On Long Leave")
+      .map((agent) => {
+        const completedApproaches = Number(agent?.completedApproaches || 0);
+        const openApproachTasks = Number(agent?.openApproachTasksDueThisWeek ?? agent?.openApproachTasks ?? 0);
+        const closingRatio = Number(agent?.conversionRate || 0);
+        const activePolicies = Number(agent?.activePolicies || 0);
+        return {
+          ...agent,
+          reassignmentMetrics: {
+            completedApproaches,
+            openApproachTasks,
+            projectedApproaches: completedApproaches + openApproachTasks,
+            weeklyDoneApproachesTarget: REASSIGNMENT_KPI_TARGETS.weeklyDoneApproaches,
+            closingRatio,
+            monthlyClosingRatioTarget: REASSIGNMENT_KPI_TARGETS.monthlyClosingRatio,
+            activePolicies,
+            monthlyActivePoliciesTarget: REASSIGNMENT_KPI_TARGETS.monthlyActivePolicies,
+          },
+        };
+      })
+      .filter((agent) => String(agent?.status || "").trim() === "Active")
+      .filter((agent) => normalizeAgentType(agent?.agentType) === "full time" || normalizeAgentType(agent?.agentType) === "full-time")
+      .filter((agent) => agent.reassignmentMetrics.completedApproaches < agent.reassignmentMetrics.weeklyDoneApproachesTarget)
+      .filter((agent) => agent.reassignmentMetrics.projectedApproaches < agent.reassignmentMetrics.weeklyDoneApproachesTarget)
+      .filter((agent) => agent.reassignmentMetrics.closingRatio >= agent.reassignmentMetrics.monthlyClosingRatioTarget)
+      .filter((agent) => agent.reassignmentMetrics.activePolicies >= agent.reassignmentMetrics.monthlyActivePoliciesTarget)
       .sort((left, right) => String(left?.name || left?.username || "").localeCompare(String(right?.name || right?.username || ""))),
     [portalData?.agents, selectedUmLongLeaveRecord?.agentId, selectedUmLongLeaveRecord?.unitName, selectedUnit?.name],
   );
+
+
+
+  const openAffectedClientDetail = (client) => {
+    setSelectedUmAffectedClient(client);
+    setSelectedReassignmentAgentId("");
+    window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+  };
 
   const filteredAgents = useMemo(() => {
     const searchedAgents = buildFilter(selectedUnitRows, agentSearch, ["username", "name"]);
@@ -3919,13 +3962,12 @@ function ManagerPortal({ roleType }) {
                     </div>
 
                     <div className="manager-section-subhead">
-                      <h3>Available Agents for Reassignment</h3>
-                      <p>Select one agent from {selectedUmLongLeaveRecord.unitName || selectedUnit?.name || "this unit"}. The on-long-leave agent is excluded.</p>
+                      <h3>Recommended Agents for Reassignment</h3>
                     </div>
                     <div className="manager-table-wrap">
                       <table className="manager-table manager-table--promotion-history">
                         <thead>
-                          <tr><th>Agent Code</th><th>Agent Name</th><th>Agent Type</th><th>Status</th><th>Select</th></tr>
+                          <tr><th>Agent Code</th><th>Agent Name</th><th>Agent Type</th><th>Status</th><th>Weekly Done Approaches</th><th>Open Approach Tasks Due This Week</th><th>Projected Weekly Approaches</th><th>Monthly Closing Ratio</th><th>Monthly Active Policies</th><th>Select</th></tr>
                         </thead>
                         <tbody>
                           {reassignmentAgentRows.map((agent) => (
@@ -3934,13 +3976,21 @@ function ManagerPortal({ roleType }) {
                               <td>{agent.name || "—"}</td>
                               <td>{agent.agentType || "—"}</td>
                               <td>{renderAgentStatusPill(agent, { table: true })}</td>
+                              <td>{agent.reassignmentMetrics.completedApproaches} / {agent.reassignmentMetrics.weeklyDoneApproachesTarget}</td>
+                              <td>{agent.reassignmentMetrics.openApproachTasks}</td>
+                              <td>{agent.reassignmentMetrics.projectedApproaches} / {agent.reassignmentMetrics.weeklyDoneApproachesTarget}</td>
+                              <td>{agent.reassignmentMetrics.closingRatio}% / {agent.reassignmentMetrics.monthlyClosingRatioTarget}%</td>
+                              <td>{agent.reassignmentMetrics.activePolicies} / {agent.reassignmentMetrics.monthlyActivePoliciesTarget}</td>
                               <td><button type="button" className="manager-refresh-btn" onClick={() => setSelectedReassignmentAgentId(agent.id)}>{selectedReassignmentAgentId === agent.id ? "Selected" : "Select"}</button></td>
                             </tr>
                           ))}
                         </tbody>
                       </table>
                     </div>
-                    {!reassignmentAgentRows.length && <div className="manager-empty-state">No available agents found in this unit for reassignment.</div>}
+                    {!reassignmentAgentRows.length && <div className="manager-empty-state">No recommended agents matched all reassignment criteria for this unit.</div>}
+                    <div className="manager-orphan-action-buttons">
+                      <button type="button" className="manager-refresh-btn manager-long-leave-next-btn" disabled={!selectedReassignmentAgentId}>Confirm Reassignment</button>
+                    </div>
                   </>
                 ) : (
                 <>
@@ -3968,7 +4018,7 @@ function ManagerPortal({ roleType }) {
                         </thead>
                         <tbody>
                           {selectedUmLongLeaveRecord.affectedProspects.map((prospect) => (
-                            <tr key={prospect.id || `${prospect.prospectCode}:${prospect.leadCode}`} onClick={() => setSelectedUmAffectedClient({ kind: "prospect", code: prospect.prospectCode || "—", name: prospect.name || "—", details: { "Prospect Code": prospect.prospectCode, "Lead Code": prospect.leadCode, Name: prospect.name, Source: prospect.source, Status: prospect.status, "Market Type": prospect.marketType, "Prospect Type": prospect.prospectType } })} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setSelectedUmAffectedClient({ kind: "prospect", code: prospect.prospectCode || "—", name: prospect.name || "—", details: { "Prospect Code": prospect.prospectCode, "Lead Code": prospect.leadCode, Name: prospect.name, Source: prospect.source, Status: prospect.status, "Market Type": prospect.marketType, "Prospect Type": prospect.prospectType } }); }}>
+                            <tr key={prospect.id || `${prospect.prospectCode}:${prospect.leadCode}`} onClick={() => openAffectedClientDetail({ kind: "prospect", code: prospect.prospectCode || "—", name: prospect.name || "—", details: { "Prospect Code": prospect.prospectCode, "Lead Code": prospect.leadCode, Name: prospect.name, Source: prospect.source, Status: prospect.status, "Market Type": prospect.marketType, "Prospect Type": prospect.prospectType } })} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") openAffectedClientDetail({ kind: "prospect", code: prospect.prospectCode || "—", name: prospect.name || "—", details: { "Prospect Code": prospect.prospectCode, "Lead Code": prospect.leadCode, Name: prospect.name, Source: prospect.source, Status: prospect.status, "Market Type": prospect.marketType, "Prospect Type": prospect.prospectType } }); }}>
                               <td>{prospect.prospectCode || "—"}</td>
                               <td>{prospect.leadCode || "—"}</td>
                               <td>{prospect.name || "—"}</td>
@@ -3992,7 +4042,7 @@ function ManagerPortal({ roleType }) {
                         </thead>
                         <tbody>
                           {selectedUmLongLeaveRecord.affectedPolicyholders.map((policyholder) => (
-                            <tr key={policyholder.id || `${policyholder.policyholderCode}:${policyholder.policyNumber}`} onClick={() => setSelectedUmAffectedClient({ kind: "policyholder", code: policyholder.policyholderCode || "—", name: policyholder.policyholderName || "—", details: { "Policyholder Code": policyholder.policyholderCode, "Policyholder Name": policyholder.policyholderName, "Product Name": policyholder.productName, "Policy Number": policyholder.policyNumber, Status: policyholder.status } })} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setSelectedUmAffectedClient({ kind: "policyholder", code: policyholder.policyholderCode || "—", name: policyholder.policyholderName || "—", details: { "Policyholder Code": policyholder.policyholderCode, "Policyholder Name": policyholder.policyholderName, "Product Name": policyholder.productName, "Policy Number": policyholder.policyNumber, Status: policyholder.status } }); }}>
+                            <tr key={policyholder.id || `${policyholder.policyholderCode}:${policyholder.policyNumber}`} onClick={() => openAffectedClientDetail({ kind: "policyholder", code: policyholder.policyholderCode || "—", name: policyholder.policyholderName || "—", details: { "Policyholder Code": policyholder.policyholderCode, "Policyholder Name": policyholder.policyholderName, "Product Name": policyholder.productName, "Policy Number": policyholder.policyNumber, Status: policyholder.status } })} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") openAffectedClientDetail({ kind: "policyholder", code: policyholder.policyholderCode || "—", name: policyholder.policyholderName || "—", details: { "Policyholder Code": policyholder.policyholderCode, "Policyholder Name": policyholder.policyholderName, "Product Name": policyholder.productName, "Policy Number": policyholder.policyNumber, Status: policyholder.status } }); }}>
                               <td>{policyholder.policyholderCode || "—"}</td>
                               <td>{policyholder.policyholderName || "—"}</td>
                               <td>{policyholder.productName || "—"}</td>

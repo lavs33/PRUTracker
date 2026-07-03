@@ -830,6 +830,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
             completedAppointments: 0,
             completedPresentations: 0,
             openTasks: 0,
+            openApproachTasksDueThisWeek: 0,
             overdueTasks: 0,
             closedTasks: 0,
             delayedDoneTasks: 0,
@@ -897,6 +898,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
         completedAppointments: metrics.completedAppointments,
         completedPresentations: metrics.completedPresentations,
         openTasks: metrics.openTasks,
+        openApproachTasksDueThisWeek: metrics.openApproachTasksDueThisWeek,
         overdueTasks: metrics.overdueTasks,
         closedTasks: metrics.closedTasks,
         delayedDoneTasks: metrics.delayedDoneTasks,
@@ -1106,6 +1108,13 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
   }
 
   const nowMs = Date.now();
+  const currentWeekStart = new Date(nowMs);
+  currentWeekStart.setHours(0, 0, 0, 0);
+  currentWeekStart.setDate(currentWeekStart.getDate() - currentWeekStart.getDay());
+  const currentWeekEnd = new Date(currentWeekStart);
+  currentWeekEnd.setDate(currentWeekEnd.getDate() + 7);
+  const currentWeekStartMs = currentWeekStart.getTime();
+  const currentWeekEndMs = currentWeekEnd.getTime();
   const applyTaskMetrics = (taskList, metricsByUserId) => {
     for (const task of taskList) {
       const assignedUserId = String(task?.assignedToUserId || "");
@@ -1131,6 +1140,9 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
         }
         continue;
       }
+
+      const isDueThisWeek = Number.isFinite(dueAtMs) && dueAtMs >= currentWeekStartMs && dueAtMs < currentWeekEndMs;
+      if (taskType === "APPROACH" && isDueThisWeek) metrics.openApproachTasksDueThisWeek += 1;
 
       const isOverdue = Number.isFinite(dueAtMs) && dueAtMs < nowMs;
       if (isOverdue) metrics.overdueTasks += 1;
@@ -1564,6 +1576,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       completedAppointments: row.completedAppointments,
       completedPresentations: row.completedPresentations,
       openTasks: row.openTasks,
+      openApproachTasksDueThisWeek: row.openApproachTasksDueThisWeek,
       overdueTasks: row.overdueTasks,
       closedTasks: row.closedTasks,
       delayedDoneTasks: row.delayedDoneTasks,
