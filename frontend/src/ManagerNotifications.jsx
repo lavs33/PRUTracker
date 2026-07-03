@@ -10,7 +10,6 @@ const MANAGER_NOTIF_TYPES = ["ORPHAN_ENDORSEMENT"];
 function ManagerNotifications({ roleType }) {
   const navigate = useNavigate();
   const { username } = useParams();
-  const normalizedRole = String(roleType || "").trim().toLowerCase();
   const [tab, setTab] = useState("unread");
   const [typeFilter, setTypeFilter] = useState("");
   const [loading, setLoading] = useState(true);
@@ -23,6 +22,7 @@ function ManagerNotifications({ roleType }) {
   const user = useMemo(() => {
     try { return JSON.parse(localStorage.getItem("user")); } catch { return null; }
   }, []);
+  const normalizedRole = String(roleType || user?.role || "UM").trim().toLowerCase();
 
   useEffect(() => {
     if (!user || user.username !== username) {
@@ -131,9 +131,9 @@ function ManagerNotifications({ roleType }) {
         <section className="notifs-card">
           <div className="notifs-head">
             <div>
-              <p className="notifs-eyebrow">UM Portal</p>
+              <p className="notifs-eyebrow">{String(roleType || "UM").toUpperCase()} Portal</p>
               <h1 className="notifs-title">Notifications</h1>
-              <p className="notifs-subtitle">Review orphan endorsement alerts for your unit.</p>
+              <p className="notifs-subtitle">Review alerts for your portal.</p>
             </div>
             <div className="notifs-tabs" role="tablist" aria-label="Notification status tabs">
               <button type="button" className={`notifs-tab is-unread ${tab === "unread" ? "active" : ""}`} onClick={() => setTab("unread")}>Unread <span className="notifs-badge unread">{counts.unread}</span></button>

@@ -45,9 +45,11 @@ function App() {
         <Route path="/um/:username" element={<ManagerPortal roleType="UM" />} />
         <Route path="/bm/:username" element={<ManagerPortal roleType="BM" />} />
         <Route path="/aum/:username/profile" element={<ManagerProfile roleType="AUM" />} />
+        <Route path="/aum/:username/notifications" element={<ManagerNotifications roleType="AUM" />} />
         <Route path="/um/:username/profile" element={<ManagerProfile roleType="UM" />} />
         <Route path="/um/:username/notifications" element={<ManagerNotifications roleType="UM" />} />
         <Route path="/bm/:username/profile" element={<ManagerProfile roleType="BM" />} />
+        <Route path="/bm/:username/notifications" element={<ManagerNotifications roleType="BM" />} />
 
         {/* Agent routes (guard handled inside pages) */}
         <Route path="/agent/:username" element={<AgentHome />} />
