@@ -1,16 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import TopNav from "./components/TopNav";
+import ManagerSideNav from "./components/ManagerSideNav";
 import { logout } from "./utils/logout";
 import "./ManagerNotifications.css";
 
 const API_BASE = "http://localhost:5000";
-const MANAGER_NOTIF_TYPES = ["ORPHAN_ENDORSEMENT"];
+const MANAGER_NOTIF_TYPES = ["ORPHANS_ENDORSEMENTS"];
 
 function ManagerNotifications({ roleType }) {
   const navigate = useNavigate();
   const { username } = useParams();
-  const normalizedRole = String(roleType || "").trim().toLowerCase();
   const [tab, setTab] = useState("unread");
   const [typeFilter, setTypeFilter] = useState("");
   const [loading, setLoading] = useState(true);
@@ -19,16 +19,27 @@ function ManagerNotifications({ roleType }) {
   const [counts, setCounts] = useState({ unread: 0, read: 0 });
   const [markingAllRead, setMarkingAllRead] = useState(false);
   const [markingNotifId, setMarkingNotifId] = useState("");
+  const [sideNavCollapsed, setSideNavCollapsed] = useState(false);
 
   const user = useMemo(() => {
-    try { return JSON.parse(localStorage.getItem("user")); } catch { return null; }
+    try { return JSON.parse(localStorage.getItem("managerPortalUser") || "null"); } catch { return null; }
   }, []);
+  const normalizedRole = String(roleType || user?.role || "UM").trim().toLowerCase();
 
   useEffect(() => {
-    if (!user || user.username !== username) {
-      navigate("/", { replace: true });
+    const isUmRoute = normalizedRole === "um";
+    const isUmSession = String(user?.role || "").trim().toUpperCase() === "UM";
+
+    if (!user || !isUmRoute || !isUmSession) {
+      localStorage.setItem("role", "UM");
+      navigate("/login", { replace: true });
+      return;
     }
-  }, [user, username, navigate]);
+
+    if (user.username !== username) {
+      navigate(`/um/${user.username}/notifications`, { replace: true });
+    }
+  }, [user, username, normalizedRole, navigate]);
 
   useEffect(() => { document.title = `${username} | Notifications`; }, [username]);
 
@@ -112,66 +123,105 @@ function ManagerNotifications({ roleType }) {
   };
 
   const typePillClass = () => "notif-pill added";
-  const openNotif = async (notification) => {
-    if (notification?.status === "Unread") await markNotifAsRead(notification._id);
-    navigate(`/${normalizedRole}/${username}`);
+
+  const handleManagerSideNav = (key) => {
+    navigate(`/um/${user?.username || username}`, { state: { activeView: key } });
   };
 
+  const openNotif = async (notification) => {
+    if (notification?.status === "Unread") await markNotifAsRead(notification._id);
+    navigate(`/${normalizedRole}/${username}`, { state: { activeView: "orphan_endorsements" } });
+  };
+
+  const NotifRow = ({ n }) => (
+    <div className={`notif-row ${n.status === "Unread" ? "unread" : ""}`}>
+      <div className="notif-left">
+        <div className="notif-topline">
+          {n.status === "Unread" ? <span className="notif-dot" aria-label="Unread" /> : null}
+          <span className={typePillClass(n.type)}>{n.type}</span>
+          <span className="notif-time">{formatWhen(n.updatedAt || n.createdAt)}</span>
+        </div>
+        <div className="notif-title">{n.title}</div>
+        {String(n.message || "").trim() ? <div className="notif-msg">{n.message}</div> : null}
+      </div>
+
+      <div className="notif-right">
+        {n.status === "Unread" ? (
+          <button
+            type="button"
+            className="notif-btn secondary"
+            onClick={() => markNotifAsRead(n._id)}
+            disabled={markingNotifId === String(n._id) || markingAllRead}
+          >
+            {markingNotifId === String(n._id) ? "Marking..." : "Mark as Read"}
+          </button>
+        ) : (
+          <button type="button" className="notif-btn secondary" onClick={() => openNotif(n)}>
+            Open
+          </button>
+        )}
+      </div>
+    </div>
+  );
+
+  if (!user || user.username !== username) return null;
+
   return (
-    <div className="notifs-page">
+    <div className="notifs-shell">
       <TopNav
         user={user}
         onLogoClick={() => navigate(`/${normalizedRole}/${username}`)}
-        onLogout={logout}
+        onLogout={() => logout(navigate, "UM")}
         onProfileClick={() => navigate(`/${normalizedRole}/${username}/profile`)}
         onNotificationsClick={() => navigate(`/${normalizedRole}/${username}/notifications`)}
       />
 
-      <main className="notifs-shell">
-        <section className="notifs-card">
-          <div className="notifs-head">
+      <div className="notifs-body">
+        <ManagerSideNav
+          roleLabel="UM"
+          active="orphan_endorsements"
+          onNavigate={handleManagerSideNav}
+          collapsed={sideNavCollapsed}
+          onToggle={() => setSideNavCollapsed((current) => !current)}
+        />
+
+        <main className="notifs-content">
+          <div className="notifs-headerRow">
             <div>
               <p className="notifs-eyebrow">UM Portal</p>
               <h1 className="notifs-title">Notifications</h1>
-              <p className="notifs-subtitle">Review orphan endorsement alerts for your unit.</p>
-            </div>
-            <div className="notifs-tabs" role="tablist" aria-label="Notification status tabs">
-              <button type="button" className={`notifs-tab is-unread ${tab === "unread" ? "active" : ""}`} onClick={() => setTab("unread")}>Unread <span className="notifs-badge unread">{counts.unread}</span></button>
-              <button type="button" className={`notifs-tab ${tab === "read" ? "active" : ""}`} onClick={() => setTab("read")}>Read <span className="notifs-badge">{counts.read}</span></button>
             </div>
           </div>
 
           <div className="notifs-toolbar">
-            <label>
-              <span>Type</span>
-              <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
-                <option value="">All types</option>
+            <div className="notifs-tabs" role="tablist" aria-label="Notification status tabs">
+              <button type="button" className={`notifs-tab is-unread ${tab === "unread" ? "active" : ""}`} onClick={() => setTab("unread")}>Unread <span className="notifs-badge unread">{counts.unread}</span></button>
+              <button type="button" className={`notifs-tab is-read ${tab === "read" ? "active" : ""}`} onClick={() => setTab("read")}>Read <span className="notifs-badge read">{counts.read}</span></button>
+            </div>
+
+            <div className="notifs-filter">
+              <select className="notifs-select" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} aria-label="Notification type filter">
+                <option value="">All Types</option>
                 {MANAGER_NOTIF_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
               </select>
-            </label>
-            <button type="button" className="notifs-mark-all" onClick={markAllAsRead} disabled={tab !== "unread" || markingAllRead || counts.unread <= 0}>{markingAllRead ? "Marking..." : "Mark all as read"}</button>
+              <button type="button" className="notif-btn ghost" onClick={() => setTypeFilter("")} disabled={!typeFilter}>Clear</button>
+              <button type="button" className="notif-btn secondary" onClick={markAllAsRead} disabled={tab !== "unread" || markingAllRead || counts.unread <= 0}>{markingAllRead ? "Marking..." : "Mark All as Read"}</button>
+            </div>
           </div>
 
-          {apiError && <div className="notifs-error">{apiError}</div>}
           {loading ? <div className="notifs-empty">Loading notifications...</div> : null}
-          {!loading && notifs.length > 0 && (
+          {!loading && apiError ? <div className="notifs-empty" style={{ color: "#FFFFFF" }}>{apiError}</div> : null}
+          {!loading && !apiError ? (
             <div className="notifs-list">
-              {notifs.map((n) => (
-                <article key={n._id} className={`notif-row ${n.status === "Unread" ? "unread" : ""}`}>
-                  <button type="button" className="notif-main" onClick={() => openNotif(n)}>
-                    <span className={typePillClass(n.type)}>{n.type}</span>
-                    <strong>{n.title}</strong>
-                    <p>{n.message || "No details provided."}</p>
-                    <small>{formatWhen(n.createdAt)}</small>
-                  </button>
-                  {tab === "unread" ? <button type="button" className="notif-read-btn" onClick={() => markNotifAsRead(n._id)} disabled={markingNotifId === n._id}>{markingNotifId === n._id ? "Marking..." : "Mark as read"}</button> : null}
-                </article>
-              ))}
+              {notifs.length === 0 ? (
+                <div className="notifs-empty">{tab === "unread" ? "No unread notifications." : "No read notifications."}</div>
+              ) : (
+                notifs.map((n) => <NotifRow key={n._id} n={n} />)
+              )}
             </div>
-          )}
-          {!loading && !notifs.length && <div className="notifs-empty">{tab === "unread" ? "No unread notifications." : "No read notifications."}</div>}
-        </section>
-      </main>
+          ) : null}
+        </main>
+      </div>
     </div>
   );
 }
