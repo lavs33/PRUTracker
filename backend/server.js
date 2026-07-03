@@ -1491,6 +1491,15 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
   const taskRows = buildRows(taskMetricsByUserId);
   const salesRows = buildRows(salesMetricsByUserId);
   const unitPerformanceRows = buildRowsForUnitPerformanceContext(unitPerformanceContext);
+  const reassignmentWeeklyRows = buildRowsForUnitPerformanceContext(buildPresetContext("7d"));
+  const reassignmentMonthlySalesRows = buildRowsForSalesContext(buildPresetContext("30d"));
+  const reassignmentWeeklyRowByUserId = new Map(reassignmentWeeklyRows.map((row) => [String(row.userId || ""), row]));
+  const reassignmentMonthlySalesRowByUserId = new Map(reassignmentMonthlySalesRows.map((row) => [String(row.userId || ""), row]));
+  const calculateKpiClosingRatio = (row = {}) => {
+    const activePolicies = Number(row.activePolicies || 0);
+    const submittedApplications = Number(row.submittedApplications || 0);
+    return submittedApplications ? Math.round((activePolicies / submittedApplications) * 100) : 0;
+  };
   const kpiSalesRowsByFrequency = {
     Daily: buildRowsForSalesContext(buildPresetContext("TODAY")),
     Weekly: buildRowsForSalesContext(buildPresetContext("7d")),
@@ -1605,6 +1614,10 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       latestLeadCreatedAt: row.latestLeadCreatedAt,
       latestPolicyIssuedAt: row.latestPolicyIssuedAt,
       latestPolicyStatus: row.latestPolicyStatus,
+      reassignmentWeeklyDoneApproaches: Number(reassignmentWeeklyRowByUserId.get(String(row.userId))?.completedApproaches || 0),
+      reassignmentOpenApproachTasksDueThisWeek: Number(row.openApproachTasksDueThisWeek || 0),
+      reassignmentMonthlyClosingRatio: calculateKpiClosingRatio(reassignmentMonthlySalesRowByUserId.get(String(row.userId))),
+      reassignmentMonthlyActivePolicies: Number(reassignmentMonthlySalesRowByUserId.get(String(row.userId))?.activePolicies || 0),
       leaveRecords: longLeaveRecordsByAgentId.get(String(row.id)) || [],
       orphanTransferProspects: orphanTransferProspectsByUserId.get(String(row.userId)) || [],
       orphanTransferPolicyholders: orphanTransferPolicyholdersByUserId.get(String(row.userId)) || [],
