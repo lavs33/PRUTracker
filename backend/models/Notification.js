@@ -34,6 +34,7 @@ const NOTIF_TYPES = [
   "POLICY_MATURED",
   "POLICY_PAID_UP_MATURED",
   "POLICY_CANCELLED",
+  "ORPHAN_ENDORSEMENT",
 
   // future
   // "POLICY_LAPSED",
@@ -52,7 +53,7 @@ const NOTIF_STATUS = ["Unread", "Read"];
  * Allowed entity types this notification can reference.
  * This lets the UI know what kind of item to open when clicking a notification.
  */
-const ENTITY_TYPES = ["Task", "Policyholder"];
+const ENTITY_TYPES = ["Task", "Policyholder", "LongLeave"];
 
 /**
  * notificationSchema
