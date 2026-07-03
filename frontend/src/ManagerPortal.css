@@ -552,6 +552,16 @@
   white-space: nowrap;
 }
 
+.manager-table-subtext {
+  display: block;
+  margin-top: 6px;
+  max-width: 520px;
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: normal;
+}
+
 .manager-table th {
   font-size: 11px;
   text-transform: uppercase;
@@ -1918,8 +1928,26 @@
   font-weight: 800;
 }
 
+.manager-toggle-line--optional {
+  background: #ffffff;
+}
+
 .manager-toggle-line--confirm {
-  background: #fffafa;
+  background: #fff7ed;
+}
+
+.manager-toggle-line--confirm-orphans {
+  margin-top: 18px;
+  border-color: rgba(194, 65, 12, 0.34);
+  box-shadow: 0 10px 24px rgba(194, 65, 12, 0.10);
+}
+
+.manager-toggle-line--confirm-orphans span {
+  color: #9a3412;
+}
+
+.manager-toggle-line--confirm-orphans input {
+  accent-color: #c2410c;
 }
 
 @media (max-width: 900px) {
