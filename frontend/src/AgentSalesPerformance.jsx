@@ -410,6 +410,7 @@ function AgentSalesPerformance() {
                   <th>Lead Code</th>
                   <th>Prospect</th>
                   <th>Lead Source</th>
+                  <th>Policy Name</th>
                   <th>Policy Status</th>
                   <th>Payment Frequency</th>
                   <th>Annual Premium</th>
@@ -423,6 +424,7 @@ function AgentSalesPerformance() {
                     <td>${escapeHtml(row.leadCode || "—")}</td>
                     <td>${escapeHtml(row.prospectName || "—")}</td>
                     <td>${escapeHtml(row.leadSource || "—")}</td>
+                    <td>${escapeHtml(row.policyName || "—")}</td>
                     <td>${escapeHtml(row.policyStatus || "—")}</td>
                     <td>${escapeHtml(row.requestedFrequency || "—")}</td>
                     <td>₱ ${escapeHtml(money(row.annualPremiumPhp || 0))}</td>
@@ -750,6 +752,7 @@ function AgentSalesPerformance() {
                       <th>Lead Code</th>
                       <th>Prospect</th>
                       <th>Lead Source</th>
+                      <th>Policy Name</th>
                       <th>Policy Status</th>
                       <th>Payment Frequency</th>
                       <th>Annual Premium</th>
@@ -763,6 +766,7 @@ function AgentSalesPerformance() {
                         <td>{row.leadCode || "—"}</td>
                         <td>{row.prospectName || "—"}</td>
                         <td>{row.leadSource || "—"}</td>
+                        <td>{row.policyName || "—"}</td>
                         <td>{row.policyStatus || "—"}</td>
                         <td>{row.requestedFrequency || "—"}</td>
                         <td>₱ {money(row.annualPremiumPhp || 0)}</td>
@@ -771,7 +775,7 @@ function AgentSalesPerformance() {
                       </tr>
                     )) : (
                       <tr>
-                        <td colSpan="8">No sales records available for the selected filters.</td>
+                        <td colSpan="9">No sales records available for the selected filters.</td>
                       </tr>
                     )}
                   </tbody>

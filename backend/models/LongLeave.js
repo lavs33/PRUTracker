@@ -44,6 +44,10 @@ const longLeaveSchema = new mongoose.Schema(
       default: "Recorded",
       index: true,
     },
+    includeOngoingPolicyholders: {
+      type: Boolean,
+      default: false,
+    },
   },
   { timestamps: true }
 );
