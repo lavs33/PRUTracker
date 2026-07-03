@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import TopNav from "./components/TopNav";
 import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
+import { normalizePolicyholderStatus } from "./utils/policyholderStatus";
 import "./AgentPolicyholderDetails.css";
 
 function AgentPolicyholderDetails() {
@@ -49,8 +50,8 @@ function AgentPolicyholderDetails() {
         setApiError("");
 
         const res = await fetch(
-          `http://localhost:5000/api/policyholders/${policyholderId}/details?userId=${user.id}`,
-          { signal: controller.signal }
+          `http://localhost:5000/api/policyholders/${policyholderId}/details?userId=${user.id}&_=${Date.now()}`,
+          { signal: controller.signal, cache: "no-store" }
         );
         const data = await res.json();
 
@@ -165,6 +166,9 @@ function AgentPolicyholderDetails() {
     return `${age} ${age === 1 ? "year old" : "years old"}`;
   };
 
+  const displayPolicyholderStatus = normalizePolicyholderStatus(policyholder.status, policyholder.nextPaymentDate);
+  const hideNextPaymentDue = ["Paid-Up", "Matured"].includes(displayPolicyholderStatus);
+
   const detailSections = [
     {
       title: "Policy Overview",
@@ -188,7 +192,7 @@ function AgentPolicyholderDetails() {
           ),
         ],
         ["Last Paid Date", formatDateOnly(policyholder.lastPaidDate)],
-        ["Next Payment Due", formatDateOnly(policyholder.nextPaymentDate)],
+        ...(!hideNextPaymentDue ? [["Next Payment Due", formatDateOnly(policyholder.nextPaymentDate)]] : []),
       ],
     },
   ];
@@ -214,7 +218,7 @@ function AgentPolicyholderDetails() {
     );
   };
 
-  const cancellationSection = policyholder.status === "Cancelled" && policyholder.cancellationDetails
+  const cancellationSection = displayPolicyholderStatus === "Cancelled" && policyholder.cancellationDetails
     ? {
         title: "Cancellation Details",
         rows: [
@@ -250,7 +254,7 @@ function AgentPolicyholderDetails() {
 
   const displaySections = cancellationSection ? [...detailSections, cancellationSection] : detailSections;
 
-  const statusClass = policyholder.status === "Active" ? "active" : (policyholder.status === "At Risk" ? "at-risk" : (policyholder.status === "Lapsed" ? "lapsed" : (policyholder.status === "Paid-Up" ? "paid-up" : (policyholder.status === "Matured" ? "matured" : "dropped"))));
+  const statusClass = displayPolicyholderStatus === "Active" ? "active" : (displayPolicyholderStatus === "At Risk" ? "at-risk" : (displayPolicyholderStatus === "Lapsed" ? "lapsed" : (displayPolicyholderStatus === "Paid-Up" ? "paid-up" : (displayPolicyholderStatus === "Matured" ? "matured" : "dropped"))));
 
   return (
     <div className="ph-shell">
@@ -322,7 +326,7 @@ function AgentPolicyholderDetails() {
                     </div>
 
                     <div className="ph-detailSections">
-                      {policyholder.policyNumber && !["Cancelled", "Paid-Up", "Matured"].includes(policyholder.status) ? (
+                      {policyholder.policyNumber && !["Cancelled", "Paid-Up", "Matured"].includes(displayPolicyholderStatus) ? (
                         <div className="ph-cancelPolicyRow">
                           <a
                             href={`/agent/${user.username}/policyholders/${policyholder._id || policyholderId}/cancel`}
@@ -357,7 +361,7 @@ function AgentPolicyholderDetails() {
                       <div className="ph-tagRow">
                         <span className="ph-tagLabel">Status</span>
                         <span className={`status-pill ${statusClass}`}>
-                          {policyholder.status || "—"}
+                          {displayPolicyholderStatus || "—"}
                         </span>
                       </div>
                     </div>

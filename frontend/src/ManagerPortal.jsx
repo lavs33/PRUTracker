@@ -270,6 +270,11 @@ function formatDate(value) {
       });
 }
 
+function toDateInputValue(value) {
+  const dt = new Date(value);
+  return Number.isNaN(dt.getTime()) ? "" : dt.toISOString().slice(0, 10);
+}
+
 function getScopeLabel(scope = {}) {
   if (scope.role === "BM") {
     return (
@@ -715,6 +720,7 @@ function ManagerPortal({ roleType }) {
   const [orphanLongLeaveId, setOrphanLongLeaveId] = useState("");
   const [orphanLongLeaveSaving, setOrphanLongLeaveSaving] = useState(false);
   const [orphanLongLeaveDetailsDirty, setOrphanLongLeaveDetailsDirty] = useState(false);
+  const [orphanSavedLongLeaveDetails, setOrphanSavedLongLeaveDetails] = useState(null);
   const [orphanLongLeaveStep, setOrphanLongLeaveStep] = useState(1);
   const [includeOngoingPolicyholders, setIncludeOngoingPolicyholders] = useState(false);
   const [confirmOrphanTransfer, setConfirmOrphanTransfer] = useState(false);
@@ -1463,9 +1469,12 @@ function ManagerPortal({ roleType }) {
   }, [agentSort]);
 
   const selectedAgent = useMemo(
-    () => selectedUnitRows.find((agent) => String(agent?.id || "") === selectedAgentId)
-      || (portalData?.agents || []).find((agent) => String(agent?.id || "") === selectedAgentId)
-      || null,
+    () => {
+      const unitRow = selectedUnitRows.find((agent) => String(agent?.id || "") === selectedAgentId) || null;
+      const fullAgent = (portalData?.agents || []).find((agent) => String(agent?.id || "") === selectedAgentId) || null;
+      if (fullAgent) return { ...(unitRow || {}), ...fullAgent };
+      return unitRow;
+    },
     [portalData?.agents, selectedAgentId, selectedUnitRows],
   );
 
@@ -1532,6 +1541,9 @@ function ManagerPortal({ roleType }) {
 
   const orphanProspectsWithActiveLeads = selectedAgent?.orphanTransferProspects || [];
   const orphanPolicyholdersWithOngoingPolicies = selectedAgent?.orphanTransferPolicyholders || [];
+  const canAccessLongLeaveStep2 = Boolean(orphanLongLeaveId) && !orphanLongLeaveDetailsDirty;
+  const canAccessLongLeaveStep3 = orphanLongLeaveStep === 3 && canAccessLongLeaveStep2 && confirmOrphanTransfer;
+  const isEditingSavedLongLeaveDetails = orphanAgentAction === "long_leave" && orphanLongLeaveStep === 1 && Boolean(orphanLongLeaveId);
 
   const readOrphanLeaveFile = (file, field, validator) => {
     if (!file) return;
@@ -1589,7 +1601,20 @@ function ManagerPortal({ roleType }) {
         if (data?.field) setOrphanLongLeaveFieldErrors((current) => ({ ...current, [data.field]: data.message || "Invalid value." }));
         throw new Error(data?.message || "Failed to save long leave details.");
       }
-      setOrphanLongLeaveId(data?.longLeave?._id || orphanLongLeaveId);
+      const savedRecord = normalizeLongLeaveRecord(data?.longLeave);
+      setOrphanLongLeaveId(savedRecord?.id || orphanLongLeaveId);
+      const savedSnapshot = savedRecord ? buildLongLeaveSnapshot(savedRecord) : {
+        leaveStartDate: orphanLeaveStartDate,
+        leaveEndDate: orphanLeaveEndDate,
+        leaveApplicationForm: orphanLeaveApplicationForm,
+        approvedLeaveProof: orphanApprovedLeaveProof,
+      };
+      setOrphanLeaveStartDate(savedSnapshot.leaveStartDate);
+      setOrphanLeaveEndDate(savedSnapshot.leaveEndDate);
+      setOrphanLeaveApplicationForm(savedSnapshot.leaveApplicationForm);
+      setOrphanApprovedLeaveProof(savedSnapshot.approvedLeaveProof);
+      setOrphanSavedLongLeaveDetails(savedSnapshot);
+      if (savedRecord) upsertSelectedAgentLeaveRecord(savedRecord);
       setOrphanLongLeaveDetailsDirty(false);
       return true;
     } catch (err) {
@@ -1605,9 +1630,24 @@ function ManagerPortal({ roleType }) {
     if (orphanLongLeaveStep === 1) {
       const saved = await saveLongLeaveDetails();
       if (!saved) return;
+      setConfirmOrphanTransfer(false);
+      setOrphanLongLeaveStep(2);
+      return;
     }
     if (orphanLongLeaveStep === 2 && !confirmOrphanTransfer) return;
     setOrphanLongLeaveStep((current) => Math.min(3, current + 1));
+  };
+
+  const cancelLongLeaveDetailEdits = () => {
+    if (!orphanLongLeaveId || !orphanSavedLongLeaveDetails) return;
+    setOrphanLeaveStartDate(orphanSavedLongLeaveDetails.leaveStartDate || "");
+    setOrphanLeaveEndDate(orphanSavedLongLeaveDetails.leaveEndDate || "");
+    setOrphanLeaveApplicationForm(orphanSavedLongLeaveDetails.leaveApplicationForm || null);
+    setOrphanApprovedLeaveProof(orphanSavedLongLeaveDetails.approvedLeaveProof || null);
+    setOrphanLongLeaveFieldErrors({});
+    setOrphanLongLeaveDetailsDirty(false);
+    setConfirmOrphanTransfer(false);
+    setOrphanLongLeaveStep(2);
   };
 
   const openOrphanAgentAction = (action) => {
@@ -1619,6 +1659,7 @@ function ManagerPortal({ roleType }) {
     setOrphanLongLeaveFieldErrors({});
     setOrphanLongLeaveId("");
     setOrphanLongLeaveDetailsDirty(false);
+    setOrphanSavedLongLeaveDetails(null);
     setOrphanLongLeaveStep(1);
     setIncludeOngoingPolicyholders(false);
     setConfirmOrphanTransfer(false);
@@ -1634,6 +1675,26 @@ function ManagerPortal({ roleType }) {
     setOrphanLongLeaveFieldErrors({});
     setOrphanLongLeaveId("");
     setOrphanLongLeaveDetailsDirty(false);
+    setOrphanSavedLongLeaveDetails(null);
+    setOrphanLongLeaveStep(1);
+    setIncludeOngoingPolicyholders(false);
+    setConfirmOrphanTransfer(false);
+    window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+  };
+
+  const openSavedLongLeaveRecord = (record) => {
+    const normalizedRecord = normalizeLongLeaveRecord(record);
+    if (!normalizedRecord?.id) return;
+    const savedSnapshot = buildLongLeaveSnapshot(normalizedRecord);
+    setOrphanAgentAction("long_leave");
+    setOrphanLongLeaveId(normalizedRecord.id);
+    setOrphanLeaveStartDate(savedSnapshot.leaveStartDate);
+    setOrphanLeaveEndDate(savedSnapshot.leaveEndDate);
+    setOrphanLeaveApplicationForm(savedSnapshot.leaveApplicationForm);
+    setOrphanApprovedLeaveProof(savedSnapshot.approvedLeaveProof);
+    setOrphanSavedLongLeaveDetails(savedSnapshot);
+    setOrphanLongLeaveFieldErrors({});
+    setOrphanLongLeaveDetailsDirty(false);
     setOrphanLongLeaveStep(1);
     setIncludeOngoingPolicyholders(false);
     setConfirmOrphanTransfer(false);
@@ -1647,6 +1708,70 @@ function ManagerPortal({ roleType }) {
       .sort((left, right) => (new Date(right?.datePromoted || 0).getTime() || 0) - (new Date(left?.datePromoted || 0).getTime() || 0)),
     [selectedAgent?.promotionHistory],
   );
+  const selectedAgentLeaveRecords = useMemo(() =>
+    (Array.isArray(selectedAgent?.leaveRecords) ? selectedAgent.leaveRecords : [])
+      .slice()
+      .sort((left, right) => {
+        const rightTime = new Date(right?.createdAt || right?.leaveStartDate || 0).getTime() || 0;
+        const leftTime = new Date(left?.createdAt || left?.leaveStartDate || 0).getTime() || 0;
+        return rightTime - leftTime;
+      }),
+    [selectedAgent?.leaveRecords],
+  );
+
+  const normalizeLongLeaveFile = (file, fallbackMimeType = "") => {
+    if (!file) return null;
+    return {
+      fileName: file.fileName || "",
+      mimeType: file.mimeType || fallbackMimeType,
+      dataUrl: file.dataUrl || "",
+      size: Number(file.size || 0),
+    };
+  };
+
+  const normalizeLongLeaveRecord = (record) => {
+    if (!record) return null;
+    return {
+      id: String(record._id || record.id || ""),
+      leaveStartDate: record.leaveStartDate || null,
+      leaveEndDate: record.leaveEndDate || null,
+      status: record.status || "Recorded",
+      leaveApplicationForm: normalizeLongLeaveFile(record.leaveApplicationForm, "application/pdf"),
+      approvedLeaveProof: normalizeLongLeaveFile(record.approvedLeaveProof, "image/jpeg"),
+      createdAt: record.createdAt || null,
+      updatedAt: record.updatedAt || null,
+    };
+  };
+
+  const buildLongLeaveSnapshot = (record) => ({
+    leaveStartDate: toDateInputValue(record?.leaveStartDate),
+    leaveEndDate: toDateInputValue(record?.leaveEndDate),
+    leaveApplicationForm: normalizeLongLeaveFile(record?.leaveApplicationForm, "application/pdf"),
+    approvedLeaveProof: normalizeLongLeaveFile(record?.approvedLeaveProof, "image/jpeg"),
+  });
+
+  const upsertSelectedAgentLeaveRecord = (record) => {
+    if (!record?.id || !selectedAgent?.id) return;
+    setPortalData((current) => {
+      if (!current?.agents) return current;
+      return {
+        ...current,
+        agents: current.agents.map((agent) => {
+          if (String(agent?.id || "") !== String(selectedAgent.id)) return agent;
+          const existingRecords = Array.isArray(agent.leaveRecords) ? agent.leaveRecords : [];
+          const nextRecords = [
+            record,
+            ...existingRecords.filter((item) => String(item?.id || "") !== String(record.id)),
+          ].sort((left, right) => {
+            const rightTime = new Date(right?.createdAt || right?.leaveStartDate || 0).getTime() || 0;
+            const leftTime = new Date(left?.createdAt || left?.leaveStartDate || 0).getTime() || 0;
+            return rightTime - leftTime;
+          });
+          return { ...agent, leaveRecords: nextRecords };
+        }),
+      };
+    });
+  };
 
   const selectedAgentKpiCards = useMemo(() => {
     if (!selectedAgent || !selectedKpiPeriod) return [];
@@ -3544,7 +3669,7 @@ function ManagerPortal({ roleType }) {
                               key={step}
                               type="button"
                               className={orphanLongLeaveStep === step ? "active" : ""}
-                              disabled={step > 1 && (!orphanLongLeaveId || orphanLongLeaveDetailsDirty)}
+                              disabled={(step === 2 && !canAccessLongLeaveStep2) || (step === 3 && !canAccessLongLeaveStep3)}
                               onClick={() => setOrphanLongLeaveStep(step)}
                             >
                               <span>Step {step}</span>
@@ -3608,7 +3733,10 @@ function ManagerPortal({ roleType }) {
                                 <thead>
                                   <tr>
                                     <th>Prospect Code</th>
+                                    <th>Lead Code</th>
                                     <th>Name</th>
+                                    <th>Source</th>
+                                    <th>Status</th>
                                     <th>Market Type</th>
                                     <th>Prospect Type</th>
                                   </tr>
@@ -3617,7 +3745,10 @@ function ManagerPortal({ roleType }) {
                                   {orphanProspectsWithActiveLeads.map((prospect) => (
                                     <tr key={prospect.id}>
                                       <td>{prospect.prospectCode || "—"}</td>
+                                      <td>{prospect.leadCode || "—"}</td>
                                       <td>{prospect.name || "—"}</td>
+                                      <td>{prospect.source || "—"}</td>
+                                      <td>{prospect.status || "—"}</td>
                                       <td>{prospect.marketType || "—"}</td>
                                       <td>{prospect.prospectType || "—"}</td>
                                     </tr>
@@ -3640,8 +3771,10 @@ function ManagerPortal({ roleType }) {
                                     <thead>
                                       <tr>
                                         <th>Policyholder Code</th>
+                                        <th>Policyholder Name</th>
                                         <th>Product Name</th>
                                         <th>Policy Number</th>
+                                        <th>Policy Issuance Date</th>
                                         <th>Status</th>
                                       </tr>
                                     </thead>
@@ -3649,8 +3782,10 @@ function ManagerPortal({ roleType }) {
                                       {orphanPolicyholdersWithOngoingPolicies.map((policyholder) => (
                                         <tr key={policyholder.id}>
                                           <td>{policyholder.policyholderCode || "—"}</td>
+                                          <td>{policyholder.policyholderName || "—"}</td>
                                           <td>{policyholder.productName || "—"}</td>
                                           <td>{policyholder.policyNumber || "—"}</td>
+                                          <td>{formatDate(policyholder.policyIssuanceDate)}</td>
                                           <td>{policyholder.status || "—"}</td>
                                         </tr>
                                       ))}
@@ -3686,12 +3821,21 @@ function ManagerPortal({ roleType }) {
                     )}
 
                     <div className="manager-orphan-action-buttons">
-                      <button type="button" className="manager-refresh-btn" onClick={closeOrphanAgentAction}>Cancel</button>
+                      {!(orphanAgentAction === "long_leave" && orphanLongLeaveStep === 2) && (
+                        <button
+                          type="button"
+                          className="manager-refresh-btn"
+                          disabled={isEditingSavedLongLeaveDetails && !orphanLongLeaveDetailsDirty}
+                          onClick={isEditingSavedLongLeaveDetails ? cancelLongLeaveDetailEdits : closeOrphanAgentAction}
+                        >
+                          Cancel
+                        </button>
+                      )}
                       {orphanAgentAction === "long_leave" && orphanLongLeaveStep < 3 ? (
                         <button
                           type="button"
                           className="manager-refresh-btn manager-long-leave-next-btn"
-                          disabled={orphanLongLeaveSaving || (orphanLongLeaveStep === 1 ? Boolean(orphanLeaveEndDateError) : !confirmOrphanTransfer)}
+                          disabled={orphanLongLeaveSaving || (orphanLongLeaveStep === 1 ? (Boolean(orphanLeaveEndDateError) || (Boolean(orphanLongLeaveId) && !orphanLongLeaveDetailsDirty)) : !confirmOrphanTransfer)}
                           onClick={goToNextLongLeaveStep}
                         >
                           {orphanLongLeaveSaving && !orphanLeaveEndDateError ? "Saving..." : (orphanLongLeaveStep === 1 && orphanLongLeaveId ? "Save Details" : "Next")}
@@ -3760,6 +3904,35 @@ function ManagerPortal({ roleType }) {
                   </div>
                 ) : (
                   <div className="manager-empty-state">No promotion history recorded for this agent.</div>
+                )}
+
+                <div className="manager-section-subhead">
+                  <h3>Long Leave Records</h3>
+                  <p>Initial long-leave details recorded for this agent.</p>
+                </div>
+                {selectedAgentLeaveRecords.length ? (
+                  <div className="manager-promotion-table-wrap">
+                    <table className="manager-table manager-table--promotion-history manager-table--clickable">
+                      <thead>
+                        <tr>
+                          <th>Leave Start Date</th>
+                          <th>Leave End Date</th>
+                          <th>Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selectedAgentLeaveRecords.map((leaveRecord) => (
+                          <tr key={leaveRecord.id} onClick={() => openSavedLongLeaveRecord(leaveRecord)} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") openSavedLongLeaveRecord(leaveRecord); }}>
+                            <td>{formatDate(leaveRecord.leaveStartDate)}</td>
+                            <td>{formatDate(leaveRecord.leaveEndDate)}</td>
+                            <td>{leaveRecord.status || "Recorded"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="manager-empty-state">No long leave records recorded for this agent.</div>
                 )}
                   </>
                 )}

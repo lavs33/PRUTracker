@@ -1007,12 +1007,16 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
   const umByUnitId = new Map(unitManagers.map((manager) => [String(manager.unitId || ""), formatUnitManager(manager)]));
   const aumByUnitId = new Map(assistantUnitManagers.map((manager) => [String(manager.unitId || ""), formatUnitManager(manager)]));
 
+  const scopedAgentIds = scopedAgents.map((agent) => agent._id).filter(Boolean);
   const scopedUserIds = scopedAgents.map((agent) => agent.userId?._id).filter(Boolean);
+  const agentIdByUserId = new Map(
+    scopedAgents.map((agent) => [String(agent?.userId?._id || ""), String(agent?._id || "")]).filter(([userId, agentId]) => userId && agentId)
+  );
   const allMetricsByUserId = createMetricsMap(scopedAgents);
   const taskMetricsByUserId = createMetricsMap(scopedAgents);
   const salesMetricsByUserId = createMetricsMap(scopedAgents);
 
-  const [tasks, prospects] = await Promise.all([
+  const [tasks, prospects, longLeaves] = await Promise.all([
     scopedUserIds.length
       ? Task.find({ assignedToUserId: { $in: scopedUserIds }, softDeletedAt: null })
           .select("assignedToUserId type title dueAt status completedAt wasDelayed createdAt")
@@ -1023,7 +1027,36 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
           .select("_id assignedToUserId prospectCode firstName middleName lastName marketType prospectType status createdAt")
           .lean()
       : [],
+    scopedAgentIds.length || scopedUserIds.length
+      ? LongLeave.find({
+          $or: [
+            ...(scopedAgentIds.length ? [{ agentId: { $in: scopedAgentIds } }] : []),
+            ...(scopedUserIds.length ? [{ userId: { $in: scopedUserIds } }] : []),
+          ],
+        })
+          .select("agentId userId leaveStartDate leaveEndDate leaveApplicationForm approvedLeaveProof status createdAt updatedAt")
+          .sort({ createdAt: -1, _id: -1 })
+          .lean()
+      : [],
   ]);
+
+  const longLeaveRecordsByAgentId = new Map();
+  for (const longLeave of longLeaves) {
+    const agentId = String(longLeave?.agentId || agentIdByUserId.get(String(longLeave?.userId || "")) || "");
+    if (!agentId) continue;
+    const records = longLeaveRecordsByAgentId.get(agentId) || [];
+    records.push({
+      id: String(longLeave._id),
+      leaveStartDate: longLeave.leaveStartDate || null,
+      leaveEndDate: longLeave.leaveEndDate || null,
+      status: longLeave.status || "Recorded",
+      leaveApplicationForm: longLeave.leaveApplicationForm || null,
+      approvedLeaveProof: longLeave.approvedLeaveProof || null,
+      createdAt: longLeave.createdAt || null,
+      updatedAt: longLeave.updatedAt || null,
+    });
+    longLeaveRecordsByAgentId.set(agentId, records);
+  }
 
   const nowMs = Date.now();
   const applyTaskMetrics = (taskList, metricsByUserId) => {
@@ -1091,34 +1124,36 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
 
   const leads = prospectIds.length
     ? await Lead.find({ prospectId: { $in: prospectIds } })
-        .select("_id prospectId status createdAt")
+        .select("_id leadCode prospectId source otherSource status createdAt")
         .lean()
     : [];
   const leadIds = leads.map((lead) => lead._id);
   const leadIdToAssignedUserId = new Map(
     leads.map((lead) => [String(lead._id), prospectIdToAssignedUserId.get(String(lead.prospectId)) || ""])
   );
+  const leadIdToProspectId = new Map(
+    leads.map((lead) => [String(lead._id), String(lead.prospectId || "")])
+  );
 
 
   const prospectById = new Map(prospects.map((prospect) => [String(prospect._id), prospect]));
-  const activeLeadProspectIds = new Set(
-    leads
-      .filter((lead) => ["New", "In Progress"].includes(String(lead?.status || "")))
-      .map((lead) => String(lead.prospectId || ""))
-      .filter(Boolean)
-  );
   const orphanTransferProspectsByUserId = new Map();
-  for (const prospectId of activeLeadProspectIds) {
+  for (const lead of leads.filter((item) => ["New", "In Progress"].includes(String(item?.status || "")))) {
+    const prospectId = String(lead?.prospectId || "");
     const prospect = prospectById.get(prospectId);
     if (!prospect) continue;
     const assignedUserId = String(prospect.assignedToUserId || "");
     if (!assignedUserId) continue;
     const fullName = [prospect.firstName, prospect.middleName, prospect.lastName].filter(Boolean).join(" ").trim();
+    const source = String(lead?.source || "").trim();
     const rows = orphanTransferProspectsByUserId.get(assignedUserId) || [];
     rows.push({
-      id: String(prospect._id),
+      id: String(lead._id),
       prospectCode: prospect.prospectCode || "—",
+      leadCode: lead.leadCode || "—",
       name: fullName || "—",
+      source: source === "Other" ? (lead.otherSource ? `Other - ${lead.otherSource}` : "Other") : (source || "—"),
+      status: lead.status || "—",
       marketType: prospect.marketType || "—",
       prospectType: prospect.prospectType || "—",
     });
@@ -1138,7 +1173,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
     engagements.map((engagement) => [String(engagement._id), String(engagement.leadId || "")])
   );
 
-  const [policyholders, applications, needsAssessments, payments, annualPayments] = await Promise.all([
+  const [policyholders, policies, applications, needsAssessments, payments, annualPayments] = await Promise.all([
     scopedUserIds.length || engagementIds.length
       ? Policyholder.find({
           $or: [
@@ -1148,6 +1183,11 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
         })
           .select("assignedToUserId leadEngagementId productId policyholderCode policyNumber status createdAt")
           .populate({ path: "productId", select: "productName" })
+          .lean()
+      : [],
+    engagementIds.length
+      ? Policy.find({ leadEngagementId: { $in: engagementIds } })
+          .select("leadEngagementId recordPolicyApplicationStatus.issuanceDate uploadPolicySummary.policyNumber")
           .lean()
       : [],
     engagementIds.length
@@ -1172,6 +1212,15 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       : [],
   ]);
 
+  const prospectNameById = new Map(
+    prospects.map((prospect) => [
+      String(prospect._id),
+      [prospect.firstName, prospect.middleName, prospect.lastName].filter(Boolean).join(" ").trim() || "—",
+    ])
+  );
+  const policyByEngagementId = new Map(
+    policies.map((policy) => [String(policy?.leadEngagementId || ""), policy])
+  );
 
   const ongoingPolicyholderStatuses = new Set(["Active", "At Risk", "Lapsed", "Paid-Up"]);
   const orphanTransferPolicyholdersByUserId = new Map();
@@ -1181,12 +1230,18 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       policyholder?.assignedToUserId || engagementIdToAssignedUserId.get(String(policyholder?.leadEngagementId || "")) || ""
     );
     if (!assignedUserId) continue;
+    const engagementId = String(policyholder?.leadEngagementId || "");
+    const leadId = engagementIdToLeadId.get(engagementId) || "";
+    const prospectId = leadIdToProspectId.get(leadId) || "";
+    const policy = policyByEngagementId.get(engagementId);
     const rows = orphanTransferPolicyholdersByUserId.get(assignedUserId) || [];
     rows.push({
       id: String(policyholder._id),
       policyholderCode: policyholder.policyholderCode || "—",
+      policyholderName: prospectNameById.get(prospectId) || "—",
       productName: policyholder.productId?.productName || "—",
-      policyNumber: policyholder.policyNumber || "—",
+      policyNumber: policyholder.policyNumber || policy?.uploadPolicySummary?.policyNumber || "—",
+      policyIssuanceDate: policy?.recordPolicyApplicationStatus?.issuanceDate || null,
       status: policyholder.status || "—",
     });
     orphanTransferPolicyholdersByUserId.set(assignedUserId, rows);
@@ -1473,6 +1528,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       latestLeadCreatedAt: row.latestLeadCreatedAt,
       latestPolicyIssuedAt: row.latestPolicyIssuedAt,
       latestPolicyStatus: row.latestPolicyStatus,
+      leaveRecords: longLeaveRecordsByAgentId.get(String(row.id)) || [],
       orphanTransferProspects: orphanTransferProspectsByUserId.get(String(row.userId)) || [],
       orphanTransferPolicyholders: orphanTransferPolicyholdersByUserId.get(String(row.userId)) || [],
     }))
