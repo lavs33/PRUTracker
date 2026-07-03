@@ -1288,10 +1288,10 @@ function ManagerPortal({ roleType }) {
       .filter((agent) => String(agent?.unit || "") === String(selectedUmLongLeaveRecord?.unitName || selectedUnit?.name || ""))
       .filter((agent) => String(agent?.id || "") !== String(selectedUmLongLeaveRecord?.agentId || ""))
       .map((agent) => {
-        const completedApproaches = Number(agent?.completedApproaches || 0);
-        const openApproachTasks = Number(agent?.openApproachTasksDueThisWeek ?? agent?.openApproachTasks ?? 0);
-        const closingRatio = Number(agent?.conversionRate || 0);
-        const activePolicies = Number(agent?.activePolicies || 0);
+        const completedApproaches = Number(agent?.reassignmentWeeklyDoneApproaches ?? agent?.completedApproaches ?? 0);
+        const openApproachTasks = Number(agent?.reassignmentOpenApproachTasksDueThisWeek ?? agent?.openApproachTasksDueThisWeek ?? agent?.openApproachTasks ?? 0);
+        const closingRatio = Number(agent?.reassignmentMonthlyClosingRatio ?? agent?.conversionRate ?? 0);
+        const activePolicies = Number(agent?.reassignmentMonthlyActivePolicies ?? agent?.activePolicies ?? 0);
         return {
           ...agent,
           reassignmentMetrics: {
