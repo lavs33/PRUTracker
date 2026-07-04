@@ -2,8 +2,19 @@ const PAYMENT_NOTIFICATION_TYPES = ["PAYMENT_TRANSFER_REMINDER", "PAYMENT_EOR_RE
 const POLICY_LIFECYCLE_NOTIFICATION_TYPES = ["POLICY_PAID_UP", "POLICY_MATURED", "POLICY_PAID_UP_MATURED", "POLICY_CANCELLED"];
 const TASK_NOTIFICATION_TYPES = ["TASK_ADDED", "TASK_DUE_TODAY", "TASK_MISSED"];
 const MANAGER_NOTIFICATION_TYPES = ["ORPHANS_ENDORSEMENTS"];
-const NOTIFICATION_TYPES = [...TASK_NOTIFICATION_TYPES, ...PAYMENT_NOTIFICATION_TYPES, ...POLICY_LIFECYCLE_NOTIFICATION_TYPES, ...MANAGER_NOTIFICATION_TYPES];
-const NOTIFICATION_ENTITY_TYPES = ["Task", "Policyholder", "LongLeave"];
+const AGENT_ORPHAN_NOTIFICATION_TYPES = ["ORPHAN_CLIENT_ASSIGNED", "ORPHAN_CLIENT_TRANSFERRED"];
+const NOTIFICATION_TYPES = [...TASK_NOTIFICATION_TYPES, ...PAYMENT_NOTIFICATION_TYPES, ...POLICY_LIFECYCLE_NOTIFICATION_TYPES, ...MANAGER_NOTIFICATION_TYPES, ...AGENT_ORPHAN_NOTIFICATION_TYPES];
+const NOTIFICATION_ENTITY_TYPES = ["Task", "Policyholder", "Prospect", "LongLeave"];
+
+function effectivePolicyholderOwnerFilter(userId) {
+  return {
+    $or: [
+      { reassignedToUserId: userId },
+      { reassignedToUserId: null, assignedToUserId: userId },
+      { reassignedToUserId: { $exists: false }, assignedToUserId: userId },
+    ],
+  };
+}
 
 function dateKeyInTZ(date, timeZone = "Asia/Manila") {
   if (!date) return "";
@@ -206,7 +217,7 @@ function createNotificationsController({
     if (todayDay === null) return;
 
     const policyholders = await Policyholder.find({
-      assignedToUserId: uid,
+      ...effectivePolicyholderOwnerFilter(uid),
       status: { $in: ["Active", "At Risk", "Lapsed", "Paid-Up"] },
     })
       .select("policyholderCode policyNumber productId leadEngagementId lastPaidDate nextPaymentDate status annualPaymentRecords")
@@ -346,7 +357,7 @@ function createNotificationsController({
         if (currentStatus !== nextLifecycleStatus || policyholder.nextPaymentDate) {
           policyholderWrites.push({
             updateOne: {
-              filter: { _id: policyholder._id, assignedToUserId: uid },
+              filter: { _id: policyholder._id, ...effectivePolicyholderOwnerFilter(uid) },
               update: { $set: { status: nextLifecycleStatus, nextPaymentDate: null } },
             },
           });
@@ -398,7 +409,7 @@ function createNotificationsController({
       if (!policyholder.nextPaymentDate && ["At Risk", "Lapsed"].includes(String(policyholder.status || ""))) {
         policyholderWrites.push({
           updateOne: {
-            filter: { _id: policyholder._id, assignedToUserId: uid, status: { $in: ["At Risk", "Lapsed"] } },
+            filter: { _id: policyholder._id, ...effectivePolicyholderOwnerFilter(uid), status: { $in: ["At Risk", "Lapsed"] } },
             update: { $set: { status: "Active" } },
           },
         });
@@ -418,7 +429,7 @@ function createNotificationsController({
         if (["At Risk", "Lapsed"].includes(String(policyholder.status || "")) || policyholder.nextPaymentDate) {
           policyholderWrites.push({
             updateOne: {
-              filter: { _id: policyholder._id, assignedToUserId: uid },
+              filter: { _id: policyholder._id, ...effectivePolicyholderOwnerFilter(uid) },
               update: { $set: { status: "Active", nextPaymentDate: null } },
             },
           });
@@ -449,7 +460,7 @@ function createNotificationsController({
         if (["At Risk", "Lapsed"].includes(String(policyholder.status || ""))) {
           policyholderWrites.push({
             updateOne: {
-              filter: { _id: policyholder._id, assignedToUserId: uid, status: { $in: ["At Risk", "Lapsed"] } },
+              filter: { _id: policyholder._id, ...effectivePolicyholderOwnerFilter(uid), status: { $in: ["At Risk", "Lapsed"] } },
               update: { $set: { status: "Active" } },
             },
           });
@@ -494,7 +505,7 @@ function createNotificationsController({
           if (["At Risk", "Lapsed"].includes(String(policyholder.status || ""))) {
             policyholderWrites.push({
               updateOne: {
-                filter: { _id: policyholder._id, assignedToUserId: uid, status: { $in: ["At Risk", "Lapsed"] } },
+                filter: { _id: policyholder._id, ...effectivePolicyholderOwnerFilter(uid), status: { $in: ["At Risk", "Lapsed"] } },
                 update: { $set: { status: "Active" } },
               },
             });
@@ -515,7 +526,7 @@ function createNotificationsController({
           const notificationTimestamp = paymentNotificationTimestamp(paymentNotificationBaseAt, "PAYMENT_POLICY_LAPSED");
           policyholderWrites.push({
             updateOne: {
-              filter: { _id: policyholder._id, assignedToUserId: uid, status: { $ne: "Lapsed" } },
+              filter: { _id: policyholder._id, ...effectivePolicyholderOwnerFilter(uid), status: { $ne: "Lapsed" } },
               update: { $set: { status: "Lapsed" } },
             },
           });
@@ -557,7 +568,7 @@ function createNotificationsController({
         if (daysUntilPayment < 0 && String(policyholder.status || "") !== "At Risk") {
           policyholderWrites.push({
             updateOne: {
-              filter: { _id: policyholder._id, assignedToUserId: uid, status: { $ne: "At Risk" } },
+              filter: { _id: policyholder._id, ...effectivePolicyholderOwnerFilter(uid), status: { $ne: "At Risk" } },
               update: { $set: { status: "At Risk" } },
             },
           });
