@@ -281,6 +281,19 @@ function normalizeAgentType(value) {
   return String(value || "").trim().toLowerCase().replace(/[\s_-]+/g, " ");
 }
 
+function formatReassignedFlag(value) {
+  return value === true ? "Yes" : "No";
+}
+
+function getLongLeaveReassignmentProgress(record = {}) {
+  const affectedClients = [
+    ...(Array.isArray(record.affectedProspects) ? record.affectedProspects : []),
+    ...(Array.isArray(record.affectedPolicyholders) ? record.affectedPolicyholders : []),
+  ];
+  const reassignedCount = affectedClients.filter((client) => client?.reassigned === true).length;
+  return `${reassignedCount}/${affectedClients.length}`;
+}
+
 function toDateInputValue(value) {
   const dt = new Date(value);
   return Number.isNaN(dt.getTime()) ? "" : dt.toISOString().slice(0, 10);
@@ -1288,10 +1301,10 @@ function ManagerPortal({ roleType }) {
       .filter((agent) => String(agent?.unit || "") === String(selectedUmLongLeaveRecord?.unitName || selectedUnit?.name || ""))
       .filter((agent) => String(agent?.id || "") !== String(selectedUmLongLeaveRecord?.agentId || ""))
       .map((agent) => {
-        const completedApproaches = Number(agent?.completedApproaches || 0);
-        const openApproachTasks = Number(agent?.openApproachTasksDueThisWeek ?? agent?.openApproachTasks ?? 0);
-        const closingRatio = Number(agent?.conversionRate || 0);
-        const activePolicies = Number(agent?.activePolicies || 0);
+        const completedApproaches = Number(agent?.reassignmentWeeklyDoneApproaches ?? agent?.completedApproaches ?? 0);
+        const openApproachTasks = Number(agent?.reassignmentOpenApproachTasksDueThisWeek ?? agent?.openApproachTasksDueThisWeek ?? agent?.openApproachTasks ?? 0);
+        const closingRatio = Number(agent?.reassignmentMonthlyClosingRatio ?? agent?.conversionRate ?? 0);
+        const activePolicies = Number(agent?.reassignmentMonthlyActivePolicies ?? agent?.activePolicies ?? 0);
         return {
           ...agent,
           reassignmentMetrics: {
@@ -4014,7 +4027,7 @@ function ManagerPortal({ roleType }) {
                     <div className="manager-table-wrap">
                       <table className="manager-table manager-table--promotion-history manager-table--clickable">
                         <thead>
-                          <tr><th>Prospect Code</th><th>Lead Code</th><th>Name</th><th>Status</th></tr>
+                          <tr><th>Prospect Code</th><th>Lead Code</th><th>Name</th><th>Status</th><th>Reassigned</th></tr>
                         </thead>
                         <tbody>
                           {selectedUmLongLeaveRecord.affectedProspects.map((prospect) => (
@@ -4023,6 +4036,7 @@ function ManagerPortal({ roleType }) {
                               <td>{prospect.leadCode || "—"}</td>
                               <td>{prospect.name || "—"}</td>
                               <td>{prospect.status || "—"}</td>
+                              <td>{formatReassignedFlag(prospect.reassigned)}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -4038,7 +4052,7 @@ function ManagerPortal({ roleType }) {
                     <div className="manager-table-wrap">
                       <table className="manager-table manager-table--promotion-history manager-table--clickable">
                         <thead>
-                          <tr><th>Policyholder Code</th><th>Policyholder Name</th><th>Product Name</th><th>Policy Number</th><th>Status</th></tr>
+                          <tr><th>Policyholder Code</th><th>Policyholder Name</th><th>Product Name</th><th>Policy Number</th><th>Status</th><th>Reassigned</th></tr>
                         </thead>
                         <tbody>
                           {selectedUmLongLeaveRecord.affectedPolicyholders.map((policyholder) => (
@@ -4048,6 +4062,7 @@ function ManagerPortal({ roleType }) {
                               <td>{policyholder.productName || "—"}</td>
                               <td>{policyholder.policyNumber || "—"}</td>
                               <td>{policyholder.status || "—"}</td>
+                              <td>{formatReassignedFlag(policyholder.reassigned)}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -4066,6 +4081,7 @@ function ManagerPortal({ roleType }) {
                           <th>Agent Name</th>
                           <th>Leave Start Date</th>
                           <th>Leave End Date</th>
+                          <th>Reassignments Progress</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -4075,6 +4091,7 @@ function ManagerPortal({ roleType }) {
                             <td>{record.agentName || "—"}</td>
                             <td>{formatDate(record.leaveStartDate)}</td>
                             <td>{formatDate(record.leaveEndDate)}</td>
+                            <td>{getLongLeaveReassignmentProgress(record)}</td>
                           </tr>
                         ))}
                       </tbody>

@@ -738,6 +738,15 @@ function formatLongLeaveNotificationDate(value) {
   return date.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric", timeZone: "Asia/Manila" });
 }
 
+
+function ensureLongLeaveReassignedFlags(items = []) {
+  if (!Array.isArray(items)) return [];
+  return items.map((item) => ({
+    ...(item && typeof item === "object" ? item : {}),
+    reassigned: typeof item?.reassigned === "boolean" ? item.reassigned : false,
+  }));
+}
+
 function buildLongLeaveEndorsementNotificationMessage(longLeave = {}) {
   const prospects = Array.isArray(longLeave.affectedProspects) ? longLeave.affectedProspects : [];
   const policyholders = Array.isArray(longLeave.affectedPolicyholders) ? longLeave.affectedPolicyholders : [];
@@ -1491,6 +1500,15 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
   const taskRows = buildRows(taskMetricsByUserId);
   const salesRows = buildRows(salesMetricsByUserId);
   const unitPerformanceRows = buildRowsForUnitPerformanceContext(unitPerformanceContext);
+  const reassignmentWeeklyRows = buildRowsForUnitPerformanceContext(buildPresetContext("7d"));
+  const reassignmentMonthlySalesRows = buildRowsForSalesContext(buildPresetContext("30d"));
+  const reassignmentWeeklyRowByUserId = new Map(reassignmentWeeklyRows.map((row) => [String(row.userId || ""), row]));
+  const reassignmentMonthlySalesRowByUserId = new Map(reassignmentMonthlySalesRows.map((row) => [String(row.userId || ""), row]));
+  const calculateKpiClosingRatio = (row = {}) => {
+    const activePolicies = Number(row.activePolicies || 0);
+    const submittedApplications = Number(row.submittedApplications || 0);
+    return submittedApplications ? Math.round((activePolicies / submittedApplications) * 100) : 0;
+  };
   const kpiSalesRowsByFrequency = {
     Daily: buildRowsForSalesContext(buildPresetContext("TODAY")),
     Weekly: buildRowsForSalesContext(buildPresetContext("7d")),
@@ -1605,6 +1623,10 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       latestLeadCreatedAt: row.latestLeadCreatedAt,
       latestPolicyIssuedAt: row.latestPolicyIssuedAt,
       latestPolicyStatus: row.latestPolicyStatus,
+      reassignmentWeeklyDoneApproaches: Number(reassignmentWeeklyRowByUserId.get(String(row.userId))?.completedApproaches || 0),
+      reassignmentOpenApproachTasksDueThisWeek: Number(row.openApproachTasksDueThisWeek || 0),
+      reassignmentMonthlyClosingRatio: calculateKpiClosingRatio(reassignmentMonthlySalesRowByUserId.get(String(row.userId))),
+      reassignmentMonthlyActivePolicies: Number(reassignmentMonthlySalesRowByUserId.get(String(row.userId))?.activePolicies || 0),
       leaveRecords: longLeaveRecordsByAgentId.get(String(row.id)) || [],
       orphanTransferProspects: orphanTransferProspectsByUserId.get(String(row.userId)) || [],
       orphanTransferPolicyholders: orphanTransferPolicyholdersByUserId.get(String(row.userId)) || [],
@@ -1829,8 +1851,12 @@ app.patch("/api/manager/long-leave/:longLeaveId/status", async (req, res) => {
     if (!allowedStatuses.has(status)) {
       return res.status(400).json({ message: "Invalid long leave status." });
     }
-    const snapshotProspects = Array.isArray(req.body?.affectedProspects) ? req.body.affectedProspects : undefined;
-    const snapshotPolicyholders = Array.isArray(req.body?.affectedPolicyholders) ? req.body.affectedPolicyholders : undefined;
+    const snapshotProspects = Array.isArray(req.body?.affectedProspects)
+      ? ensureLongLeaveReassignedFlags(req.body.affectedProspects)
+      : undefined;
+    const snapshotPolicyholders = Array.isArray(req.body?.affectedPolicyholders)
+      ? ensureLongLeaveReassignedFlags(req.body.affectedPolicyholders)
+      : undefined;
     const longLeaveUpdate = {
       status,
       ...(req.body?.includeOngoingPolicyholders !== undefined ? { includeOngoingPolicyholders: req.body.includeOngoingPolicyholders === true } : {}),
