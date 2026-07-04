@@ -6,6 +6,13 @@
  */
 const mongoose = require("mongoose");
 
+const affectedClientSchema = new mongoose.Schema(
+  {
+    reassigned: { type: Boolean, default: false },
+  },
+  { _id: false, strict: false }
+);
+
 const longLeaveSchema = new mongoose.Schema(
   {
     agentId: {
@@ -49,11 +56,11 @@ const longLeaveSchema = new mongoose.Schema(
       default: false,
     },
     affectedProspects: {
-      type: [mongoose.Schema.Types.Mixed],
+      type: [affectedClientSchema],
       default: [],
     },
     affectedPolicyholders: {
-      type: [mongoose.Schema.Types.Mixed],
+      type: [affectedClientSchema],
       default: [],
     },
   },
