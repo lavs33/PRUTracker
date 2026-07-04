@@ -5,7 +5,7 @@ import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
 import "./AgentNotifications.css";
 
-const NOTIF_TYPES = ["TASK_ADDED", "TASK_DUE_TODAY", "TASK_MISSED", "PAYMENT_TRANSFER_REMINDER", "PAYMENT_EOR_REMINDER", "PAYMENT_MISSED_TRANSFER", "PAYMENT_POLICY_LAPSED", "POLICY_PAID_UP", "POLICY_MATURED", "POLICY_PAID_UP_MATURED", "POLICY_CANCELLED"];
+const NOTIF_TYPES = ["TASK_ADDED", "TASK_DUE_TODAY", "TASK_MISSED", "PAYMENT_TRANSFER_REMINDER", "PAYMENT_EOR_REMINDER", "PAYMENT_MISSED_TRANSFER", "PAYMENT_POLICY_LAPSED", "POLICY_PAID_UP", "POLICY_MATURED", "POLICY_PAID_UP_MATURED", "POLICY_CANCELLED", "ORPHAN_CLIENT_ASSIGNED", "ORPHAN_CLIENT_TRANSFERRED"];
 
 function AgentNotifications() {
   const navigate = useNavigate();
@@ -234,7 +234,14 @@ function AgentNotifications() {
     }
   };
 
+  const isOpenDisabled = (n) => String(n?.type || "") === "ORPHAN_CLIENT_TRANSFERRED"
+    || n?.metadata?.transferredAway === true
+    || n?.transferredAwayForViewer === true;
+
   const openNotif = async (n) => {
+    if (isOpenDisabled(n)) return;
+    const metadataProspectId = n?.metadata?.prospectId || (n.entityType === "Prospect" ? n.entityId : "");
+    const metadataLeadId = n?.metadata?.leadId || "";
     const policyholderId = n?.metadata?.policyholderId || (n.entityType === "Policyholder" ? n.entityId : "");
     const annualPaymentId = n?.metadata?.annualPaymentId || "";
     if (policyholderId && annualPaymentId) {
@@ -247,13 +254,16 @@ function AgentNotifications() {
       return;
     }
 
-    if (n.prospectId && n.leadId) {
-      navigate(`/agent/${username}/prospects/${n.prospectId}/leads/${n.leadId}/engage`);
+    const prospectId = n.prospectId || metadataProspectId;
+    const leadId = n.leadId || metadataLeadId;
+
+    if (String(n?.type || "") !== "ORPHAN_CLIENT_ASSIGNED" && prospectId && leadId) {
+      navigate(`/agent/${username}/prospects/${prospectId}/leads/${leadId}/engage`);
       return;
     }
 
-    if (n.prospectId) {
-      navigate(`/agent/${username}/prospects/${n.prospectId}`);
+    if (prospectId) {
+      navigate(`/agent/${username}/prospects/${prospectId}`);
       return;
     }
 
@@ -284,8 +294,14 @@ function AgentNotifications() {
             {markingNotifId === String(n._id) ? "Marking..." : "Mark as Read"}
           </button>
         ) : (
-          <button type="button" className="notif-btn secondary" onClick={() => openNotif(n)}>
-            Open
+          <button
+            type="button"
+            className="notif-btn secondary"
+            onClick={() => openNotif(n)}
+            disabled={isOpenDisabled(n)}
+            title={isOpenDisabled(n) ? "🚫 This record was transferred to another agent." : "Open notification record"}
+          >
+            {isOpenDisabled(n) ? "🚫" : "Open"}
           </button>
         )}
       </div>

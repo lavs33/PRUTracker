@@ -1,16 +1,24 @@
 .notifs-shell {
   min-height: 100vh;
   background: #da291c;
+  display: flex;
+  flex-direction: column;
 }
 
 .notifs-body {
   display: flex;
+  flex: 1;
+  width: 100%;
+  min-width: 0;
   font-family: "FSAlbertArabic", sans-serif;
 }
 
 .notifs-content {
   flex: 1;
-  padding: 24px 28px;
+  min-width: 0;
+  width: 100%;
+  padding: 22px;
+  box-sizing: border-box;
   background: #da291c;
 }
 

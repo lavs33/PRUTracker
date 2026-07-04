@@ -57,6 +57,30 @@ const policyholderSchema = new mongoose.Schema(
     },
 
     /**
+     * reassignedToUserId
+     * ------------------
+     * Stores the most recent User that received this policyholder through
+     * orphan reassignment. This remains null until a reassignment happens.
+     */
+    reassignedToUserId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+      index: true,
+    },
+
+    /**
+     * reassignedAt
+     * ------------
+     * Date and time when this policyholder was most recently reassigned.
+     */
+    reassignedAt: {
+      type: Date,
+      default: null,
+      index: true,
+    },
+
+    /**
      * leadEngagementId (ObjectId reference to LeadEngagement)
      * -----------------------------------
      * References the LeadEngagement that converted into this policyholder.
