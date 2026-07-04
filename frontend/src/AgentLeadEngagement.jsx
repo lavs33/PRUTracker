@@ -12178,7 +12178,7 @@ function AgentLeadEngagement() {
                 <button
                   type="button"
                   className="le-btn primary"
-                  onClick={() => navigate(`/agent/${user.username}/policyholders/${policyholderCreatedModal._id}`)}
+                  onClick={() => navigate(`/agent/${username}/policyholders/${policyholderCreatedModal._id}`)}
                 >
                   View Policyholder
                 </button>
