@@ -5,7 +5,7 @@ import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
 import "./AgentNotifications.css";
 
-const NOTIF_TYPES = ["TASK_ADDED", "TASK_DUE_TODAY", "TASK_MISSED", "PAYMENT_TRANSFER_REMINDER", "PAYMENT_EOR_REMINDER", "PAYMENT_MISSED_TRANSFER", "PAYMENT_POLICY_LAPSED", "POLICY_PAID_UP", "POLICY_MATURED", "POLICY_PAID_UP_MATURED", "POLICY_CANCELLED"];
+const NOTIF_TYPES = ["TASK_ADDED", "TASK_DUE_TODAY", "TASK_MISSED", "PAYMENT_TRANSFER_REMINDER", "PAYMENT_EOR_REMINDER", "PAYMENT_MISSED_TRANSFER", "PAYMENT_POLICY_LAPSED", "POLICY_PAID_UP", "POLICY_MATURED", "POLICY_PAID_UP_MATURED", "POLICY_CANCELLED", "ORPHAN_CLIENT_ASSIGNED", "ORPHAN_CLIENT_TRANSFERRED"];
 
 function AgentNotifications() {
   const navigate = useNavigate();
@@ -235,6 +235,7 @@ function AgentNotifications() {
   };
 
   const openNotif = async (n) => {
+    if (String(n?.type || "") === "ORPHAN_CLIENT_TRANSFERRED" || n?.metadata?.transferredAway === true) return;
     const policyholderId = n?.metadata?.policyholderId || (n.entityType === "Policyholder" ? n.entityId : "");
     const annualPaymentId = n?.metadata?.annualPaymentId || "";
     if (policyholderId && annualPaymentId) {
@@ -284,7 +285,7 @@ function AgentNotifications() {
             {markingNotifId === String(n._id) ? "Marking..." : "Mark as Read"}
           </button>
         ) : (
-          <button type="button" className="notif-btn secondary" onClick={() => openNotif(n)}>
+          <button type="button" className="notif-btn secondary" onClick={() => openNotif(n)} disabled={String(n?.type || "") === "ORPHAN_CLIENT_TRANSFERRED" || n?.metadata?.transferredAway === true}>
             Open
           </button>
         )}
