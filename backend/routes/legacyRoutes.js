@@ -3093,7 +3093,13 @@ app.get("/api/prospects/recent", async (req, res) => {
       /**
        * Step 1: Filter to only prospects owned by this agent
        */
-      { $match: { assignedToUserId: userObjectId } },
+      { $match: {
+        $or: [
+          { reassignedToUserId: userObjectId },
+          { reassignedToUserId: null, assignedToUserId: userObjectId },
+          { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+        ],
+      } },
 
       /**
        * Step 2: Compute agent-specific "prospectNo"
@@ -3275,7 +3281,13 @@ app.get("/api/policyholders/recent", async (req, res) => {
        * Step 4: Filter policyholders to those belonging to THIS agent
        * - Determined by prospect.assignedToUserId
        */
-      { $match: { "prospect.assignedToUserId": userObjectId } },
+      { $match: {
+        $or: [
+          { reassignedToUserId: userObjectId },
+          { reassignedToUserId: null, "prospect.assignedToUserId": userObjectId },
+          { reassignedToUserId: { $exists: false }, "prospect.assignedToUserId": userObjectId },
+        ],
+      } },
 
       /**
        * Step 5: Copy assignedToUserId into root document
@@ -4472,7 +4484,13 @@ app.get("/api/policyholders", async (req, res) => {
         },
       },
       { $unwind: "$prospect" },
-      { $match: { "prospect.assignedToUserId": userObjectId } },
+      { $match: {
+        $or: [
+          { reassignedToUserId: userObjectId },
+          { reassignedToUserId: null, "prospect.assignedToUserId": userObjectId },
+          { reassignedToUserId: { $exists: false }, "prospect.assignedToUserId": userObjectId },
+        ],
+      } },
       {
         $lookup: {
           from: "products",
@@ -4741,7 +4759,13 @@ app.get("/api/prospects", async (req, res) => {
      * - filterMatch
      * - searchMatch
      */
-    let finalCountQuery = { assignedToUserId: userObjectId };
+    let finalCountQuery = {
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
+    };
     const countAnd = [];
     if (filterMatch) countAnd.push(filterMatch);
     if (searchMatch) countAnd.push(searchMatch);
@@ -4791,7 +4815,13 @@ app.get("/api/prospects", async (req, res) => {
      * 3) Apply filters/search AFTER numbering so prospectNo stays stable across all views
      */
     const pipeline = [
-      { $match: { assignedToUserId: userObjectId } },
+      { $match: {
+        $or: [
+          { reassignedToUserId: userObjectId },
+          { reassignedToUserId: null, assignedToUserId: userObjectId },
+          { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+        ],
+      } },
 
       // Stable prospectNo across FULL agent list (not affected by filters/search)
       {
@@ -5175,8 +5205,14 @@ app.get("/api/prospects/:prospectId/details", async (req, res) => {
      * 7) Remove internal fields
      */
     const agg = await Prospect.aggregate([
-      // Step 1: authorization scope (only this agent's prospects)
-      { $match: { assignedToUserId: userObjectId } },
+      // Step 1: authorization scope (owned by this agent or reassigned to this agent)
+      { $match: {
+        $or: [
+          { reassignedToUserId: userObjectId },
+          { reassignedToUserId: null, assignedToUserId: userObjectId },
+          { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+        ],
+      } },
 
       // Step 2: compute stable prospectNo across FULL agent list
       {
