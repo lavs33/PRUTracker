@@ -3077,7 +3077,11 @@ app.get("/api/prospects/recent", async (req, res) => {
      * Used for dashboard counts and UI pagination/summary.
      */
     const totalForThisUser = await Prospect.countDocuments({
-      assignedToUserId: userObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
     });
 
     /**
@@ -3093,7 +3097,13 @@ app.get("/api/prospects/recent", async (req, res) => {
       /**
        * Step 1: Filter to only prospects owned by this agent
        */
-      { $match: { assignedToUserId: userObjectId } },
+      { $match: {
+        $or: [
+          { reassignedToUserId: userObjectId },
+          { reassignedToUserId: null, assignedToUserId: userObjectId },
+          { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+        ],
+      } },
 
       /**
        * Step 2: Compute agent-specific "prospectNo"
@@ -3110,9 +3120,15 @@ app.get("/api/prospects/recent", async (req, res) => {
        * - Produces 1,2,3,... based on the sort order.
        */
       {
+        $addFields: {
+          effectiveAssignedToUserId: { $ifNull: ["$reassignedToUserId", "$assignedToUserId"] },
+          effectiveProspectSortDate: { $ifNull: ["$reassignedAt", "$createdAt"] },
+        },
+      },
+      {
         $setWindowFields: {
-          partitionBy: "$assignedToUserId",
-          sortBy: { prospectCode: 1 }, 
+          partitionBy: "$effectiveAssignedToUserId",
+          sortBy: { effectiveProspectSortDate: 1 }, 
           output: {
             prospectNo: { $documentNumber: {} },
           },
@@ -3125,7 +3141,7 @@ app.get("/api/prospects/recent", async (req, res) => {
        * After prospectNo is computed in ASC order, we now sort DESC to get newest codes.
        * This makes the returned list "latest prospects" while keeping numbering stable.
        */
-      { $sort: { prospectCode: -1 } },
+      { $sort: { effectiveProspectSortDate: -1, _id: -1 } },
       { $limit: n },
 
       /**
@@ -3275,13 +3291,25 @@ app.get("/api/policyholders/recent", async (req, res) => {
        * Step 4: Filter policyholders to those belonging to THIS agent
        * - Determined by prospect.assignedToUserId
        */
-      { $match: { "prospect.assignedToUserId": userObjectId } },
+      { $match: {
+        $or: [
+          { reassignedToUserId: userObjectId },
+          { reassignedToUserId: null, "prospect.assignedToUserId": userObjectId },
+          { reassignedToUserId: { $exists: false }, "prospect.assignedToUserId": userObjectId },
+        ],
+      } },
 
       /**
        * Step 5: Copy assignedToUserId into root document
        * - Makes it easier to use partitionBy in window fields
        */
-      { $addFields: { assignedToUserId: "$prospect.assignedToUserId" } },
+      {
+        $addFields: {
+          assignedToUserId: "$prospect.assignedToUserId",
+          effectiveAssignedToUserId: { $ifNull: ["$reassignedToUserId", "$prospect.assignedToUserId"] },
+          effectivePolicyholderSortDate: { $ifNull: ["$reassignedAt", "$createdAt"] },
+        },
+      },
 
       /**
        * Step 6: Compute stable policyholderNo per agent
@@ -3290,8 +3318,8 @@ app.get("/api/policyholders/recent", async (req, res) => {
        */
       {
         $setWindowFields: {
-          partitionBy: "$assignedToUserId",
-          sortBy: { policyholderCode: 1 }, 
+          partitionBy: "$effectiveAssignedToUserId",
+          sortBy: { effectivePolicyholderSortDate: 1 }, 
           output: { policyholderNo: { $documentNumber: {} } },
         },
       },
@@ -3402,8 +3430,14 @@ app.get("/api/agent/home", async (req, res) => {
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
       .slice(0, 5);
 
-    const prospects = await Prospect.find({ assignedToUserId: userObjectId })
-      .select("_id prospectCode firstName middleName lastName marketType prospectType source status createdAt")
+    const prospects = await Prospect.find({
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
+    })
+      .select("_id prospectCode firstName middleName lastName marketType prospectType source status createdAt reassignedAt reassignedToUserId")
       .lean();
     const prospectIds = prospects.map((prospect) => prospect._id);
 
@@ -4472,7 +4506,13 @@ app.get("/api/policyholders", async (req, res) => {
         },
       },
       { $unwind: "$prospect" },
-      { $match: { "prospect.assignedToUserId": userObjectId } },
+      { $match: {
+        $or: [
+          { reassignedToUserId: userObjectId },
+          { reassignedToUserId: null, "prospect.assignedToUserId": userObjectId },
+          { reassignedToUserId: { $exists: false }, "prospect.assignedToUserId": userObjectId },
+        ],
+      } },
       {
         $lookup: {
           from: "products",
@@ -4482,11 +4522,17 @@ app.get("/api/policyholders", async (req, res) => {
         },
       },
       { $unwind: { path: "$product", preserveNullAndEmptyArrays: true } },
-      { $addFields: { assignedToUserId: "$prospect.assignedToUserId" } },
+      {
+        $addFields: {
+          assignedToUserId: "$prospect.assignedToUserId",
+          effectiveAssignedToUserId: { $ifNull: ["$reassignedToUserId", "$prospect.assignedToUserId"] },
+          effectivePolicyholderSortDate: { $ifNull: ["$reassignedAt", "$createdAt"] },
+        },
+      },
       {
         $setWindowFields: {
-          partitionBy: "$assignedToUserId",
-          sortBy: { policyholderCode: 1 },
+          partitionBy: "$effectiveAssignedToUserId",
+          sortBy: { effectivePolicyholderSortDate: 1 },
           output: { policyholderNo: { $documentNumber: {} } },
         },
       },
@@ -4741,7 +4787,13 @@ app.get("/api/prospects", async (req, res) => {
      * - filterMatch
      * - searchMatch
      */
-    let finalCountQuery = { assignedToUserId: userObjectId };
+    let finalCountQuery = {
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
+    };
     const countAnd = [];
     if (filterMatch) countAnd.push(filterMatch);
     if (searchMatch) countAnd.push(searchMatch);
@@ -4791,13 +4843,25 @@ app.get("/api/prospects", async (req, res) => {
      * 3) Apply filters/search AFTER numbering so prospectNo stays stable across all views
      */
     const pipeline = [
-      { $match: { assignedToUserId: userObjectId } },
+      { $match: {
+        $or: [
+          { reassignedToUserId: userObjectId },
+          { reassignedToUserId: null, assignedToUserId: userObjectId },
+          { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+        ],
+      } },
 
-      // Stable prospectNo across FULL agent list (not affected by filters/search)
+      {
+        $addFields: {
+          effectiveAssignedToUserId: { $ifNull: ["$reassignedToUserId", "$assignedToUserId"] },
+          effectiveProspectSortDate: { $ifNull: ["$reassignedAt", "$createdAt"] },
+        },
+      },
+      // Stable prospectNo across FULL effective agent list (not affected by filters/search)
       {
         $setWindowFields: {
-          partitionBy: "$assignedToUserId",
-          sortBy: { prospectCode: 1 },
+          partitionBy: "$effectiveAssignedToUserId",
+          sortBy: { effectiveProspectSortDate: 1 },
           output: { prospectNo: { $documentNumber: {} } },
         },
       },
@@ -5175,8 +5239,14 @@ app.get("/api/prospects/:prospectId/details", async (req, res) => {
      * 7) Remove internal fields
      */
     const agg = await Prospect.aggregate([
-      // Step 1: authorization scope (only this agent's prospects)
-      { $match: { assignedToUserId: userObjectId } },
+      // Step 1: authorization scope (owned by this agent or reassigned to this agent)
+      { $match: {
+        $or: [
+          { reassignedToUserId: userObjectId },
+          { reassignedToUserId: null, assignedToUserId: userObjectId },
+          { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+        ],
+      } },
 
       // Step 2: compute stable prospectNo across FULL agent list
       {
@@ -5188,6 +5258,32 @@ app.get("/api/prospects/:prospectId/details", async (req, res) => {
       },
       // Step 3: filter to the requested prospect
       { $match: { _id: prospectObjectId } },
+      {
+        $lookup: {
+          from: "users",
+          localField: "assignedToUserId",
+          foreignField: "_id",
+          as: "originalAssignedUser",
+        },
+      },
+      { $unwind: { path: "$originalAssignedUser", preserveNullAndEmptyArrays: true } },
+      {
+        $addFields: {
+          originalAgentName: {
+            $trim: {
+              input: {
+                $concat: [
+                  { $ifNull: ["$originalAssignedUser.firstName", ""] },
+                  " ",
+                  { $ifNull: ["$originalAssignedUser.middleName", ""] },
+                  " ",
+                  { $ifNull: ["$originalAssignedUser.lastName", ""] },
+                ],
+              },
+            },
+          },
+        },
+      },
 
       /**
        * Step 4: Lookup Leads under this prospect
@@ -5325,7 +5421,13 @@ app.get("/api/prospects/next-no", async (req, res) => {
     const userObjectId = new mongoose.Types.ObjectId(userId);
 
     // Validate required scope parameter
-    const count = await Prospect.countDocuments({ assignedToUserId: userObjectId });
+    const count = await Prospect.countDocuments({
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
+    });
 
     // Next number is 1-based
     const nextProspectNo = count + 1;
@@ -5373,16 +5475,54 @@ app.get("/api/prospects/:prospectId/full", async (req, res) => {
      * 4) Remove internal __v
      */
     const agg = await Prospect.aggregate([
-      { $match: { assignedToUserId: userObjectId } },
+      { $match: {
+        $or: [
+          { reassignedToUserId: userObjectId },
+          { reassignedToUserId: null, assignedToUserId: userObjectId },
+          { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+        ]
+      } },
+      {
+        $addFields: {
+          effectiveAssignedToUserId: { $ifNull: ["$reassignedToUserId", "$assignedToUserId"] },
+          effectiveProspectSortDate: { $ifNull: ["$reassignedAt", "$createdAt"] },
+        },
+      },
       {
         $setWindowFields: {
-          partitionBy: "$assignedToUserId",
-          sortBy: { prospectCode: 1 },
+          partitionBy: "$effectiveAssignedToUserId",
+          sortBy: { effectiveProspectSortDate: 1 },
           output: { prospectNo: { $documentNumber: {} } },
         },
       },
       { $match: { _id: prospectObjectId } },
-      { $project: { __v: 0 } },
+      {
+        $lookup: {
+          from: "users",
+          localField: "assignedToUserId",
+          foreignField: "_id",
+          as: "originalAssignedUser",
+        },
+      },
+      { $unwind: { path: "$originalAssignedUser", preserveNullAndEmptyArrays: true } },
+      {
+        $addFields: {
+          originalAgentName: {
+            $trim: {
+              input: {
+                $concat: [
+                  { $ifNull: ["$originalAssignedUser.firstName", ""] },
+                  " ",
+                  { $ifNull: ["$originalAssignedUser.middleName", ""] },
+                  " ",
+                  { $ifNull: ["$originalAssignedUser.lastName", ""] },
+                ],
+              },
+            },
+          },
+        },
+      },
+      { $project: { __v: 0, originalAssignedUser: 0 } },
     ]);
 
     const prospect = agg[0];
@@ -6492,9 +6632,13 @@ app.get("/api/prospects/:prospectId/leads/:leadId/details", async (req, res) => 
     // 1) Ensure prospect belongs to agent (authorization)
     const prospect = await Prospect.findOne({
       _id: prospectObjectId,
-      assignedToUserId: userObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
     })
-      .select("firstName middleName lastName source status")
+      .select("firstName middleName lastName source status assignedToUserId reassignedToUserId")
       .lean();
 
     if (!prospect) {
@@ -6526,7 +6670,11 @@ app.get("/api/prospects/:prospectId/leads/:leadId/details", async (req, res) => 
     const policy = leadEngagement
       ? await Policyholder.findOne({
           leadEngagementId: leadEngagement._id,
-          assignedToUserId: userObjectId,
+          $or: [
+            { reassignedToUserId: userObjectId },
+            { reassignedToUserId: null, assignedToUserId: userObjectId },
+            { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+          ],
         })
           .select("policyholderCode status createdAt")
           .lean()
@@ -6642,7 +6790,11 @@ app.get("/api/policyholders/:policyholderId/details", async (req, res) => {
 
     const policyholderDoc = await Policyholder.findOne({
       _id: policyholderObjectId,
-      assignedToUserId: userObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
     })
       .select("assignedToUserId policyholderCode productId policyNumber leadEngagementId lastPaidDate nextPaymentDate status annualPaymentRecords cancellationDetails createdAt updatedAt");
 
@@ -6664,7 +6816,11 @@ app.get("/api/policyholders/:policyholderId/details", async (req, res) => {
 
     const prospect = await Prospect.findOne({
       _id: lead.prospectId,
-      assignedToUserId: userObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
     })
       .select("firstName middleName lastName age")
       .lean();
