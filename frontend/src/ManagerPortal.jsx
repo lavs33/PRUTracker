@@ -1757,7 +1757,11 @@ function ManagerPortal({ roleType }) {
   const todayDateInputValue = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const minimumOrphanLeaveStartDate = useMemo(() => {
     const records = Array.isArray(selectedAgent?.leaveRecords) ? selectedAgent.leaveRecords : [];
+    const currentLongLeaveId = String(orphanLongLeaveId || "");
     const latestEndTime = records.reduce((latest, record) => {
+      if (currentLongLeaveId && String(record?.id || record?._id || "") === currentLongLeaveId) return latest;
+      const status = String(record?.status || "").trim();
+      if (["Recorded", "Confirmed Orphans"].includes(status)) return latest;
       const endTime = new Date(record?.leaveEndDate || 0).getTime() || 0;
       return Math.max(latest, endTime);
     }, 0);
@@ -1765,10 +1769,10 @@ function ManagerPortal({ roleType }) {
     const nextAvailableDate = new Date(latestEndTime);
     nextAvailableDate.setDate(nextAvailableDate.getDate() + 1);
     return nextAvailableDate.toISOString().slice(0, 10) > todayDateInputValue ? nextAvailableDate.toISOString().slice(0, 10) : todayDateInputValue;
-  }, [selectedAgent?.leaveRecords, todayDateInputValue]);
+  }, [orphanLongLeaveId, selectedAgent?.leaveRecords, todayDateInputValue]);
 
   const orphanLeaveEndDateError = useMemo(() => {
-    if (orphanAgentAction !== "long_leave" || orphanViewingSavedLongLeave || orphanLongLeaveStatus === "Endorsed" || !orphanLeaveStartDate || !orphanLeaveEndDate) return "";
+    if (orphanAgentAction !== "long_leave" || orphanLongLeaveStep !== 1 || orphanViewingSavedLongLeave || orphanLongLeaveStatus === "Endorsed" || !orphanLeaveStartDate || !orphanLeaveEndDate) return "";
     const start = new Date(`${orphanLeaveStartDate}T00:00:00`);
     const end = new Date(`${orphanLeaveEndDate}T00:00:00`);
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return "";
@@ -1776,7 +1780,7 @@ function ManagerPortal({ roleType }) {
     if (!Number.isNaN(minimumStart.getTime()) && start < minimumStart) return `Leave start date must be on or after ${formatDate(minimumOrphanLeaveStartDate)}.`;
     const dayDifference = Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
     return dayDifference <= 7 ? "Leave end date should be beyond 7 days to be marked as on long leave." : "";
-  }, [minimumOrphanLeaveStartDate, orphanAgentAction, orphanLeaveEndDate, orphanLeaveStartDate, orphanLongLeaveStatus, orphanViewingSavedLongLeave]);
+  }, [minimumOrphanLeaveStartDate, orphanAgentAction, orphanLeaveEndDate, orphanLeaveStartDate, orphanLongLeaveStatus, orphanLongLeaveStep, orphanViewingSavedLongLeave]);
 
   const orphanProspectsWithActiveLeads = selectedAgent?.orphanTransferProspects || [];
   const orphanPolicyholdersWithOngoingPolicies = selectedAgent?.orphanTransferPolicyholders || [];
@@ -1785,6 +1789,11 @@ function ManagerPortal({ roleType }) {
     ? (orphanConfirmedPolicyholders.length ? orphanConfirmedPolicyholders : orphanPolicyholdersWithOngoingPolicies)
     : [];
   const hasPendingLongLeaveRecord = (Array.isArray(selectedAgent?.leaveRecords) ? selectedAgent.leaveRecords : []).some((record) => ["Recorded", "Confirmed Orphans"].includes(String(record?.status || "").trim()));
+  const selectedAgentStatusLabel = String(selectedAgent?.status || "").trim();
+  const selectedAgentIsRetired = selectedAgentStatusLabel === "Retired";
+  const selectedAgentIsOnLongLeave = selectedAgentStatusLabel === "On Long Leave";
+  const disableOrphanStatusActions = selectedAgentIsRetired || selectedAgentIsOnLongLeave || hasPendingLongLeaveRecord;
+  const disabledOrphanStatusActionHint = selectedAgentIsOnLongLeave ? "🚫" : undefined;
   const canAccessLongLeaveStep2 = Boolean(orphanLongLeaveId) && !orphanLongLeaveDetailsDirty;
   const canAccessLongLeaveStep3 = canAccessLongLeaveStep2 && ["Confirmed Orphans", "Endorsed"].includes(orphanLongLeaveStatus);
   const isEditingSavedLongLeaveDetails = orphanAgentAction === "long_leave" && orphanLongLeaveStep === 1 && Boolean(orphanLongLeaveId) && !orphanViewingSavedLongLeave;
@@ -4520,8 +4529,8 @@ function ManagerPortal({ roleType }) {
                     <p>{selectedAgent.username || "—"} • {selectedAgent.agentType || "—"} • {selectedAgent.unit || "Unassigned Unit"}</p>
                   </div>
                   <div className="manager-orphan-agent-actions">
-                    <button type="button" className="manager-refresh-btn" onClick={() => openOrphanAgentAction("long_leave")} disabled={selectedAgent.status === "Retired" || hasPendingLongLeaveRecord}>Mark as On Long Leave</button>
-                    <button type="button" className="manager-refresh-btn" onClick={() => openOrphanAgentAction("retired")} disabled={selectedAgent.status === "Retired" || hasPendingLongLeaveRecord}>Mark as Retired</button>
+                    <button type="button" className="manager-refresh-btn" onClick={() => openOrphanAgentAction("long_leave")} disabled={disableOrphanStatusActions} title={disabledOrphanStatusActionHint}>Mark as On Long Leave</button>
+                    <button type="button" className="manager-refresh-btn" onClick={() => openOrphanAgentAction("retired")} disabled={disableOrphanStatusActions} title={disabledOrphanStatusActionHint}>Mark as Retired</button>
                   </div>
                 </div>
 
