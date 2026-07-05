@@ -281,6 +281,19 @@ function normalizeAgentType(value) {
   return String(value || "").trim().toLowerCase().replace(/[\s_-]+/g, " ");
 }
 
+function formatReassignedFlag(value) {
+  return value === true ? "Yes" : "No";
+}
+
+function getLongLeaveReassignmentProgress(record = {}) {
+  const affectedClients = [
+    ...(Array.isArray(record.affectedProspects) ? record.affectedProspects : []),
+    ...(Array.isArray(record.affectedPolicyholders) ? record.affectedPolicyholders : []),
+  ];
+  const reassignedCount = affectedClients.filter((client) => client?.reassigned === true).length;
+  return `${reassignedCount}/${affectedClients.length}`;
+}
+
 function toDateInputValue(value) {
   const dt = new Date(value);
   return Number.isNaN(dt.getTime()) ? "" : dt.toISOString().slice(0, 10);
@@ -752,6 +765,8 @@ function ManagerPortal({ roleType }) {
   const [selectedUmLongLeaveRecordId, setSelectedUmLongLeaveRecordId] = useState("");
   const [selectedUmAffectedClient, setSelectedUmAffectedClient] = useState(null);
   const [selectedReassignmentAgentId, setSelectedReassignmentAgentId] = useState("");
+  const [reassignmentSaving, setReassignmentSaving] = useState(false);
+  const [reassignmentSuccess, setReassignmentSuccess] = useState(null);
   // eslint-disable-next-line no-unused-vars
   const [taskSearch, setTaskSearch] = useState("");
   // eslint-disable-next-line no-unused-vars
@@ -1288,10 +1303,10 @@ function ManagerPortal({ roleType }) {
       .filter((agent) => String(agent?.unit || "") === String(selectedUmLongLeaveRecord?.unitName || selectedUnit?.name || ""))
       .filter((agent) => String(agent?.id || "") !== String(selectedUmLongLeaveRecord?.agentId || ""))
       .map((agent) => {
-        const completedApproaches = Number(agent?.completedApproaches || 0);
-        const openApproachTasks = Number(agent?.openApproachTasksDueThisWeek ?? agent?.openApproachTasks ?? 0);
-        const closingRatio = Number(agent?.conversionRate || 0);
-        const activePolicies = Number(agent?.activePolicies || 0);
+        const completedApproaches = Number(agent?.reassignmentWeeklyDoneApproaches ?? agent?.completedApproaches ?? 0);
+        const openApproachTasks = Number(agent?.reassignmentOpenApproachTasksDueThisWeek ?? agent?.openApproachTasksDueThisWeek ?? agent?.openApproachTasks ?? 0);
+        const closingRatio = Number(agent?.reassignmentMonthlyClosingRatio ?? agent?.conversionRate ?? 0);
+        const activePolicies = Number(agent?.reassignmentMonthlyActivePolicies ?? agent?.activePolicies ?? 0);
         return {
           ...agent,
           reassignmentMetrics: {
@@ -1318,10 +1333,92 @@ function ManagerPortal({ roleType }) {
 
 
 
+  const selectedReassignmentAgent = useMemo(() => {
+    const selectedId = selectedReassignmentAgentId || selectedUmAffectedClient?.reassignedToAgentId || "";
+    return (portalData?.agents || []).find((agent) => String(agent?.id || "") === String(selectedId)) || null;
+  }, [portalData?.agents, selectedReassignmentAgentId, selectedUmAffectedClient?.reassignedToAgentId]);
+
+  const displayedReassignmentAgentRows = useMemo(() => {
+    if (selectedUmAffectedClient?.reassigned === true && selectedReassignmentAgent) {
+      const selectedRow = reassignmentAgentRows.find((agent) => String(agent.id || "") === String(selectedReassignmentAgent.id || ""));
+      return [selectedRow || {
+        ...selectedReassignmentAgent,
+        reassignmentMetrics: {
+          completedApproaches: 0,
+          openApproachTasks: 0,
+          projectedApproaches: 0,
+          weeklyDoneApproachesTarget: REASSIGNMENT_KPI_TARGETS.weeklyDoneApproaches,
+          closingRatio: 0,
+          monthlyClosingRatioTarget: REASSIGNMENT_KPI_TARGETS.monthlyClosingRatio,
+          activePolicies: 0,
+          monthlyActivePoliciesTarget: REASSIGNMENT_KPI_TARGETS.monthlyActivePolicies,
+        },
+      }];
+    }
+    return reassignmentAgentRows;
+  }, [reassignmentAgentRows, selectedReassignmentAgent, selectedUmAffectedClient?.reassigned]);
+
   const openAffectedClientDetail = (client) => {
     setSelectedUmAffectedClient(client);
-    setSelectedReassignmentAgentId("");
+    setSelectedReassignmentAgentId(client?.reassignedToAgentId || "");
+    setReassignmentSuccess(null);
     window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+  };
+
+  const applyLongLeaveRecordUpdate = (updatedRecord) => {
+    if (!updatedRecord?.id) return;
+    setPortalData((current) => {
+      if (!current?.agents) return current;
+      return {
+        ...current,
+        agents: current.agents.map((agent) => {
+          const records = Array.isArray(agent?.leaveRecords) ? agent.leaveRecords : [];
+          const hasRecord = records.some((record) => String(record?.id || "") === String(updatedRecord.id));
+          if (!hasRecord) return agent;
+          return {
+            ...agent,
+            leaveRecords: records.map((record) => String(record?.id || "") === String(updatedRecord.id) ? updatedRecord : record),
+          };
+        }),
+      };
+    });
+  };
+
+  const confirmProspectReassignment = async () => {
+    if (!selectedUmLongLeaveRecord?.id || !selectedUmAffectedClient || !selectedReassignmentAgentId || selectedUmAffectedClient?.kind !== "prospect") return;
+    setReassignmentSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/manager/long-leave/${selectedUmLongLeaveRecord.id}/reassign-prospect`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prospectId: selectedUmAffectedClient.prospectId,
+          leadId: selectedUmAffectedClient.leadId || selectedUmAffectedClient.id,
+          reassignmentAgentId: selectedReassignmentAgentId,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.message || "Failed to confirm reassignment.");
+      const updatedRecord = normalizeLongLeaveRecord(data?.longLeave);
+      applyLongLeaveRecordUpdate(updatedRecord);
+      const reassignment = data?.reassignment || {};
+      setSelectedUmAffectedClient((current) => current ? {
+        ...current,
+        reassigned: true,
+        reassignedAt: reassignment.reassignedAt,
+        reassignedToUserId: reassignment.reassignedToUserId,
+        reassignedToAgentId: reassignment.reassignedToAgentId || selectedReassignmentAgentId,
+        reassignedToAgentName: reassignment.reassignedToAgentName || selectedReassignmentAgent?.name || "—",
+      } : current);
+      setSelectedReassignmentAgentId(reassignment.reassignedToAgentId || selectedReassignmentAgentId);
+      setReassignmentSuccess({
+        message: data?.message || `${selectedUmAffectedClient.name || "Prospect"} with lead code ${selectedUmAffectedClient.leadCode || "—"} has been reassigned to ${reassignment.reassignedToAgentName || selectedReassignmentAgent?.name || "—"} from ${reassignment.originalAgentName || selectedUmLongLeaveRecord.agentName || "—"}.`,
+      });
+    } catch (err) {
+      setOrphanLongLeaveFieldErrors((current) => ({ ...current, form: err?.message || "Failed to confirm reassignment." }));
+    } finally {
+      setReassignmentSaving(false);
+    }
   };
 
   const filteredAgents = useMemo(() => {
@@ -1660,7 +1757,11 @@ function ManagerPortal({ roleType }) {
   const todayDateInputValue = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const minimumOrphanLeaveStartDate = useMemo(() => {
     const records = Array.isArray(selectedAgent?.leaveRecords) ? selectedAgent.leaveRecords : [];
+    const currentLongLeaveId = String(orphanLongLeaveId || "");
     const latestEndTime = records.reduce((latest, record) => {
+      if (currentLongLeaveId && String(record?.id || record?._id || "") === currentLongLeaveId) return latest;
+      const status = String(record?.status || "").trim();
+      if (["Recorded", "Confirmed Orphans"].includes(status)) return latest;
       const endTime = new Date(record?.leaveEndDate || 0).getTime() || 0;
       return Math.max(latest, endTime);
     }, 0);
@@ -1668,10 +1769,10 @@ function ManagerPortal({ roleType }) {
     const nextAvailableDate = new Date(latestEndTime);
     nextAvailableDate.setDate(nextAvailableDate.getDate() + 1);
     return nextAvailableDate.toISOString().slice(0, 10) > todayDateInputValue ? nextAvailableDate.toISOString().slice(0, 10) : todayDateInputValue;
-  }, [selectedAgent?.leaveRecords, todayDateInputValue]);
+  }, [orphanLongLeaveId, selectedAgent?.leaveRecords, todayDateInputValue]);
 
   const orphanLeaveEndDateError = useMemo(() => {
-    if (orphanAgentAction !== "long_leave" || orphanViewingSavedLongLeave || orphanLongLeaveStatus === "Endorsed" || !orphanLeaveStartDate || !orphanLeaveEndDate) return "";
+    if (orphanAgentAction !== "long_leave" || orphanLongLeaveStep !== 1 || orphanViewingSavedLongLeave || orphanLongLeaveStatus === "Endorsed" || !orphanLeaveStartDate || !orphanLeaveEndDate) return "";
     const start = new Date(`${orphanLeaveStartDate}T00:00:00`);
     const end = new Date(`${orphanLeaveEndDate}T00:00:00`);
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return "";
@@ -1679,7 +1780,7 @@ function ManagerPortal({ roleType }) {
     if (!Number.isNaN(minimumStart.getTime()) && start < minimumStart) return `Leave start date must be on or after ${formatDate(minimumOrphanLeaveStartDate)}.`;
     const dayDifference = Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
     return dayDifference <= 7 ? "Leave end date should be beyond 7 days to be marked as on long leave." : "";
-  }, [minimumOrphanLeaveStartDate, orphanAgentAction, orphanLeaveEndDate, orphanLeaveStartDate, orphanLongLeaveStatus, orphanViewingSavedLongLeave]);
+  }, [minimumOrphanLeaveStartDate, orphanAgentAction, orphanLeaveEndDate, orphanLeaveStartDate, orphanLongLeaveStatus, orphanLongLeaveStep, orphanViewingSavedLongLeave]);
 
   const orphanProspectsWithActiveLeads = selectedAgent?.orphanTransferProspects || [];
   const orphanPolicyholdersWithOngoingPolicies = selectedAgent?.orphanTransferPolicyholders || [];
@@ -3953,7 +4054,7 @@ function ManagerPortal({ roleType }) {
 
                     <div className="manager-section-subhead">
                       <h3>{selectedUmAffectedClient.kind === "policyholder" ? "Policyholder Details" : "Prospect Details"}</h3>
-                      <p>Review the recorded orphan client details before choosing a reassignment agent.</p>
+                      {selectedUmAffectedClient.reassigned === true ? null : <p>Review the recorded orphan client details before choosing a reassignment agent.</p>}
                     </div>
                     <div className="manager-agent-detail-grid manager-agent-detail-grid--profile">
                       {Object.entries(selectedUmAffectedClient.details || {}).map(([label, value]) => (
@@ -3962,15 +4063,15 @@ function ManagerPortal({ roleType }) {
                     </div>
 
                     <div className="manager-section-subhead">
-                      <h3>Recommended Agents for Reassignment</h3>
+                      <h3>{selectedUmAffectedClient.reassigned === true ? "Selected Agent for Reassignment" : "Recommended Agents for Reassignment"}</h3>
                     </div>
                     <div className="manager-table-wrap">
                       <table className="manager-table manager-table--promotion-history">
                         <thead>
-                          <tr><th>Agent Code</th><th>Agent Name</th><th>Agent Type</th><th>Status</th><th>Weekly Done Approaches</th><th>Open Approach Tasks Due This Week</th><th>Projected Weekly Approaches</th><th>Monthly Closing Ratio</th><th>Monthly Active Policies</th><th>Select</th></tr>
+                          <tr><th>Agent Code</th><th>Agent Name</th><th>Agent Type</th><th>Status</th><th>Weekly Done Approaches</th><th>Open Approach Tasks Due This Week</th><th>Projected Weekly Approaches</th><th>Monthly Closing Ratio</th><th>Monthly Active Policies</th><th>Select</th>{selectedUmAffectedClient.reassigned === true && <th>Reassignment Date and Time</th>}</tr>
                         </thead>
                         <tbody>
-                          {reassignmentAgentRows.map((agent) => (
+                          {displayedReassignmentAgentRows.map((agent) => (
                             <tr key={agent.id}>
                               <td>{agent.username || "—"}</td>
                               <td>{agent.name || "—"}</td>
@@ -3981,16 +4082,20 @@ function ManagerPortal({ roleType }) {
                               <td>{agent.reassignmentMetrics.projectedApproaches} / {agent.reassignmentMetrics.weeklyDoneApproachesTarget}</td>
                               <td>{agent.reassignmentMetrics.closingRatio}% / {agent.reassignmentMetrics.monthlyClosingRatioTarget}%</td>
                               <td>{agent.reassignmentMetrics.activePolicies} / {agent.reassignmentMetrics.monthlyActivePoliciesTarget}</td>
-                              <td><button type="button" className="manager-refresh-btn" onClick={() => setSelectedReassignmentAgentId(agent.id)}>{selectedReassignmentAgentId === agent.id ? "Selected" : "Select"}</button></td>
+                              <td><button type="button" className="manager-refresh-btn" disabled={selectedUmAffectedClient.reassigned === true} onClick={() => setSelectedReassignmentAgentId(agent.id)}>{selectedReassignmentAgentId === agent.id || selectedUmAffectedClient.reassigned === true ? "Selected" : "Select"}</button></td>
+                              {selectedUmAffectedClient.reassigned === true && <td>{formatDateTime(selectedUmAffectedClient.reassignedAt)}</td>}
                             </tr>
                           ))}
                         </tbody>
                       </table>
                     </div>
-                    {!reassignmentAgentRows.length && <div className="manager-empty-state">No recommended agents matched all reassignment criteria for this unit.</div>}
-                    <div className="manager-orphan-action-buttons">
-                      <button type="button" className="manager-refresh-btn manager-long-leave-next-btn" disabled={!selectedReassignmentAgentId}>Confirm Reassignment</button>
-                    </div>
+                    {!displayedReassignmentAgentRows.length && <div className="manager-empty-state">No recommended agents matched all reassignment criteria for this unit.</div>}
+                    {orphanLongLeaveFieldErrors.form && <small className="manager-field-error">{orphanLongLeaveFieldErrors.form}</small>}
+                    {selectedUmAffectedClient.reassigned !== true && (
+                      <div className="manager-orphan-action-buttons">
+                        <button type="button" className="manager-refresh-btn manager-long-leave-next-btn" disabled={!selectedReassignmentAgentId || reassignmentSaving || selectedUmAffectedClient.kind !== "prospect"} onClick={confirmProspectReassignment}>{reassignmentSaving ? "Confirming..." : "Confirm Reassignment"}</button>
+                      </div>
+                    )}
                   </>
                 ) : (
                 <>
@@ -4014,15 +4119,16 @@ function ManagerPortal({ roleType }) {
                     <div className="manager-table-wrap">
                       <table className="manager-table manager-table--promotion-history manager-table--clickable">
                         <thead>
-                          <tr><th>Prospect Code</th><th>Lead Code</th><th>Name</th><th>Status</th></tr>
+                          <tr><th>Prospect Code</th><th>Lead Code</th><th>Name</th><th>Status</th><th>Reassigned</th></tr>
                         </thead>
                         <tbody>
                           {selectedUmLongLeaveRecord.affectedProspects.map((prospect) => (
-                            <tr key={prospect.id || `${prospect.prospectCode}:${prospect.leadCode}`} onClick={() => openAffectedClientDetail({ kind: "prospect", code: prospect.prospectCode || "—", name: prospect.name || "—", details: { "Prospect Code": prospect.prospectCode, "Lead Code": prospect.leadCode, Name: prospect.name, Source: prospect.source, Status: prospect.status, "Market Type": prospect.marketType, "Prospect Type": prospect.prospectType } })} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") openAffectedClientDetail({ kind: "prospect", code: prospect.prospectCode || "—", name: prospect.name || "—", details: { "Prospect Code": prospect.prospectCode, "Lead Code": prospect.leadCode, Name: prospect.name, Source: prospect.source, Status: prospect.status, "Market Type": prospect.marketType, "Prospect Type": prospect.prospectType } }); }}>
+                            <tr key={prospect.id || `${prospect.prospectCode}:${prospect.leadCode}`} onClick={() => openAffectedClientDetail({ kind: "prospect", id: prospect.id, prospectId: prospect.prospectId, leadId: prospect.leadId || prospect.id, code: prospect.prospectCode || "—", leadCode: prospect.leadCode || "—", name: prospect.name || "—", reassigned: prospect.reassigned === true, reassignedAt: prospect.reassignedAt, reassignedToAgentId: prospect.reassignedToAgentId, reassignedToAgentName: prospect.reassignedToAgentName, details: { "Prospect Code": prospect.prospectCode, "Lead Code": prospect.leadCode, Name: prospect.name, Source: prospect.source, Status: prospect.status, "Market Type": prospect.marketType, "Prospect Type": prospect.prospectType } })} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") openAffectedClientDetail({ kind: "prospect", id: prospect.id, prospectId: prospect.prospectId, leadId: prospect.leadId || prospect.id, code: prospect.prospectCode || "—", leadCode: prospect.leadCode || "—", name: prospect.name || "—", reassigned: prospect.reassigned === true, reassignedAt: prospect.reassignedAt, reassignedToAgentId: prospect.reassignedToAgentId, reassignedToAgentName: prospect.reassignedToAgentName, details: { "Prospect Code": prospect.prospectCode, "Lead Code": prospect.leadCode, Name: prospect.name, Source: prospect.source, Status: prospect.status, "Market Type": prospect.marketType, "Prospect Type": prospect.prospectType } }); }}>
                               <td>{prospect.prospectCode || "—"}</td>
                               <td>{prospect.leadCode || "—"}</td>
                               <td>{prospect.name || "—"}</td>
                               <td>{prospect.status || "—"}</td>
+                              <td>{formatReassignedFlag(prospect.reassigned)}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -4038,16 +4144,17 @@ function ManagerPortal({ roleType }) {
                     <div className="manager-table-wrap">
                       <table className="manager-table manager-table--promotion-history manager-table--clickable">
                         <thead>
-                          <tr><th>Policyholder Code</th><th>Policyholder Name</th><th>Product Name</th><th>Policy Number</th><th>Status</th></tr>
+                          <tr><th>Policyholder Code</th><th>Policyholder Name</th><th>Product Name</th><th>Policy Number</th><th>Status</th><th>Reassigned</th></tr>
                         </thead>
                         <tbody>
                           {selectedUmLongLeaveRecord.affectedPolicyholders.map((policyholder) => (
-                            <tr key={policyholder.id || `${policyholder.policyholderCode}:${policyholder.policyNumber}`} onClick={() => openAffectedClientDetail({ kind: "policyholder", code: policyholder.policyholderCode || "—", name: policyholder.policyholderName || "—", details: { "Policyholder Code": policyholder.policyholderCode, "Policyholder Name": policyholder.policyholderName, "Product Name": policyholder.productName, "Policy Number": policyholder.policyNumber, Status: policyholder.status } })} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") openAffectedClientDetail({ kind: "policyholder", code: policyholder.policyholderCode || "—", name: policyholder.policyholderName || "—", details: { "Policyholder Code": policyholder.policyholderCode, "Policyholder Name": policyholder.policyholderName, "Product Name": policyholder.productName, "Policy Number": policyholder.policyNumber, Status: policyholder.status } }); }}>
+                            <tr key={policyholder.id || `${policyholder.policyholderCode}:${policyholder.policyNumber}`} onClick={() => openAffectedClientDetail({ kind: "policyholder", id: policyholder.id, code: policyholder.policyholderCode || "—", name: policyholder.policyholderName || "—", reassigned: policyholder.reassigned === true, reassignedAt: policyholder.reassignedAt, reassignedToAgentId: policyholder.reassignedToAgentId, reassignedToAgentName: policyholder.reassignedToAgentName, details: { "Policyholder Code": policyholder.policyholderCode, "Policyholder Name": policyholder.policyholderName, "Product Name": policyholder.productName, "Policy Number": policyholder.policyNumber, Status: policyholder.status } })} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") openAffectedClientDetail({ kind: "policyholder", id: policyholder.id, code: policyholder.policyholderCode || "—", name: policyholder.policyholderName || "—", reassigned: policyholder.reassigned === true, reassignedAt: policyholder.reassignedAt, reassignedToAgentId: policyholder.reassignedToAgentId, reassignedToAgentName: policyholder.reassignedToAgentName, details: { "Policyholder Code": policyholder.policyholderCode, "Policyholder Name": policyholder.policyholderName, "Product Name": policyholder.productName, "Policy Number": policyholder.policyNumber, Status: policyholder.status } }); }}>
                               <td>{policyholder.policyholderCode || "—"}</td>
                               <td>{policyholder.policyholderName || "—"}</td>
                               <td>{policyholder.productName || "—"}</td>
                               <td>{policyholder.policyNumber || "—"}</td>
                               <td>{policyholder.status || "—"}</td>
+                              <td>{formatReassignedFlag(policyholder.reassigned)}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -4066,6 +4173,7 @@ function ManagerPortal({ roleType }) {
                           <th>Agent Name</th>
                           <th>Leave Start Date</th>
                           <th>Leave End Date</th>
+                          <th>Reassignments Progress</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -4075,6 +4183,7 @@ function ManagerPortal({ roleType }) {
                             <td>{record.agentName || "—"}</td>
                             <td>{formatDate(record.leaveStartDate)}</td>
                             <td>{formatDate(record.leaveEndDate)}</td>
+                            <td>{getLongLeaveReassignmentProgress(record)}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -4963,6 +5072,21 @@ function ManagerPortal({ roleType }) {
 
         </main>
       </div>
+
+      {reassignmentSuccess && (
+        <div className="manager-modal-backdrop" role="presentation">
+          <div className="manager-endorse-modal" role="dialog" aria-modal="true" aria-labelledby="reassignment-success-title">
+            <button type="button" className="manager-endorse-modal__x" onClick={() => setReassignmentSuccess(null)} aria-label="Close reassignment confirmation">×</button>
+            <div className="manager-endorse-modal__header">
+              <h2 id="reassignment-success-title">Reassignment confirmed</h2>
+              <p>{reassignmentSuccess.message}</p>
+            </div>
+            <div className="manager-endorse-modal__actions">
+              <button type="button" className="manager-refresh-btn manager-long-leave-next-btn" onClick={() => setReassignmentSuccess(null)}>OK</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showEndorseOrphansModal && (
         <div className="manager-modal-backdrop" role="presentation">
