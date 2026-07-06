@@ -534,6 +534,10 @@ function registerLegacyRoutes(app, deps) {
     return `${actionMessage} Policyholder Code: ${policyholderCode}. Policyholder Name: ${policyholderName}. Policy Name: ${policyName}. Policy Number: ${policyNumber}.`;
   }
 
+  function effectivePolicyholderOwnerId(policyholderDoc = {}) {
+    return policyholderDoc?.reassignedToUserId || policyholderDoc?.assignedToUserId || null;
+  }
+
   function cancellationDateForPolicyholder(policyholderDoc = {}) {
     return policyholderDoc?.cancellationDetails?.approvedCancellationDate
       || policyholderDoc?.cancellationDetails?.cancelledAt
@@ -555,7 +559,7 @@ function registerLegacyRoutes(app, deps) {
         $set: {
           softDeletedAt: new Date(),
           softDeleteReason: reason || "Policy payment tracking ended.",
-          softDeletedByUserId: policyholderDoc.assignedToUserId || null,
+          softDeletedByUserId: effectivePolicyholderOwnerId(policyholderDoc),
         },
       }
     );
@@ -563,13 +567,14 @@ function registerLegacyRoutes(app, deps) {
 
   async function createPolicyLifecycleNotification(policyholderDoc, policy, prospect, lifecycle, previousStatus) {
     const config = policyLifecycleNotificationConfig(previousStatus, lifecycle);
-    if (!config || !policyholderDoc?._id || !policyholderDoc?.assignedToUserId) return;
+    if (!config || !policyholderDoc?._id || !effectivePolicyholderOwnerId(policyholderDoc)) return;
 
     const policyholderObject = typeof policyholderDoc.toObject === "function" ? policyholderDoc.toObject() : policyholderDoc;
     const hydratedPolicyholder = await Policyholder.findById(policyholderDoc._id)
-      .select("assignedToUserId policyholderCode productId policyNumber lastPaidDate")
+      .select("assignedToUserId reassignedToUserId policyholderCode productId policyNumber lastPaidDate")
       .lean();
     const notificationPolicyholder = { ...(hydratedPolicyholder || {}), ...(policyholderObject || {}) };
+    const notificationOwnerId = effectivePolicyholderOwnerId(notificationPolicyholder);
 
     const policyholderName = `${prospect?.firstName || ""}${prospect?.middleName ? ` ${prospect.middleName}` : ""} ${prospect?.lastName || ""}`.trim() || "—";
     const product = notificationPolicyholder.productId ? await Product.findById(notificationPolicyholder.productId).select("productName").lean() : null;
@@ -582,7 +587,7 @@ function registerLegacyRoutes(app, deps) {
 
     await Notification.updateOne(
       {
-        assignedToUserId: notificationPolicyholder.assignedToUserId,
+        assignedToUserId: notificationOwnerId,
         dedupeKey: `${config.type}:${policyholderDoc._id}`,
       },
       {
@@ -608,7 +613,7 @@ function registerLegacyRoutes(app, deps) {
           softDeletedByUserId: null,
         },
         $setOnInsert: {
-          assignedToUserId: notificationPolicyholder.assignedToUserId,
+          assignedToUserId: notificationOwnerId,
           dedupeKey: `${config.type}:${policyholderDoc._id}`,
           status: "Unread",
           readAt: null,
@@ -619,8 +624,9 @@ function registerLegacyRoutes(app, deps) {
   }
 
   async function createPolicyCancellationNotification(policyholderDoc, prospect) {
-    if (!policyholderDoc?._id || !policyholderDoc?.assignedToUserId) return;
+    if (!policyholderDoc?._id || !effectivePolicyholderOwnerId(policyholderDoc)) return;
 
+    const notificationOwnerId = effectivePolicyholderOwnerId(policyholderDoc);
     const policyholderName = `${prospect?.firstName || ""}${prospect?.middleName ? ` ${prospect.middleName}` : ""} ${prospect?.lastName || ""}`.trim() || "—";
     const product = policyholderDoc.productId ? await Product.findById(policyholderDoc.productId).select("productName").lean() : null;
     const policyName = product?.productName || "—";
@@ -631,7 +637,7 @@ function registerLegacyRoutes(app, deps) {
 
     await Notification.updateOne(
       {
-        assignedToUserId: policyholderDoc.assignedToUserId,
+        assignedToUserId: notificationOwnerId,
         dedupeKey: `POLICY_CANCELLED:${policyholderDoc._id}`,
       },
       {
@@ -655,7 +661,7 @@ function registerLegacyRoutes(app, deps) {
           softDeletedByUserId: null,
         },
         $setOnInsert: {
-          assignedToUserId: policyholderDoc.assignedToUserId,
+          assignedToUserId: notificationOwnerId,
           dedupeKey: `POLICY_CANCELLED:${policyholderDoc._id}`,
           status: "Unread",
           readAt: null,
@@ -1080,8 +1086,14 @@ function registerLegacyRoutes(app, deps) {
   }
 
   async function syncPolicyholderPaymentDatesForUser(userObjectId) {
-    const policyholderDocs = await Policyholder.find({ assignedToUserId: userObjectId })
-      .select("assignedToUserId policyholderCode policyNumber productId leadEngagementId lastPaidDate nextPaymentDate status annualPaymentRecords")
+    const policyholderDocs = await Policyholder.find({
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
+    })
+      .select("assignedToUserId reassignedToUserId policyholderCode policyNumber productId leadEngagementId lastPaidDate nextPaymentDate status annualPaymentRecords")
       .sort({ policyholderCode: 1 });
     for (const policyholderDoc of policyholderDocs) {
       await syncPolicyholderPaymentDates(policyholderDoc);
@@ -1938,6 +1950,71 @@ app.patch("/api/admin/organization/agents/:agentId", async (req, res) => {
   }
 });
 
+const validatePlainPasswordRequirements = (password = "") => {
+  const errors = [];
+  if (String(password).length < 8) errors.push("Password must be at least 8 characters.");
+  if (!/\d/.test(String(password))) errors.push("Password must include at least one number.");
+  if (!/[^A-Za-z0-9]/.test(String(password))) errors.push("Password must include at least one special character.");
+  return errors;
+};
+
+app.post("/api/agent/profile/password/verify", async (req, res) => {
+  try {
+    const userId = String(req.body?.userId || "").trim();
+    const username = String(req.body?.username || "").trim();
+    const currentPassword = String(req.body?.currentPassword || "");
+
+    if (!currentPassword) {
+      return res.json({ matches: false });
+    }
+
+    const query = mongoose.Types.ObjectId.isValid(userId)
+      ? { _id: userId, role: "AG" }
+      : { username, role: "AG" };
+    const user = await User.findOne(query).select("password").lean();
+
+    return res.json({ matches: !!user && user.password === currentPassword });
+  } catch (err) {
+    console.error("Agent verify password error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+app.patch("/api/agent/profile/password", async (req, res) => {
+  try {
+    const userId = String(req.body?.userId || "").trim();
+    const username = String(req.body?.username || "").trim();
+    const currentPassword = String(req.body?.currentPassword || "");
+    const newPassword = String(req.body?.newPassword || "");
+
+    const passwordErrors = validatePlainPasswordRequirements(newPassword);
+    if (passwordErrors.length) {
+      return res.status(400).json({ message: "New password does not satisfy all requirements.", errors: passwordErrors });
+    }
+
+    const query = mongoose.Types.ObjectId.isValid(userId)
+      ? { _id: userId, role: "AG" }
+      : { username, role: "AG" };
+    const user = await User.findOne(query);
+
+    if (!user) {
+      return res.status(404).json({ message: "Agent account was not found." });
+    }
+
+    if (user.password !== currentPassword) {
+      return res.status(400).json({ message: "Current password does not match.", field: "currentPassword" });
+    }
+
+    user.password = newPassword;
+    await user.save();
+
+    return res.json({ message: "Password successfully updated." });
+  } catch (err) {
+    console.error("Agent update password error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
 app.post("/api/admin/organization/managers/assign", async (req, res) => {
   try {
     const managerType = String(req.body?.managerType || "").trim().toUpperCase();
@@ -2126,6 +2203,151 @@ app.post("/api/admin/organization/managers/assign", async (req, res) => {
     });
   } catch (err) {
     console.error("Admin assign manager error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+app.patch("/api/admin/organization/managers/:managerType/:managerId", async (req, res) => {
+  try {
+    const managerType = String(req.params.managerType || "").trim().toUpperCase();
+    const { managerId } = req.params;
+    const ManagerModel = getManagerModelByType(managerType);
+
+    if (!ManagerModel) {
+      return res.status(400).json({ message: "Invalid manager type." });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(managerId)) {
+      return res.status(400).json({ message: "Invalid manager id." });
+    }
+
+    const username = String(req.body?.username || "").trim().toUpperCase();
+    const password = String(req.body?.password || "").trim();
+    const firstName = String(req.body?.firstName || "").trim();
+    const middleName = String(req.body?.middleName || "").trim();
+    const lastName = String(req.body?.lastName || "").trim();
+    const birthday = String(req.body?.birthday || "").trim();
+    const sex = String(req.body?.sex || "").trim() || "Male";
+    const displayPhoto = String(req.body?.displayPhoto || "").trim();
+    const dateEmployed = String(req.body?.dateEmployed || "").trim();
+    const branchId = String(req.body?.branchId || "").trim();
+    const unitId = String(req.body?.unitId || "").trim();
+
+    if (!username) {
+      return res.status(400).json({ message: "Username is required." });
+    }
+
+    if (!firstName || !lastName) {
+      return res.status(400).json({ message: "First name and last name are required." });
+    }
+
+    if (!birthday) {
+      return res.status(400).json({ message: "Birthday is required." });
+    }
+
+    if (!dateEmployed) {
+      return res.status(400).json({ message: "Date employed is required." });
+    }
+
+    if (managerType === "BM" && !mongoose.Types.ObjectId.isValid(branchId)) {
+      return res.status(400).json({ message: "A valid branch is required for BM details." });
+    }
+
+    if ((managerType === "UM" || managerType === "AUM") && !mongoose.Types.ObjectId.isValid(unitId)) {
+      return res.status(400).json({ message: `A valid unit is required for ${managerType} details.` });
+    }
+
+    const manager = await ManagerModel.findById(managerId).populate(buildManagerPopulateQuery(managerType));
+    if (!manager) {
+      return res.status(404).json({ message: "Manager record was not found." });
+    }
+
+    if (manager.isBlocked === true) {
+      return res.status(409).json({ message: "Blocked manager records cannot be edited from this form." });
+    }
+
+    const birthdayDate = new Date(birthday);
+    const employedDate = new Date(dateEmployed);
+
+    if (Number.isNaN(birthdayDate.getTime())) {
+      return res.status(400).json({ message: "Birthday is invalid." });
+    }
+
+    if (Number.isNaN(employedDate.getTime())) {
+      return res.status(400).json({ message: "Date employed is invalid." });
+    }
+
+    if (isFutureDate(birthdayDate)) {
+      return res.status(400).json({ message: "Birthday cannot be in the future." });
+    }
+
+    if (isFutureDate(employedDate)) {
+      return res.status(400).json({ message: "Date employed cannot be in the future." });
+    }
+
+    const age = calculateAgeFromDate(birthdayDate);
+    if (age === null) {
+      return res.status(400).json({ message: "Birthday is invalid." });
+    }
+
+    if (age < 21) {
+      return res.status(400).json({ message: "Managers must be at least 21 years old." });
+    }
+
+    const existingUser = await User.findOne({ _id: { $ne: manager.userId?._id || manager.userId }, username }).lean();
+    if (existingUser) {
+      return res.status(409).json({ message: "Username already exists." });
+    }
+
+    if (managerType === "BM") {
+      const branch = await Branch.findById(branchId).lean();
+      if (!branch) {
+        return res.status(404).json({ message: "Selected branch was not found." });
+      }
+    } else {
+      const unit = await Unit.findById(unitId).lean();
+      if (!unit) {
+        return res.status(404).json({ message: "Selected unit was not found." });
+      }
+    }
+
+    const activeManagerForScope = await findActiveManagerForScope(managerType, { branchId, unitId });
+    if (activeManagerForScope && String(activeManagerForScope._id || "") !== String(manager._id || "")) {
+      return res.status(409).json({ message: `Another active ${managerType} is already assigned to the selected ${managerType === "BM" ? "branch" : "unit"}.` });
+    }
+
+    await User.findByIdAndUpdate(
+      manager.userId?._id || manager.userId,
+      {
+        username,
+        ...(password ? { password } : {}),
+        firstName,
+        middleName,
+        lastName,
+        birthday: birthdayDate,
+        sex,
+        age,
+        displayPhoto,
+        dateEmployed: employedDate,
+      },
+      { new: true, runValidators: true }
+    );
+
+    if (managerType === "BM") {
+      manager.branchId = branchId;
+    } else {
+      manager.unitId = unitId;
+    }
+    await manager.save();
+
+    const updatedManager = await ManagerModel.findById(manager._id).populate(buildManagerPopulateQuery(managerType)).lean();
+
+    return res.json({
+      message: `${managerType} updated successfully.`,
+      manager: formatManagerRecord(updatedManager, managerType),
+    });
+  } catch (err) {
+    console.error("Admin update manager error:", err);
     return res.status(500).json({ message: "Server error." });
   }
 });
@@ -3077,7 +3299,11 @@ app.get("/api/prospects/recent", async (req, res) => {
      * Used for dashboard counts and UI pagination/summary.
      */
     const totalForThisUser = await Prospect.countDocuments({
-      assignedToUserId: userObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
     });
 
     /**
@@ -3093,7 +3319,13 @@ app.get("/api/prospects/recent", async (req, res) => {
       /**
        * Step 1: Filter to only prospects owned by this agent
        */
-      { $match: { assignedToUserId: userObjectId } },
+      { $match: {
+        $or: [
+          { reassignedToUserId: userObjectId },
+          { reassignedToUserId: null, assignedToUserId: userObjectId },
+          { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+        ],
+      } },
 
       /**
        * Step 2: Compute agent-specific "prospectNo"
@@ -3110,9 +3342,15 @@ app.get("/api/prospects/recent", async (req, res) => {
        * - Produces 1,2,3,... based on the sort order.
        */
       {
+        $addFields: {
+          effectiveAssignedToUserId: { $ifNull: ["$reassignedToUserId", "$assignedToUserId"] },
+          effectiveProspectSortDate: { $ifNull: ["$reassignedAt", "$createdAt"] },
+        },
+      },
+      {
         $setWindowFields: {
-          partitionBy: "$assignedToUserId",
-          sortBy: { prospectCode: 1 }, 
+          partitionBy: "$effectiveAssignedToUserId",
+          sortBy: { effectiveProspectSortDate: 1 }, 
           output: {
             prospectNo: { $documentNumber: {} },
           },
@@ -3125,7 +3363,7 @@ app.get("/api/prospects/recent", async (req, res) => {
        * After prospectNo is computed in ASC order, we now sort DESC to get newest codes.
        * This makes the returned list "latest prospects" while keeping numbering stable.
        */
-      { $sort: { prospectCode: -1 } },
+      { $sort: { effectiveProspectSortDate: -1, _id: -1 } },
       { $limit: n },
 
       /**
@@ -3275,13 +3513,26 @@ app.get("/api/policyholders/recent", async (req, res) => {
        * Step 4: Filter policyholders to those belonging to THIS agent
        * - Determined by prospect.assignedToUserId
        */
-      { $match: { "prospect.assignedToUserId": userObjectId } },
+      { $match: {
+        $or: [
+          { reassignedToUserId: userObjectId },
+          { reassignedToUserId: null, assignedToUserId: userObjectId },
+          { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+          { reassignedToUserId: null, assignedToUserId: { $exists: false }, "prospect.assignedToUserId": userObjectId },
+        ],
+      } },
 
       /**
-       * Step 5: Copy assignedToUserId into root document
-       * - Makes it easier to use partitionBy in window fields
+       * Step 5: Compute effective ownership for policyholder numbering.
+       * - Direct policyholder assignment wins for converted reassigned leads.
        */
-      { $addFields: { assignedToUserId: "$prospect.assignedToUserId" } },
+      {
+        $addFields: {
+          originalProspectAssignedToUserId: "$prospect.assignedToUserId",
+          effectiveAssignedToUserId: { $ifNull: ["$reassignedToUserId", { $ifNull: ["$assignedToUserId", "$prospect.assignedToUserId"] }] },
+          effectivePolicyholderSortDate: { $ifNull: ["$reassignedAt", "$createdAt"] },
+        },
+      },
 
       /**
        * Step 6: Compute stable policyholderNo per agent
@@ -3290,8 +3541,8 @@ app.get("/api/policyholders/recent", async (req, res) => {
        */
       {
         $setWindowFields: {
-          partitionBy: "$assignedToUserId",
-          sortBy: { policyholderCode: 1 }, 
+          partitionBy: "$effectiveAssignedToUserId",
+          sortBy: { effectivePolicyholderSortDate: 1 }, 
           output: { policyholderNo: { $documentNumber: {} } },
         },
       },
@@ -3402,8 +3653,14 @@ app.get("/api/agent/home", async (req, res) => {
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
       .slice(0, 5);
 
-    const prospects = await Prospect.find({ assignedToUserId: userObjectId })
-      .select("_id prospectCode firstName middleName lastName marketType prospectType source status createdAt")
+    const prospects = await Prospect.find({
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
+    })
+      .select("_id prospectCode firstName middleName lastName marketType prospectType source status createdAt reassignedAt reassignedToUserId")
       .lean();
     const prospectIds = prospects.map((prospect) => prospect._id);
 
@@ -3627,7 +3884,13 @@ app.get("/api/clients/relationship/dashboard", async (req, res) => {
     };
 
     const userObjectId = new mongoose.Types.ObjectId(userId);
-    const prospectQuery = { assignedToUserId: userObjectId };
+    const prospectQuery = {
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
+    };
     if (startDate) prospectQuery.createdAt = { $gte: startDate, $lte: now };
     if (source !== "ALL") prospectQuery.source = source;
     if (marketType !== "ALL") prospectQuery.marketType = marketType;
@@ -3943,7 +4206,13 @@ app.get("/api/sales/performance", async (req, res) => {
       salesRows: [],
     };
 
-    const prospects = await Prospect.find({ assignedToUserId: userObjectId })
+    const prospects = await Prospect.find({
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
+    })
       .select("_id prospectCode firstName middleName lastName")
       .lean();
     const prospectIds = prospects.map((p) => p._id);
@@ -3975,8 +4244,15 @@ app.get("/api/sales/performance", async (req, res) => {
     const engagementIds = engagements.map((e) => e._id);
 
     const policyholders = engagementIds.length
-      ? await Policyholder.find({ leadEngagementId: { $in: engagementIds } })
-          .select("leadEngagementId status createdAt productId")
+      ? await Policyholder.find({
+          leadEngagementId: { $in: engagementIds },
+          $or: [
+            { reassignedToUserId: userObjectId },
+            { reassignedToUserId: null, assignedToUserId: userObjectId },
+            { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+          ],
+        })
+          .select("assignedToUserId reassignedToUserId leadEngagementId status createdAt productId annualPaymentRecords")
           .lean()
       : [];
 
@@ -4005,7 +4281,7 @@ app.get("/api/sales/performance", async (req, res) => {
 
     const annualPayments = engagementIds.length
       ? await AnnualPayment.find({ leadEngagementId: { $in: engagementIds } })
-          .select("leadEngagementId totalAnnualPremiumPhp frequencyOfPayment")
+          .select("leadEngagementId annualPaymentPeriod totalAnnualPremiumPhp frequencyOfPayment createdAt updatedAt")
           .lean()
       : [];
 
@@ -4040,9 +4316,35 @@ app.get("/api/sales/performance", async (req, res) => {
       if (payment?.recordPremiumPaymentTransfer?.isMissedPaymentRecord === true) continue;
       engagementToPayment.set(engagementId, payment);
     }
-    const engagementToAnnualPayment = new Map(
-      scopedAnnualPayments.map((annualPayment) => [String(annualPayment?.leadEngagementId || ""), annualPayment]).filter(([engagementId]) => engagementId)
+    const annualPaymentById = new Map(
+      scopedAnnualPayments.map((annualPayment) => [String(annualPayment?._id || ""), annualPayment]).filter(([annualPaymentId]) => annualPaymentId)
     );
+    const sortAnnualPaymentDesc = (left, right) => {
+      const rightTime = new Date(right?.annualPaymentPeriod?.startDate || right?.updatedAt || right?.createdAt || 0).getTime() || 0;
+      const leftTime = new Date(left?.annualPaymentPeriod?.startDate || left?.updatedAt || left?.createdAt || 0).getTime() || 0;
+      return rightTime - leftTime;
+    };
+    const annualPaymentsByEngagementId = new Map();
+    scopedAnnualPayments.forEach((annualPayment) => {
+      const engagementId = String(annualPayment?.leadEngagementId || "");
+      if (!engagementId) return;
+      const items = annualPaymentsByEngagementId.get(engagementId) || [];
+      items.push(annualPayment);
+      items.sort(sortAnnualPaymentDesc);
+      annualPaymentsByEngagementId.set(engagementId, items);
+    });
+    const engagementToAnnualPayment = new Map(
+      [...annualPaymentsByEngagementId.entries()].map(([engagementId, items]) => [engagementId, items[0]]).filter(([engagementId]) => engagementId)
+    );
+    const resolvePolicyholderAnnualPremium = (policyholder) => {
+      const linkedAnnualPayments = (policyholder?.annualPaymentRecords || [])
+        .map((record) => annualPaymentById.get(String(record?.annualPaymentId || "")))
+        .filter(Boolean)
+        .sort(sortAnnualPaymentDesc);
+      const fallbackAnnualPayments = annualPaymentsByEngagementId.get(String(policyholder?.leadEngagementId || "")) || [];
+      const annualPayment = linkedAnnualPayments[0] || fallbackAnnualPayments[0] || null;
+      return Number(annualPayment?.totalAnnualPremiumPhp || 0);
+    };
 
     const engagementToFrequency = new Map(
       scopedNeedsAssessments.map((n) => [
@@ -4082,10 +4384,9 @@ app.get("/api/sales/performance", async (req, res) => {
     };
 
     const activeScopedApplications = scopedApplications.filter((application) => activeEngagementIds.has(String(application?.leadEngagementId || "")));
-    const activeScopedAnnualPayments = scopedAnnualPayments.filter((annualPayment) => activeEngagementIds.has(String(annualPayment?.leadEngagementId || "")));
 
-    const totalAnnualPremiumPhp = activeScopedAnnualPayments.reduce(
-      (sum, annualPayment) => sum + Number(annualPayment?.totalAnnualPremiumPhp || 0),
+    const totalAnnualPremiumPhp = activePolicyholders.reduce(
+      (sum, policyholder) => sum + resolvePolicyholderAnnualPremium(policyholder),
       0
     );
     const totalFrequencyPremiumPhp = activeScopedApplications.reduce((sum, application) => {
@@ -4472,7 +4773,14 @@ app.get("/api/policyholders", async (req, res) => {
         },
       },
       { $unwind: "$prospect" },
-      { $match: { "prospect.assignedToUserId": userObjectId } },
+      { $match: {
+        $or: [
+          { reassignedToUserId: userObjectId },
+          { reassignedToUserId: null, assignedToUserId: userObjectId },
+          { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+          { reassignedToUserId: null, assignedToUserId: { $exists: false }, "prospect.assignedToUserId": userObjectId },
+        ],
+      } },
       {
         $lookup: {
           from: "products",
@@ -4482,11 +4790,17 @@ app.get("/api/policyholders", async (req, res) => {
         },
       },
       { $unwind: { path: "$product", preserveNullAndEmptyArrays: true } },
-      { $addFields: { assignedToUserId: "$prospect.assignedToUserId" } },
+      {
+        $addFields: {
+          originalProspectAssignedToUserId: "$prospect.assignedToUserId",
+          effectiveAssignedToUserId: { $ifNull: ["$reassignedToUserId", { $ifNull: ["$assignedToUserId", "$prospect.assignedToUserId"] }] },
+          effectivePolicyholderSortDate: { $ifNull: ["$reassignedAt", "$createdAt"] },
+        },
+      },
       {
         $setWindowFields: {
-          partitionBy: "$assignedToUserId",
-          sortBy: { policyholderCode: 1 },
+          partitionBy: "$effectiveAssignedToUserId",
+          sortBy: { effectivePolicyholderSortDate: 1 },
           output: { policyholderNo: { $documentNumber: {} } },
         },
       },
@@ -4528,7 +4842,14 @@ app.get("/api/policyholders", async (req, res) => {
         },
       },
       { $unwind: "$prospect" },
-      { $match: { "prospect.assignedToUserId": userObjectId } },
+      { $match: {
+        $or: [
+          { reassignedToUserId: userObjectId },
+          { reassignedToUserId: null, assignedToUserId: userObjectId },
+          { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+          { reassignedToUserId: null, assignedToUserId: { $exists: false }, "prospect.assignedToUserId": userObjectId },
+        ],
+      } },
       {
         $lookup: {
           from: "products",
@@ -4741,7 +5062,13 @@ app.get("/api/prospects", async (req, res) => {
      * - filterMatch
      * - searchMatch
      */
-    let finalCountQuery = { assignedToUserId: userObjectId };
+    let finalCountQuery = {
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
+    };
     const countAnd = [];
     if (filterMatch) countAnd.push(filterMatch);
     if (searchMatch) countAnd.push(searchMatch);
@@ -4791,13 +5118,25 @@ app.get("/api/prospects", async (req, res) => {
      * 3) Apply filters/search AFTER numbering so prospectNo stays stable across all views
      */
     const pipeline = [
-      { $match: { assignedToUserId: userObjectId } },
+      { $match: {
+        $or: [
+          { reassignedToUserId: userObjectId },
+          { reassignedToUserId: null, assignedToUserId: userObjectId },
+          { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+        ],
+      } },
 
-      // Stable prospectNo across FULL agent list (not affected by filters/search)
+      {
+        $addFields: {
+          effectiveAssignedToUserId: { $ifNull: ["$reassignedToUserId", "$assignedToUserId"] },
+          effectiveProspectSortDate: { $ifNull: ["$reassignedAt", "$createdAt"] },
+        },
+      },
+      // Stable prospectNo across FULL effective agent list (not affected by filters/search)
       {
         $setWindowFields: {
-          partitionBy: "$assignedToUserId",
-          sortBy: { prospectCode: 1 },
+          partitionBy: "$effectiveAssignedToUserId",
+          sortBy: { effectiveProspectSortDate: 1 },
           output: { prospectNo: { $documentNumber: {} } },
         },
       },
@@ -5175,8 +5514,14 @@ app.get("/api/prospects/:prospectId/details", async (req, res) => {
      * 7) Remove internal fields
      */
     const agg = await Prospect.aggregate([
-      // Step 1: authorization scope (only this agent's prospects)
-      { $match: { assignedToUserId: userObjectId } },
+      // Step 1: authorization scope (owned by this agent or reassigned to this agent)
+      { $match: {
+        $or: [
+          { reassignedToUserId: userObjectId },
+          { reassignedToUserId: null, assignedToUserId: userObjectId },
+          { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+        ],
+      } },
 
       // Step 2: compute stable prospectNo across FULL agent list
       {
@@ -5188,6 +5533,32 @@ app.get("/api/prospects/:prospectId/details", async (req, res) => {
       },
       // Step 3: filter to the requested prospect
       { $match: { _id: prospectObjectId } },
+      {
+        $lookup: {
+          from: "users",
+          localField: "assignedToUserId",
+          foreignField: "_id",
+          as: "originalAssignedUser",
+        },
+      },
+      { $unwind: { path: "$originalAssignedUser", preserveNullAndEmptyArrays: true } },
+      {
+        $addFields: {
+          originalAgentName: {
+            $trim: {
+              input: {
+                $concat: [
+                  { $ifNull: ["$originalAssignedUser.firstName", ""] },
+                  " ",
+                  { $ifNull: ["$originalAssignedUser.middleName", ""] },
+                  " ",
+                  { $ifNull: ["$originalAssignedUser.lastName", ""] },
+                ],
+              },
+            },
+          },
+        },
+      },
 
       /**
        * Step 4: Lookup Leads under this prospect
@@ -5325,7 +5696,13 @@ app.get("/api/prospects/next-no", async (req, res) => {
     const userObjectId = new mongoose.Types.ObjectId(userId);
 
     // Validate required scope parameter
-    const count = await Prospect.countDocuments({ assignedToUserId: userObjectId });
+    const count = await Prospect.countDocuments({
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
+    });
 
     // Next number is 1-based
     const nextProspectNo = count + 1;
@@ -5373,16 +5750,54 @@ app.get("/api/prospects/:prospectId/full", async (req, res) => {
      * 4) Remove internal __v
      */
     const agg = await Prospect.aggregate([
-      { $match: { assignedToUserId: userObjectId } },
+      { $match: {
+        $or: [
+          { reassignedToUserId: userObjectId },
+          { reassignedToUserId: null, assignedToUserId: userObjectId },
+          { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+        ]
+      } },
+      {
+        $addFields: {
+          effectiveAssignedToUserId: { $ifNull: ["$reassignedToUserId", "$assignedToUserId"] },
+          effectiveProspectSortDate: { $ifNull: ["$reassignedAt", "$createdAt"] },
+        },
+      },
       {
         $setWindowFields: {
-          partitionBy: "$assignedToUserId",
-          sortBy: { prospectCode: 1 },
+          partitionBy: "$effectiveAssignedToUserId",
+          sortBy: { effectiveProspectSortDate: 1 },
           output: { prospectNo: { $documentNumber: {} } },
         },
       },
       { $match: { _id: prospectObjectId } },
-      { $project: { __v: 0 } },
+      {
+        $lookup: {
+          from: "users",
+          localField: "assignedToUserId",
+          foreignField: "_id",
+          as: "originalAssignedUser",
+        },
+      },
+      { $unwind: { path: "$originalAssignedUser", preserveNullAndEmptyArrays: true } },
+      {
+        $addFields: {
+          originalAgentName: {
+            $trim: {
+              input: {
+                $concat: [
+                  { $ifNull: ["$originalAssignedUser.firstName", ""] },
+                  " ",
+                  { $ifNull: ["$originalAssignedUser.middleName", ""] },
+                  " ",
+                  { $ifNull: ["$originalAssignedUser.lastName", ""] },
+                ],
+              },
+            },
+          },
+        },
+      },
+      { $project: { __v: 0, originalAssignedUser: 0 } },
     ]);
 
     const prospect = agg[0];
@@ -5459,7 +5874,11 @@ app.put("/api/prospects/:prospectId", async (req, res) => {
        */
       const existing = await Prospect.findOne({
         _id: prospectId,
-        assignedToUserId: userObjectId,
+        $or: [
+          { reassignedToUserId: userObjectId },
+          { reassignedToUserId: null, assignedToUserId: userObjectId },
+          { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+        ],
       }).session(session);
 
       if (!existing) {
@@ -6066,7 +6485,11 @@ app.get("/api/leads/init", async (req, res) => {
      */
     const prospect = await Prospect.findOne({
       _id: prospectObjectId,
-      assignedToUserId: userObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
     })
       .select("firstName middleName lastName source prospectCode status")
       .lean();
@@ -6121,7 +6544,13 @@ app.get("/api/leads/init", async (req, res) => {
      * - Lead number is computed as: (count of leads for all agent prospects) + 1
      * - Used for UI display; NOT used as database identifier.
      */
-    const agentProspects = await Prospect.find({ assignedToUserId: userObjectId })
+    const agentProspects = await Prospect.find({
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
+    })
       .select("_id")
       .lean();
 
@@ -6208,7 +6637,11 @@ app.post("/api/leads", async (req, res) => {
      */
     const prospect = await Prospect.findOne({
       _id: prospectObjectId,
-      assignedToUserId: userObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
     })
       .select("source contactInfoVersion firstName middleName lastName status")
       .lean();
@@ -6492,9 +6925,13 @@ app.get("/api/prospects/:prospectId/leads/:leadId/details", async (req, res) => 
     // 1) Ensure prospect belongs to agent (authorization)
     const prospect = await Prospect.findOne({
       _id: prospectObjectId,
-      assignedToUserId: userObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
     })
-      .select("firstName middleName lastName source status")
+      .select("firstName middleName lastName source status assignedToUserId reassignedToUserId")
       .lean();
 
     if (!prospect) {
@@ -6526,7 +6963,11 @@ app.get("/api/prospects/:prospectId/leads/:leadId/details", async (req, res) => 
     const policy = leadEngagement
       ? await Policyholder.findOne({
           leadEngagementId: leadEngagement._id,
-          assignedToUserId: userObjectId,
+          $or: [
+            { reassignedToUserId: userObjectId },
+            { reassignedToUserId: null, assignedToUserId: userObjectId },
+            { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+          ],
         })
           .select("policyholderCode status createdAt")
           .lean()
@@ -6554,7 +6995,13 @@ app.get("/api/prospects/:prospectId/leads/:leadId/details", async (req, res) => 
      *     OR createdAt == this.createdAt AND _id < this leadId
      * - leadNo = beforeCount + 1
      */
-    const agentProspects = await Prospect.find({ assignedToUserId: userObjectId })
+    const agentProspects = await Prospect.find({
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
+    })
       .select("_id")
       .lean();
 
@@ -6642,7 +7089,11 @@ app.get("/api/policyholders/:policyholderId/details", async (req, res) => {
 
     const policyholderDoc = await Policyholder.findOne({
       _id: policyholderObjectId,
-      assignedToUserId: userObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
     })
       .select("assignedToUserId policyholderCode productId policyNumber leadEngagementId lastPaidDate nextPaymentDate status annualPaymentRecords cancellationDetails createdAt updatedAt");
 
@@ -6664,7 +7115,11 @@ app.get("/api/policyholders/:policyholderId/details", async (req, res) => {
 
     const prospect = await Prospect.findOne({
       _id: lead.prospectId,
-      assignedToUserId: userObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
     })
       .select("firstName middleName lastName age")
       .lean();
@@ -6754,7 +7209,11 @@ app.post("/api/policyholders/:policyholderId/cancellation", async (req, res) => 
 
     const policyholder = await Policyholder.findOne({
       _id: policyholderObjectId,
-      assignedToUserId: userObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
     }).select("assignedToUserId policyholderCode policyNumber productId leadEngagementId status lastPaidDate nextPaymentDate cancellationDetails");
 
     if (!policyholder) return res.status(404).json({ message: "Policyholder not found." });
@@ -6909,7 +7368,11 @@ app.get("/api/policyholders/:policyholderId/annual-payments/:annualPaymentId", a
 
     const policyholder = await Policyholder.findOne({
       _id: policyholderObjectId,
-      assignedToUserId: userObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
     })
       .select("assignedToUserId policyholderCode productId policyNumber leadEngagementId lastPaidDate nextPaymentDate status annualPaymentRecords createdAt updatedAt")
       .lean();
@@ -6943,7 +7406,11 @@ app.get("/api/policyholders/:policyholderId/annual-payments/:annualPaymentId", a
 
     const prospect = await Prospect.findOne({
       _id: lead.prospectId,
-      assignedToUserId: userObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
     })
       .select("firstName middleName lastName age")
       .lean();
@@ -7092,7 +7559,11 @@ app.get("/api/policyholders/:policyholderId/annual-payments/:annualPaymentId/pay
 
     const policyholder = await Policyholder.findOne({
       _id: policyholderObjectId,
-      assignedToUserId: userObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
     })
       .select("assignedToUserId policyholderCode productId policyNumber leadEngagementId status nextPaymentDate annualPaymentRecords")
       .lean();
@@ -7136,7 +7607,11 @@ app.get("/api/policyholders/:policyholderId/annual-payments/:annualPaymentId/pay
 
     const prospect = await Prospect.findOne({
       _id: lead.prospectId,
-      assignedToUserId: userObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
     })
       .select("firstName middleName lastName age")
       .lean();
@@ -7174,7 +7649,14 @@ app.get("/api/policyholders/:policyholderId/annual-payments/:annualPaymentId/pay
     if ((isWaitingForFinalEorProcessing && (["At Risk", "Lapsed"].includes(String(policyholder.status || "")) || policyholder.nextPaymentDate))
       || (!policyholder.nextPaymentDate && ["At Risk", "Lapsed"].includes(String(policyholder.status || "")))) {
       await Policyholder.updateOne(
-        { _id: policyholder._id, assignedToUserId: userObjectId },
+        {
+          _id: policyholder._id,
+          $or: [
+            { reassignedToUserId: userObjectId },
+            { reassignedToUserId: null, assignedToUserId: userObjectId },
+            { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+          ],
+        },
         { $set: { status: "Active", nextPaymentDate: null } }
       );
       policyholder.status = "Active";
@@ -7305,7 +7787,11 @@ app.post("/api/policyholders/:policyholderId/annual-payments/:annualPaymentId/pa
 
     const policyholder = await Policyholder.findOne({
       _id: policyholderObjectId,
-      assignedToUserId: userObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
     }).select("assignedToUserId policyholderCode policyNumber productId leadEngagementId lastPaidDate nextPaymentDate annualPaymentRecords status");
 
     if (!policyholder) return res.status(404).json({ message: "Policyholder not found." });
@@ -7609,7 +8095,11 @@ app.post("/api/policyholders/:policyholderId/annual-payments/:annualPaymentId/pa
 
     const policyholder = await Policyholder.findOne({
       _id: policyholderObjectId,
-      assignedToUserId: userObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
     }).select("assignedToUserId policyholderCode policyNumber productId leadEngagementId nextPaymentDate annualPaymentRecords status").lean();
 
     if (!policyholder) return res.status(404).json({ message: "Policyholder not found." });
@@ -7658,7 +8148,14 @@ app.post("/api/policyholders/:policyholderId/annual-payments/:annualPaymentId/pa
       && processedPaymentCount < expectedProcessedCount;
     if (isWaitingForFinalEorProcessing) {
       await Policyholder.updateOne(
-        { _id: policyholder._id, assignedToUserId: userObjectId },
+        {
+          _id: policyholder._id,
+          $or: [
+            { reassignedToUserId: userObjectId },
+            { reassignedToUserId: null, assignedToUserId: userObjectId },
+            { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+          ],
+        },
         { $set: { status: "Active", nextPaymentDate: null } }
       );
       policyholder.status = "Active";
@@ -7774,7 +8271,11 @@ app.put("/api/policyholders/:policyholderId/annual-payments/:annualPaymentId/pay
 
     const policyholder = await Policyholder.findOne({
       _id: policyholderObjectId,
-      assignedToUserId: userObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
     }).select("assignedToUserId leadEngagementId annualPaymentRecords lastPaidDate nextPaymentDate status");
 
     if (!policyholder) return res.status(404).json({ message: "Policyholder not found." });
@@ -7906,7 +8407,11 @@ app.get("/api/policyholders/:policyholderId/annual-payments/:annualPaymentId/pay
 
     const policyholder = await Policyholder.findOne({
       _id: policyholderObjectId,
-      assignedToUserId: userObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
     }).select("leadEngagementId annualPaymentRecords").lean();
     if (!policyholder) return res.status(404).json({ message: "Policyholder not found." });
 
@@ -7968,7 +8473,11 @@ app.post("/api/policyholders/:policyholderId/annual-payments/:annualPaymentId/pa
 
     const policyholder = await Policyholder.findOne({
       _id: policyholderObjectId,
-      assignedToUserId: userObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
     }).select("assignedToUserId policyholderCode policyNumber productId leadEngagementId lastPaidDate nextPaymentDate annualPaymentRecords status");
 
     if (!policyholder) return res.status(404).json({ message: "Policyholder not found." });
@@ -8082,7 +8591,11 @@ app.get("/api/prospects/:prospectId/leads/:leadId/policyholders/:policyholderId/
 
     const prospect = await Prospect.findOne({
       _id: prospectObjectId,
-      assignedToUserId: userObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
     })
       .select("firstName middleName lastName age")
       .lean();
@@ -8107,7 +8620,11 @@ app.get("/api/prospects/:prospectId/leads/:leadId/policyholders/:policyholderId/
     const policyholderDoc = await Policyholder.findOne({
       _id: policyholderObjectId,
       leadEngagementId: leadEngagement._id,
-      assignedToUserId: userObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
     })
       .select("assignedToUserId policyholderCode productId policyNumber leadEngagementId lastPaidDate nextPaymentDate status annualPaymentRecords createdAt updatedAt");
 
@@ -8231,7 +8748,11 @@ app.put("/api/prospects/:prospectId/leads/:leadId", async (req, res) => {
     // 1) Authorization: ensure prospect belongs to agent
     const prospect = await Prospect.findOne({
       _id: prospectObjectId,
-      assignedToUserId: userObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
     })
       .select("_id source status")
       .lean();
@@ -8615,10 +9136,14 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
     // 1) Authorization: prospect must belong to agent
     const prospect = await Prospect.findOne({
       _id: prospectId,
-      assignedToUserId: userObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
     })
       // Include fields the engagement UI needs (contact info + versioning + tags)
-      .select("firstName middleName lastName marketType source status phoneNumber contactInfoVersion email birthday")
+      .select("firstName middleName lastName marketType source status phoneNumber contactInfoVersion email birthday assignedToUserId reassignedToUserId")
       .lean();
 
     if (!prospect) {
@@ -9483,7 +10008,14 @@ app.post("/api/prospects/:prospectId/leads/:leadId/contact-attempts", async (req
       // 1) Authorization: prospect must belong to agent
       // Only fetch contactInfoVersion because that is what we need for attempt versioning.
       const prospect = await Prospect.findOne(
-        { _id: prospectObjectId, assignedToUserId: userObjectId },
+        {
+      _id: prospectObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
+    },
         { contactInfoVersion: 1, firstName: 1, middleName: 1, lastName: 1 }
       )
         .session(session)
@@ -9739,7 +10271,11 @@ app.patch("/api/prospects/:prospectId/leads/:leadId/contact-attempts/:attemptId"
     await session.withTransaction(async () => {
       const prospect = await Prospect.findOne({
         _id: prospectObjectId,
-        assignedToUserId: userObjectId,
+        $or: [
+          { reassignedToUserId: userObjectId },
+          { reassignedToUserId: null, assignedToUserId: userObjectId },
+          { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+        ],
       })
         .session(session);
       if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
@@ -10019,7 +10555,11 @@ app.post("/api/prospects/:prospectId/leads/:leadId/validate-contact", async (req
     await session.withTransaction(async () => {
       const prospect = await Prospect.findOne({
         _id: prospectObjectId,
-        assignedToUserId: userObjectId,
+        $or: [
+          { reassignedToUserId: userObjectId },
+          { reassignedToUserId: null, assignedToUserId: userObjectId },
+          { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+        ],
       }).session(session);
       if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
 
@@ -10206,7 +10746,14 @@ app.post("/api/prospects/:prospectId/leads/:leadId/assess-interest", async (req,
     await session.withTransaction(async () => {
       // Scope the prospect lookup to the requesting agent/user so this route
       // cannot mutate a lead that belongs to someone else.
-      const prospect = await Prospect.findOne({ _id: prospectId, assignedToUserId: userObjectId }).session(session);
+      const prospect = await Prospect.findOne({
+        _id: prospectId,
+        $or: [
+          { reassignedToUserId: userObjectId },
+          { reassignedToUserId: null, assignedToUserId: userObjectId },
+          { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+        ],
+      }).session(session);
       if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
 
       const lead = await Lead.findOne({ _id: leadId, prospectId }).session(session);
@@ -10527,7 +11074,11 @@ app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req
     await session.withTransaction(async () => {
       const prospect = await Prospect.findOne({
         _id: prospectObjectId,
-        assignedToUserId: userObjectId,
+        $or: [
+          { reassignedToUserId: userObjectId },
+          { reassignedToUserId: null, assignedToUserId: userObjectId },
+          { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+        ],
       }).session(session);
       if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
 
@@ -10943,7 +11494,14 @@ app.get("/api/prospects/:prospectId/leads/:leadId/needs-assessment", async (req,
     const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
     const leadObjectId = new mongoose.Types.ObjectId(leadId);
 
-    const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId })
+    const prospect = await Prospect.findOne({
+      _id: prospectObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
+    })
       .select("firstName middleName lastName sex civilStatus birthday age occupation occupationCategory address")
       .lean();
     if (!prospect) return res.status(404).json({ message: "Prospect not found." });
@@ -11194,7 +11752,14 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/attendance",
 
     let presentationTaskIdForNotif = null;
     await session.withTransaction(async () => {
-      const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).session(session);
+      const prospect = await Prospect.findOne({
+      _id: prospectObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
+    }).session(session);
       if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
 
       const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).session(session);
@@ -11290,7 +11855,14 @@ app.put("/api/prospects/:prospectId/leads/:leadId/needs-assessment", async (req,
     let needsAnalysisNextActivityKey = "Perform Needs Analysis";
 
     await session.withTransaction(async () => {
-      const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).session(session);
+      const prospect = await Prospect.findOne({
+      _id: prospectObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
+    }).session(session);
       if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
 
       const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).session(session);
@@ -11770,7 +12342,14 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/schedule-pro
     const leadObjectId = new mongoose.Types.ObjectId(leadId);
 
     await session.withTransaction(async () => {
-      const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).session(session);
+      const prospect = await Prospect.findOne({
+      _id: prospectObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
+    }).session(session);
       if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
 
       const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).session(session);
@@ -12342,7 +12921,14 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/follow-up-de
     let followUpNeedsAssessmentDecidedAt = null;
 
     await session.withTransaction(async () => {
-      const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).session(session);
+      const prospect = await Prospect.findOne({
+      _id: prospectObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
+    }).session(session);
       if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
       const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).session(session);
       if (!lead) throw Object.assign(new Error("Lead not found."), { status: 404 });
@@ -12416,7 +13002,14 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/generate", async (re
 
     let applicationTaskIdForNotif = null;
     await session.withTransaction(async () => {
-      const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).session(session);
+      const prospect = await Prospect.findOne({
+      _id: prospectObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
+    }).session(session);
       if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
 
       const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).session(session);
@@ -12551,7 +13144,14 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/attendance", async (
     let responseCurrentActivityKey = normalizedAttended ? "Present Proposal" : "Record Prospect Attendance";
 
     await session.withTransaction(async () => {
-      const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).session(session);
+      const prospect = await Prospect.findOne({
+      _id: prospectObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
+    }).session(session);
       if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
 
       const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).session(session);
@@ -12663,7 +13263,14 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/attendance", asyn
     let responseCurrentActivityKey = "Record Premium Payment Transfer";
 
     await session.withTransaction(async () => {
-      const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).session(session);
+      const prospect = await Prospect.findOne({
+      _id: prospectObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
+    }).session(session);
       if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
 
       const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).session(session);
@@ -12807,7 +13414,14 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/premium-payment-t
     const leadObjectId = new mongoose.Types.ObjectId(leadId);
 
     await session.withTransaction(async () => {
-      const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).session(session);
+      const prospect = await Prospect.findOne({
+      _id: prospectObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
+    }).session(session);
       if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
 
       const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).session(session);
@@ -12942,7 +13556,14 @@ app.get("/api/prospects/:prospectId/leads/:leadId/application/submission/validat
     const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
     const leadObjectId = new mongoose.Types.ObjectId(leadId);
 
-    const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).select("_id").lean();
+    const prospect = await Prospect.findOne({
+      _id: prospectObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
+    }).select("_id").lean();
     if (!prospect) return res.status(404).json({ message: "Prospect not found." });
 
     const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).select("_id").lean();
@@ -13014,7 +13635,14 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/submission", asyn
     };
 
     await session.withTransaction(async () => {
-      const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).session(session);
+      const prospect = await Prospect.findOne({
+      _id: prospectObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
+    }).session(session);
       if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
 
       const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).session(session);
@@ -13253,7 +13881,14 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/status", asyn
     const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
     const leadObjectId = new mongoose.Types.ObjectId(leadId);
 
-    const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).select("_id").lean();
+    const prospect = await Prospect.findOne({
+      _id: prospectObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
+    }).select("_id").lean();
     if (!prospect) return res.status(404).json({ message: "Prospect not found." });
 
     const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).select("_id status");
@@ -13494,7 +14129,14 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/initial-premi
     const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
     const leadObjectId = new mongoose.Types.ObjectId(leadId);
 
-    const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).select("_id").lean();
+    const prospect = await Prospect.findOne({
+      _id: prospectObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
+    }).select("_id").lean();
     if (!prospect) return res.status(404).json({ message: "Prospect not found." });
 
     const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).select("_id").lean();
@@ -13663,7 +14305,14 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/policy-summar
     const prospectObjectId = new mongoose.Types.ObjectId(prospectId);
     const leadObjectId = new mongoose.Types.ObjectId(leadId);
 
-    const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).select("_id").lean();
+    const prospect = await Prospect.findOne({
+      _id: prospectObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
+    }).select("_id").lean();
     if (!prospect) return res.status(404).json({ message: "Prospect not found." });
 
     const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).select("_id").lean();
@@ -13750,7 +14399,14 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-dura
     let responsePayload = null;
 
     await session.withTransaction(async () => {
-      const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId })
+      const prospect = await Prospect.findOne({
+      _id: prospectObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
+    })
         .select("_id firstName middleName lastName birthday")
         .session(session)
         .lean();
@@ -14172,7 +14828,8 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-dura
         leadClosed: policyStatus === "Issued",
         policyholder: policyholderForResponse
           ? {
-              _id: policyholderForResponse._id,
+              _id: String(policyholderForResponse._id),
+              policyholderId: String(policyholderForResponse._id),
               policyholderCode: policyholderForResponse.policyholderCode || "",
               name: prospectFullName,
               productName: String(product?.productName || ""),
@@ -14223,7 +14880,14 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/schedule-application
     const leadObjectId = new mongoose.Types.ObjectId(leadId);
 
     await session.withTransaction(async () => {
-      const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).session(session);
+      const prospect = await Prospect.findOne({
+      _id: prospectObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
+    }).session(session);
       if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
 
       const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).session(session);
@@ -14558,7 +15222,14 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/presentation", async
     let proposalPresentationResponse = { currentActivityKey: "Present Proposal", presentedAt: null };
 
     await session.withTransaction(async () => {
-      const prospect = await Prospect.findOne({ _id: prospectObjectId, assignedToUserId: userObjectId }).session(session);
+      const prospect = await Prospect.findOne({
+      _id: prospectObjectId,
+      $or: [
+        { reassignedToUserId: userObjectId },
+        { reassignedToUserId: null, assignedToUserId: userObjectId },
+        { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
+      ],
+    }).session(session);
       if (!prospect) throw Object.assign(new Error("Prospect not found."), { status: 404 });
 
       const lead = await Lead.findOne({ _id: leadObjectId, prospectId: prospectObjectId }).session(session);
