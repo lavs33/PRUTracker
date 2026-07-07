@@ -281,6 +281,19 @@ function normalizeAgentType(value) {
   return String(value || "").trim().toLowerCase().replace(/[\s_-]+/g, " ");
 }
 
+function formatReassignedFlag(value) {
+  return value === true ? "Yes" : "No";
+}
+
+function getLongLeaveReassignmentProgress(record = {}) {
+  const affectedClients = [
+    ...(Array.isArray(record.affectedProspects) ? record.affectedProspects : []),
+    ...(Array.isArray(record.affectedPolicyholders) ? record.affectedPolicyholders : []),
+  ];
+  const reassignedCount = affectedClients.filter((client) => client?.reassigned === true).length;
+  return `${reassignedCount}/${affectedClients.length}`;
+}
+
 function toDateInputValue(value) {
   const dt = new Date(value);
   return Number.isNaN(dt.getTime()) ? "" : dt.toISOString().slice(0, 10);
@@ -423,27 +436,19 @@ function createPrintableReport({
   const tableFontSize = isLandscape ? "8px" : "10px";
   const tableCellPadding = isLandscape ? "4px 3px" : "6px 5px";
 
-  const chunkRows = (rows, size) => {
-    const chunks = [];
-    for (let index = 0; index < rows.length; index += size)
-      chunks.push(rows.slice(index, index + size));
-    return chunks.length ? chunks : [[]];
-  };
-
-  const tablePages = [];
-  tableSections.forEach((section) => {
-    const rowChunks = chunkRows(section.rows || [], section.pageSize || 18);
-    rowChunks.forEach((rows, chunkIndex) => {
-      tablePages.push({
-        title: chunkIndex === 0 ? section.title : `${section.title} (cont.)`,
-        columns: section.columns,
-        rows,
-        emptyMessage: section.emptyMessage || "No rows available.",
-        compactWithPrevious: Boolean(section.compactWithPrevious && chunkIndex === 0),
-        compactMaxRows: section.compactMaxRows || 18,
-        estimatedRows: Math.max(rows.length, 1),
-      });
-    });
+  const populatedTableSections = tableSections.filter((section) => (section.rows || []).length > 0);
+  const reportTableSections = populatedTableSections.length ? populatedTableSections : tableSections.slice(0, 1);
+  const tablePages = reportTableSections.map((section) => {
+    const rows = section.rows || [];
+    return {
+      title: section.title,
+      columns: section.columns,
+      rows,
+      emptyMessage: section.emptyMessage || "No rows available.",
+      compactWithPrevious: Boolean(section.compactWithPrevious),
+      compactMaxRows: section.compactMaxRows || 18,
+      estimatedRows: Math.max(rows.length, 1),
+    };
   });
 
   const tablePageGroups = [];
@@ -480,8 +485,12 @@ function createPrintableReport({
       <h3>${escapeHtml(page.title)}</h3>
       <table>
         <thead>
+          <tr class="pdf-table-top-spacer"><th colspan="${page.columns.length}"></th></tr>
           <tr>${page.columns.map((column) => `<th>${escapeHtml(column.label)}</th>`).join("")}</tr>
         </thead>
+        <tfoot>
+          <tr class="pdf-table-bottom-spacer"><td colspan="${page.columns.length}"></td></tr>
+        </tfoot>
         <tbody>
           ${
             page.rows.length
@@ -603,8 +612,8 @@ function createPrintableReport({
           @page { size: ${pageSize}; margin: 0; }
           * { box-sizing: border-box; }
           body { margin: 0; font-family: Verdana, Geneva, sans-serif; color: #0f172a; }
-          .pdf-page { height: ${pageHeight}; margin: 10mm 8mm 12mm; padding: 4mm 2mm 16mm; position: relative; page-break-after: always; overflow: hidden; }
-          .pdf-page:last-child { page-break-after: auto; }
+          .pdf-page { min-height: ${pageHeight}; margin: 0; padding: 12mm 8mm 18mm; position: relative; page-break-after: always; overflow: visible; }
+          .pdf-page:last-of-type { page-break-after: auto; }
           .pdf-top-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.9fr); gap: 18px; align-items: start; }
           .pdf-title-block h1 { margin: 0; color: #a32020; font-size: 24px; line-height: 1.12; }
           .pdf-period { margin-top: 10px; color: #1e3a5f; font-size: 12px; font-weight: 700; }
@@ -623,6 +632,7 @@ function createPrintableReport({
           .pdf-stat-card.green { border-color: #bfe7ca; }
           .pdf-stat-card.gold { border-color: #f3d48a; }
           .pdf-section-block { margin-top: 14px; }
+          .pdf-section-block--table { break-inside: auto; page-break-inside: auto; }
           .pdf-section-block h3 { margin: 0 0 10px; padding-left: 8px; border-left: 4px solid #da291c; color: #c22820; font-size: 13px; }
           .pdf-analytics-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
           .pdf-analytics-card { border: 1px solid #d6dee8; border-radius: 10px; padding: 10px 12px; }
@@ -630,11 +640,16 @@ function createPrintableReport({
           .pdf-analytics-rows { display: grid; gap: 5px; }
           .pdf-analytics-row { display: grid; grid-template-columns: minmax(80px, 0.75fr) minmax(0, 1.25fr); gap: 8px; align-items: start; font-size: 10px; }
           .pdf-analytics-row strong { font-size: 10px; text-align: right; overflow-wrap: anywhere; }
-          table { width: 100%; border-collapse: collapse; font-size: ${tableFontSize}; table-layout: fixed; }
+          table { width: 100%; border-collapse: collapse; font-size: ${tableFontSize}; table-layout: fixed; break-inside: auto; page-break-inside: auto; }
+          thead { display: table-header-group; }
+          tfoot { display: table-footer-group; }
+          tr { break-inside: avoid; page-break-inside: avoid; }
           th, td { border: 1px solid #d6dee8; padding: ${tableCellPadding}; text-align: left; vertical-align: top; overflow-wrap: anywhere; word-break: break-word; }
           th { background: #f8fafc; color: #0f172a; font-size: 9px; }
+          .pdf-table-top-spacer th { height: 7mm; padding: 0; border: 0; background: transparent; }
+          .pdf-table-bottom-spacer td { height: 10mm; padding: 0; border: 0; background: transparent; }
           .empty-row { text-align: center; color: #6b7280; }
-          .pdf-footer { position: absolute; left: 2mm; right: 2mm; bottom: 4mm; padding-top: 6px; border-top: 1px solid #d6dee8; display: flex; justify-content: space-between; font-size: 9px; }
+          .pdf-footer { position: absolute; left: 8mm; right: 8mm; bottom: 4mm; padding-top: 6px; border-top: 1px solid #d6dee8; display: flex; justify-content: space-between; font-size: 9px; break-inside: avoid; page-break-inside: avoid; }
         </style>
       </head>
       <body>
@@ -752,6 +767,8 @@ function ManagerPortal({ roleType }) {
   const [selectedUmLongLeaveRecordId, setSelectedUmLongLeaveRecordId] = useState("");
   const [selectedUmAffectedClient, setSelectedUmAffectedClient] = useState(null);
   const [selectedReassignmentAgentId, setSelectedReassignmentAgentId] = useState("");
+  const [reassignmentSaving, setReassignmentSaving] = useState(false);
+  const [reassignmentSuccess, setReassignmentSuccess] = useState(null);
   // eslint-disable-next-line no-unused-vars
   const [taskSearch, setTaskSearch] = useState("");
   // eslint-disable-next-line no-unused-vars
@@ -1288,10 +1305,10 @@ function ManagerPortal({ roleType }) {
       .filter((agent) => String(agent?.unit || "") === String(selectedUmLongLeaveRecord?.unitName || selectedUnit?.name || ""))
       .filter((agent) => String(agent?.id || "") !== String(selectedUmLongLeaveRecord?.agentId || ""))
       .map((agent) => {
-        const completedApproaches = Number(agent?.completedApproaches || 0);
-        const openApproachTasks = Number(agent?.openApproachTasksDueThisWeek ?? agent?.openApproachTasks ?? 0);
-        const closingRatio = Number(agent?.conversionRate || 0);
-        const activePolicies = Number(agent?.activePolicies || 0);
+        const completedApproaches = Number(agent?.reassignmentWeeklyDoneApproaches ?? agent?.completedApproaches ?? 0);
+        const openApproachTasks = Number(agent?.reassignmentOpenApproachTasksDueThisWeek ?? agent?.openApproachTasksDueThisWeek ?? agent?.openApproachTasks ?? 0);
+        const closingRatio = Number(agent?.reassignmentMonthlyClosingRatio ?? agent?.conversionRate ?? 0);
+        const activePolicies = Number(agent?.reassignmentMonthlyActivePolicies ?? agent?.activePolicies ?? 0);
         return {
           ...agent,
           reassignmentMetrics: {
@@ -1318,10 +1335,101 @@ function ManagerPortal({ roleType }) {
 
 
 
+  const selectedReassignmentAgent = useMemo(() => {
+    const selectedId = selectedReassignmentAgentId || selectedUmAffectedClient?.reassignedToAgentId || "";
+    return (portalData?.agents || []).find((agent) => String(agent?.id || "") === String(selectedId)) || null;
+  }, [portalData?.agents, selectedReassignmentAgentId, selectedUmAffectedClient?.reassignedToAgentId]);
+
+  const displayedReassignmentAgentRows = useMemo(() => {
+    if (selectedUmAffectedClient?.reassigned === true && selectedReassignmentAgent) {
+      const selectedRow = reassignmentAgentRows.find((agent) => String(agent.id || "") === String(selectedReassignmentAgent.id || ""));
+      return [selectedRow || {
+        ...selectedReassignmentAgent,
+        reassignmentMetrics: {
+          completedApproaches: 0,
+          openApproachTasks: 0,
+          projectedApproaches: 0,
+          weeklyDoneApproachesTarget: REASSIGNMENT_KPI_TARGETS.weeklyDoneApproaches,
+          closingRatio: 0,
+          monthlyClosingRatioTarget: REASSIGNMENT_KPI_TARGETS.monthlyClosingRatio,
+          activePolicies: 0,
+          monthlyActivePoliciesTarget: REASSIGNMENT_KPI_TARGETS.monthlyActivePolicies,
+        },
+      }];
+    }
+    return reassignmentAgentRows;
+  }, [reassignmentAgentRows, selectedReassignmentAgent, selectedUmAffectedClient?.reassigned]);
+
   const openAffectedClientDetail = (client) => {
     setSelectedUmAffectedClient(client);
-    setSelectedReassignmentAgentId("");
+    setSelectedReassignmentAgentId(client?.reassignedToAgentId || "");
+    setReassignmentSuccess(null);
     window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+  };
+
+  const applyLongLeaveRecordUpdate = (updatedRecord) => {
+    if (!updatedRecord?.id) return;
+    setPortalData((current) => {
+      if (!current?.agents) return current;
+      return {
+        ...current,
+        agents: current.agents.map((agent) => {
+          const records = Array.isArray(agent?.leaveRecords) ? agent.leaveRecords : [];
+          const hasRecord = records.some((record) => String(record?.id || "") === String(updatedRecord.id));
+          if (!hasRecord) return agent;
+          return {
+            ...agent,
+            leaveRecords: records.map((record) => String(record?.id || "") === String(updatedRecord.id) ? updatedRecord : record),
+          };
+        }),
+      };
+    });
+  };
+
+  const confirmAffectedClientReassignment = async () => {
+    if (!selectedUmLongLeaveRecord?.id || !selectedUmAffectedClient || !selectedReassignmentAgentId) return;
+    const isPolicyholderReassignment = selectedUmAffectedClient?.kind === "policyholder";
+    const endpoint = isPolicyholderReassignment ? "reassign-policyholder" : "reassign-prospect";
+    setReassignmentSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/manager/long-leave/${selectedUmLongLeaveRecord.id}/${endpoint}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(isPolicyholderReassignment
+          ? {
+              policyholderId: selectedUmAffectedClient.id,
+              reassignmentAgentId: selectedReassignmentAgentId,
+            }
+          : {
+              prospectId: selectedUmAffectedClient.prospectId,
+              leadId: selectedUmAffectedClient.leadId || selectedUmAffectedClient.id,
+              reassignmentAgentId: selectedReassignmentAgentId,
+            }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.message || "Failed to confirm reassignment.");
+      const updatedRecord = normalizeLongLeaveRecord(data?.longLeave);
+      applyLongLeaveRecordUpdate(updatedRecord);
+      const reassignment = data?.reassignment || {};
+      setSelectedUmAffectedClient((current) => current ? {
+        ...current,
+        reassigned: true,
+        reassignedAt: reassignment.reassignedAt,
+        reassignedToUserId: reassignment.reassignedToUserId,
+        reassignedToAgentId: reassignment.reassignedToAgentId || selectedReassignmentAgentId,
+        reassignedToAgentName: reassignment.reassignedToAgentName || selectedReassignmentAgent?.name || "—",
+      } : current);
+      setSelectedReassignmentAgentId(reassignment.reassignedToAgentId || selectedReassignmentAgentId);
+      setReassignmentSuccess({
+        message: data?.message || (isPolicyholderReassignment
+          ? `${selectedUmAffectedClient.name || "Prospect"} with policyholder code ${selectedUmAffectedClient.code || "—"} has been reassigned to ${reassignment.reassignedToAgentName || selectedReassignmentAgent?.name || "—"} from ${reassignment.originalAgentName || selectedUmLongLeaveRecord.agentName || "—"}.`
+          : `${selectedUmAffectedClient.name || "Prospect"} with lead code ${selectedUmAffectedClient.leadCode || "—"} has been reassigned to ${reassignment.reassignedToAgentName || selectedReassignmentAgent?.name || "—"} from ${reassignment.originalAgentName || selectedUmLongLeaveRecord.agentName || "—"}.`),
+      });
+    } catch (err) {
+      setOrphanLongLeaveFieldErrors((current) => ({ ...current, form: err?.message || "Failed to confirm reassignment." }));
+    } finally {
+      setReassignmentSaving(false);
+    }
   };
 
   const filteredAgents = useMemo(() => {
@@ -1660,7 +1768,11 @@ function ManagerPortal({ roleType }) {
   const todayDateInputValue = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const minimumOrphanLeaveStartDate = useMemo(() => {
     const records = Array.isArray(selectedAgent?.leaveRecords) ? selectedAgent.leaveRecords : [];
+    const currentLongLeaveId = String(orphanLongLeaveId || "");
     const latestEndTime = records.reduce((latest, record) => {
+      if (currentLongLeaveId && String(record?.id || record?._id || "") === currentLongLeaveId) return latest;
+      const status = String(record?.status || "").trim();
+      if (["Recorded", "Confirmed Orphans"].includes(status)) return latest;
       const endTime = new Date(record?.leaveEndDate || 0).getTime() || 0;
       return Math.max(latest, endTime);
     }, 0);
@@ -1668,10 +1780,10 @@ function ManagerPortal({ roleType }) {
     const nextAvailableDate = new Date(latestEndTime);
     nextAvailableDate.setDate(nextAvailableDate.getDate() + 1);
     return nextAvailableDate.toISOString().slice(0, 10) > todayDateInputValue ? nextAvailableDate.toISOString().slice(0, 10) : todayDateInputValue;
-  }, [selectedAgent?.leaveRecords, todayDateInputValue]);
+  }, [orphanLongLeaveId, selectedAgent?.leaveRecords, todayDateInputValue]);
 
   const orphanLeaveEndDateError = useMemo(() => {
-    if (orphanAgentAction !== "long_leave" || orphanViewingSavedLongLeave || orphanLongLeaveStatus === "Endorsed" || !orphanLeaveStartDate || !orphanLeaveEndDate) return "";
+    if (orphanAgentAction !== "long_leave" || orphanLongLeaveStep !== 1 || orphanViewingSavedLongLeave || orphanLongLeaveStatus === "Endorsed" || !orphanLeaveStartDate || !orphanLeaveEndDate) return "";
     const start = new Date(`${orphanLeaveStartDate}T00:00:00`);
     const end = new Date(`${orphanLeaveEndDate}T00:00:00`);
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return "";
@@ -1679,7 +1791,7 @@ function ManagerPortal({ roleType }) {
     if (!Number.isNaN(minimumStart.getTime()) && start < minimumStart) return `Leave start date must be on or after ${formatDate(minimumOrphanLeaveStartDate)}.`;
     const dayDifference = Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
     return dayDifference <= 7 ? "Leave end date should be beyond 7 days to be marked as on long leave." : "";
-  }, [minimumOrphanLeaveStartDate, orphanAgentAction, orphanLeaveEndDate, orphanLeaveStartDate, orphanLongLeaveStatus, orphanViewingSavedLongLeave]);
+  }, [minimumOrphanLeaveStartDate, orphanAgentAction, orphanLeaveEndDate, orphanLeaveStartDate, orphanLongLeaveStatus, orphanLongLeaveStep, orphanViewingSavedLongLeave]);
 
   const orphanProspectsWithActiveLeads = selectedAgent?.orphanTransferProspects || [];
   const orphanPolicyholdersWithOngoingPolicies = selectedAgent?.orphanTransferPolicyholders || [];
@@ -1688,6 +1800,11 @@ function ManagerPortal({ roleType }) {
     ? (orphanConfirmedPolicyholders.length ? orphanConfirmedPolicyholders : orphanPolicyholdersWithOngoingPolicies)
     : [];
   const hasPendingLongLeaveRecord = (Array.isArray(selectedAgent?.leaveRecords) ? selectedAgent.leaveRecords : []).some((record) => ["Recorded", "Confirmed Orphans"].includes(String(record?.status || "").trim()));
+  const selectedAgentStatusLabel = String(selectedAgent?.status || "").trim();
+  const selectedAgentIsRetired = selectedAgentStatusLabel === "Retired";
+  const selectedAgentIsOnLongLeave = selectedAgentStatusLabel === "On Long Leave";
+  const disableOrphanStatusActions = selectedAgentIsRetired || selectedAgentIsOnLongLeave || hasPendingLongLeaveRecord;
+  const disabledOrphanStatusActionHint = selectedAgentIsOnLongLeave ? "🚫" : undefined;
   const canAccessLongLeaveStep2 = Boolean(orphanLongLeaveId) && !orphanLongLeaveDetailsDirty;
   const canAccessLongLeaveStep3 = canAccessLongLeaveStep2 && ["Confirmed Orphans", "Endorsed"].includes(orphanLongLeaveStatus);
   const isEditingSavedLongLeaveDetails = orphanAgentAction === "long_leave" && orphanLongLeaveStep === 1 && Boolean(orphanLongLeaveId) && !orphanViewingSavedLongLeave;
@@ -2249,11 +2366,10 @@ function ManagerPortal({ roleType }) {
     [selectedUnitRows],
   );
 
-  const topUnitKpiSalesAgents = useMemo(
+  const unitKpiSalesAgents = useMemo(
     () => [...(portalData?.kpiSalesRowsByFrequency?.[unitKpiPeriod] || [])]
       .filter((row) => String(row?.unit || "") === String(selectedUnit?.name || "") && Number(row?.annualPremium || 0) > 0)
-      .sort((left, right) => Number(right?.annualPremium || 0) - Number(left?.annualPremium || 0) || String(left?.username || "").localeCompare(String(right?.username || ""), undefined, { numeric: true, sensitivity: "base" }))
-      .slice(0, 5),
+      .sort((left, right) => Number(right?.annualPremium || 0) - Number(left?.annualPremium || 0) || String(left?.username || "").localeCompare(String(right?.username || ""), undefined, { numeric: true, sensitivity: "base" })),
     [portalData?.kpiSalesRowsByFrequency, selectedUnit?.name, unitKpiPeriod],
   );
 
@@ -2343,8 +2459,7 @@ function ManagerPortal({ roleType }) {
       targetAchievementIndex: productionTarget ? Math.round((Number(item.annualPremium || 0) / productionTarget) * 100) : 0,
       topAgents: [...item.agents]
         .filter((agent) => Number(agent?.annualPremium || 0) > 0)
-        .sort((left, right) => Number(right?.annualPremium || 0) - Number(left?.annualPremium || 0) || String(left?.username || "").localeCompare(String(right?.username || ""), undefined, { numeric: true, sensitivity: "base" }))
-        .slice(0, 5),
+        .sort((left, right) => Number(right?.annualPremium || 0) - Number(left?.annualPremium || 0) || String(left?.username || "").localeCompare(String(right?.username || ""), undefined, { numeric: true, sensitivity: "base" })),
     })).sort((a, b) => b.annualPremium - a.annualPremium || a.unit.localeCompare(b.unit));
   }, [branchKpiPeriod, kpiData?.assignments, portalData?.kpiSalesRowsByFrequency]);
 
@@ -2945,7 +3060,7 @@ function ManagerPortal({ roleType }) {
       filters: [
         { label: "Assigned KPI Cards", value: String(dashboardUnitKpiCards.length) },
         { label: "Date Range", value: getPresetLabel(unitKpiDatePreset) },
-        { label: "Top Contributing Agents", value: String(topUnitKpiSalesAgents.length) },
+        { label: "Agent Drilldown Rows", value: String(unitKpiSalesAgents.length) },
       ],
       statCards: dashboardUnitKpiCards.map(({ kpi, actual }) => ({
         label: formatKpiLabel(kpi, "UNIT"),
@@ -2978,13 +3093,13 @@ function ManagerPortal({ roleType }) {
           emptyMessage: "No KPIs assigned.",
         },
         {
-          title: "Top 5 Contributing Agents",
+          title: "Agent Drilldown",
           columns: [
             { key: "username", label: "Agent Code" },
             { key: "name", label: "Agent Name" },
             { key: "salesProduction", label: "Sales Production" },
           ],
-          rows: topUnitKpiSalesAgents.map((agent) => ({
+          rows: unitKpiSalesAgents.map((agent) => ({
             username: agent.username,
             name: agent.name || agent.username,
             salesProduction: formatMoney(agent.annualPremium),
@@ -3953,7 +4068,7 @@ function ManagerPortal({ roleType }) {
 
                     <div className="manager-section-subhead">
                       <h3>{selectedUmAffectedClient.kind === "policyholder" ? "Policyholder Details" : "Prospect Details"}</h3>
-                      <p>Review the recorded orphan client details before choosing a reassignment agent.</p>
+                      {selectedUmAffectedClient.reassigned === true ? null : <p>Review the recorded orphan client details before choosing a reassignment agent.</p>}
                     </div>
                     <div className="manager-agent-detail-grid manager-agent-detail-grid--profile">
                       {Object.entries(selectedUmAffectedClient.details || {}).map(([label, value]) => (
@@ -3962,15 +4077,15 @@ function ManagerPortal({ roleType }) {
                     </div>
 
                     <div className="manager-section-subhead">
-                      <h3>Recommended Agents for Reassignment</h3>
+                      <h3>{selectedUmAffectedClient.reassigned === true ? "Selected Agent for Reassignment" : "Recommended Agents for Reassignment"}</h3>
                     </div>
                     <div className="manager-table-wrap">
                       <table className="manager-table manager-table--promotion-history">
                         <thead>
-                          <tr><th>Agent Code</th><th>Agent Name</th><th>Agent Type</th><th>Status</th><th>Weekly Done Approaches</th><th>Open Approach Tasks Due This Week</th><th>Projected Weekly Approaches</th><th>Monthly Closing Ratio</th><th>Monthly Active Policies</th><th>Select</th></tr>
+                          <tr><th>Agent Code</th><th>Agent Name</th><th>Agent Type</th><th>Status</th><th>Weekly Done Approaches</th><th>Open Approach Tasks Due This Week</th><th>Projected Weekly Approaches</th><th>Monthly Closing Ratio</th><th>Monthly Active Policies</th><th>Select</th>{selectedUmAffectedClient.reassigned === true && <th>Reassignment Date and Time</th>}</tr>
                         </thead>
                         <tbody>
-                          {reassignmentAgentRows.map((agent) => (
+                          {displayedReassignmentAgentRows.map((agent) => (
                             <tr key={agent.id}>
                               <td>{agent.username || "—"}</td>
                               <td>{agent.name || "—"}</td>
@@ -3981,16 +4096,20 @@ function ManagerPortal({ roleType }) {
                               <td>{agent.reassignmentMetrics.projectedApproaches} / {agent.reassignmentMetrics.weeklyDoneApproachesTarget}</td>
                               <td>{agent.reassignmentMetrics.closingRatio}% / {agent.reassignmentMetrics.monthlyClosingRatioTarget}%</td>
                               <td>{agent.reassignmentMetrics.activePolicies} / {agent.reassignmentMetrics.monthlyActivePoliciesTarget}</td>
-                              <td><button type="button" className="manager-refresh-btn" onClick={() => setSelectedReassignmentAgentId(agent.id)}>{selectedReassignmentAgentId === agent.id ? "Selected" : "Select"}</button></td>
+                              <td><button type="button" className="manager-refresh-btn" disabled={selectedUmAffectedClient.reassigned === true} onClick={() => setSelectedReassignmentAgentId(agent.id)}>{selectedReassignmentAgentId === agent.id || selectedUmAffectedClient.reassigned === true ? "Selected" : "Select"}</button></td>
+                              {selectedUmAffectedClient.reassigned === true && <td>{formatDateTime(selectedUmAffectedClient.reassignedAt)}</td>}
                             </tr>
                           ))}
                         </tbody>
                       </table>
                     </div>
-                    {!reassignmentAgentRows.length && <div className="manager-empty-state">No recommended agents matched all reassignment criteria for this unit.</div>}
-                    <div className="manager-orphan-action-buttons">
-                      <button type="button" className="manager-refresh-btn manager-long-leave-next-btn" disabled={!selectedReassignmentAgentId}>Confirm Reassignment</button>
-                    </div>
+                    {!displayedReassignmentAgentRows.length && <div className="manager-empty-state">No recommended agents matched all reassignment criteria for this unit.</div>}
+                    {orphanLongLeaveFieldErrors.form && <small className="manager-field-error">{orphanLongLeaveFieldErrors.form}</small>}
+                    {selectedUmAffectedClient.reassigned !== true && (
+                      <div className="manager-orphan-action-buttons">
+                        <button type="button" className="manager-refresh-btn manager-long-leave-next-btn" disabled={!selectedReassignmentAgentId || reassignmentSaving} onClick={confirmAffectedClientReassignment}>{reassignmentSaving ? "Confirming..." : "Confirm Reassignment"}</button>
+                      </div>
+                    )}
                   </>
                 ) : (
                 <>
@@ -4014,15 +4133,16 @@ function ManagerPortal({ roleType }) {
                     <div className="manager-table-wrap">
                       <table className="manager-table manager-table--promotion-history manager-table--clickable">
                         <thead>
-                          <tr><th>Prospect Code</th><th>Lead Code</th><th>Name</th><th>Status</th></tr>
+                          <tr><th>Prospect Code</th><th>Lead Code</th><th>Name</th><th>Status</th><th>Reassigned</th></tr>
                         </thead>
                         <tbody>
                           {selectedUmLongLeaveRecord.affectedProspects.map((prospect) => (
-                            <tr key={prospect.id || `${prospect.prospectCode}:${prospect.leadCode}`} onClick={() => openAffectedClientDetail({ kind: "prospect", code: prospect.prospectCode || "—", name: prospect.name || "—", details: { "Prospect Code": prospect.prospectCode, "Lead Code": prospect.leadCode, Name: prospect.name, Source: prospect.source, Status: prospect.status, "Market Type": prospect.marketType, "Prospect Type": prospect.prospectType } })} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") openAffectedClientDetail({ kind: "prospect", code: prospect.prospectCode || "—", name: prospect.name || "—", details: { "Prospect Code": prospect.prospectCode, "Lead Code": prospect.leadCode, Name: prospect.name, Source: prospect.source, Status: prospect.status, "Market Type": prospect.marketType, "Prospect Type": prospect.prospectType } }); }}>
+                            <tr key={prospect.id || `${prospect.prospectCode}:${prospect.leadCode}`} onClick={() => openAffectedClientDetail({ kind: "prospect", id: prospect.id, prospectId: prospect.prospectId, leadId: prospect.leadId || prospect.id, code: prospect.prospectCode || "—", leadCode: prospect.leadCode || "—", name: prospect.name || "—", reassigned: prospect.reassigned === true, reassignedAt: prospect.reassignedAt, reassignedToAgentId: prospect.reassignedToAgentId, reassignedToAgentName: prospect.reassignedToAgentName, details: { "Prospect Code": prospect.prospectCode, "Lead Code": prospect.leadCode, Name: prospect.name, Source: prospect.source, Status: prospect.status, "Market Type": prospect.marketType, "Prospect Type": prospect.prospectType } })} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") openAffectedClientDetail({ kind: "prospect", id: prospect.id, prospectId: prospect.prospectId, leadId: prospect.leadId || prospect.id, code: prospect.prospectCode || "—", leadCode: prospect.leadCode || "—", name: prospect.name || "—", reassigned: prospect.reassigned === true, reassignedAt: prospect.reassignedAt, reassignedToAgentId: prospect.reassignedToAgentId, reassignedToAgentName: prospect.reassignedToAgentName, details: { "Prospect Code": prospect.prospectCode, "Lead Code": prospect.leadCode, Name: prospect.name, Source: prospect.source, Status: prospect.status, "Market Type": prospect.marketType, "Prospect Type": prospect.prospectType } }); }}>
                               <td>{prospect.prospectCode || "—"}</td>
                               <td>{prospect.leadCode || "—"}</td>
                               <td>{prospect.name || "—"}</td>
                               <td>{prospect.status || "—"}</td>
+                              <td>{formatReassignedFlag(prospect.reassigned)}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -4038,16 +4158,17 @@ function ManagerPortal({ roleType }) {
                     <div className="manager-table-wrap">
                       <table className="manager-table manager-table--promotion-history manager-table--clickable">
                         <thead>
-                          <tr><th>Policyholder Code</th><th>Policyholder Name</th><th>Product Name</th><th>Policy Number</th><th>Status</th></tr>
+                          <tr><th>Policyholder Code</th><th>Policyholder Name</th><th>Product Name</th><th>Policy Number</th><th>Status</th><th>Reassigned</th></tr>
                         </thead>
                         <tbody>
                           {selectedUmLongLeaveRecord.affectedPolicyholders.map((policyholder) => (
-                            <tr key={policyholder.id || `${policyholder.policyholderCode}:${policyholder.policyNumber}`} onClick={() => openAffectedClientDetail({ kind: "policyholder", code: policyholder.policyholderCode || "—", name: policyholder.policyholderName || "—", details: { "Policyholder Code": policyholder.policyholderCode, "Policyholder Name": policyholder.policyholderName, "Product Name": policyholder.productName, "Policy Number": policyholder.policyNumber, Status: policyholder.status } })} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") openAffectedClientDetail({ kind: "policyholder", code: policyholder.policyholderCode || "—", name: policyholder.policyholderName || "—", details: { "Policyholder Code": policyholder.policyholderCode, "Policyholder Name": policyholder.policyholderName, "Product Name": policyholder.productName, "Policy Number": policyholder.policyNumber, Status: policyholder.status } }); }}>
+                            <tr key={policyholder.id || `${policyholder.policyholderCode}:${policyholder.policyNumber}`} onClick={() => openAffectedClientDetail({ kind: "policyholder", id: policyholder.id, prospectId: policyholder.prospectId, leadId: policyholder.leadId, code: policyholder.policyholderCode || "—", name: policyholder.policyholderName || "—", reassigned: policyholder.reassigned === true, reassignedAt: policyholder.reassignedAt, reassignedToAgentId: policyholder.reassignedToAgentId, reassignedToAgentName: policyholder.reassignedToAgentName, details: { "Policyholder Code": policyholder.policyholderCode, "Policyholder Name": policyholder.policyholderName, "Product Name": policyholder.productName, "Policy Number": policyholder.policyNumber, Status: policyholder.status } })} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") openAffectedClientDetail({ kind: "policyholder", id: policyholder.id, prospectId: policyholder.prospectId, leadId: policyholder.leadId, code: policyholder.policyholderCode || "—", name: policyholder.policyholderName || "—", reassigned: policyholder.reassigned === true, reassignedAt: policyholder.reassignedAt, reassignedToAgentId: policyholder.reassignedToAgentId, reassignedToAgentName: policyholder.reassignedToAgentName, details: { "Policyholder Code": policyholder.policyholderCode, "Policyholder Name": policyholder.policyholderName, "Product Name": policyholder.productName, "Policy Number": policyholder.policyNumber, Status: policyholder.status } }); }}>
                               <td>{policyholder.policyholderCode || "—"}</td>
                               <td>{policyholder.policyholderName || "—"}</td>
                               <td>{policyholder.productName || "—"}</td>
                               <td>{policyholder.policyNumber || "—"}</td>
                               <td>{policyholder.status || "—"}</td>
+                              <td>{formatReassignedFlag(policyholder.reassigned)}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -4066,6 +4187,7 @@ function ManagerPortal({ roleType }) {
                           <th>Agent Name</th>
                           <th>Leave Start Date</th>
                           <th>Leave End Date</th>
+                          <th>Reassignments Progress</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -4075,6 +4197,7 @@ function ManagerPortal({ roleType }) {
                             <td>{record.agentName || "—"}</td>
                             <td>{formatDate(record.leaveStartDate)}</td>
                             <td>{formatDate(record.leaveEndDate)}</td>
+                            <td>{getLongLeaveReassignmentProgress(record)}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -4415,8 +4538,8 @@ function ManagerPortal({ roleType }) {
                     <p>{selectedAgent.username || "—"} • {selectedAgent.agentType || "—"} • {selectedAgent.unit || "Unassigned Unit"}</p>
                   </div>
                   <div className="manager-orphan-agent-actions">
-                    <button type="button" className="manager-refresh-btn" onClick={() => openOrphanAgentAction("long_leave")} disabled={selectedAgent.status === "Retired" || hasPendingLongLeaveRecord}>Mark as On Long Leave</button>
-                    <button type="button" className="manager-refresh-btn" onClick={() => openOrphanAgentAction("retired")} disabled={selectedAgent.status === "Retired" || hasPendingLongLeaveRecord}>Mark as Retired</button>
+                    <button type="button" className="manager-refresh-btn" onClick={() => openOrphanAgentAction("long_leave")} disabled={disableOrphanStatusActions} title={disabledOrphanStatusActionHint}>Mark as On Long Leave</button>
+                    <button type="button" className="manager-refresh-btn" onClick={() => openOrphanAgentAction("retired")} disabled={disableOrphanStatusActions} title={disabledOrphanStatusActionHint}>Mark as Retired</button>
                   </div>
                 </div>
 
@@ -4807,10 +4930,10 @@ function ManagerPortal({ roleType }) {
               ) : (
                 <>
                 <div className="manager-kpi-unit-drilldown">
-                  <h3>Top 5 Contributing Agents</h3>
-                  {topUnitKpiSalesAgents.length ? (
+                  <h3>Agent Drilldown</h3>
+                  {unitKpiSalesAgents.length ? (
                     <ul className="manager-kpi-agent-list">
-                      {topUnitKpiSalesAgents.map((agent) => (
+                      {unitKpiSalesAgents.map((agent) => (
                         <li key={`dashboard-unit-top-agent:${agent.id}`}>
                           <button type="button" className="manager-kpi-agent-link" onClick={() => openAgentDetails(agent.id)}>
                             <strong>{agent.username}</strong>
@@ -4963,6 +5086,21 @@ function ManagerPortal({ roleType }) {
 
         </main>
       </div>
+
+      {reassignmentSuccess && (
+        <div className="manager-modal-backdrop" role="presentation">
+          <div className="manager-endorse-modal" role="dialog" aria-modal="true" aria-labelledby="reassignment-success-title">
+            <button type="button" className="manager-endorse-modal__x" onClick={() => setReassignmentSuccess(null)} aria-label="Close reassignment confirmation">×</button>
+            <div className="manager-endorse-modal__header">
+              <h2 id="reassignment-success-title">Reassignment confirmed</h2>
+              <p>{reassignmentSuccess.message}</p>
+            </div>
+            <div className="manager-endorse-modal__actions">
+              <button type="button" className="manager-refresh-btn manager-long-leave-next-btn" onClick={() => setReassignmentSuccess(null)}>OK</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showEndorseOrphansModal && (
         <div className="manager-modal-backdrop" role="presentation">
