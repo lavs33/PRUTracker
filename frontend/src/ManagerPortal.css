@@ -2195,3 +2195,36 @@
 .manager-endorse-detail-grid--compact {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
+.manager-promotion-table-wrap--retirement {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.manager-table--retirement-orphans {
+  min-width: 980px;
+  table-layout: fixed;
+  font-size: 0.72rem;
+}
+
+.manager-table--retirement-orphans th,
+.manager-table--retirement-orphans td {
+  padding: 8px 9px;
+  line-height: 1.25;
+  vertical-align: top;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+.manager-table--retirement-orphans th:nth-child(1),
+.manager-table--retirement-orphans td:nth-child(1) { width: 105px; }
+.manager-table--retirement-orphans th:nth-child(2),
+.manager-table--retirement-orphans td:nth-child(2) { width: 160px; }
+.manager-table--retirement-orphans th:nth-child(3),
+.manager-table--retirement-orphans td:nth-child(3),
+.manager-table--retirement-orphans th:nth-child(4),
+.manager-table--retirement-orphans td:nth-child(4) { width: 105px; }
+.manager-table--retirement-orphans th:nth-child(5),
+.manager-table--retirement-orphans td:nth-child(5),
+.manager-table--retirement-orphans th:nth-child(6),
+.manager-table--retirement-orphans td:nth-child(6) { width: 250px; }
