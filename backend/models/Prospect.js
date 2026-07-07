@@ -50,6 +50,30 @@ const prospectSchema = new mongoose.Schema(
     },
 
     /**
+     * reassignedToUserId
+     * ------------------
+     * Stores the most recent User that received this prospect through orphan
+     * reassignment. This remains null until a reassignment happens.
+     */
+    reassignedToUserId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+      index: true,
+    },
+
+    /**
+     * reassignedAt
+     * ------------
+     * Date and time when this prospect was most recently reassigned.
+     */
+    reassignedAt: {
+      type: Date,
+      default: null,
+      index: true,
+    },
+
+    /**
      * prospectCode
      * ------------
      * A unique string identifier for the prospect (e.g., system-generated code).
