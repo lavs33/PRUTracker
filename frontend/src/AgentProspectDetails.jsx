@@ -269,7 +269,7 @@ function AgentProspectDetails() {
                   <span className="pd-dot">•</span>
                   <span className="pd-subtext">
                     Potential Customer |{" "}
-                    {prospect.source === "Agent-Sourced" ? "Agent-Sourced" : "System-Assigned"}
+                    {prospect.source === "Agent-Sourced" ? "Agent-Sourced" : `System-Assigned${prospect.reassignedToUserId && prospect.originalAgentName ? ` from ${prospect.originalAgentName}` : ""}`}
                   </span>
                 </div>
 
