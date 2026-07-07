@@ -2195,3 +2195,29 @@
 .manager-endorse-detail-grid--compact {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
+.manager-promotion-table-wrap--retirement {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.manager-table--retirement-orphans {
+  width: max-content;
+  min-width: 1200px;
+  table-layout: auto;
+}
+
+.manager-table--retirement-orphans th,
+.manager-table--retirement-orphans td {
+  white-space: nowrap;
+}
+
+.manager-table--retirement-orphans th:nth-child(5),
+.manager-table--retirement-orphans td:nth-child(5),
+.manager-table--retirement-orphans th:nth-child(6),
+.manager-table--retirement-orphans td:nth-child(6) {
+  min-width: 360px;
+  max-width: 480px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
