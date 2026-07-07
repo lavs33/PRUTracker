@@ -12178,7 +12178,10 @@ function AgentLeadEngagement() {
                 <button
                   type="button"
                   className="le-btn primary"
-                  onClick={() => navigate(`/agent/${user.username}/policyholders/${policyholderCreatedModal._id}`)}
+                  onClick={() => {
+                    const targetPolicyholderId = String(policyholderCreatedModal.policyholderId || policyholderCreatedModal._id || "");
+                    if (targetPolicyholderId) navigate(`/agent/${username}/policyholders/${encodeURIComponent(targetPolicyholderId)}`);
+                  }}
                 >
                   View Policyholder
                 </button>
