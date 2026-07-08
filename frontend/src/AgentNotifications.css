@@ -16,8 +16,8 @@
 
 
 .notifs-body .side-nav {
-  margin-top: 2px;
-  margin-left: 2px;
+  margin-top: -10px;
+  margin-left: -10px;
   margin-bottom: 2px;
   height: calc(100vh - 4px);
 }

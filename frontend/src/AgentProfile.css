@@ -305,6 +305,32 @@
   border-color: #93c5fd;
 }
 
+.password-helper,
+.password-error,
+.password-server-error {
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.password-helper {
+  color: #2563eb;
+}
+
+.password-error,
+.password-server-error {
+  color: #dc2626;
+}
+
+.password-error-list {
+  display: grid;
+  gap: 4px;
+}
+
+.password-server-error {
+  margin: 14px 0 0;
+}
+
 .save-btn {
   padding: 14px 18px;
   border-radius: 14px;
@@ -326,6 +352,62 @@
 .save-btn:hover {
   transform: translateY(-1px);
   opacity: 0.94;
+}
+
+.save-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+  box-shadow: none;
+  transform: none;
+}
+
+.password-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.38);
+  backdrop-filter: blur(3px);
+}
+
+.password-modal {
+  position: relative;
+  width: min(420px, 100%);
+  border-radius: 24px;
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  background: #ffffff;
+  box-shadow: 0 28px 70px rgba(15, 23, 42, 0.24);
+  padding: 34px 30px 30px;
+  text-align: center;
+}
+
+.password-modal h2 {
+  margin: 0 0 10px;
+  color: #0f172a;
+  font-size: 24px;
+}
+
+.password-modal p {
+  margin: 0;
+  color: #475569;
+  font-weight: 700;
+}
+
+.password-modal-close {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #0f172a;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
 }
 
 .logout-row {

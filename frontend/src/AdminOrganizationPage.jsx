@@ -17,6 +17,21 @@ const EMPTY_AREA_FORM = { areaName: '' };
 const EMPTY_BRANCH_FORM = { branchName: '', areaId: '' };
 const EMPTY_UNIT_FORM = { unitName: '', branchId: '' };
 const EMPTY_MANAGER_CREATE_FORM = { managerType: 'UM', sourceAgentId: '', branchId: '', unitId: '', dateEmployed: '' };
+const EMPTY_MANAGER_EDIT_FORM = {
+  managerType: 'UM',
+  username: '',
+  password: '',
+  firstName: '',
+  middleName: '',
+  lastName: '',
+  birthday: '',
+  sex: 'Male',
+  age: '',
+  displayPhoto: '',
+  dateEmployed: '',
+  branchId: '',
+  unitId: '',
+};
 const EMPTY_AGENT_FORM = {
   username: '',
   password: '',
@@ -270,6 +285,10 @@ function AdminOrganizationPage() {
   const [editUnitId, setEditUnitId] = useState('');
   const [editUnitForm, setEditUnitForm] = useState(EMPTY_UNIT_FORM);
   const [createManagerForm, setCreateManagerForm] = useState(EMPTY_MANAGER_CREATE_FORM);
+  const [editManagerId, setEditManagerId] = useState('');
+  const [editManagerForm, setEditManagerForm] = useState(EMPTY_MANAGER_EDIT_FORM);
+  const [editManagerErrors, setEditManagerErrors] = useState({});
+  const [editManagerPhotoName, setEditManagerPhotoName] = useState('');
   const [successModal, setSuccessModal] = useState({ open: false, title: '', message: '', onClose: null });
   const [addAgentForm, setAddAgentForm] = useState(EMPTY_AGENT_FORM);
   const [addAgentErrors, setAddAgentErrors] = useState({});
@@ -520,6 +539,13 @@ function AdminOrganizationPage() {
         : formOptions.units.filter((unit) => !createManagerForm.branchId || unit.branchId === createManagerForm.branchId),
     [createManagerForm.branchId, createManagerForm.managerType, formOptions.units]
   );
+  const editManagerUnitOptions = useMemo(
+    () =>
+      editManagerForm.managerType === 'BM'
+        ? []
+        : formOptions.units.filter((unit) => !editManagerForm.branchId || unit.branchId === editManagerForm.branchId),
+    [editManagerForm.branchId, editManagerForm.managerType, formOptions.units]
+  );
 
   const currentScopeManager = useMemo(() => {
     const managers = managerDirectory[createManagerForm.managerType] || [];
@@ -636,6 +662,31 @@ function AdminOrganizationPage() {
       ),
     [directoryData.managers]
   );
+
+  useEffect(() => {
+    const manager = managerList.find((item) => item.managerId === editManagerId);
+    setEditManagerPhotoName('');
+    setEditManagerErrors({});
+    setEditManagerForm(
+      manager
+        ? {
+            managerType: manager.managerType || managerTab,
+            username: manager.username || '',
+            password: '',
+            firstName: manager.firstName || '',
+            middleName: manager.middleName || '',
+            lastName: manager.lastName || '',
+            birthday: formatDateInput(manager.birthday),
+            sex: manager.sex || 'Male',
+            age: manager.age || calculateAge(manager.birthday),
+            displayPhoto: manager.displayPhoto || '',
+            dateEmployed: formatDateInput(manager.dateEmployed),
+            branchId: manager.branchId || '',
+            unitId: manager.unitId || '',
+          }
+        : { ...EMPTY_MANAGER_EDIT_FORM, managerType: managerTab }
+    );
+  }, [editManagerId, managerList, managerTab]);
 
   const filteredAreas = useMemo(() => sortByCreatedAtAsc(directoryData.areas), [directoryData.areas]);
   const filteredBranches = useMemo(() => sortByCreatedAtAsc(branchList), [branchList]);
@@ -1304,6 +1355,154 @@ function AdminOrganizationPage() {
         title: 'Agent updated successfully',
         message: data.message || 'Agent updated successfully.',
         onClose: () => setAgentView('list'),
+      });
+    } catch {
+      setErrorMessage('Cannot connect to server. Is backend running?');
+    }
+  };
+
+  const handleEditManagerFieldChange = useCallback((field, value) => {
+    handleAgentFieldChange(setEditManagerForm, field, value);
+
+    setEditManagerErrors((current) => {
+      const next = { ...current };
+
+      if (field === 'birthday') {
+        if (!value) {
+          next.birthday = 'Birthday is required.';
+        } else if (isFutureDateValue(value)) {
+          next.birthday = 'Birthday cannot be in the future.';
+        } else if (Number(calculateAge(value) || 0) < 21) {
+          next.birthday = 'Manager must be at least 21 years old.';
+        } else {
+          delete next.birthday;
+        }
+      } else if (field === 'dateEmployed') {
+        if (!value) {
+          next.dateEmployed = 'Date employed is required.';
+        } else if (isFutureDateValue(value)) {
+          next.dateEmployed = 'Date employed cannot be in the future.';
+        } else {
+          delete next.dateEmployed;
+        }
+      } else if (field === 'branchId') {
+        if (!value) {
+          next.branchId = 'Assigned branch is required.';
+        } else {
+          delete next.branchId;
+        }
+      } else if (field === 'unitId') {
+        if (editManagerForm.managerType !== 'BM' && !value) {
+          next.unitId = 'Assigned unit is required.';
+        } else {
+          delete next.unitId;
+        }
+      } else if (field === 'firstName' || field === 'lastName' || field === 'username') {
+        if (!String(value || '').trim()) {
+          next[field] = `${field === 'username' ? 'Username' : field === 'firstName' ? 'First name' : 'Last name'} is required.`;
+        } else {
+          delete next[field];
+        }
+      } else if (field === 'password') {
+        delete next.password;
+      } else {
+        delete next[field];
+      }
+
+      return next;
+    });
+  }, [editManagerForm.managerType]);
+
+  const handleEditManagerPhotoChange = useCallback((e) => {
+    const file = e.target.files?.[0];
+
+    if (!file) {
+      setEditManagerPhotoName('');
+      setEditManagerErrors((current) => {
+        const next = { ...current };
+        delete next.displayPhoto;
+        return next;
+      });
+      return;
+    }
+
+    if (!['image/jpeg', 'image/jpg', 'image/png'].includes(file.type)) {
+      setEditManagerErrors((current) => ({ ...current, displayPhoto: 'Display photo must be a JPG, JPEG, or PNG file.' }));
+      setEditManagerPhotoName('');
+      e.target.value = '';
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      setEditManagerPhotoName(file.name);
+      setEditManagerForm((current) => ({ ...current, displayPhoto: String(reader.result || '') }));
+      setEditManagerErrors((current) => {
+        const next = { ...current };
+        delete next.displayPhoto;
+        return next;
+      });
+    };
+    reader.readAsDataURL(file);
+  }, []);
+
+  const handleEditManager = async (e) => {
+    e.preventDefault();
+    resetMessages();
+
+    if (!editManagerId) {
+      setErrorMessage(`Please choose a ${managerTab} to edit.`);
+      return;
+    }
+
+    const payload = {
+      ...editManagerForm,
+      username: String(editManagerForm.username || '').trim().toUpperCase(),
+      firstName: String(editManagerForm.firstName || '').trim(),
+      middleName: String(editManagerForm.middleName || '').trim(),
+      lastName: String(editManagerForm.lastName || '').trim(),
+      age: calculateAge(editManagerForm.birthday),
+    };
+
+    const validationErrors = {};
+    if (!payload.username) validationErrors.username = 'Username is required.';
+    if (!payload.firstName) validationErrors.firstName = 'First name is required.';
+    if (!payload.lastName) validationErrors.lastName = 'Last name is required.';
+    if (!payload.birthday) validationErrors.birthday = 'Birthday is required.';
+    else if (isFutureDateValue(payload.birthday)) validationErrors.birthday = 'Birthday cannot be in the future.';
+    else if (Number(calculateAge(payload.birthday) || 0) < 21) validationErrors.birthday = 'Manager must be at least 21 years old.';
+    if (!payload.dateEmployed) validationErrors.dateEmployed = 'Date employed is required.';
+    else if (isFutureDateValue(payload.dateEmployed)) validationErrors.dateEmployed = 'Date employed cannot be in the future.';
+    if (!payload.branchId) validationErrors.branchId = 'Assigned branch is required.';
+    if (payload.managerType !== 'BM' && !payload.unitId) validationErrors.unitId = 'Assigned unit is required.';
+    setEditManagerErrors(validationErrors);
+
+    if (Object.keys(validationErrors).length > 0) {
+      setErrorMessage(`Please fix the highlighted Edit ${payload.managerType} fields.`);
+      return;
+    }
+
+    try {
+      const res = await fetch(`http://localhost:5000/api/admin/organization/managers/${payload.managerType}/${editManagerId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        setErrorMessage(data.message || `Failed to update ${payload.managerType}.`);
+        return;
+      }
+
+      setEditManagerErrors({});
+      setEditManagerPhotoName('');
+      await refreshAdminData();
+      setSuccessModal({
+        open: true,
+        title: `${payload.managerType} updated successfully`,
+        message: data.message || `${payload.managerType} updated successfully.`,
+        onClose: () => setManagerView('list'),
       });
     } catch {
       setErrorMessage('Cannot connect to server. Is backend running?');
@@ -2006,6 +2205,18 @@ function AdminOrganizationPage() {
                         >
                           Open {managerTab} Assignment
                         </button>
+                        <button
+                          type="button"
+                          className="aop-action-btn"
+                          onClick={() => {
+                            const firstManager = filteredManagers.find((manager) => manager.managerType === managerTab);
+                            setEditManagerId(firstManager?.managerId || '');
+                            setEditManagerForm({ ...EMPTY_MANAGER_EDIT_FORM, managerType: managerTab });
+                            setManagerView('edit');
+                          }}
+                        >
+                          Open Edit {managerTab}
+                        </button>
                       </div>
                     </div>
 
@@ -2070,7 +2281,7 @@ function AdminOrganizationPage() {
                       </div>
                     )}
                   </>
-                ) : (
+                ) : managerView === 'form' ? (
                   <div className="aop-form-grid">
                     <form className="aop-form-card" onSubmit={handleCreateManager}>
                     <FormActionBar backLabel="Back to All Managers" onBack={() => setManagerView('list')} />
@@ -2240,6 +2451,169 @@ function AdminOrganizationPage() {
                     </div>
 
                     <button type="submit" disabled={isSavingManager}>{isSavingManager ? 'Saving Manager...' : 'Save Manager'}</button>
+                    </form>
+                  </div>
+                ) : (
+                  <div className="aop-form-grid">
+                    <form className="aop-form-card" onSubmit={handleEditManager}>
+                      <FormActionBar backLabel="Back to All Managers" onBack={() => setManagerView('list')} />
+                      <div className="aop-form-head">
+                        <FaUserEdit />
+                        <div>
+                          <h3>Edit {managerTab}</h3>
+                          <p>Update the active manager account and its current assignment scope.</p>
+                        </div>
+                      </div>
+
+                      <label htmlFor="manager-edit-select">Select {managerTab}</label>
+                      <select
+                        id="manager-edit-select"
+                        value={editManagerId}
+                        onChange={(e) => setEditManagerId(e.target.value)}
+                      >
+                        <option value="">Choose a {managerTab}</option>
+                        {filteredManagers
+                          .filter((manager) => manager.managerType === managerTab)
+                          .map((manager) => (
+                            <option key={manager.managerId} value={manager.managerId}>
+                              {manager.username} · {[manager.firstName, manager.lastName].filter(Boolean).join(' ')}
+                            </option>
+                          ))}
+                      </select>
+
+                      <div className="aop-inline-grid">
+                        <div>
+                          <label htmlFor="manager-edit-username">Username</label>
+                          <input id="manager-edit-username" value={editManagerForm.username} onChange={(e) => handleEditManagerFieldChange('username', e.target.value)} />
+                          {editManagerErrors.username ? <p className="aop-field-error">{editManagerErrors.username}</p> : null}
+                        </div>
+                        <div>
+                          <label htmlFor="manager-edit-password">Password</label>
+                          <div className="aop-password-field">
+                            <input
+                              id="manager-edit-password"
+                              type={visibleManagerPasswords.editManagerPassword ? 'text' : 'password'}
+                              value={editManagerForm.password}
+                              onChange={(e) => handleEditManagerFieldChange('password', e.target.value)}
+                              placeholder="Leave blank to keep current password"
+                            />
+                            <button
+                              type="button"
+                              className="aop-password-toggle"
+                              onClick={() => togglePasswordVisibility(setVisibleManagerPasswords, 'editManagerPassword')}
+                            >
+                              {visibleManagerPasswords.editManagerPassword ? 'Hide' : 'Show'}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="aop-inline-grid three-up">
+                        <div>
+                          <label htmlFor="manager-edit-firstName">First Name</label>
+                          <input id="manager-edit-firstName" value={editManagerForm.firstName} onChange={(e) => handleEditManagerFieldChange('firstName', e.target.value)} />
+                          {editManagerErrors.firstName ? <p className="aop-field-error">{editManagerErrors.firstName}</p> : null}
+                        </div>
+                        <div>
+                          <label htmlFor="manager-edit-middleName">Middle Name</label>
+                          <input id="manager-edit-middleName" value={editManagerForm.middleName} onChange={(e) => handleEditManagerFieldChange('middleName', e.target.value)} />
+                        </div>
+                        <div>
+                          <label htmlFor="manager-edit-lastName">Last Name</label>
+                          <input id="manager-edit-lastName" value={editManagerForm.lastName} onChange={(e) => handleEditManagerFieldChange('lastName', e.target.value)} />
+                          {editManagerErrors.lastName ? <p className="aop-field-error">{editManagerErrors.lastName}</p> : null}
+                        </div>
+                      </div>
+
+                      <div className="aop-inline-grid four-up">
+                        <div>
+                          <label htmlFor="manager-edit-birthday">Birthday</label>
+                          <input id="manager-edit-birthday" type="date" max={new Date().toISOString().slice(0, 10)} value={editManagerForm.birthday} onChange={(e) => handleEditManagerFieldChange('birthday', e.target.value)} />
+                          {editManagerErrors.birthday ? <p className="aop-field-error">{editManagerErrors.birthday}</p> : null}
+                        </div>
+                        <div>
+                          <label htmlFor="manager-edit-sex">Sex</label>
+                          <select id="manager-edit-sex" value={editManagerForm.sex} onChange={(e) => handleEditManagerFieldChange('sex', e.target.value)}>
+                            <option value="Male">Male</option>
+                            <option value="Female">Female</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label htmlFor="manager-edit-age">Age</label>
+                          <input id="manager-edit-age" value={editManagerForm.age} readOnly />
+                        </div>
+                        <div>
+                          <label htmlFor="manager-edit-employed">Date Employed</label>
+                          <input id="manager-edit-employed" type="date" max={new Date().toISOString().slice(0, 10)} value={editManagerForm.dateEmployed} onChange={(e) => handleEditManagerFieldChange('dateEmployed', e.target.value)} />
+                          {editManagerErrors.dateEmployed ? <p className="aop-field-error">{editManagerErrors.dateEmployed}</p> : null}
+                        </div>
+                      </div>
+
+                      <div className="aop-inline-grid">
+                        <div>
+                          <label htmlFor="manager-edit-photo">Display Photo</label>
+                          <input
+                            id="manager-edit-photo"
+                            type="file"
+                            accept=".jpg,.jpeg,.png,image/jpeg,image/png"
+                            onChange={handleEditManagerPhotoChange}
+                          />
+                          {editManagerPhotoName ? <p className="aop-field-note">Selected file: {editManagerPhotoName}</p> : null}
+                          {editManagerErrors.displayPhoto ? <p className="aop-field-error">{editManagerErrors.displayPhoto}</p> : null}
+                        </div>
+                        <div>
+                          <label htmlFor="manager-edit-branch">Assigned Branch</label>
+                          <select
+                            id="manager-edit-branch"
+                            value={editManagerForm.branchId}
+                            onChange={(e) =>
+                              setEditManagerForm((current) => ({
+                                ...current,
+                                branchId: e.target.value,
+                                unitId: '',
+                              }))
+                            }
+                          >
+                            <option value="">Choose a branch</option>
+                            {formOptions.branches.map((branch) => (
+                              <option key={branch.id} value={branch.id}>{branch.branchName}</option>
+                            ))}
+                          </select>
+                          {editManagerErrors.branchId ? <p className="aop-field-error">{editManagerErrors.branchId}</p> : null}
+                        </div>
+                      </div>
+
+                      {editManagerForm.managerType !== 'BM' && (
+                        <>
+                          <label htmlFor="manager-edit-unit">Assigned Unit</label>
+                          <select
+                            id="manager-edit-unit"
+                            value={editManagerForm.unitId}
+                            onChange={(e) => handleEditManagerFieldChange('unitId', e.target.value)}
+                            disabled={!editManagerForm.branchId}
+                          >
+                            <option value="">{editManagerForm.branchId ? 'Choose a unit' : 'Choose a branch first'}</option>
+                            {editManagerUnitOptions.map((unit) => (
+                              <option key={unit.id} value={unit.id}>{unit.unitName}</option>
+                            ))}
+                          </select>
+                          {editManagerErrors.unitId ? <p className="aop-field-error">{editManagerErrors.unitId}</p> : null}
+                        </>
+                      )}
+
+                      <div className="aop-photo-preview-card">
+                        <span>Current Display Photo</span>
+                        {editManagerForm.displayPhoto ? (
+                          <div className="aop-photo-preview-body">
+                            <img src={editManagerForm.displayPhoto} alt="Current manager display" className="aop-photo-preview-image" />
+                            <a className="aop-inline-link" href={editManagerForm.displayPhoto} target="_blank" rel="noreferrer">Preview current image</a>
+                          </div>
+                        ) : (
+                          <p className="aop-field-note">No display photo uploaded yet.</p>
+                        )}
+                      </div>
+
+                      <button type="submit">Update {editManagerForm.managerType || managerTab}</button>
                     </form>
                   </div>
                 )}

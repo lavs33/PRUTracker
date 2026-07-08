@@ -39,6 +39,7 @@ const Policy = require("./models/Policy");
 const Payment = require("./models/Payment");
 const AnnualPayment = require("./models/AnnualPayment");
 const LongLeave = require("./models/LongLeave");
+const Retirement = require("./models/Retirement");
 const Product = require("./models/Product");
 const Task = require("./models/Task");
 const Notification = require("./models/Notification");
@@ -759,6 +760,16 @@ function buildLongLeaveEndorsementNotificationMessage(longLeave = {}) {
   return `${prospectText} ${policyholderText}`;
 }
 
+function buildRetirementEndorsementNotificationMessage(retirement = {}) {
+  const prospects = Array.isArray(retirement.affectedProspects) ? retirement.affectedProspects : [];
+  if (!prospects.length) return "Prospects endorsed: None.";
+  return `Prospects endorsed: ${prospects.map((prospect) => {
+    const leadCodes = (Array.isArray(prospect.leads) ? prospect.leads : []).map((lead) => lead.leadCode || "—").join(", ") || "—";
+    const policyholderCodes = (Array.isArray(prospect.policies) ? prospect.policies : []).map((policy) => policy.policyholderCode || "—").join(", ") || "—";
+    return `${prospect.prospectCode || "—"} / Leads: ${leadCodes} / Policyholders: ${policyholderCodes} / ${prospect.name || "—"}`;
+  }).join("; ")}.`;
+}
+
 
 function formatPersonName(person = {}) {
   return [person.firstName, person.middleName, person.lastName].filter(Boolean).join(" ").trim() || person.username || "—";
@@ -766,7 +777,7 @@ function formatPersonName(person = {}) {
 
 function formatLeadListForNotification(leads = []) {
   return leads.length
-    ? `Leads: ${leads.map((lead) => `${lead.leadCode || "—"} / ${lead.source === "Other" && lead.otherSource ? `Other - ${lead.otherSource}` : (lead.source || "—")}`).join("; ")}.`
+    ? `Leads: ${leads.map((lead) => `${lead.leadCode || "—"} / ${lead.source === "Other" && lead.otherSource ? `Other - ${lead.otherSource}` : (lead.source || "—")} / ${lead.status || "—"}`).join("; ")}.`
     : "Leads: None.";
 }
 
@@ -1119,7 +1130,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
   const taskMetricsByUserId = createMetricsMap(scopedAgents);
   const salesMetricsByUserId = createMetricsMap(scopedAgents);
 
-  const [tasks, prospects, longLeaves] = await Promise.all([
+  const [tasks, prospects, longLeaves, retirements] = await Promise.all([
     scopedUserIds.length
       ? Task.find({ assignedToUserId: { $in: scopedUserIds }, softDeletedAt: null })
           .select("assignedToUserId type title dueAt status completedAt wasDelayed createdAt")
@@ -1147,6 +1158,17 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
           .sort({ createdAt: -1, _id: -1 })
           .lean()
       : [],
+    scopedAgentIds.length || scopedUserIds.length
+      ? Retirement.find({
+          $or: [
+            ...(scopedAgentIds.length ? [{ agentId: { $in: scopedAgentIds } }] : []),
+            ...(scopedUserIds.length ? [{ userId: { $in: scopedUserIds } }] : []),
+          ],
+        })
+          .select("agentId userId retirementDate retirementLetter approvedRetirementProof status affectedProspects affectedPolicyholders createdAt updatedAt")
+          .sort({ createdAt: -1, _id: -1 })
+          .lean()
+      : [],
   ]);
 
   const longLeaveRecordsByAgentId = new Map();
@@ -1168,6 +1190,25 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       updatedAt: longLeave.updatedAt || null,
     });
     longLeaveRecordsByAgentId.set(agentId, records);
+  }
+
+  const retirementRecordsByAgentId = new Map();
+  for (const retirement of retirements) {
+    const agentId = String(retirement?.agentId || agentIdByUserId.get(String(retirement?.userId || "")) || "");
+    if (!agentId) continue;
+    const records = retirementRecordsByAgentId.get(agentId) || [];
+    records.push({
+      id: String(retirement._id),
+      retirementDate: retirement.retirementDate || null,
+      status: retirement.status || "Recorded",
+      affectedProspects: Array.isArray(retirement.affectedProspects) ? retirement.affectedProspects : [],
+      affectedPolicyholders: Array.isArray(retirement.affectedPolicyholders) ? retirement.affectedPolicyholders : [],
+      retirementLetter: retirement.retirementLetter || null,
+      approvedRetirementProof: retirement.approvedRetirementProof || null,
+      createdAt: retirement.createdAt || null,
+      updatedAt: retirement.updatedAt || null,
+    });
+    retirementRecordsByAgentId.set(agentId, records);
   }
 
   const nowMs = Date.now();
@@ -1366,6 +1407,8 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
     const policy = policyByEngagementId.get(engagementId);
     const policyholderRow = {
       id: String(policyholder._id),
+      prospectId,
+      leadId,
       policyholderCode: policyholder.policyholderCode || "—",
       policyholderName: prospectNameById.get(prospectId) || "—",
       productName: policyholder.productId?.productName || "—",
@@ -1388,6 +1431,52 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
     rows.forEach((row) => {
       row.ongoingPolicies = activeLeadOngoingPoliciesByProspectId.get(String(row.prospectId || "")) || [];
     });
+  }
+
+  const retirementLeadsByProspectId = new Map();
+  for (const lead of leads) {
+    const prospectId = String(lead?.prospectId || "");
+    if (!prospectId) continue;
+    const leadRows = retirementLeadsByProspectId.get(prospectId) || [];
+    const source = String(lead?.source || "").trim();
+    leadRows.push({
+      leadCode: lead.leadCode || "—",
+      source: source === "Other" ? (lead.otherSource ? `Other - ${lead.otherSource}` : "Other") : (source || "—"),
+      status: lead.status || "—",
+    });
+    retirementLeadsByProspectId.set(prospectId, leadRows);
+  }
+  const retirementPoliciesByProspectId = new Map();
+  for (const policyholder of policyholders) {
+    const leadId = engagementIdToLeadId.get(String(policyholder?.leadEngagementId || "")) || "";
+    const prospectId = leadIdToProspectId.get(leadId) || "";
+    if (!prospectId) continue;
+    const policyRows = retirementPoliciesByProspectId.get(prospectId) || [];
+    policyRows.push({
+      policyholderCode: policyholder.policyholderCode || "—",
+      policyNumber: policyholder.policyNumber || policyByEngagementId.get(String(policyholder?.leadEngagementId || ""))?.uploadPolicySummary?.policyNumber || "—",
+      status: policyholder.status || "—",
+    });
+    retirementPoliciesByProspectId.set(prospectId, policyRows);
+  }
+  const retirementTransferProspectsByUserId = new Map();
+  for (const prospect of prospects) {
+    const assignedUserId = effectiveProspectOwnerId(prospect);
+    if (!assignedUserId) continue;
+    const prospectId = String(prospect._id || "");
+    const rows = retirementTransferProspectsByUserId.get(assignedUserId) || [];
+    rows.push({
+      id: prospectId,
+      prospectId,
+      prospectCode: prospect.prospectCode || "—",
+      name: [prospect.firstName, prospect.middleName, prospect.lastName].filter(Boolean).join(" ").trim() || "—",
+      marketType: prospect.marketType || "—",
+      prospectType: prospect.prospectType || "—",
+      status: prospect.status || "—",
+      leads: retirementLeadsByProspectId.get(prospectId) || [],
+      policies: retirementPoliciesByProspectId.get(prospectId) || [],
+    });
+    retirementTransferProspectsByUserId.set(assignedUserId, rows);
   }
 
   const engagementIdToFrequency = new Map(
@@ -1717,8 +1806,10 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       reassignmentMonthlyClosingRatio: calculateKpiClosingRatio(reassignmentMonthlySalesRowByUserId.get(String(row.userId))),
       reassignmentMonthlyActivePolicies: Number(reassignmentMonthlySalesRowByUserId.get(String(row.userId))?.activePolicies || 0),
       leaveRecords: longLeaveRecordsByAgentId.get(String(row.id)) || [],
+      retirementRecords: retirementRecordsByAgentId.get(String(row.id)) || [],
       orphanTransferProspects: orphanTransferProspectsByUserId.get(String(row.userId)) || [],
       orphanTransferPolicyholders: orphanTransferPolicyholdersByUserId.get(String(row.userId)) || [],
+      retirementTransferProspects: retirementTransferProspectsByUserId.get(String(row.userId)) || [],
     }))
     .sort(byName);
 
@@ -1851,6 +1942,144 @@ app.use(
 /* =========================================================
    KPI ASSIGNMENT ROUTES
 ========================================================= */
+
+
+app.post("/api/manager/agents/:agentId/retirement", async (req, res) => {
+  try {
+    const { agentId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(agentId)) return res.status(400).json({ message: "Invalid agent ID." });
+
+    const agent = await Agent.findById(agentId).populate({ path: "userId", select: "dateEmployed" }).select("_id userId");
+    if (!agent) return res.status(404).json({ message: "Agent not found." });
+
+    const retirementDate = new Date(req.body?.retirementDate);
+    if (Number.isNaN(retirementDate.getTime())) {
+      return res.status(400).json({ field: "retirementDate", message: "Retirement date is required." });
+    }
+    const dateEmployed = new Date(agent.userId?.dateEmployed || 0);
+    if (!Number.isNaN(dateEmployed.getTime()) && retirementDate <= dateEmployed) {
+      return res.status(400).json({ field: "retirementDate", message: "Retirement date must be after the agent's employment date." });
+    }
+
+    const retirementLetter = req.body?.retirementLetter || {};
+    const approvedRetirementProof = req.body?.approvedRetirementProof || {};
+    if (!retirementLetter?.fileName || !retirementLetter?.dataUrl || !/^data:application\/pdf;base64,/i.test(String(retirementLetter.dataUrl))) {
+      return res.status(400).json({ field: "retirementLetter", message: "Accomplished retirement letter PDF is required." });
+    }
+    if (!approvedRetirementProof?.fileName || !approvedRetirementProof?.dataUrl || !/^data:image\/(?:jpeg|png);base64,/i.test(String(approvedRetirementProof.dataUrl))) {
+      return res.status(400).json({ field: "approvedRetirementProof", message: "Proof of approved retirement image is required." });
+    }
+
+    const existingId = req.body?.retirementId;
+    if (!existingId) {
+      const existingOpenRetirement = await Retirement.findOne({ agentId: agent._id, status: { $in: ["Recorded", "Confirmed Orphans"] } }).select("_id status").lean();
+      if (existingOpenRetirement) return res.status(409).json({ message: `This agent already has a ${existingOpenRetirement.status} retirement record.` });
+    }
+
+    const payload = {
+      agentId: agent._id,
+      userId: agent.userId?._id || agent.userId,
+      retirementDate,
+      retirementLetter: {
+        fileName: String(retirementLetter.fileName || "").trim(),
+        mimeType: String(retirementLetter.mimeType || "application/pdf").trim(),
+        dataUrl: String(retirementLetter.dataUrl || ""),
+      },
+      approvedRetirementProof: {
+        fileName: String(approvedRetirementProof.fileName || "").trim(),
+        mimeType: String(approvedRetirementProof.mimeType || "image/jpeg").trim(),
+        dataUrl: String(approvedRetirementProof.dataUrl || ""),
+      },
+      status: "Recorded",
+      affectedProspects: [],
+      affectedPolicyholders: [],
+    };
+
+    const retirement = existingId && mongoose.Types.ObjectId.isValid(existingId)
+      ? await Retirement.findOneAndUpdate({ _id: existingId, agentId: agent._id }, { $set: payload }, { new: true, runValidators: true })
+      : await Retirement.create(payload);
+
+    if (!retirement) return res.status(404).json({ message: "Retirement record not found for this agent." });
+    return res.json({ message: "Retirement details recorded.", retirement });
+  } catch (err) {
+    console.error("Save retirement failed:", err);
+    return res.status(500).json({ message: err.message || "Failed to save retirement details." });
+  }
+});
+
+app.patch("/api/manager/retirement/:retirementId/status", async (req, res) => {
+  try {
+    const { retirementId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(retirementId)) return res.status(400).json({ message: "Invalid retirement record ID." });
+    const nextStatus = String(req.body?.status || "").trim();
+    if (!["Confirmed Orphans", "Endorsed"].includes(nextStatus)) return res.status(400).json({ message: "Invalid retirement status." });
+
+    const retirement = await Retirement.findByIdAndUpdate(
+      retirementId,
+      {
+        $set: {
+          status: nextStatus,
+          affectedProspects: Array.isArray(req.body?.affectedProspects) ? ensureLongLeaveReassignedFlags(req.body.affectedProspects) : [],
+          affectedPolicyholders: Array.isArray(req.body?.affectedPolicyholders) ? ensureLongLeaveReassignedFlags(req.body.affectedPolicyholders) : [],
+        },
+      },
+      { new: true, runValidators: true }
+    );
+    if (!retirement) return res.status(404).json({ message: "Retirement record not found." });
+    if (nextStatus === "Endorsed") {
+      const agent = await Agent.findByIdAndUpdate(
+        retirement.agentId,
+        { $set: { status: "Retired" } },
+        { new: true },
+      )
+        .populate({ path: "userId", select: "username firstName middleName lastName" })
+        .populate({ path: "unitId", select: "unitName" })
+        .lean();
+      const unitManager = agent?.unitId?._id
+        ? await UM.findOne({ unitId: agent.unitId._id, isBlocked: { $ne: true } }).select("userId").lean()
+        : null;
+      const agentUser = agent?.userId || {};
+      const agentName = formatPersonName(agentUser);
+      if (unitManager?.userId) {
+        await Notification.updateOne(
+          { dedupeKey: `retirement-orphan-endorsement:${retirement._id}:um:${unitManager.userId}` },
+          {
+            $set: {
+              assignedToUserId: unitManager.userId,
+              type: "ORPHANS_ENDORSEMENTS",
+              title: `${agentUser.username || "—"} - ${agentName} marked as retired (${formatLongLeaveNotificationDate(retirement.retirementDate)})`,
+              message: buildRetirementEndorsementNotificationMessage(retirement),
+              status: "Unread",
+              readAt: null,
+              entityType: "Retirement",
+              entityId: retirement._id,
+              metadata: {
+                endorsementType: "retirement",
+                retirementId: String(retirement._id),
+                agentId: String(agent?._id || ""),
+                agentCode: agentUser.username || "",
+                agentName,
+                unitName: agent?.unitId?.unitName || "",
+                retirementDate: retirement.retirementDate || null,
+                targetView: "orphan_endorsements",
+                targetTab: "retirements",
+              },
+              softDeletedAt: null,
+              softDeleteReason: "",
+              softDeletedByUserId: null,
+            },
+            $setOnInsert: { createdAt: new Date() },
+          },
+          { upsert: true, timestamps: false },
+        );
+      }
+    }
+    return res.json({ message: nextStatus === "Endorsed" ? "Retirement orphan clients endorsed." : "Retirement orphan clients confirmed.", retirement });
+  } catch (err) {
+    console.error("Update retirement status failed:", err);
+    return res.status(500).json({ message: err.message || "Failed to update retirement status." });
+  }
+});
 
 app.post("/api/manager/agents/:agentId/long-leave", async (req, res) => {
   try {
@@ -2014,6 +2243,253 @@ app.patch("/api/manager/long-leave/:longLeaveId/status", async (req, res) => {
 });
 
 
+
+app.post("/api/manager/retirement/:retirementId/reassign-prospect", async (req, res) => {
+  try {
+    const { retirementId } = req.params;
+    const { prospectId, reassignmentAgentId } = req.body || {};
+    if (!mongoose.Types.ObjectId.isValid(retirementId)) return res.status(400).json({ message: "Invalid retirement ID." });
+    if (!mongoose.Types.ObjectId.isValid(prospectId)) return res.status(400).json({ message: "Invalid prospect ID." });
+    if (!mongoose.Types.ObjectId.isValid(reassignmentAgentId)) return res.status(400).json({ message: "Invalid reassignment agent ID." });
+
+    const [retirement, prospect, reassigneeAgent] = await Promise.all([
+      Retirement.findById(retirementId),
+      Prospect.findById(prospectId),
+      Agent.findById(reassignmentAgentId).populate({ path: "userId", select: "username firstName middleName lastName" }).lean(),
+    ]);
+    if (!retirement) return res.status(404).json({ message: "Retirement record not found." });
+    if (!prospect) return res.status(404).json({ message: "Prospect not found." });
+    if (!reassigneeAgent?.userId?._id) return res.status(404).json({ message: "Selected reassignment agent not found." });
+
+    const originalAgent = await Agent.findOne({ userId: prospect.assignedToUserId })
+      .populate({ path: "userId", select: "username firstName middleName lastName" })
+      .lean();
+    const originalUserId = prospect.assignedToUserId;
+    const reassignedToUserId = reassigneeAgent.userId._id;
+    const reassignedAt = new Date();
+    const prospectName = formatPersonName(prospect);
+    const reassigneeName = formatPersonName(reassigneeAgent.userId);
+    const reassigneeCode = reassigneeAgent.userId.username || "—";
+    const originalAgentName = formatPersonName(originalAgent?.userId || {});
+
+    const leads = await Lead.find({ prospectId: prospect._id }).select("_id leadCode source otherSource status").lean();
+    const leadIds = leads.map((lead) => lead._id);
+    const engagements = leadIds.length ? await LeadEngagement.find({ leadId: { $in: leadIds } }).lean() : [];
+    const engagementIds = engagements.map((engagement) => engagement._id);
+    const policyholders = engagementIds.length
+      ? await Policyholder.find({ leadEngagementId: { $in: engagementIds } }).populate({ path: "productId", select: "productName" })
+      : [];
+    const notificationPolicyholders = policyholders.map((policyholder) => ({
+      policyholderCode: policyholder.policyholderCode || "—",
+      productName: policyholder.productId?.productName || "—",
+      policyNumber: policyholder.policyNumber || "—",
+      status: policyholder.status || "—",
+    }));
+
+    prospect.reassignedToUserId = reassignedToUserId;
+    prospect.reassignedAt = reassignedAt;
+    prospect.source = "System-Assigned";
+    await prospect.save();
+
+    if (leadIds.length) {
+      await Lead.updateMany(
+        { _id: { $in: leadIds } },
+        { $set: { source: "System" }, $unset: { otherSource: "" } },
+      );
+    }
+    const notificationLeads = leads.map((lead) => ({ ...lead, source: "System", otherSource: undefined }));
+
+    if (policyholders.length) {
+      await Policyholder.updateMany(
+        { _id: { $in: policyholders.map((policyholder) => policyholder._id) } },
+        { $set: { reassignedToUserId, reassignedAt } },
+      );
+    }
+
+    if (engagementIds.length) {
+      await ScheduledMeeting.updateMany(
+        { leadEngagementId: { $in: engagementIds }, status: "Scheduled" },
+        { $set: { status: "Cancelled" } },
+      );
+    }
+    const oldTaskIds = await Task.find({ assignedToUserId: originalUserId, prospectId: prospect._id, status: { $in: ["Open", "Overdue"] } }).distinct("_id");
+    await Task.deleteMany({ _id: { $in: oldTaskIds } });
+    const relatedNotificationClauses = [
+      { entityType: "Prospect", entityId: prospect._id },
+      { "metadata.prospectId": String(prospect._id) },
+    ];
+    if (leadIds.length) {
+      relatedNotificationClauses.push({ "metadata.leadId": { $in: leadIds.map((leadId) => String(leadId)) } });
+    }
+    if (oldTaskIds.length) {
+      relatedNotificationClauses.push(
+        { entityType: "Task", entityId: { $in: oldTaskIds } },
+        { "metadata.taskId": { $in: oldTaskIds.map((taskId) => String(taskId)) } },
+      );
+    }
+    const relatedNotificationFilter = {
+      assignedToUserId: originalUserId,
+      $or: relatedNotificationClauses,
+    };
+    await Notification.deleteMany({ ...relatedNotificationFilter, status: "Unread" });
+    await Notification.updateMany(
+      { ...relatedNotificationFilter, status: "Read" },
+      { $set: { "metadata.transferredAway": true, "metadata.reassignedToUserId": String(reassignedToUserId), "metadata.transferReason": "Retirement reassignment" } },
+    );
+
+    const activeLeadIds = new Set(leads.filter((lead) => ["New", "In Progress"].includes(String(lead.status || ""))).map((lead) => String(lead._id)));
+    const activeEngagement = engagements.find((engagement) => activeLeadIds.has(String(engagement.leadId || "")));
+    let taskNotificationPayload = null;
+    if (activeEngagement) {
+      const nextCycle = Number(activeEngagement.contactAttemptCycle || 1) + 1;
+      await LeadEngagement.updateOne(
+        { _id: activeEngagement._id },
+        {
+          $set: {
+            currentStage: "Contacting",
+            currentActivityKey: "contact_attempt",
+            stageStartedAt: reassignedAt,
+            stageCompletedAt: null,
+            contactAttemptsCount: 0,
+            lastContactAttemptNo: 0,
+            lastContactAttemptAt: null,
+            nextAttemptAt: reassignedAt,
+            contactAttemptCycle: nextCycle,
+          },
+          $push: {
+            stageHistory: {
+              stage: "Contacting",
+              startedAt: reassignedAt,
+              completedAt: null,
+              reason: `Retirement orphan client reassigned from ${originalAgentName} to ${reassigneeAgent.userId.username || reassigneeName}.`,
+            },
+          },
+        },
+      );
+      const dueAt = computeContactNewLeadDueAt(reassignedAt);
+      const task = await Task.create({
+        assignedToUserId: reassignedToUserId,
+        prospectId: prospect._id,
+        leadEngagementId: activeEngagement._id,
+        type: "APPROACH",
+        title: "Contact new lead",
+        description: `Contact ${prospectName} regarding this reassigned lead.`,
+        dueAt,
+        status: "Open",
+        dedupeKey: `RETIREMENT_ORPHAN_CONTACT:${activeEngagement._id}:${Date.now()}`,
+      });
+      taskNotificationPayload = { task, dueAt, lead: leads.find((lead) => String(lead._id) === String(activeEngagement.leadId)) };
+    }
+
+    retirement.affectedProspects = ensureLongLeaveReassignedFlags(retirement.affectedProspects).map((item) => {
+      const matchesProspect = String(item.prospectId || item.id || "") === String(prospect._id);
+      if (!matchesProspect) return item;
+      return {
+        ...item,
+        reassigned: true,
+        reassignedAt,
+        reassignedToUserId: String(reassignedToUserId),
+        reassignedToAgentId: String(reassignmentAgentId),
+        reassignedToAgentCode: reassigneeCode,
+        reassignedToAgentName: reassigneeName,
+      };
+    });
+    await retirement.save();
+
+    const leadDescription = formatLeadListForNotification(notificationLeads);
+    const policyholderDescription = formatPolicyholderListForNotification(notificationPolicyholders);
+    const orphanNotificationCreatedAt = new Date();
+    await Notification.create([
+      {
+        assignedToUserId: originalUserId,
+        type: "ORPHAN_CLIENT_TRANSFERRED",
+        title: `Prospect data has been transferred to ${reassigneeCode} - ${reassigneeName}.`,
+        message: `Prospect Name: ${prospectName}. ${leadDescription} ${policyholderDescription}`,
+        entityType: "Prospect",
+        entityId: prospect._id,
+        metadata: { prospectId: String(prospect._id), transferredAway: true, reassignedToUserId: String(reassignedToUserId), retirementId: String(retirement._id) },
+        createdAt: orphanNotificationCreatedAt,
+        updatedAt: orphanNotificationCreatedAt,
+      },
+      {
+        assignedToUserId: reassignedToUserId,
+        type: "ORPHAN_CLIENT_ASSIGNED",
+        title: `${prospect.prospectCode || "—"} - ${prospectName} was reassigned.`,
+        message: `${leadDescription} ${policyholderDescription}`,
+        entityType: "Prospect",
+        entityId: prospect._id,
+        metadata: { prospectId: String(prospect._id), originalUserId: String(originalUserId || ""), retirementId: String(retirement._id) },
+        createdAt: orphanNotificationCreatedAt,
+        updatedAt: orphanNotificationCreatedAt,
+      },
+    ], { timestamps: false });
+
+    if (taskNotificationPayload?.task) {
+      const task = taskNotificationPayload.task;
+      const taskAddedAt = new Date(orphanNotificationCreatedAt.getTime() + 1);
+      await Notification.updateOne(
+        { assignedToUserId: reassignedToUserId, dedupeKey: `TASK_ADDED:${task._id}` },
+        {
+          $setOnInsert: {
+            assignedToUserId: reassignedToUserId,
+            type: "TASK_ADDED",
+            title: "New task added",
+            message: `${task.title} was created for ${prospectName}.`,
+            status: "Unread",
+            entityType: "Task",
+            entityId: task._id,
+            dedupeKey: `TASK_ADDED:${task._id}`,
+            createdAt: taskAddedAt,
+            updatedAt: taskAddedAt,
+          },
+        },
+        { upsert: true, timestamps: false },
+      );
+      if (isDueTodayInManila(task.dueAt)) {
+        const dueTodayAt = new Date(orphanNotificationCreatedAt.getTime() + 2);
+        const lead = taskNotificationPayload.lead || {};
+        const dueTodayDedupeKey = `TASK_DUE_TODAY:${task._id}:${dateKeyInTZ(task.dueAt, "Asia/Manila")}`;
+        await Notification.updateOne(
+          { assignedToUserId: reassignedToUserId, dedupeKey: dueTodayDedupeKey },
+          {
+            $set: {
+              title: "Task due today",
+              message: `${task.title} for ${prospectName} (Lead ${lead.leadCode || "—"}) is due today at ${formatTimeInManila(task.dueAt)}.`,
+              status: "Unread",
+              entityType: "Task",
+              entityId: task._id,
+              metadata: { prospectId: String(prospect._id), leadId: lead._id ? String(lead._id) : undefined, taskId: String(task._id) },
+              updatedAt: dueTodayAt,
+            },
+            $setOnInsert: {
+              assignedToUserId: reassignedToUserId,
+              type: "TASK_DUE_TODAY",
+              dedupeKey: dueTodayDedupeKey,
+              createdAt: dueTodayAt,
+            },
+          },
+          { upsert: true, timestamps: false },
+        );
+      }
+    }
+
+    return res.json({
+      message: `${prospectName} has been reassigned to ${reassigneeName} from ${originalAgentName || "the retired agent"}.`,
+      retirement,
+      reassignment: {
+        reassignedAt,
+        reassignedToUserId,
+        reassignedToAgentId: String(reassignmentAgentId),
+        reassignedToAgentName: reassigneeName,
+        originalAgentName,
+      },
+    });
+  } catch (err) {
+    console.error("Retirement prospect reassignment error:", err);
+    return res.status(500).json({ message: "Failed to reassign retirement orphan prospect." });
+  }
+});
+
 app.post("/api/manager/long-leave/:longLeaveId/reassign-prospect", async (req, res) => {
   try {
     const { longLeaveId } = req.params;
@@ -2071,6 +2547,13 @@ app.post("/api/manager/long-leave/:longLeaveId/reassign-prospect", async (req, r
     prospect.reassignedAt = reassignedAt;
     prospect.source = "System-Assigned";
     await prospect.save();
+    if (leadIds.length) {
+      await Lead.updateMany(
+        { _id: { $in: leadIds } },
+        { $set: { source: "System" }, $unset: { otherSource: "" } },
+      );
+    }
+    const notificationLeads = leads.map((lead) => ({ ...lead, source: "System", otherSource: undefined }));
 
     if (policyholders.length) {
       await Policyholder.updateMany(
@@ -2097,6 +2580,7 @@ app.post("/api/manager/long-leave/:longLeaveId/reassign-prospect", async (req, r
     await longLeave.save();
 
     let taskNotificationPayload = null;
+    const oldTaskIds = await Task.find({ assignedToUserId: originalUserId, prospectId: prospect._id, status: { $in: ["Open", "Overdue"] } }).distinct("_id");
     const activeEngagement = engagements.find((engagement) => String(engagement.leadId || "") === String(activeLead._id));
     if (activeEngagement) {
       const nextCycle = Number(activeEngagement.contactAttemptCycle || 1) + 1;
@@ -2128,7 +2612,7 @@ app.post("/api/manager/long-leave/:longLeaveId/reassign-prospect", async (req, r
         { leadEngagementId: activeEngagement._id, status: "Scheduled" },
         { $set: { status: "Cancelled" } },
       );
-      await Task.deleteMany({ assignedToUserId: originalUserId, prospectId: prospect._id, status: "Open" });
+      await Task.deleteMany({ _id: { $in: oldTaskIds } });
       const dueAt = computeContactNewLeadDueAt(reassignedAt);
       const task = await Task.create({
         assignedToUserId: reassignedToUserId,
@@ -2144,16 +2628,28 @@ app.post("/api/manager/long-leave/:longLeaveId/reassign-prospect", async (req, r
       taskNotificationPayload = { task, dueAt };
     }
 
-    await Notification.deleteMany({
+    const relatedNotificationClauses = [
+      { entityType: "Prospect", entityId: prospect._id },
+      { "metadata.prospectId": String(prospect._id) },
+      { "metadata.leadId": String(activeLead._id) },
+    ];
+    if (oldTaskIds.length) {
+      relatedNotificationClauses.push(
+        { entityType: "Task", entityId: { $in: oldTaskIds } },
+        { "metadata.taskId": { $in: oldTaskIds.map((taskId) => String(taskId)) } },
+      );
+    }
+    const relatedNotificationFilter = {
       assignedToUserId: originalUserId,
-      status: "Unread",
-      $or: [
-        { entityType: "Prospect", entityId: prospect._id },
-        { "metadata.prospectId": String(prospect._id) },
-      ],
-    });
+      $or: relatedNotificationClauses,
+    };
+    await Notification.deleteMany({ ...relatedNotificationFilter, status: "Unread" });
+    await Notification.updateMany(
+      { ...relatedNotificationFilter, status: "Read" },
+      { $set: { "metadata.transferredAway": true, "metadata.reassignedToUserId": String(reassignedToUserId), "metadata.transferReason": "Long leave reassignment" } },
+    );
 
-    const leadDescription = formatLeadListForNotification(leads);
+    const leadDescription = formatLeadListForNotification(notificationLeads);
     const policyholderDescription = formatPolicyholderListForNotification(notificationPolicyholders);
     const orphanNotificationCreatedAt = new Date();
     await Notification.create([
@@ -2247,6 +2743,182 @@ app.post("/api/manager/long-leave/:longLeaveId/reassign-prospect", async (req, r
   } catch (err) {
     console.error("Reassign long leave prospect failed:", err);
     return res.status(500).json({ message: err.message || "Failed to reassign prospect." });
+  }
+});
+
+app.post("/api/manager/long-leave/:longLeaveId/reassign-policyholder", async (req, res) => {
+  try {
+    const { longLeaveId } = req.params;
+    const { policyholderId, reassignmentAgentId } = req.body || {};
+    if (!mongoose.Types.ObjectId.isValid(longLeaveId)) return res.status(400).json({ message: "Invalid long leave ID." });
+    if (!mongoose.Types.ObjectId.isValid(policyholderId)) return res.status(400).json({ message: "Invalid policyholder ID." });
+    if (!mongoose.Types.ObjectId.isValid(reassignmentAgentId)) return res.status(400).json({ message: "Invalid reassignment agent ID." });
+
+    const [longLeave, policyholder, reassigneeAgent] = await Promise.all([
+      LongLeave.findById(longLeaveId),
+      Policyholder.findById(policyholderId).populate({ path: "productId", select: "productName" }),
+      Agent.findById(reassignmentAgentId)
+        .populate({ path: "userId", select: "username firstName middleName lastName" })
+        .lean(),
+    ]);
+    if (!longLeave) return res.status(404).json({ message: "Long leave record not found." });
+    if (!policyholder) return res.status(404).json({ message: "Policyholder not found." });
+    if (!reassigneeAgent?.userId?._id) return res.status(404).json({ message: "Selected reassignment agent not found." });
+
+    const policyholderEngagement = policyholder.leadEngagementId
+      ? await LeadEngagement.findById(policyholder.leadEngagementId).lean()
+      : null;
+    const policyholderLead = policyholderEngagement?.leadId
+      ? await Lead.findById(policyholderEngagement.leadId).lean()
+      : null;
+    const prospect = policyholderLead?.prospectId
+      ? await Prospect.findById(policyholderLead.prospectId)
+      : null;
+    if (!prospect) return res.status(404).json({ message: "Prospect linked to this policyholder was not found." });
+
+    const originalUserId = prospect.assignedToUserId || policyholder.assignedToUserId;
+    const originalAgent = originalUserId
+      ? await Agent.findOne({ userId: originalUserId }).populate({ path: "userId", select: "username firstName middleName lastName" }).lean()
+      : null;
+    const reassignedToUserId = reassigneeAgent.userId._id;
+    const reassignedAt = new Date();
+    const prospectName = formatPersonName(prospect);
+    const reassigneeName = formatPersonName(reassigneeAgent.userId);
+    const reassigneeCode = reassigneeAgent.userId.username || "—";
+    const originalAgentName = formatPersonName(originalAgent?.userId || {});
+
+    const leads = await Lead.find({ prospectId: prospect._id })
+      .select("_id leadCode source otherSource status")
+      .lean();
+    const leadIds = leads.map((lead) => lead._id);
+    const engagements = leadIds.length
+      ? await LeadEngagement.find({ leadId: { $in: leadIds } }).lean()
+      : [];
+    const engagementIds = engagements.map((engagement) => engagement._id);
+    const prospectPolicyholders = engagementIds.length
+      ? await Policyholder.find({ leadEngagementId: { $in: engagementIds } })
+        .populate({ path: "productId", select: "productName" })
+      : [policyholder];
+    const notificationPolicyholders = prospectPolicyholders.map((item) => ({
+      policyholderCode: item.policyholderCode || "—",
+      productName: item.productId?.productName || "—",
+      policyNumber: item.policyNumber || "—",
+      status: item.status || "—",
+    }));
+
+    prospect.reassignedToUserId = reassignedToUserId;
+    prospect.reassignedAt = reassignedAt;
+    prospect.source = "System-Assigned";
+    await prospect.save();
+    if (leadIds.length) {
+      await Lead.updateMany(
+        { _id: { $in: leadIds } },
+        { $set: { source: "System" }, $unset: { otherSource: "" } },
+      );
+    }
+    const notificationLeads = leads.map((lead) => ({ ...lead, source: "System", otherSource: undefined }));
+
+    policyholder.reassignedToUserId = reassignedToUserId;
+    policyholder.reassignedAt = reassignedAt;
+    await policyholder.save();
+
+    const affectedPolicyholders = ensureLongLeaveReassignedFlags(longLeave.affectedPolicyholders).map((item) => {
+      const matchesId = String(item.id || item.policyholderId || "") === String(policyholder._id);
+      const matchesCode = String(item.policyholderCode || "") === String(policyholder.policyholderCode || "");
+      if (!matchesId && !matchesCode) return item;
+      return {
+        ...item,
+        reassigned: true,
+        reassignedAt,
+        reassignedToUserId: String(reassignedToUserId),
+        reassignedToAgentId: String(reassignmentAgentId),
+        reassignedToAgentCode: reassigneeCode,
+        reassignedToAgentName: reassigneeName,
+      };
+    });
+    longLeave.affectedPolicyholders = affectedPolicyholders;
+    await longLeave.save();
+
+    if (engagementIds.length) {
+      await ScheduledMeeting.updateMany(
+        { leadEngagementId: { $in: engagementIds }, status: "Scheduled" },
+        { $set: { status: "Cancelled" } },
+      );
+    }
+
+    if (originalUserId) {
+      await Task.deleteMany({
+        assignedToUserId: originalUserId,
+        status: { $in: ["Open", "Overdue"] },
+        $or: [
+          { prospectId: prospect._id },
+          ...(engagementIds.length ? [{ leadEngagementId: { $in: engagementIds } }] : []),
+        ],
+      });
+
+      const relatedNotificationFilter = {
+        assignedToUserId: originalUserId,
+        $or: [
+          { entityType: "Prospect", entityId: prospect._id },
+          { entityType: "Policyholder", entityId: policyholder._id },
+          { "metadata.prospectId": String(prospect._id) },
+          { "metadata.policyholderId": String(policyholder._id) },
+        ],
+      };
+      await Notification.deleteMany({ ...relatedNotificationFilter, status: "Unread" });
+      await Notification.updateMany(
+        { ...relatedNotificationFilter, status: "Read" },
+        { $set: { "metadata.transferredAway": true, "metadata.reassignedToUserId": String(reassignedToUserId), "metadata.policyholderId": String(policyholder._id) } },
+      );
+    }
+
+    const leadDescription = formatLeadListForNotification(notificationLeads);
+    const policyholderDescription = formatPolicyholderListForNotification(notificationPolicyholders);
+    const orphanNotificationCreatedAt = new Date();
+    const orphanNotifications = [
+      ...(originalUserId ? [{
+        assignedToUserId: originalUserId,
+        type: "ORPHAN_CLIENT_TRANSFERRED",
+        title: `Prospect data has been transferred to ${reassigneeCode} - ${reassigneeName}.`,
+        message: `Prospect Name: ${prospectName}. ${leadDescription} ${policyholderDescription}`,
+        entityType: "Prospect",
+        entityId: prospect._id,
+        metadata: { prospectId: String(prospect._id), policyholderId: String(policyholder._id), transferredAway: true, reassignedToUserId: String(reassignedToUserId) },
+        createdAt: orphanNotificationCreatedAt,
+        updatedAt: orphanNotificationCreatedAt,
+      }] : []),
+      {
+        assignedToUserId: reassignedToUserId,
+        type: "ORPHAN_CLIENT_ASSIGNED",
+        title: `${prospect.prospectCode || "—"} - ${prospectName} was reassigned with ongoing policy - ${policyholder.policyholderCode || "—"}.`,
+        message: `${leadDescription} ${policyholderDescription}`,
+        entityType: "Prospect",
+        entityId: prospect._id,
+        metadata: { prospectId: String(prospect._id), policyholderId: String(policyholder._id), originalUserId: String(originalUserId || "") },
+        createdAt: orphanNotificationCreatedAt,
+        updatedAt: orphanNotificationCreatedAt,
+      },
+    ];
+    await Notification.create(orphanNotifications, { timestamps: false });
+
+    return res.json({
+      message: `${prospectName} with policyholder code ${policyholder.policyholderCode || "—"} has been reassigned to ${reassigneeName} from ${originalAgentName}.`,
+      longLeave,
+      reassignment: {
+        prospectId: String(prospect._id),
+        policyholderId: String(policyholder._id),
+        prospectName,
+        policyholderCode: policyholder.policyholderCode || "—",
+        reassignedAt,
+        reassignedToUserId: String(reassignedToUserId),
+        reassignedToAgentId: String(reassignmentAgentId),
+        reassignedToAgentName: reassigneeName,
+        originalAgentName,
+      },
+    });
+  } catch (err) {
+    console.error("Reassign long leave policyholder failed:", err);
+    return res.status(500).json({ message: err.message || "Failed to reassign policyholder." });
   }
 });
 

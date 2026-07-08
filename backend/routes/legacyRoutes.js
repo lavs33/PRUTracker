@@ -1950,6 +1950,138 @@ app.patch("/api/admin/organization/agents/:agentId", async (req, res) => {
   }
 });
 
+const validatePlainPasswordRequirements = (password = "") => {
+  const errors = [];
+  if (String(password).length < 8) errors.push("Password must be at least 8 characters.");
+  if (!/\d/.test(String(password))) errors.push("Password must include at least one number.");
+  if (!/[^A-Za-z0-9]/.test(String(password))) errors.push("Password must include at least one special character.");
+  return errors;
+};
+
+app.post("/api/agent/profile/password/verify", async (req, res) => {
+  try {
+    const userId = String(req.body?.userId || "").trim();
+    const username = String(req.body?.username || "").trim();
+    const currentPassword = String(req.body?.currentPassword || "");
+
+    if (!currentPassword) {
+      return res.json({ matches: false });
+    }
+
+    const query = mongoose.Types.ObjectId.isValid(userId)
+      ? { _id: userId, role: "AG" }
+      : { username, role: "AG" };
+    const user = await User.findOne(query).select("password").lean();
+
+    return res.json({ matches: !!user && user.password === currentPassword });
+  } catch (err) {
+    console.error("Agent verify password error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+app.patch("/api/agent/profile/password", async (req, res) => {
+  try {
+    const userId = String(req.body?.userId || "").trim();
+    const username = String(req.body?.username || "").trim();
+    const currentPassword = String(req.body?.currentPassword || "");
+    const newPassword = String(req.body?.newPassword || "");
+
+    const passwordErrors = validatePlainPasswordRequirements(newPassword);
+    if (passwordErrors.length) {
+      return res.status(400).json({ message: "New password does not satisfy all requirements.", errors: passwordErrors });
+    }
+
+    const query = mongoose.Types.ObjectId.isValid(userId)
+      ? { _id: userId, role: "AG" }
+      : { username, role: "AG" };
+    const user = await User.findOne(query);
+
+    if (!user) {
+      return res.status(404).json({ message: "Agent account was not found." });
+    }
+
+    if (user.password !== currentPassword) {
+      return res.status(400).json({ message: "Current password does not match.", field: "currentPassword" });
+    }
+
+    user.password = newPassword;
+    await user.save();
+
+    return res.json({ message: "Password successfully updated." });
+  } catch (err) {
+    console.error("Agent update password error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+app.post("/api/manager/profile/password/verify", async (req, res) => {
+  try {
+    const userId = String(req.body?.userId || "").trim();
+    const username = String(req.body?.username || "").trim();
+    const role = String(req.body?.role || "").trim().toUpperCase();
+    const currentPassword = String(req.body?.currentPassword || "");
+
+    if (!["BM", "UM", "AUM"].includes(role)) {
+      return res.status(400).json({ message: "Invalid manager role." });
+    }
+
+    if (!currentPassword) {
+      return res.json({ matches: false });
+    }
+
+    const query = mongoose.Types.ObjectId.isValid(userId)
+      ? { _id: userId, role }
+      : { username, role };
+    const user = await User.findOne(query).select("password").lean();
+
+    return res.json({ matches: !!user && user.password === currentPassword });
+  } catch (err) {
+    console.error("Manager verify password error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+app.patch("/api/manager/profile/password", async (req, res) => {
+  try {
+    const userId = String(req.body?.userId || "").trim();
+    const username = String(req.body?.username || "").trim();
+    const role = String(req.body?.role || "").trim().toUpperCase();
+    const currentPassword = String(req.body?.currentPassword || "");
+    const newPassword = String(req.body?.newPassword || "");
+
+    if (!["BM", "UM", "AUM"].includes(role)) {
+      return res.status(400).json({ message: "Invalid manager role." });
+    }
+
+    const passwordErrors = validatePlainPasswordRequirements(newPassword);
+    if (passwordErrors.length) {
+      return res.status(400).json({ message: "New password does not satisfy all requirements.", errors: passwordErrors });
+    }
+
+    const query = mongoose.Types.ObjectId.isValid(userId)
+      ? { _id: userId, role }
+      : { username, role };
+    const user = await User.findOne(query);
+
+    if (!user) {
+      return res.status(404).json({ message: "Manager account was not found." });
+    }
+
+    if (user.password !== currentPassword) {
+      return res.status(400).json({ message: "Current password does not match.", field: "currentPassword" });
+    }
+
+    user.password = newPassword;
+    await user.save();
+
+    return res.json({ message: "Password successfully updated." });
+  } catch (err) {
+    console.error("Manager update password error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
 app.post("/api/admin/organization/managers/assign", async (req, res) => {
   try {
     const managerType = String(req.body?.managerType || "").trim().toUpperCase();
@@ -2138,6 +2270,151 @@ app.post("/api/admin/organization/managers/assign", async (req, res) => {
     });
   } catch (err) {
     console.error("Admin assign manager error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+});
+
+app.patch("/api/admin/organization/managers/:managerType/:managerId", async (req, res) => {
+  try {
+    const managerType = String(req.params.managerType || "").trim().toUpperCase();
+    const { managerId } = req.params;
+    const ManagerModel = getManagerModelByType(managerType);
+
+    if (!ManagerModel) {
+      return res.status(400).json({ message: "Invalid manager type." });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(managerId)) {
+      return res.status(400).json({ message: "Invalid manager id." });
+    }
+
+    const username = String(req.body?.username || "").trim().toUpperCase();
+    const password = String(req.body?.password || "").trim();
+    const firstName = String(req.body?.firstName || "").trim();
+    const middleName = String(req.body?.middleName || "").trim();
+    const lastName = String(req.body?.lastName || "").trim();
+    const birthday = String(req.body?.birthday || "").trim();
+    const sex = String(req.body?.sex || "").trim() || "Male";
+    const displayPhoto = String(req.body?.displayPhoto || "").trim();
+    const dateEmployed = String(req.body?.dateEmployed || "").trim();
+    const branchId = String(req.body?.branchId || "").trim();
+    const unitId = String(req.body?.unitId || "").trim();
+
+    if (!username) {
+      return res.status(400).json({ message: "Username is required." });
+    }
+
+    if (!firstName || !lastName) {
+      return res.status(400).json({ message: "First name and last name are required." });
+    }
+
+    if (!birthday) {
+      return res.status(400).json({ message: "Birthday is required." });
+    }
+
+    if (!dateEmployed) {
+      return res.status(400).json({ message: "Date employed is required." });
+    }
+
+    if (managerType === "BM" && !mongoose.Types.ObjectId.isValid(branchId)) {
+      return res.status(400).json({ message: "A valid branch is required for BM details." });
+    }
+
+    if ((managerType === "UM" || managerType === "AUM") && !mongoose.Types.ObjectId.isValid(unitId)) {
+      return res.status(400).json({ message: `A valid unit is required for ${managerType} details.` });
+    }
+
+    const manager = await ManagerModel.findById(managerId).populate(buildManagerPopulateQuery(managerType));
+    if (!manager) {
+      return res.status(404).json({ message: "Manager record was not found." });
+    }
+
+    if (manager.isBlocked === true) {
+      return res.status(409).json({ message: "Blocked manager records cannot be edited from this form." });
+    }
+
+    const birthdayDate = new Date(birthday);
+    const employedDate = new Date(dateEmployed);
+
+    if (Number.isNaN(birthdayDate.getTime())) {
+      return res.status(400).json({ message: "Birthday is invalid." });
+    }
+
+    if (Number.isNaN(employedDate.getTime())) {
+      return res.status(400).json({ message: "Date employed is invalid." });
+    }
+
+    if (isFutureDate(birthdayDate)) {
+      return res.status(400).json({ message: "Birthday cannot be in the future." });
+    }
+
+    if (isFutureDate(employedDate)) {
+      return res.status(400).json({ message: "Date employed cannot be in the future." });
+    }
+
+    const age = calculateAgeFromDate(birthdayDate);
+    if (age === null) {
+      return res.status(400).json({ message: "Birthday is invalid." });
+    }
+
+    if (age < 21) {
+      return res.status(400).json({ message: "Managers must be at least 21 years old." });
+    }
+
+    const existingUser = await User.findOne({ _id: { $ne: manager.userId?._id || manager.userId }, username }).lean();
+    if (existingUser) {
+      return res.status(409).json({ message: "Username already exists." });
+    }
+
+    if (managerType === "BM") {
+      const branch = await Branch.findById(branchId).lean();
+      if (!branch) {
+        return res.status(404).json({ message: "Selected branch was not found." });
+      }
+    } else {
+      const unit = await Unit.findById(unitId).lean();
+      if (!unit) {
+        return res.status(404).json({ message: "Selected unit was not found." });
+      }
+    }
+
+    const activeManagerForScope = await findActiveManagerForScope(managerType, { branchId, unitId });
+    if (activeManagerForScope && String(activeManagerForScope._id || "") !== String(manager._id || "")) {
+      return res.status(409).json({ message: `Another active ${managerType} is already assigned to the selected ${managerType === "BM" ? "branch" : "unit"}.` });
+    }
+
+    await User.findByIdAndUpdate(
+      manager.userId?._id || manager.userId,
+      {
+        username,
+        ...(password ? { password } : {}),
+        firstName,
+        middleName,
+        lastName,
+        birthday: birthdayDate,
+        sex,
+        age,
+        displayPhoto,
+        dateEmployed: employedDate,
+      },
+      { new: true, runValidators: true }
+    );
+
+    if (managerType === "BM") {
+      manager.branchId = branchId;
+    } else {
+      manager.unitId = unitId;
+    }
+    await manager.save();
+
+    const updatedManager = await ManagerModel.findById(manager._id).populate(buildManagerPopulateQuery(managerType)).lean();
+
+    return res.json({
+      message: `${managerType} updated successfully.`,
+      manager: formatManagerRecord(updatedManager, managerType),
+    });
+  } catch (err) {
+    console.error("Admin update manager error:", err);
     return res.status(500).json({ message: "Server error." });
   }
 });
