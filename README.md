@@ -475,3 +475,34 @@ The backend package currently has a placeholder `npm test` script. For backend v
 - The orphan module depends on `LongLeave`, `Retirement`, `Prospect`, `Policyholder`, `Task`, and `Notification` data staying in sync during reassignment.
 - KPI assignments are stored in `KpiAssignment` documents keyed by `scopeType` and `scopeId`.
 - Agent-facing prospect and policyholder queries account for reassignment using `reassignedToUserId` where applicable.
+## Deploying to Vercel
+
+This repository is configured for a Vercel deployment with the React frontend served from `frontend/build` and the Express API exposed through `api/index.js`.
+
+### Required environment variables
+
+Set these in **Vercel Project Settings → Environment Variables** before deploying:
+
+| Variable | Where | Description |
+| --- | --- | --- |
+| `MONGO_URI` | Server | MongoDB Atlas connection string used by the Express API. |
+| `REACT_APP_API_BASE_URL` | Frontend | API base URL for browser requests. Leave blank for same-origin Vercel deployments, or set to your deployed backend origin if the API is hosted separately. |
+| `CORS_ORIGIN` | Server | Optional comma-separated list of allowed frontend origins. Omit to allow all origins. |
+
+### Vercel settings
+
+Use the repository root as the Vercel project root. The included `vercel.json` handles the build and routing configuration:
+
+- Vercel installs both `frontend` and `backend` dependencies before building.
+- `/api/*` routes are served by the Express app through `api/index.js`.
+- All other routes are served by the React static build in `frontend/build`, with React Router paths falling back to `index.html`.
+
+### Local deployment check
+
+Before pushing to Vercel, run:
+
+```bash
+cd frontend && npm run build
+```
+
+You can then import the repository in Vercel or run `vercel --prod` from the repository root after installing and logging in to the Vercel CLI.
