@@ -4,6 +4,7 @@ import TopNav from "./components/TopNav";
 import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
 import "./AgentSalesPerformance.css";
+import { API_BASE } from "./config/api";
 
 const DATE_PRESETS = [
   { value: "ALL", label: "All Time" },
@@ -133,7 +134,7 @@ function AgentSalesPerformance() {
       datePreset: filters.datePreset,
       leadSource: filters.leadSource,
     });
-    const res = await fetch(`http://localhost:5000/api/sales/performance?${params.toString()}`, signal ? { signal } : undefined);
+    const res = await fetch(`${API_BASE}/api/sales/performance?${params.toString()}`, signal ? { signal } : undefined);
     const payload = await res.json();
     if (!res.ok) throw new Error(payload?.message || "Failed to load sales performance.");
     setData({ ...DEFAULT_DATA, ...payload });

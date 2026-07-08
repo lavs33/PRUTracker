@@ -12,6 +12,7 @@ import {
 import './AdminOrganizationPage.css';
 import AdminNav from './components/AdminNav';
 import logo from './assets/prutracker-navbar-logo.png';
+import { API_BASE } from "./config/api";
 
 const EMPTY_AREA_FORM = { areaName: '' };
 const EMPTY_BRANCH_FORM = { branchName: '', areaId: '' };
@@ -334,7 +335,7 @@ function AdminOrganizationPage() {
       const params = new URLSearchParams();
       if (String(nextOverviewSearch || '').trim()) params.set('overviewSearch', String(nextOverviewSearch).trim());
       const query = params.toString();
-      const res = await fetch(`http://localhost:5000/api/admin/organization/tree${query ? `?${query}` : ''}`);
+      const res = await fetch(`${API_BASE}/api/admin/organization/tree${query ? `?${query}` : ''}`);
       const data = await res.json();
 
       if (!res.ok) {
@@ -371,7 +372,7 @@ function AdminOrganizationPage() {
 
   const fetchFormOptions = useCallback(async () => {
     try {
-      const res = await fetch('http://localhost:5000/api/admin/organization/form-options');
+      const res = await fetch(`${API_BASE}/api/admin/organization/form-options`);
       const data = await res.json();
 
       if (!res.ok) {
@@ -398,7 +399,7 @@ function AdminOrganizationPage() {
       if (nextManagerType.trim()) params.set('managerType', nextManagerType.trim());
 
       const query = params.toString();
-      const res = await fetch(`http://localhost:5000/api/admin/organization/list-data${query ? `?${query}` : ''}`);
+      const res = await fetch(`${API_BASE}/api/admin/organization/list-data${query ? `?${query}` : ''}`);
       const data = await res.json();
 
       if (!res.ok) {
@@ -782,7 +783,7 @@ function AdminOrganizationPage() {
     }
 
     try {
-      const res = await fetch('http://localhost:5000/api/admin/organization/areas', {
+      const res = await fetch(`${API_BASE}/api/admin/organization/areas`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(addAreaForm),
@@ -829,7 +830,7 @@ function AdminOrganizationPage() {
     }
 
     try {
-      const res = await fetch(`http://localhost:5000/api/admin/organization/areas/${editAreaId}`, {
+      const res = await fetch(`${API_BASE}/api/admin/organization/areas/${editAreaId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(editAreaForm),
@@ -876,7 +877,7 @@ function AdminOrganizationPage() {
     }
 
     try {
-      const res = await fetch('http://localhost:5000/api/admin/organization/branches', {
+      const res = await fetch(`${API_BASE}/api/admin/organization/branches`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(addBranchForm),
@@ -929,7 +930,7 @@ function AdminOrganizationPage() {
     }
 
     try {
-      const res = await fetch(`http://localhost:5000/api/admin/organization/branches/${editBranchId}`, {
+      const res = await fetch(`${API_BASE}/api/admin/organization/branches/${editBranchId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(editBranchForm),
@@ -976,7 +977,7 @@ function AdminOrganizationPage() {
     }
 
     try {
-      const res = await fetch('http://localhost:5000/api/admin/organization/units', {
+      const res = await fetch(`${API_BASE}/api/admin/organization/units`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(addUnitForm),
@@ -1029,7 +1030,7 @@ function AdminOrganizationPage() {
     }
 
     try {
-      const res = await fetch(`http://localhost:5000/api/admin/organization/units/${editUnitId}`, {
+      const res = await fetch(`${API_BASE}/api/admin/organization/units/${editUnitId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(editUnitForm),
@@ -1196,7 +1197,7 @@ function AdminOrganizationPage() {
     }
 
     try {
-      const res = await fetch('http://localhost:5000/api/admin/organization/agents', {
+      const res = await fetch(`${API_BASE}/api/admin/organization/agents`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -1335,7 +1336,7 @@ function AdminOrganizationPage() {
     }
 
     try {
-      const res = await fetch(`http://localhost:5000/api/admin/organization/agents/${editAgentId}`, {
+      const res = await fetch(`${API_BASE}/api/admin/organization/agents/${editAgentId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -1483,7 +1484,7 @@ function AdminOrganizationPage() {
     }
 
     try {
-      const res = await fetch(`http://localhost:5000/api/admin/organization/managers/${payload.managerType}/${editManagerId}`, {
+      const res = await fetch(`${API_BASE}/api/admin/organization/managers/${payload.managerType}/${editManagerId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -1547,7 +1548,7 @@ function AdminOrganizationPage() {
 
     try {
       setIsSavingManager(true);
-      const res = await fetch('http://localhost:5000/api/admin/organization/managers/assign', {
+      const res = await fetch(`${API_BASE}/api/admin/organization/managers/assign`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(createManagerForm),

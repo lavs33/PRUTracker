@@ -5,6 +5,7 @@ import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
 import { normalizePolicyholderStatus } from "./utils/policyholderStatus";
 import "./AgentAnnualPaymentRecord.css";
+import { API_BASE } from "./config/api";
 
 function AgentAnnualPaymentRecord() {
   const navigate = useNavigate();
@@ -49,7 +50,7 @@ function AgentAnnualPaymentRecord() {
         setApiError("");
 
         const res = await fetch(
-          `http://localhost:5000/api/policyholders/${policyholderId}/annual-payments/${annualPaymentId}?userId=${user.id}`,
+          `${API_BASE}/api/policyholders/${policyholderId}/annual-payments/${annualPaymentId}?userId=${user.id}`,
           { signal: controller.signal }
         );
         const data = await res.json();

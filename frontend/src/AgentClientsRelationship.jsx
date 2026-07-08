@@ -4,6 +4,7 @@ import TopNav from "./components/TopNav";
 import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
 import "./AgentClientsRelationship.css";
+import { API_BASE } from "./config/api";
 
 const DATE_PRESETS = [
   { value: "ALL", label: "All Time" },
@@ -148,7 +149,7 @@ function AgentClientsRelationship() {
         status: filters.status,
       });
 
-      const res = await fetch(`http://localhost:5000/api/clients/relationship/dashboard?${params.toString()}`, {
+      const res = await fetch(`${API_BASE}/api/clients/relationship/dashboard?${params.toString()}`, {
         signal,
       });
       const payload = await res.json();
