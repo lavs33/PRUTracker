@@ -14,46 +14,61 @@ const MODULES = [
   {
     title: "Client & Orphan Visibility and Management",
     summary:
-      "Centralized visibility for clients and orphaned clients, with searchable profiles, policy context, recent activity cues, and follow-up indicators.",
+      "Keep prospect, lead, policyholder, and orphan-client records organized under the agent currently handling the relationship.",
     highlights: [
-      "Unified client and orphan lists with quick search",
-      "Profile-level context: policy type, status, and activity signals",
-      "Weighted orphan recommendation support (specialization, load, fit)",
+      "Prospect, lead, and policyholder lists with complete client details",
+      "Lead engagement history, policy information, and payment records in agent views",
+      "Long-leave and retirement orphan clients reassigned without losing original history",
     ],
     imageSrc: module1Image,
   },
   {
     title: "Agent Task Visibility and Management",
     summary:
-      "Role-aware task dashboards for agents and managers, with progress snapshots and monthly performance reporting to guide coaching and accountability.",
+      "Help agents and managers monitor daily work through tasks, reminders, meetings, notifications, and progress dashboards.",
     highlights: [
-      "Agent, unit, and branch-level visibility by role",
-      "Task progress and productivity trends",
-      "Monthly performance summary reports",
+      "Open, overdue, completed, missed, and due-today task tracking",
+      "Contact-new-lead and follow-up workflows tied to the assigned agent",
+      "Unit and branch task reports for coaching and performance review",
     ],
     imageSrc: module2Image,
   },
   {
     title: "Sales Monitoring and Analytics",
     summary:
-      "Visual sales analytics with KPI tracking, trend comparison, and report outputs to support data-informed sales decisions.",
+      "Review sales performance, active policies, annual premium production, conversion results, and KPI progress across agent and manager portals.",
     highlights: [
-      "Current vs historical performance trend views",
-      "KPI and conversion-focused monitoring",
-      "Sales reporting for documentation and records",
+      "Agent sales dashboards with client, lead, policy, and premium context",
+      "UM/AUM/BM rollups for unit and branch sales performance",
+      "Printable manager reports for clients, tasks, sales, and KPI progress",
     ],
     imageSrc: module3Image,
   },
   {
     title: "Orphan and KPI Assignment",
     summary:
-      "Branch-level controls for orphan assignment decisions and KPI alignment so units stay focused on shared performance goals.",
+      "Support BM and UM workflows for KPI setup, long-leave or retirement endorsements, recommended-agent review, and orphan reassignment.",
     highlights: [
-      "Manager review and assignment of orphan recommendations",
-      "Centralized branch KPI setup and visibility",
-      "Performance-overview dashboards for corrective actions",
+      "Record long leave or retirement and confirm affected orphan clients",
+      "Endorse orphan clients to the UM portal for reassignment follow-through",
+      "Track reassignment progress and recommended-agent metrics",
     ],
     imageSrc: module4Image,
+  },
+];
+
+const OVERVIEW_CARDS = [
+  {
+    label: "Role-based portals",
+    text: "Separate workspaces for agents, UM/AUM/BM managers, admins, and endorsed orphan-client handling.",
+  },
+  {
+    label: "Client lifecycle",
+    text: "Prospecting, lead engagement, policyholder servicing, payments, and historical reassignment context.",
+  },
+  {
+    label: "Performance visibility",
+    text: "Dashboards and printable reports for clients, tasks, sales production, KPI progress, units, and branches.",
   },
 ];
 
@@ -117,23 +132,39 @@ function LandingPage() {
           <div className="mp-hero-inner">
             <div className="mp-hero-copy">
               <span className="mp-chip">Pru Life UK's Salesforce Automation System</span>
-              <h1>Track client relationships, tasks, and sales performance in one place.</h1>
+              <h1>Manage agency operations from prospecting to policy servicing.</h1>
               <p>
-                PRUTracker is designed to support Pru Life UK agents and managers with visibility dashboards,
-                structured workflows, and decision support tools for client and branch performance.
+                PRUTracker supports agents, UM/AUM/BM managers, and administrators with role-based dashboards for
+                clients, lead engagement, tasks, sales production, KPI progress, long-leave endorsements, retirement
+                endorsements, and orphan-client reassignment workflows.
               </p>
+              <div className="mp-hero-actions" aria-label="System capabilities">
+                <a href="#modules" className="mp-primary-link">Explore functions</a>
+                <span>Ownership-aware client records</span>
+                <span>Printable manager reports</span>
+              </div>
             </div>
 
             <figure className="mp-hero-imageWrap" aria-label="Header visual">
               <img src={heroImage} alt="Pru Life UK overview visual" className="mp-hero-image" />
             </figure>
           </div>
+
+          <div className="mp-overview-cards" aria-label="PRUTracker overview highlights">
+            {OVERVIEW_CARDS.map((card) => (
+              <article key={card.label} className="mp-overview-card">
+                <h2>{card.label}</h2>
+                <p>{card.text}</p>
+              </article>
+            ))}
+          </div>
         </section>
 
         <section id="modules" className="mp-modules">
           <div className="mp-modules-head">
+            <span className="mp-section-kicker">Functions</span>
             <h2>PRUTracker Core at a Glance</h2>
-            <p>What PRUTracker offers for Pru Life UK agents, managers, and units.</p>
+            <p>Current system capabilities across agent, manager, and admin workflows.</p>
           </div>
 
           <div className="mp-module-grid">

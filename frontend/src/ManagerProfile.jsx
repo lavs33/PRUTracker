@@ -18,6 +18,15 @@ function ManagerProfile({ roleType }) {
 
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
+  const [currentPasswordTouched, setCurrentPasswordTouched] = useState(false);
+  const [newPasswordTouched, setNewPasswordTouched] = useState(false);
+  const [currentPasswordMatches, setCurrentPasswordMatches] = useState(false);
+  const [isCheckingCurrentPassword, setIsCheckingCurrentPassword] = useState(false);
+  const [isSavingPassword, setIsSavingPassword] = useState(false);
+  const [passwordServerError, setPasswordServerError] = useState("");
+  const [passwordSuccessOpen, setPasswordSuccessOpen] = useState(false);
+
+  const roleLabel = String(user?.role || roleType || "BM").toUpperCase();
 
   useEffect(() => {
     const normalizedRole = String(roleType || user?.role || "").trim().toUpperCase();
@@ -30,7 +39,61 @@ function ManagerProfile({ roleType }) {
     if (user) document.title = `${user.username} | Profile`;
   }, [user]);
 
+  const newPasswordErrors = useMemo(() => {
+    const errors = [];
+    if (newPassword.length < 8) errors.push("Password must be at least 8 characters.");
+    if (!/\d/.test(newPassword)) errors.push("Password must include at least one number.");
+    if (!/[^A-Za-z0-9]/.test(newPassword)) errors.push("Password must include at least one special character.");
+    return errors;
+  }, [newPassword]);
+
+  useEffect(() => {
+    setPasswordServerError("");
+    setCurrentPasswordMatches(false);
+
+    if (!currentPassword) {
+      setIsCheckingCurrentPassword(false);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      setIsCheckingCurrentPassword(true);
+
+      try {
+        const res = await fetch("http://localhost:5000/api/manager/profile/password/verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            userId: user?.id || "",
+            username: user?.username || username,
+            role: roleLabel,
+            currentPassword,
+          }),
+          signal: controller.signal,
+        });
+        const data = await res.json();
+        if (!controller.signal.aborted) setCurrentPasswordMatches(res.ok && data.matches === true);
+      } catch (err) {
+        if (!controller.signal.aborted) setCurrentPasswordMatches(false);
+      } finally {
+        if (!controller.signal.aborted) setIsCheckingCurrentPassword(false);
+      }
+    }, 300);
+
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
+  }, [currentPassword, roleLabel, user?.id, user?.username, username]);
+
   if (!user || user.username !== username) return null;
+
+  const currentPasswordError = currentPasswordTouched && currentPassword && !isCheckingCurrentPassword && !currentPasswordMatches
+    ? "Current password does not match."
+    : "";
+  const visibleNewPasswordErrors = newPasswordTouched ? newPasswordErrors : [];
+  const canSavePassword = currentPasswordMatches && newPasswordErrors.length === 0 && !isCheckingCurrentPassword && !isSavingPassword;
 
   const formatDate = (value) => {
     if (!value) return "Not available yet";
@@ -46,20 +109,56 @@ function ManagerProfile({ roleType }) {
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase())
     .join("");
-  const roleLabel = String(user.role || "BM").toUpperCase();
   const managerTypeLabel = { AUM: "Assistant Unit Manager", UM: "Unit Manager", BM: "Branch Manager" }[roleLabel] || "Manager";
   const branchName = user.branchName || "Not available yet";
   const unitName = user.unitName || "Not available yet";
   const areaName = user.areaName || "Not available yet";
 
-  const handleSavePassword = () => {
-    if (!currentPassword || !newPassword) {
-      alert("Please enter current password and new password.");
+  const handleSavePassword = async () => {
+    setCurrentPasswordTouched(true);
+    setNewPasswordTouched(true);
+    setPasswordServerError("");
+
+    if (!canSavePassword) {
       return;
     }
-    alert("Password successfully changed!");
-    setCurrentPassword("");
-    setNewPassword("");
+
+    setIsSavingPassword(true);
+
+    try {
+      const res = await fetch("http://localhost:5000/api/manager/profile/password", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: user.id || "",
+          username: user.username,
+          role: roleLabel,
+          currentPassword,
+          newPassword,
+        }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        if (data.field === "currentPassword") {
+          setCurrentPasswordMatches(false);
+          setCurrentPasswordTouched(true);
+        }
+        setPasswordServerError(data.message || "Failed to update password.");
+        return;
+      }
+
+      setCurrentPassword("");
+      setNewPassword("");
+      setCurrentPasswordTouched(false);
+      setNewPasswordTouched(false);
+      setCurrentPasswordMatches(false);
+      setPasswordSuccessOpen(true);
+    } catch {
+      setPasswordServerError("Cannot connect to server. Is backend running?");
+    } finally {
+      setIsSavingPassword(false);
+    }
   };
 
   const personalInfo = [
@@ -194,8 +293,14 @@ function ManagerProfile({ roleType }) {
                   placeholder="Enter current password"
                   type="password"
                   value={currentPassword}
-                  onChange={(event) => setCurrentPassword(event.target.value)}
+                  onBlur={() => setCurrentPasswordTouched(true)}
+                  onChange={(event) => {
+                    setCurrentPasswordTouched(true);
+                    setCurrentPassword(event.target.value);
+                  }}
                 />
+                {isCheckingCurrentPassword ? <small className="password-helper">Checking current password...</small> : null}
+                {currentPasswordError ? <small className="password-error">{currentPasswordError}</small> : null}
               </label>
 
               <label className="password-field">
@@ -205,15 +310,27 @@ function ManagerProfile({ roleType }) {
                   placeholder="Enter new password"
                   type="password"
                   value={newPassword}
-                  onChange={(event) => setNewPassword(event.target.value)}
+                  onBlur={() => setNewPasswordTouched(true)}
+                  onChange={(event) => {
+                    setNewPasswordTouched(true);
+                    setNewPassword(event.target.value);
+                  }}
                 />
+                {visibleNewPasswordErrors.length ? (
+                  <div className="password-error-list">
+                    {visibleNewPasswordErrors.map((error) => (
+                      <small key={error} className="password-error">{error}</small>
+                    ))}
+                  </div>
+                ) : null}
               </label>
 
-              <button className="save-btn" onClick={handleSavePassword}>
+              <button className="save-btn" onClick={handleSavePassword} disabled={!canSavePassword}>
                 <FiKey aria-hidden="true" />
-                Save Password
+                {isSavingPassword ? "Saving..." : "Save Password"}
               </button>
             </div>
+            {passwordServerError ? <p className="password-server-error">{passwordServerError}</p> : null}
           </section>
         </div>
 
@@ -223,6 +340,22 @@ function ManagerProfile({ roleType }) {
           </button>
         </div>
       </div>
+      {passwordSuccessOpen ? (
+        <div className="password-modal-backdrop" role="presentation">
+          <div className="password-modal" role="dialog" aria-modal="true" aria-labelledby="manager-password-success-title">
+            <button
+              type="button"
+              className="password-modal-close"
+              aria-label="Close password update confirmation"
+              onClick={() => setPasswordSuccessOpen(false)}
+            >
+              ×
+            </button>
+            <h2 id="manager-password-success-title">Password successfully updated</h2>
+            <p>Your new password has been saved.</p>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
