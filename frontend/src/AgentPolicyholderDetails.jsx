@@ -5,6 +5,7 @@ import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
 import { normalizePolicyholderStatus } from "./utils/policyholderStatus";
 import "./AgentPolicyholderDetails.css";
+import { API_BASE } from "./config/api";
 
 function AgentPolicyholderDetails() {
   const navigate = useNavigate();
@@ -50,7 +51,7 @@ function AgentPolicyholderDetails() {
         setApiError("");
 
         const res = await fetch(
-          `http://localhost:5000/api/policyholders/${policyholderId}/details?userId=${user.id}&_=${Date.now()}`,
+          `${API_BASE}/api/policyholders/${policyholderId}/details?userId=${user.id}&_=${Date.now()}`,
           { signal: controller.signal, cache: "no-store" }
         );
         const data = await res.json();

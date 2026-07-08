@@ -5,6 +5,7 @@ import TopNav from "./components/TopNav";
 import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
 import "./AgentTasks.css";
+import { API_BASE } from "./config/api";
 
 function AgentTasks() {
   const navigate = useNavigate();
@@ -18,7 +19,6 @@ function AgentTasks() {
     }
   }, []);
 
-  const API_BASE = "http://localhost:5000";
 
   const [loading, setLoading] = useState(true);
   const [apiError, setApiError] = useState("");
@@ -145,7 +145,7 @@ function AgentTasks() {
       setDueTodayTop5(normalizeTasks(data?.dueTodayTop5));
       setRecentlyAddedTop5(normalizeTasks(data?.recentlyAddedTop5));
     },
-    [API_BASE, user?.id]
+    [user?.id]
   );
 
   useEffect(() => {

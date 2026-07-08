@@ -5,6 +5,7 @@ import TopNav from "./components/TopNav";
 import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
 import "./AgentTasksProgress.css";
+import { API_BASE } from "./config/api";
 
 const TASK_TYPES = ["APPROACH", "FOLLOW_UP", "UPDATE_CONTACT_INFO", "APPOINTMENT", "PRESENTATION"];
 const DATE_PRESETS = [
@@ -65,7 +66,6 @@ function AgentTasksProgress() {
   const [typeFilter, setTypeFilter] = useState("ALL");
   const [selectedTypeDrill, setSelectedTypeDrill] = useState("");
 
-  const API_BASE = "http://localhost:5000";
 
   useEffect(() => {
     if (!user || user.username !== username) navigate("/", { replace: true });
@@ -108,7 +108,7 @@ function AgentTasksProgress() {
       });
       setLastUpdated(new Date());
     },
-    [API_BASE, user?.id, datePreset, typeFilter, selectedTypeDrill]
+    [user?.id, datePreset, typeFilter, selectedTypeDrill]
   );
 
   useEffect(() => {

@@ -4,6 +4,7 @@ import { logout } from "./utils/logout";
 import { FaArrowLeft } from "react-icons/fa";
 import { FiBriefcase, FiCalendar, FiKey, FiMapPin, FiShield, FiUser } from "react-icons/fi";
 import "./AgentProfile.css";
+import { API_BASE } from "./config/api";
 
 function AgentProfile() {
   const navigate = useNavigate();
@@ -68,7 +69,7 @@ function AgentProfile() {
       setIsCheckingCurrentPassword(true);
 
       try {
-        const res = await fetch("http://localhost:5000/api/agent/profile/password/verify", {
+        const res = await fetch(`${API_BASE}/api/agent/profile/password/verify`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -113,7 +114,7 @@ function AgentProfile() {
     setIsSavingPassword(true);
 
     try {
-      const res = await fetch("http://localhost:5000/api/agent/profile/password", {
+      const res = await fetch(`${API_BASE}/api/agent/profile/password`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

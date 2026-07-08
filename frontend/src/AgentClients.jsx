@@ -5,6 +5,7 @@ import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
 import { normalizePolicyholderStatus, policyholderStatusClass } from "./utils/policyholderStatus";
 import "./AgentClients.css";
+import { API_BASE } from "./config/api";
 
 function AgentClients() {
   const navigate = useNavigate();
@@ -67,7 +68,7 @@ function AgentClients() {
         }
 
         const res = await fetch(
-          `http://localhost:5000/api/prospects/recent?userId=${user.id}&limit=5`,
+          `${API_BASE}/api/prospects/recent?userId=${user.id}&limit=5`,
           { signal: controller.signal }
         );
 
@@ -114,7 +115,7 @@ function AgentClients() {
         }
 
         const res = await fetch(
-          `http://localhost:5000/api/policyholders/recent?userId=${user.id}&limit=5`,
+          `${API_BASE}/api/policyholders/recent?userId=${user.id}&limit=5`,
           { signal: controller.signal }
         );
 

@@ -4,6 +4,7 @@ import TopNav from "./components/TopNav";
 import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
 import "./AgentTasksAll.css";
+import { API_BASE } from "./config/api";
 
 const TASK_TYPES = [
   "APPROACH",
@@ -49,7 +50,6 @@ function AgentTasksAll() {
   const [apiError, setApiError] = useState("");
   const [tasksRaw, setTasksRaw] = useState([]);
 
-  const API_BASE = "http://localhost:5000";
 
   // Guard
   useEffect(() => {
@@ -142,7 +142,7 @@ function AgentTasksAll() {
       const arr = Array.isArray(data?.tasks) ? data.tasks : Array.isArray(data) ? data : [];
       setTasksRaw(arr);
     },
-    [API_BASE, user?.id]
+    [user?.id]
   );
 
   // Load tasks from backend

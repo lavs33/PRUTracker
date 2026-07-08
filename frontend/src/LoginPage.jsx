@@ -3,8 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { FaArrowLeft } from "react-icons/fa";
 import "./LoginPage.css";
 import logo from "./assets/prutracker-landing-logo.png";
+import { API_BASE } from "./config/api";
 
-const API_BASE = "http://localhost:5000";
 
 function LoginPage() {
   const navigate = useNavigate();

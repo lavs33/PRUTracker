@@ -6,6 +6,7 @@ import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
 import "./AgentLeadEngagement.css";
 import { PH_CITY_REGION_OPTIONS, CITY_TO_REGION } from "./constants/phCityRegionOptions";
+import { API_BASE } from "./config/api";
 
 function SubactivityNavigator({
   steps,
@@ -573,7 +574,6 @@ function AgentLeadEngagement() {
     setIsReady(true);
   }, [user, username, navigate]);
 
-  const API_BASE = "http://localhost:5000";
 
   const fetchEngagement = useCallback(
     async (signal) => {
@@ -815,7 +815,7 @@ function AgentLeadEngagement() {
       });
       setApplicationMeetingPrefillKey("");
     },
-    [API_BASE, historyStageView, leadId, prospectId, selectedHistoryCycle, user?.id]
+    [historyStageView, leadId, prospectId, selectedHistoryCycle, user?.id]
   );
 
 
@@ -836,7 +836,7 @@ function AgentLeadEngagement() {
     } finally {
       setLoadingAvailability(false);
     }
-  }, [API_BASE, user?.id]);
+  }, [user?.id]);
 
   const fetchNeedsAssessment = useCallback(async () => {
     if (!user?.id) return;
@@ -1182,7 +1182,7 @@ function AgentLeadEngagement() {
       setNeedsAssessmentLoading(false);
       needsDraftReadyRef.current = true;
     }
-  }, [API_BASE, historyStageView, leadId, prospectId, selectedHistoryCycle, user?.id]);
+  }, [historyStageView, leadId, prospectId, selectedHistoryCycle, user?.id]);
 
 
   // Fetch engagement details

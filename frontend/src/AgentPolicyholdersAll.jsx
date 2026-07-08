@@ -5,6 +5,7 @@ import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
 import { normalizePolicyholderStatus, policyholderStatusClass } from "./utils/policyholderStatus";
 import "./AgentPolicyholdersAll.css";
+import { API_BASE } from "./config/api";
 
 function AgentPolicyholdersAll() {
   const navigate = useNavigate();
@@ -69,7 +70,7 @@ function AgentPolicyholdersAll() {
         }
 
         const res = await fetch(
-          `http://localhost:5000/api/policyholders?userId=${user.id}&page=${page}&limit=${PAGE_SIZE}` +
+          `${API_BASE}/api/policyholders?userId=${user.id}&page=${page}&limit=${PAGE_SIZE}` +
             `&q=${encodeURIComponent(query)}` +
             `&productName=${encodeURIComponent(productName)}` +
             `&status=${encodeURIComponent(status)}` +
