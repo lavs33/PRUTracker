@@ -369,7 +369,6 @@ PRUTracker/
 │   ├── controllers/          # Route controller helpers, including auth and notifications
 │   ├── models/               # Mongoose schemas for users, agents, sales workflows, orphan flows, and KPIs
 │   ├── routes/               # Auth, notification, and legacy API route registration
-│   ├── scripts/              # Data backfill scripts
 │   ├── seed/                 # Admin/product/product-term seed scripts
 │   ├── utils/                # Backend utility helpers
 │   ├── server.js             # Express app, MongoDB connection, manager orphan routes, KPI routes
@@ -441,19 +440,15 @@ The frontend is a Create React App application. If the frontend needs to call a 
 
 ---
 
-## Seed and Backfill Scripts
+## Seed Scripts
 
-Available backend scripts include:
+Available backend seed scripts include:
 
 ```bash
 node backend/seed/seedAdmin.js
 node backend/seed/seed-products.js
 node backend/seed/seed-product-terms.js
-node backend/scripts/backfill-long-leave-reassigned-flags.js
-node backend/scripts/backfill-needs-assessment-attempt-cycles.js
 ```
-
-Use the backfill scripts when migrating older data that predates newer schema fields such as long-leave reassignment flags or needs-assessment attempt cycles.
 
 ---
 
