@@ -1,8 +1,9 @@
 /**
- * LongLeave Model
- * ---------------
- * Stores long-leave details recorded for an Agent, including required leave
- * dates and supporting proof documents used by branch workflows.
+ * Retirement Model
+ * ----------------
+ * Stores retirement details recorded for an Agent, including retirement date,
+ * required supporting documents, orphan-client endorsement status, and affected
+ * client snapshots used by manager workflows.
  */
 const mongoose = require("mongoose");
 
@@ -13,7 +14,7 @@ const affectedClientSchema = new mongoose.Schema(
   { _id: false, strict: false }
 );
 
-const longLeaveSchema = new mongoose.Schema(
+const retirementSchema = new mongoose.Schema(
   {
     agentId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -27,20 +28,16 @@ const longLeaveSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
-    leaveStartDate: {
+    retirementDate: {
       type: Date,
       required: true,
     },
-    leaveEndDate: {
-      type: Date,
-      required: true,
-    },
-    leaveApplicationForm: {
+    retirementLetter: {
       fileName: { type: String, required: true, trim: true },
       mimeType: { type: String, required: true, trim: true },
       dataUrl: { type: String, required: true },
     },
-    approvedLeaveProof: {
+    approvedRetirementProof: {
       fileName: { type: String, required: true, trim: true },
       mimeType: { type: String, required: true, trim: true },
       dataUrl: { type: String, required: true },
@@ -50,10 +47,6 @@ const longLeaveSchema = new mongoose.Schema(
       enum: ["Recorded", "Confirmed Orphans", "Endorsed"],
       default: "Recorded",
       index: true,
-    },
-    includeOngoingPolicyholders: {
-      type: Boolean,
-      default: false,
     },
     affectedProspects: {
       type: [affectedClientSchema],
@@ -67,4 +60,4 @@ const longLeaveSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-module.exports = mongoose.model("LongLeave", longLeaveSchema);
+module.exports = mongoose.model("Retirement", retirementSchema);
