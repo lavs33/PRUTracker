@@ -1,6 +1,7 @@
 function registerLegacyRoutes(app, deps) {
   const {
     mongoose,
+    connectToMongo,
     User,
     Admin,
     Agent,
@@ -59,9 +60,13 @@ function registerLegacyRoutes(app, deps) {
   } = deps;
   async function waitForMongooseConnection() {
     if (mongoose.connection.readyState === 1 && mongoose.connection.db) return;
-    if (typeof mongoose.connection.asPromise === "function") {
+
+    if (typeof connectToMongo === "function") {
+      await connectToMongo();
+    } else if (typeof mongoose.connection.asPromise === "function") {
       await mongoose.connection.asPromise();
     }
+
     if (mongoose.connection.readyState !== 1 || !mongoose.connection.db) {
       throw new Error("MongoDB connection is not ready.");
     }

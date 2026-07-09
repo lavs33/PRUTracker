@@ -3383,6 +3383,7 @@ app.get("/api/agent/kpi-progress", async (req, res) => {
 ========================================================= */
 registerLegacyRoutes(app, {
   mongoose,
+  connectToMongo,
   User,
   Admin,
   Agent,
