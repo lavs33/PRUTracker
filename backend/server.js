@@ -1904,14 +1904,14 @@ function connectToMongo() {
     return Promise.resolve(null);
   }
 
-  if (mongoose.connection.readyState === 1) {
+  if (mongoose.connection.readyState === 1 && mongoose.connection.db) {
     return Promise.resolve(mongoose.connection);
   }
 
   if (!mongoConnectionPromise) {
     mongoConnectionPromise = mongoose
       .connect(process.env.MONGO_URI, {
-        serverSelectionTimeoutMS: 10000,
+        serverSelectionTimeoutMS: 30000,
       })
       .then(() => {
         if (!mongoConnectionLogged) {

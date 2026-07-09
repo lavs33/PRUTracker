@@ -67,6 +67,11 @@ function registerLegacyRoutes(app, deps) {
       await mongoose.connection.asPromise();
     }
 
+    const startedAt = Date.now();
+    while ((mongoose.connection.readyState !== 1 || !mongoose.connection.db) && Date.now() - startedAt < 5000) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
     if (mongoose.connection.readyState !== 1 || !mongoose.connection.db) {
       throw new Error("MongoDB connection is not ready.");
     }
