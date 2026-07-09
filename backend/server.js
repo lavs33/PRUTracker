@@ -1885,7 +1885,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
  * cors() → Enables cross-origin requests (frontend ↔ backend).
  * express.json() → Parses incoming JSON request bodies.
  */
-app.use(cors());
+app.use(cors({ origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(",").map((origin) => origin.trim()).filter(Boolean) : true }));
 app.use(express.json({ limit: "6mb" }));
 app.use(express.urlencoded({ extended: true, limit: "6mb" }));
 
@@ -1893,20 +1893,75 @@ app.use(express.urlencoded({ extended: true, limit: "6mb" }));
  * =========================
  * Database Connection
  * =========================
- * Connects to MongoDB Atlas using URI from environment variables.
- * Logs connection success or failure.
+ * Reuses a single connection promise so serverless cold starts do not allow
+ * route handlers to query MongoDB before the connection is ready.
  */
-mongoose
-  .connect(process.env.MONGO_URI)
-  .then(async () => {
-    console.log("MongoDB Atlas connected");
-    await reactivateEndedLongLeaveAgents();
-  })
-  .catch((err) => console.error("MongoDB error:", err));
+let mongoConnectionPromise = null;
+let mongoConnectionLogged = false;
 
-setInterval(() => {
-  reactivateEndedLongLeaveAgents().catch((err) => console.error("Long leave reactivation check failed:", err));
-}, 60 * 60 * 1000);
+function connectToMongo() {
+  if (!process.env.MONGO_URI) {
+    return Promise.resolve(null);
+  }
+
+  if (mongoose.connection.readyState === 1 && mongoose.connection.db) {
+    return Promise.resolve(mongoose.connection);
+  }
+
+  if (!mongoConnectionPromise) {
+    mongoConnectionPromise = mongoose
+      .connect(process.env.MONGO_URI, {
+        serverSelectionTimeoutMS: 30000,
+      })
+      .then(() => {
+        if (!mongoConnectionLogged) {
+          console.log("MongoDB Atlas connected");
+          mongoConnectionLogged = true;
+        }
+        return mongoose.connection;
+      })
+      .catch((err) => {
+        mongoConnectionPromise = null;
+        console.error("MongoDB error:", err);
+        throw err;
+      });
+  }
+
+  return mongoConnectionPromise;
+}
+
+if (process.env.MONGO_URI) {
+  connectToMongo()
+    .then(() => {
+      if (!process.env.VERCEL) {
+        return reactivateEndedLongLeaveAgents();
+      }
+      return null;
+    })
+    .catch(() => {});
+} else {
+  console.warn("MONGO_URI is not set; database connection skipped.");
+}
+
+app.use(async (req, res, next) => {
+  if (!req.path.startsWith("/api")) return next();
+  if (!process.env.MONGO_URI) {
+    return res.status(503).json({ message: "Database is not configured." });
+  }
+
+  try {
+    await connectToMongo();
+    return next();
+  } catch (err) {
+    return res.status(503).json({ message: "Database connection is not ready. Please try again." });
+  }
+});
+
+if (require.main === module && !process.env.VERCEL) {
+  setInterval(() => {
+    reactivateEndedLongLeaveAgents().catch((err) => console.error("Long leave reactivation check failed:", err));
+  }, 60 * 60 * 1000);
+}
 
 /**
  * =========================
@@ -3328,6 +3383,7 @@ app.get("/api/agent/kpi-progress", async (req, res) => {
 ========================================================= */
 registerLegacyRoutes(app, {
   mongoose,
+  connectToMongo,
   User,
   Admin,
   Agent,
@@ -3402,6 +3458,10 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+  });
+}
+
+module.exports = app;

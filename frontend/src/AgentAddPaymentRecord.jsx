@@ -4,8 +4,8 @@ import TopNav from "./components/TopNav";
 import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
 import "./AgentAddPaymentRecord.css";
+import { API_BASE } from "./config/api";
 
-const API_BASE = "http://localhost:5000";
 const PAYMENT_METHODS = ["Credit Card / Debit Card", "Mobile Wallet / GCash", "Dated Check", "Bills Payments"];
 function getDataUrlMimeType(dataUrl) {
   const match = String(dataUrl || "").match(/^data:([^;,]+)[;,]/i);

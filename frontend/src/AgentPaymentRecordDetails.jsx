@@ -4,8 +4,8 @@ import TopNav from "./components/TopNav";
 import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
 import "./AgentPaymentRecordDetails.css";
+import { API_BASE } from "./config/api";
 
-const API_BASE = "http://localhost:5000";
 
 function toDateInputValue(value) {
   const date = value ? new Date(value) : new Date();
