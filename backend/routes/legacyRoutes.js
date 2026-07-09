@@ -57,11 +57,23 @@ function registerLegacyRoutes(app, deps) {
     syncTaskNotificationsForTasks,
     markTaskNotificationAsRead,
   } = deps;
-  async function startMongooseSession() {
-    if (mongoose.connection.readyState !== 1 && typeof mongoose.connection.asPromise === "function") {
+  async function waitForMongooseConnection() {
+    if (mongoose.connection.readyState === 1 && mongoose.connection.db) return;
+    if (typeof mongoose.connection.asPromise === "function") {
       await mongoose.connection.asPromise();
     }
-    return mongoose.startSession();
+    if (mongoose.connection.readyState !== 1 || !mongoose.connection.db) {
+      throw new Error("MongoDB connection is not ready.");
+    }
+  }
+
+  async function startMongooseSession() {
+    await waitForMongooseConnection();
+    const client = typeof mongoose.connection.getClient === "function" ? mongoose.connection.getClient() : null;
+    if (!client) {
+      throw new Error("MongoDB client is not ready.");
+    }
+    return client.startSession();
   }
 
   const shouldRunRouteMaintenance = !process.env.VERCEL;
