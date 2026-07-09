@@ -9278,8 +9278,10 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
     }
 
     // 4) Load contact attempts for the engagement (oldest→newest by attemptNo)
-    await ensureContactAttemptCycleBackfill();
-    await ensureScheduledMeetingAttemptCycleBackfill();
+    if (!process.env.VERCEL) {
+      await ensureContactAttemptCycleBackfill();
+      await ensureScheduledMeetingAttemptCycleBackfill();
+    }
     const attempts = await ContactAttempt.find({
       leadEngagementId: engagement._id,
     })
@@ -9351,7 +9353,9 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
       ? { attemptCycle: targetAttemptCycle }
       : attemptCycleFilterForCycle(targetAttemptCycle);
 
-    await ensureNeedsAssessmentAttemptCycleIndex();
+    if (!process.env.VERCEL) {
+      await ensureNeedsAssessmentAttemptCycleIndex();
+    }
     const needsAssessment = await NeedsAssessment.findOne({
       leadEngagementId: engagement._id,
       attemptCycle: targetAttemptCycle,
@@ -9359,7 +9363,9 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
       .select("attemptCycle needsPriorities.productSelection.selectedProductId needsPriorities.productSelection.requestedFrequency needsPriorities.productSelection.requestedPremiumPayment")
       .lean();
 
-    await ensureProposalAttemptCycleIndex();
+    if (!process.env.VERCEL) {
+      await ensureProposalAttemptCycleIndex();
+    }
     const proposalDoc = await Proposal.findOne({
       leadEngagementId: engagement._id,
       attemptCycle: targetAttemptCycle,
@@ -9367,7 +9373,9 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
       .select("attemptCycle outcomeActivity chosenProductId generateProposal recordProspectAttendance presentProposal")
       .lean();
 
-    await ensureApplicationAttemptCycleIndex();
+    if (!process.env.VERCEL) {
+      await ensureApplicationAttemptCycleIndex();
+    }
     const applicationDoc = await Application.findOne({
       leadEngagementId: engagement._id,
       attemptCycle: targetAttemptCycle,
@@ -9375,7 +9383,9 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
       .select("attemptCycle outcomeActivity chosenProductId recordProspectAttendance recordPremiumPaymentTransfer recordApplicationSubmission")
       .lean();
 
-    await ensurePolicyAttemptCycleIndex();
+    if (!process.env.VERCEL) {
+      await ensurePolicyAttemptCycleIndex();
+    }
     const policyDoc = await Policy.findOne({
       leadEngagementId: engagement._id,
       ...targetAttemptCycleFilter,
@@ -11071,7 +11081,6 @@ function hasMeetingConflict(startAt, endAt, windows) {
 }
 
 app.get("/api/agents/:agentId/meeting-availability", async (req, res) => {
-  const session = await mongoose.startSession();
   try {
     const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { agentId } = req.params;
@@ -11092,7 +11101,7 @@ app.get("/api/agents/:agentId/meeting-availability", async (req, res) => {
     const end = new Date(start);
     end.setDate(end.getDate() + days);
 
-    const windows = await getAgentMeetingWindows(userObjectId, start, end, session);
+    const windows = await getAgentMeetingWindows(userObjectId, start, end);
 
     return res.json({
       fromDate: start.toISOString(),
@@ -11102,8 +11111,6 @@ app.get("/api/agents/:agentId/meeting-availability", async (req, res) => {
   } catch (err) {
     console.error("Meeting availability error:", err);
     return res.status(500).json({ message: "Server error." });
-  } finally {
-    session.endSession();
   }
 });
 
