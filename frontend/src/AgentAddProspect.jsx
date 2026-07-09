@@ -4,6 +4,7 @@ import TopNav from "./components/TopNav";
 import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
 import "./AgentAddProspect.css";
+import { API_BASE } from "./config/api";
 
 function AgentAddProspect() {
   const navigate = useNavigate();
@@ -100,7 +101,7 @@ function AgentAddProspect() {
         if (!user?.id) return;
 
         const res = await fetch(
-          `http://localhost:5000/api/prospects/next-no?userId=${user.id}`,
+          `${API_BASE}/api/prospects/next-no?userId=${user.id}`,
           { signal: controller.signal }
         );
 
@@ -250,7 +251,7 @@ function AgentAddProspect() {
         ...(String(birthday || "").trim() ? {} : { age }),
       };
 
-      const res = await fetch("http://localhost:5000/api/prospects", {
+      const res = await fetch(`${API_BASE}/api/prospects`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),

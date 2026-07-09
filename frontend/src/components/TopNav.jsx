@@ -3,6 +3,7 @@ import { FaBell } from "react-icons/fa";
 import { FiActivity, FiCalendar, FiShield } from "react-icons/fi";
 import logo from "../assets/prutracker-navbar-logo.png";
 import "./TopNav.css";
+import { API_BASE } from "../config/api";
 
 function TopNav({
   user,
@@ -14,7 +15,6 @@ function TopNav({
   showDate = showAlerts,
   profileClickable = true,
 }) {
-  const API_BASE = "http://localhost:5000";
 
   const [unreadCount, setUnreadCount] = useState(0);
 
@@ -37,7 +37,7 @@ function TopNav({
     } catch (err) {
       setUnreadCount(0);
     }
-  }, [API_BASE, user?.id]);
+  }, [user?.id]);
 
   useEffect(() => {
     const controller = new AbortController();
