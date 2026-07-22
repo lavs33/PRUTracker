@@ -4,7 +4,6 @@ import TopNav from "./components/TopNav";
 import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
 import "./AgentProspectsAll.css";
-import { API_BASE } from "./config/api";
 
 function AgentProspectsAll() {
   const navigate = useNavigate();
@@ -78,7 +77,7 @@ function AgentProspectsAll() {
         }
 
         const res = await fetch(
-          `${API_BASE}/api/prospects?userId=${user.id}&page=${page}&limit=${PAGE_SIZE}` +
+          `http://localhost:5000/api/prospects?userId=${user.id}&page=${page}&limit=${PAGE_SIZE}` +
             `&q=${encodeURIComponent(query)}` +
             `&marketType=${encodeURIComponent(marketType)}` +
             `&prospectType=${encodeURIComponent(prospectType)}` +

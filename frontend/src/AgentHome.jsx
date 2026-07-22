@@ -5,8 +5,8 @@ import { FiAlertCircle, FiArrowRight, FiCheckCircle, FiClock, FiTrendingUp } fro
 import "./AgentHome.css";
 import TopNav from "./components/TopNav";
 import { logout } from "./utils/logout";
-import { API_BASE } from "./config/api";
 
+const API_BASE = "http://localhost:5000";
 
 const KPI_PREVIEW_DATE_PRESETS_BY_PERIOD = {
   Daily: "1d",

@@ -5,7 +5,6 @@ import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
 import "./AgentProspectFullDetails.css";
 import { PH_CITY_REGION_OPTIONS, CITY_TO_REGION } from "./constants/phCityRegionOptions";
-import { API_BASE } from "./config/api";
 
 function AgentProspectFullDetails() {
   const navigate = useNavigate();
@@ -174,7 +173,7 @@ function AgentProspectFullDetails() {
       }
 
       const res = await fetch(
-        `${API_BASE}/api/prospects/${prospectId}/full?userId=${user.id}`,
+        `http://localhost:5000/api/prospects/${prospectId}/full?userId=${user.id}`,
         { signal }
       );
 
@@ -430,7 +429,7 @@ const handleSideNav = (key) => {
         payload.age = String(draft.age ?? "").trim(); // "" clears
       }
 
-      const res = await fetch(`${API_BASE}/api/prospects/${prospectId}?userId=${user.id}`, {
+      const res = await fetch(`http://localhost:5000/api/prospects/${prospectId}?userId=${user.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -555,7 +554,7 @@ const handleSideNav = (key) => {
         dropNotes: String(dropDraft.dropNotes || "").trim(),
       };
 
-      const res = await fetch(`${API_BASE}/api/prospects/${prospectId}?userId=${user.id}`, {
+      const res = await fetch(`http://localhost:5000/api/prospects/${prospectId}?userId=${user.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -601,7 +600,7 @@ const handleSideNav = (key) => {
       // Lead records and prospect details are left unchanged.
       const payload = { status: "Active" };
 
-      const res = await fetch(`${API_BASE}/api/prospects/${prospectId}?userId=${user.id}`, {
+      const res = await fetch(`http://localhost:5000/api/prospects/${prospectId}?userId=${user.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),

@@ -4,7 +4,6 @@ import TopNav from "./components/TopNav";
 import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
 import "./AgentCancelPolicy.css";
-import { API_BASE } from "./config/api";
 
 function AgentCancelPolicy() {
   const navigate = useNavigate();
@@ -64,7 +63,7 @@ function AgentCancelPolicy() {
         setApiError("");
 
         const res = await fetch(
-          `${API_BASE}/api/policyholders/${policyholderId}/details?userId=${user.id}`,
+          `http://localhost:5000/api/policyholders/${policyholderId}/details?userId=${user.id}`,
           { signal: controller.signal }
         );
         const data = await res.json();
@@ -294,7 +293,7 @@ function AgentCancelPolicy() {
     try {
       setSaving(true);
       setFieldErrors({});
-      const res = await fetch(`${API_BASE}/api/policyholders/${policyholderId}/cancellation?userId=${user.id}`, {
+      const res = await fetch(`http://localhost:5000/api/policyholders/${policyholderId}/cancellation?userId=${user.id}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(form),

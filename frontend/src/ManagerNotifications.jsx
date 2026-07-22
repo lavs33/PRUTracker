@@ -4,8 +4,8 @@ import TopNav from "./components/TopNav";
 import ManagerSideNav from "./components/ManagerSideNav";
 import { logout } from "./utils/logout";
 import "./ManagerNotifications.css";
-import { API_BASE } from "./config/api";
 
+const API_BASE = "http://localhost:5000";
 const MANAGER_NOTIF_TYPES = ["ORPHANS_ENDORSEMENTS"];
 
 function ManagerNotifications({ roleType }) {

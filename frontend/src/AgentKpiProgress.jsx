@@ -5,8 +5,8 @@ import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
 import "./AgentSalesPerformance.css";
 import "./AgentKpiProgress.css";
-import { API_BASE } from "./config/api";
 
+const API_BASE = "http://localhost:5000";
 
 const DATE_PRESETS = [
   { value: "1d", label: "This Day" },

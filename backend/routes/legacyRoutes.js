@@ -1,7 +1,6 @@
 function registerLegacyRoutes(app, deps) {
   const {
     mongoose,
-    connectToMongo,
     User,
     Admin,
     Agent,
@@ -58,36 +57,6 @@ function registerLegacyRoutes(app, deps) {
     syncTaskNotificationsForTasks,
     markTaskNotificationAsRead,
   } = deps;
-  async function waitForMongooseConnection() {
-    if (mongoose.connection.readyState === 1 && mongoose.connection.db) return;
-
-    if (typeof connectToMongo === "function") {
-      await connectToMongo();
-    } else if (typeof mongoose.connection.asPromise === "function") {
-      await mongoose.connection.asPromise();
-    }
-
-    const startedAt = Date.now();
-    while ((mongoose.connection.readyState !== 1 || !mongoose.connection.db) && Date.now() - startedAt < 5000) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-
-    if (mongoose.connection.readyState !== 1 || !mongoose.connection.db) {
-      throw new Error("MongoDB connection is not ready.");
-    }
-  }
-
-  async function startMongooseSession() {
-    await waitForMongooseConnection();
-    const client = typeof mongoose.connection.getClient === "function" ? mongoose.connection.getClient() : null;
-    if (!client) {
-      throw new Error("MongoDB client is not ready.");
-    }
-    return client.startSession();
-  }
-
-  const shouldRunRouteMaintenance = !process.env.VERCEL;
-
   let contactAttemptCycleIndexEnsured = false;
   async function ensureContactAttemptCycleIndex() {
     if (contactAttemptCycleIndexEnsured) return;
@@ -234,9 +203,7 @@ function registerLegacyRoutes(app, deps) {
 
 
   async function ensureApplicationForCurrentAttemptCycle(leadEngagementId, attemptCycle, { session, chosenProductId = null } = {}) {
-    if (shouldRunRouteMaintenance) {
-      await ensureApplicationAttemptCycleIndex();
-    }
+    await ensureApplicationAttemptCycleIndex();
     const normalizedAttemptCycle = normalizeAttemptCycle(attemptCycle);
     const setOnInsert = {
       leadEngagementId,
@@ -291,9 +258,7 @@ function registerLegacyRoutes(app, deps) {
   }
 
   async function ensurePolicyForCurrentAttemptCycle(leadEngagementId, attemptCycle, { session, chosenProductId = null } = {}) {
-    if (shouldRunRouteMaintenance) {
-      await ensurePolicyAttemptCycleIndex();
-    }
+    await ensurePolicyAttemptCycleIndex();
     const normalizedAttemptCycle = normalizeAttemptCycle(attemptCycle);
     const setOnInsert = {
       leadEngagementId,
@@ -1002,9 +967,7 @@ function registerLegacyRoutes(app, deps) {
         && nextAnnualStartDate
         && isBeforePaymentTermEnd(nextAnnualStartDate, paymentTermEndDate)
       ) {
-        if (shouldRunRouteMaintenance) {
-          await ensureAnnualPaymentLeadEngagementIndex();
-        }
+        await ensureAnnualPaymentLeadEngagementIndex();
         const nextAnnualPeriod = deriveAnnualPaymentPeriod(nextAnnualStartDate);
         const nextAnnualMetrics = buildAnnualPaymentMetrics({
           totalAnnualPremiumPhp: latestAnnualPayment.totalAnnualPremiumPhp,
@@ -5951,7 +5914,7 @@ app.get("/api/prospects/:prospectId/full", async (req, res) => {
 app.put("/api/prospects/:prospectId", async (req, res) => {
 
   // Use a session so updates across Prospect/Task/LeadEngagement/Notification are atomic
-  const session = await startMongooseSession();
+  const session = await mongoose.startSession();
 
   try {
     const { prospectId } = req.params;
@@ -6711,7 +6674,7 @@ app.get("/api/leads/init", async (req, res) => {
  */
 app.post("/api/leads", async (req, res) => {
   // Session enables MongoDB transaction across multiple collections
-  const session = await startMongooseSession();
+  const session = await mongoose.startSession();
 
   try {
     const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
@@ -8032,9 +7995,7 @@ app.post("/api/policyholders/:policyholderId/annual-payments/:annualPaymentId/pa
       };
     }
     const totalPremiumForRecord = Math.round((expectedAmount * paymentCountCovered) * 100) / 100;
-    if (shouldRunRouteMaintenance) {
-      await ensurePaymentLeadEngagementIndex();
-    }
+    await ensurePaymentLeadEngagementIndex();
     const now = new Date();
     const paymentDoc = await Payment.create({
       leadEngagementId: policyholder.leadEngagementId,
@@ -8097,9 +8058,7 @@ app.post("/api/policyholders/:policyholderId/annual-payments/:annualPaymentId/pa
       nextPaymentDate = null;
       const nextAnnualStartDate = nextDay(annualPayment.annualPaymentPeriod?.endDate);
       if (nextAnnualStartDate && isBeforePaymentTermEnd(nextAnnualStartDate, paymentTermEndDate)) {
-        if (shouldRunRouteMaintenance) {
-          await ensureAnnualPaymentLeadEngagementIndex();
-        }
+        await ensureAnnualPaymentLeadEngagementIndex();
         const nextAnnualPeriod = deriveAnnualPaymentPeriod(nextAnnualStartDate);
         const nextAnnualMetrics = buildAnnualPaymentMetrics({
           totalAnnualPremiumPhp: annualPayment.totalAnnualPremiumPhp,
@@ -9061,7 +9020,7 @@ app.put("/api/prospects/:prospectId/leads/:leadId", async (req, res) => {
       // Clear statusBeforeDrop after successful restore
       existing.statusBeforeDrop = undefined;
 
-      const session = await startMongooseSession();
+      const session = await mongoose.startSession();
       let saved = null;
       await session.withTransaction(async () => {
         const reopenNow = new Date();
@@ -9319,12 +9278,8 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
     }
 
     // 4) Load contact attempts for the engagement (oldest→newest by attemptNo)
-    if (!process.env.VERCEL) {
-      await ensureContactAttemptCycleBackfill();
-      if (shouldRunRouteMaintenance) {
-        await ensureScheduledMeetingAttemptCycleBackfill();
-      }
-    }
+    await ensureContactAttemptCycleBackfill();
+    await ensureScheduledMeetingAttemptCycleBackfill();
     const attempts = await ContactAttempt.find({
       leadEngagementId: engagement._id,
     })
@@ -9396,9 +9351,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
       ? { attemptCycle: targetAttemptCycle }
       : attemptCycleFilterForCycle(targetAttemptCycle);
 
-    if (!process.env.VERCEL) {
-      await ensureNeedsAssessmentAttemptCycleIndex();
-    }
+    await ensureNeedsAssessmentAttemptCycleIndex();
     const needsAssessment = await NeedsAssessment.findOne({
       leadEngagementId: engagement._id,
       attemptCycle: targetAttemptCycle,
@@ -9406,9 +9359,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
       .select("attemptCycle needsPriorities.productSelection.selectedProductId needsPriorities.productSelection.requestedFrequency needsPriorities.productSelection.requestedPremiumPayment")
       .lean();
 
-    if (!process.env.VERCEL) {
-      await ensureProposalAttemptCycleIndex();
-    }
+    await ensureProposalAttemptCycleIndex();
     const proposalDoc = await Proposal.findOne({
       leadEngagementId: engagement._id,
       attemptCycle: targetAttemptCycle,
@@ -9416,9 +9367,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
       .select("attemptCycle outcomeActivity chosenProductId generateProposal recordProspectAttendance presentProposal")
       .lean();
 
-    if (!process.env.VERCEL) {
-      await ensureApplicationAttemptCycleIndex();
-    }
+    await ensureApplicationAttemptCycleIndex();
     const applicationDoc = await Application.findOne({
       leadEngagementId: engagement._id,
       attemptCycle: targetAttemptCycle,
@@ -9426,9 +9375,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
       .select("attemptCycle outcomeActivity chosenProductId recordProspectAttendance recordPremiumPaymentTransfer recordApplicationSubmission")
       .lean();
 
-    if (!process.env.VERCEL) {
-      await ensurePolicyAttemptCycleIndex();
-    }
+    await ensurePolicyAttemptCycleIndex();
     const policyDoc = await Policy.findOne({
       leadEngagementId: engagement._id,
       ...targetAttemptCycleFilter,
@@ -10063,7 +10010,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/engagement", async (req, res) 
 =========================== */
 app.post("/api/prospects/:prospectId/leads/:leadId/contact-attempts", async (req, res) => {
   // Start a session so attempt creation + engagement/lead updates commit together
-  const session = await startMongooseSession();
+  const session = await mongoose.startSession();
  
   try {
     const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
@@ -10123,9 +10070,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/contact-attempts", async (req
     const now = new Date();
     let createdAttempt;
 
-    if (shouldRunRouteMaintenance) {
-      await ensureContactAttemptCycleIndex();
-    }
+    await ensureContactAttemptCycleIndex();
     await session.withTransaction(async () => {
       // 1) Authorization: prospect must belong to agent
       // Only fetch contactInfoVersion because that is what we need for attempt versioning.
@@ -10369,7 +10314,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/contact-attempts", async (req
    - Editable fields: primaryChannel, otherChannels, response, notes.
 =========================== */
 app.patch("/api/prospects/:prospectId/leads/:leadId/contact-attempts/:attemptId", async (req, res) => {
-  const session = await startMongooseSession();
+  const session = await mongoose.startSession();
 
   try {
     const { userId } = req.query;
@@ -10654,7 +10599,7 @@ async function completeCurrentContactTaskAndCreateRecontact({
    - Does NOT create a new ContactAttempt.
 =========================== */
 app.post("/api/prospects/:prospectId/leads/:leadId/validate-contact", async (req, res) => {
-  const session = await startMongooseSession();
+  const session = await mongoose.startSession();
 
   try {
     const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
@@ -10851,7 +10796,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/validate-contact", async (req
 });
 
 app.post("/api/prospects/:prospectId/leads/:leadId/assess-interest", async (req, res) => {
-  const session = await startMongooseSession();
+  const session = await mongoose.startSession();
   try {
     const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
@@ -11126,6 +11071,7 @@ function hasMeetingConflict(startAt, endAt, windows) {
 }
 
 app.get("/api/agents/:agentId/meeting-availability", async (req, res) => {
+  const session = await mongoose.startSession();
   try {
     const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { agentId } = req.params;
@@ -11146,7 +11092,7 @@ app.get("/api/agents/:agentId/meeting-availability", async (req, res) => {
     const end = new Date(start);
     end.setDate(end.getDate() + days);
 
-    const windows = await getAgentMeetingWindows(userObjectId, start, end);
+    const windows = await getAgentMeetingWindows(userObjectId, start, end, session);
 
     return res.json({
       fromDate: start.toISOString(),
@@ -11156,15 +11102,15 @@ app.get("/api/agents/:agentId/meeting-availability", async (req, res) => {
   } catch (err) {
     console.error("Meeting availability error:", err);
     return res.status(500).json({ message: "Server error." });
+  } finally {
+    session.endSession();
   }
 });
 
 app.post("/api/prospects/:prospectId/leads/:leadId/schedule-meeting", async (req, res) => {
-  const session = await startMongooseSession();
+  const session = await mongoose.startSession();
   try {
-    if (shouldRunRouteMaintenance) {
-      await ensureScheduledMeetingHistoryIndex();
-    }
+    await ensureScheduledMeetingHistoryIndex();
     const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
     const {
@@ -11633,9 +11579,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/needs-assessment", async (req,
     const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).select("_id currentStage currentActivityKey contactAttemptCycle").lean();
     if (!engagement) return res.status(404).json({ message: "Lead engagement not found." });
 
-    if (shouldRunRouteMaintenance) {
-      await ensureNeedsAssessmentAttemptCycleIndex();
-    }
+    await ensureNeedsAssessmentAttemptCycleIndex();
 
     const currentAttemptCycle = normalizeAttemptCycle(engagement.contactAttemptCycle);
     const requestedHistoryCycle = Number(historyCycle || 0);
@@ -11708,9 +11652,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/needs-assessment", async (req,
       .sort({ productCategory: 1, productName: 1 })
       .lean();
 
-    if (shouldRunRouteMaintenance) {
-      await ensureScheduledMeetingAttemptCycleBackfill();
-    }
+    await ensureScheduledMeetingAttemptCycleBackfill();
 
     const proposalMeetingQuery = {
       leadEngagementId: engagement._id,
@@ -11841,7 +11783,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/needs-assessment", async (req,
 });
 
 app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/attendance", async (req, res) => {
-  const session = await startMongooseSession();
+  const session = await mongoose.startSession();
   try {
     const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
@@ -11893,9 +11835,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/attendance",
       const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).session(session);
       if (!engagement) throw Object.assign(new Error("Lead engagement not found."), { status: 404 });
 
-      if (shouldRunRouteMaintenance) {
-        await ensureNeedsAssessmentAttemptCycleIndex();
-      }
+      await ensureNeedsAssessmentAttemptCycleIndex();
       const currentAttemptCycle = normalizeAttemptCycle(engagement.contactAttemptCycle);
       const na = (await NeedsAssessment.findOne({
         leadEngagementId: engagement._id,
@@ -11932,7 +11872,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/attendance",
 });
 
 app.put("/api/prospects/:prospectId/leads/:leadId/needs-assessment", async (req, res) => {
-  const session = await startMongooseSession();
+  const session = await mongoose.startSession();
   try {
     const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
@@ -11998,9 +11938,7 @@ app.put("/api/prospects/:prospectId/leads/:leadId/needs-assessment", async (req,
       const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).session(session);
       if (!engagement) throw Object.assign(new Error("Lead engagement not found."), { status: 404 });
 
-      if (shouldRunRouteMaintenance) {
-        await ensureNeedsAssessmentAttemptCycleIndex();
-      }
+      await ensureNeedsAssessmentAttemptCycleIndex();
       const currentAttemptCycle = normalizeAttemptCycle(engagement.contactAttemptCycle);
       const na = (await NeedsAssessment.findOne({
         leadEngagementId: engagement._id,
@@ -12443,7 +12381,7 @@ app.put("/api/prospects/:prospectId/leads/:leadId/needs-assessment", async (req,
 });
 
 app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/schedule-proposal", async (req, res) => {
-  const session = await startMongooseSession();
+  const session = await mongoose.startSession();
   try {
     const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
@@ -12487,17 +12425,13 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/schedule-pro
       const engagement = await LeadEngagement.findOne({ leadId: leadObjectId }).session(session);
       if (!engagement) throw Object.assign(new Error("Lead engagement not found."), { status: 404 });
 
-      if (shouldRunRouteMaintenance) {
-        await ensureNeedsAssessmentAttemptCycleIndex();
-      }
+      await ensureNeedsAssessmentAttemptCycleIndex();
       const currentAttemptCycle = normalizeAttemptCycle(engagement.contactAttemptCycle);
       const na = await NeedsAssessment.findOne({
         leadEngagementId: engagement._id,
         attemptCycle: currentAttemptCycle,
       }).session(session);
-      if (shouldRunRouteMaintenance) {
-        await ensureProposalAttemptCycleIndex();
-      }
+      await ensureProposalAttemptCycleIndex();
       const proposalDocForReschedule = await Proposal.findOne({
         leadEngagementId: engagement._id,
         attemptCycle: currentAttemptCycle,
@@ -13033,7 +12967,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/schedule-pro
 });
 
 app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/follow-up-decision", async (req, res) => {
-  const session = await startMongooseSession();
+  const session = await mongoose.startSession();
   try {
     const { userId } = req.query;
     const { prospectId, leadId } = req.params;
@@ -13072,9 +13006,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/follow-up-de
         throw Object.assign(new Error("Follow-up needs assessment decision can only be edited during Needs Assessment."), { status: 409 });
       }
 
-      if (shouldRunRouteMaintenance) {
-        await ensureNeedsAssessmentAttemptCycleIndex();
-      }
+      await ensureNeedsAssessmentAttemptCycleIndex();
       const currentAttemptCycle = normalizeAttemptCycle(engagement.contactAttemptCycle);
       const needsAssessment = await NeedsAssessment.findOne({
         leadEngagementId: engagement._id,
@@ -13114,7 +13046,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/needs-assessment/follow-up-de
 });
 
 app.post("/api/prospects/:prospectId/leads/:leadId/proposal/generate", async (req, res) => {
-  const session = await startMongooseSession();
+  const session = await mongoose.startSession();
   try {
     const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
@@ -13157,9 +13089,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/generate", async (re
         throw Object.assign(new Error("Lead is not in Proposal/Application stage."), { status: 409 });
       }
 
-      if (shouldRunRouteMaintenance) {
-        await ensureProposalAttemptCycleIndex();
-      }
+      await ensureProposalAttemptCycleIndex();
       const currentAttemptCycle = normalizeAttemptCycle(engagement.contactAttemptCycle);
       const proposalDoc = await Proposal.findOne({
         leadEngagementId: engagement._id,
@@ -13197,9 +13127,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/generate", async (re
         throw Object.assign(new Error("Please confirm proposal was sent to prospect email."), { status: 400 });
       }
 
-      if (shouldRunRouteMaintenance) {
-        await ensureNeedsAssessmentAttemptCycleIndex();
-      }
+      await ensureNeedsAssessmentAttemptCycleIndex();
       const needsAssessment = await NeedsAssessment.findOne({
         leadEngagementId: engagement._id,
         attemptCycle: currentAttemptCycle,
@@ -13252,7 +13180,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/generate", async (re
 
 
 app.post("/api/prospects/:prospectId/leads/:leadId/proposal/attendance", async (req, res) => {
-  const session = await startMongooseSession();
+  const session = await mongoose.startSession();
   try {
     const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
@@ -13303,9 +13231,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/attendance", async (
         throw Object.assign(new Error("Lead is not in Proposal stage."), { status: 409 });
       }
 
-      if (shouldRunRouteMaintenance) {
-        await ensureProposalAttemptCycleIndex();
-      }
+      await ensureProposalAttemptCycleIndex();
       const currentAttemptCycle = normalizeAttemptCycle(engagement.contactAttemptCycle);
       const existingProposalDoc = await Proposal.findOne({
         leadEngagementId: engagement._id,
@@ -13373,7 +13299,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/attendance", async (
 
 
 app.post("/api/prospects/:prospectId/leads/:leadId/application/attendance", async (req, res) => {
-  const session = await startMongooseSession();
+  const session = await mongoose.startSession();
   try {
     const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
@@ -13424,9 +13350,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/attendance", asyn
         throw Object.assign(new Error("Lead is not in Application stage."), { status: 409 });
       }
 
-      if (shouldRunRouteMaintenance) {
-        await ensureApplicationAttemptCycleIndex();
-      }
+      await ensureApplicationAttemptCycleIndex();
       const currentAttemptCycle = normalizeAttemptCycle(engagement.contactAttemptCycle);
       const existingApplicationDoc = await Application.findOne({
         leadEngagementId: engagement._id,
@@ -13482,7 +13406,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/attendance", asyn
 });
 
 app.post("/api/prospects/:prospectId/leads/:leadId/application/premium-payment-transfer", async (req, res) => {
-  const session = await startMongooseSession();
+  const session = await mongoose.startSession();
   try {
     const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
@@ -13608,9 +13532,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/premium-payment-t
         frequencyOfPayment: paymentFrequency,
       });
       const currentAttemptCycle = Number(engagement.contactAttemptCycle || 1);
-      if (shouldRunRouteMaintenance) {
-        await ensureAnnualPaymentLeadEngagementIndex();
-      }
+      await ensureAnnualPaymentLeadEngagementIndex();
       const annualPaymentDoc = await AnnualPayment.findOneAndUpdate(
         { leadEngagementId: engagement._id, ...attemptCycleFilterForCycle(currentAttemptCycle) },
         {
@@ -13654,9 +13576,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/premium-payment-t
         { upsert: true, new: true, session }
       );
 
-      if (shouldRunRouteMaintenance) {
-        await ensureApplicationAttemptCycleIndex();
-      }
+      await ensureApplicationAttemptCycleIndex();
       await Application.updateOne(
         { leadEngagementId: engagement._id, ...attemptCycleFilterForCycle(currentAttemptCycle) },
         {
@@ -13741,7 +13661,7 @@ app.get("/api/prospects/:prospectId/leads/:leadId/application/submission/validat
 });
 
 app.post("/api/prospects/:prospectId/leads/:leadId/application/submission", async (req, res) => {
-  const session = await startMongooseSession();
+  const session = await mongoose.startSession();
   try {
     const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
@@ -13814,9 +13734,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/submission", asyn
         throw Object.assign(new Error("Record already exists for this Transaction ID."), { status: 409 });
       }
 
-      if (shouldRunRouteMaintenance) {
-        await ensureApplicationAttemptCycleIndex();
-      }
+      await ensureApplicationAttemptCycleIndex();
       const currentAttemptCycle = normalizeAttemptCycle(engagement.contactAttemptCycle);
       const existingApplication = await Application.findOne({
         leadEngagementId: engagement._id,
@@ -13825,12 +13743,8 @@ app.post("/api/prospects/:prospectId/leads/:leadId/application/submission", asyn
         .select("chosenProductId recordPremiumPaymentTransfer.paymentId recordPremiumPaymentTransfer.paymentDate")
         .session(session);
 
-      if (shouldRunRouteMaintenance) {
-        await ensureNeedsAssessmentAttemptCycleIndex();
-      }
-      if (shouldRunRouteMaintenance) {
-        await ensureProposalAttemptCycleIndex();
-      }
+      await ensureNeedsAssessmentAttemptCycleIndex();
+      await ensureProposalAttemptCycleIndex();
       const proposal = await Proposal.findOne({
         leadEngagementId: engagement._id,
         attemptCycle: currentAttemptCycle,
@@ -14057,9 +13971,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/status", asyn
       return res.status(409).json({ message: "Lead is not in Policy Issuance stage." });
     }
 
-    if (shouldRunRouteMaintenance) {
-      await ensurePolicyAttemptCycleIndex();
-    }
+    await ensurePolicyAttemptCycleIndex();
     const currentAttemptCycle = normalizeAttemptCycle(engagement.contactAttemptCycle);
     const existingPolicyDoc = await Policy.findOne({
       leadEngagementId: engagement._id,
@@ -14077,9 +13989,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/status", asyn
       ? new Date(new Date(policyInitialEorPayment.uploadPremiumPaymentEor.receiptDate).setHours(0, 0, 0, 0))
       : null;
 
-    if (shouldRunRouteMaintenance) {
-      await ensureApplicationAttemptCycleIndex();
-    }
+    await ensureApplicationAttemptCycleIndex();
     const applicationDoc = await Application.findOne({
       leadEngagementId: engagement._id,
       attemptCycle: currentAttemptCycle,
@@ -14087,12 +13997,8 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/status", asyn
       .select("chosenProductId recordApplicationSubmission.savedAt")
       .lean();
 
-    if (shouldRunRouteMaintenance) {
-      await ensureNeedsAssessmentAttemptCycleIndex();
-    }
-    if (shouldRunRouteMaintenance) {
-      await ensureProposalAttemptCycleIndex();
-    }
+    await ensureNeedsAssessmentAttemptCycleIndex();
+    await ensureProposalAttemptCycleIndex();
     const proposalDoc = await Proposal.findOne({
       leadEngagementId: engagement._id,
       attemptCycle: currentAttemptCycle,
@@ -14309,9 +14215,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/initial-premi
       return res.status(409).json({ message: "Lead is not in Policy Issuance stage." });
     }
 
-    if (shouldRunRouteMaintenance) {
-      await ensureApplicationAttemptCycleIndex();
-    }
+    await ensureApplicationAttemptCycleIndex();
     const currentAttemptCycle = normalizeAttemptCycle(engagement.contactAttemptCycle);
     const applicationDoc = await Application.findOne({
       leadEngagementId: engagement._id,
@@ -14319,9 +14223,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/initial-premi
     })
       .select("recordApplicationSubmission.savedAt recordPremiumPaymentTransfer.paymentId")
       .lean();
-    if (shouldRunRouteMaintenance) {
-      await ensurePolicyAttemptCycleIndex();
-    }
+    await ensurePolicyAttemptCycleIndex();
     const policyDoc = await Policy.findOne({
       leadEngagementId: engagement._id,
       ...attemptCycleFilterForCycle(currentAttemptCycle),
@@ -14500,9 +14402,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/policy-summar
     }
 
     const currentAttemptCycle = normalizeAttemptCycle(engagement.contactAttemptCycle);
-    if (shouldRunRouteMaintenance) {
-      await ensurePolicyAttemptCycleIndex();
-    }
+    await ensurePolicyAttemptCycleIndex();
     await Policy.updateOne(
       { leadEngagementId: engagement._id, ...attemptCycleFilterForCycle(currentAttemptCycle) },
       {
@@ -14539,7 +14439,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/policy-summar
 
 
 app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-duration", async (req, res) => {
-  const session = await startMongooseSession();
+  const session = await mongoose.startSession();
   try {
     const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
@@ -14590,9 +14490,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-dura
       }
 
       const currentAttemptCycle = normalizeAttemptCycle(engagement.contactAttemptCycle);
-      if (shouldRunRouteMaintenance) {
-        await ensurePolicyAttemptCycleIndex();
-      }
+      await ensurePolicyAttemptCycleIndex();
       const policyDoc = await Policy.findOne({ leadEngagementId: engagement._id, ...attemptCycleFilterForCycle(currentAttemptCycle) })
         .select("chosenProductId uploadPolicySummary.policyNumber uploadInitialPremiumEor.paymentId recordPolicyApplicationStatus.status recordPolicyApplicationStatus.issuanceDate")
         .session(session)
@@ -14745,9 +14643,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-dura
         ? new Date(paymentDoc.recordPremiumPaymentTransfer.paymentDate)
         : null;
 
-      if (shouldRunRouteMaintenance) {
-        await ensureNeedsAssessmentAttemptCycleIndex();
-      }
+      await ensureNeedsAssessmentAttemptCycleIndex();
       const needsAssessment = await NeedsAssessment.findOne({
         leadEngagementId: engagement._id,
         attemptCycle: currentAttemptCycle,
@@ -14895,9 +14791,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-dura
         ) {
           const nextAnnualStartDate = nextDay(annualPaymentDoc.annualPaymentPeriod?.endDate);
           if (nextAnnualStartDate && isBeforePaymentTermEnd(nextAnnualStartDate, paymentTermEndDate)) {
-            if (shouldRunRouteMaintenance) {
-              await ensureAnnualPaymentLeadEngagementIndex();
-            }
+            await ensureAnnualPaymentLeadEngagementIndex();
             const nextAnnualPeriod = deriveAnnualPaymentPeriod(nextAnnualStartDate);
             const nextAnnualMetrics = buildAnnualPaymentMetrics({
               totalAnnualPremiumPhp: annualPaymentDoc.totalAnnualPremiumPhp,
@@ -15026,7 +14920,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/policy-issuance/coverage-dura
 
 
 app.post("/api/prospects/:prospectId/leads/:leadId/proposal/schedule-application", async (req, res) => {
-  const session = await startMongooseSession();
+  const session = await mongoose.startSession();
   try {
     const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
@@ -15315,9 +15209,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/schedule-application
       engagement.stageStartedAt = now;
       await engagement.save({ session });
 
-      if (shouldRunRouteMaintenance) {
-        await ensureProposalAttemptCycleIndex();
-      }
+      await ensureProposalAttemptCycleIndex();
       await Proposal.updateOne(
         { leadEngagementId: engagement._id, ...attemptCycleFilterForCycle(currentAttemptCycle) },
         {
@@ -15334,9 +15226,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/schedule-application
         .select("chosenProductId")
         .session(session)
         .lean();
-      if (shouldRunRouteMaintenance) {
-        await ensureNeedsAssessmentAttemptCycleIndex();
-      }
+      await ensureNeedsAssessmentAttemptCycleIndex();
       const applicationNeedsAssessment = await NeedsAssessment.findOne({
         leadEngagementId: engagement._id,
         attemptCycle: currentAttemptCycle,
@@ -15371,7 +15261,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/schedule-application
 });
 
 app.post("/api/prospects/:prospectId/leads/:leadId/proposal/presentation", async (req, res) => {
-  const session = await startMongooseSession();
+  const session = await mongoose.startSession();
   try {
     const { userId, taskDatePreset = "ALL", salesDatePreset = "ALL" } = req.query;
     const { prospectId, leadId } = req.params;
@@ -15432,9 +15322,7 @@ app.post("/api/prospects/:prospectId/leads/:leadId/proposal/presentation", async
         await engagement.save({ session });
       }
 
-      if (shouldRunRouteMaintenance) {
-        await ensureProposalAttemptCycleIndex();
-      }
+      await ensureProposalAttemptCycleIndex();
       const currentAttemptCycle = normalizeAttemptCycle(engagement.contactAttemptCycle);
 
       const proposalSet = hasDecision

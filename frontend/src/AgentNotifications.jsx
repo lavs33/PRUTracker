@@ -4,7 +4,6 @@ import TopNav from "./components/TopNav";
 import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
 import "./AgentNotifications.css";
-import { API_BASE } from "./config/api";
 
 const NOTIF_TYPES = ["TASK_ADDED", "TASK_DUE_TODAY", "TASK_MISSED", "PAYMENT_TRANSFER_REMINDER", "PAYMENT_EOR_REMINDER", "PAYMENT_MISSED_TRANSFER", "PAYMENT_POLICY_LAPSED", "POLICY_PAID_UP", "POLICY_MATURED", "POLICY_PAID_UP_MATURED", "POLICY_CANCELLED", "ORPHAN_CLIENT_ASSIGNED", "ORPHAN_CLIENT_TRANSFERRED"];
 
@@ -20,6 +19,7 @@ function AgentNotifications() {
     }
   }, []);
 
+  const API_BASE = "http://localhost:5000";
 
   // Tabs: unread | read
   const [tab, setTab] = useState("unread");
@@ -129,7 +129,7 @@ function AgentNotifications() {
         read: Number(data?.read || 0),
       });
     },
-    [user?.id, typeFilter]
+    [API_BASE, user?.id, typeFilter]
   );
 
   // Fetch notifications list for current tab + filters
@@ -158,7 +158,7 @@ function AgentNotifications() {
       const arr = Array.isArray(data?.notifications) ? data.notifications : [];
       setNotifs(arr);
     },
-    [user?.id, tab, typeFilter]
+    [API_BASE, user?.id, tab, typeFilter]
   );
 
   // Load counts + list

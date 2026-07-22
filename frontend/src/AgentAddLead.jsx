@@ -4,7 +4,6 @@ import TopNav from "./components/TopNav";
 import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
 import "./AgentAddLead.css";
-import { API_BASE } from "./config/api";
 
 const UI_ONLY = false;
 
@@ -164,7 +163,7 @@ function AgentAddLead() {
         }
 
         const res = await fetch(
-          `${API_BASE}/api/leads/init?userId=${user.id}&prospectId=${prospectId}`,
+          `http://localhost:5000/api/leads/init?userId=${user.id}&prospectId=${prospectId}`,
           { signal: controller.signal }
         );
 
@@ -363,7 +362,7 @@ function AgentAddLead() {
         description: String(description || "").trim(),
       };
 
-      const res = await fetch(`${API_BASE}/api/leads?userId=${user.id}`, {
+      const res = await fetch(`http://localhost:5000/api/leads?userId=${user.id}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),

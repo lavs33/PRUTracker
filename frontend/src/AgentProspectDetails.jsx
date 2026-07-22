@@ -4,7 +4,6 @@ import TopNav from "./components/TopNav";
 import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
 import "./AgentProspectDetails.css";
-import { API_BASE } from "./config/api";
 
 function AgentProspectDetails() {
   const navigate = useNavigate();
@@ -65,7 +64,7 @@ function AgentProspectDetails() {
         }
 
         const res = await fetch(
-          `${API_BASE}/api/prospects/${prospectId}/details?userId=${user.id}`,
+          `http://localhost:5000/api/prospects/${prospectId}/details?userId=${user.id}`,
           { signal: controller.signal }
         );
 

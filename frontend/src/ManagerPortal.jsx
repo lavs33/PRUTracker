@@ -4,8 +4,8 @@ import { FaFilePdf, FaSearch } from "react-icons/fa";
 import TopNav from "./components/TopNav";
 import ManagerSideNav from "./components/ManagerSideNav";
 import "./ManagerPortal.css";
-import { API_BASE } from "./config/api";
 
+const API_BASE = "http://localhost:5000";
 const DATE_PRESETS = [
   { value: "ALL", label: "All Time" },
   { value: "TODAY", label: "This Day" },

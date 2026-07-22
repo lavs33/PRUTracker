@@ -4,7 +4,6 @@ import TopNav from "./components/TopNav";
 import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
 import "./AgentLeadDetails.css";
-import { API_BASE } from "./config/api";
 
 function AgentLeadDetails() {
   const navigate = useNavigate();
@@ -151,7 +150,7 @@ function AgentLeadDetails() {
       const fetchOpts = signal ? { signal } : undefined;
 
       const res = await fetch(
-        `${API_BASE}/api/prospects/${prospectId}/leads/${leadId}/details?userId=${user.id}`,
+        `http://localhost:5000/api/prospects/${prospectId}/leads/${leadId}/details?userId=${user.id}`,
         fetchOpts
       );
 
@@ -362,7 +361,7 @@ const handleSideNav = (key) => {
       }
 
       const res = await fetch(
-        `${API_BASE}/api/prospects/${prospectId}/leads/${leadId}?userId=${user.id}`,
+        `http://localhost:5000/api/prospects/${prospectId}/leads/${leadId}?userId=${user.id}`,
         {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
@@ -422,7 +421,7 @@ const handleSideNav = (key) => {
       setDropBusy(true);
 
       const res = await fetch(
-        `${API_BASE}/api/prospects/${prospectId}/leads/${leadId}?userId=${user.id}`,
+        `http://localhost:5000/api/prospects/${prospectId}/leads/${leadId}?userId=${user.id}`,
         {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
@@ -463,7 +462,7 @@ const handleSideNav = (key) => {
       setDropBusy(true);
 
       const res = await fetch(
-        `${API_BASE}/api/prospects/${prospectId}/leads/${leadId}?userId=${user.id}`,
+        `http://localhost:5000/api/prospects/${prospectId}/leads/${leadId}?userId=${user.id}`,
         {
           method: "PUT",
           headers: { "Content-Type": "application/json" },

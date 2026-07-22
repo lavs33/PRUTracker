@@ -4,7 +4,6 @@ import { useNavigate } from "react-router-dom";
 import { FaArrowLeft } from "react-icons/fa";
 import "./AdminLoginPage.css";
 import logo from "./assets/prutracker-landing-logo.png";
-import { API_BASE } from "./config/api";
 
 function AdminLoginPage() {
   const navigate = useNavigate();
@@ -34,7 +33,7 @@ function AdminLoginPage() {
     }
 
     try {
-      const res = await fetch(`${API_BASE}/api/admin/auth/login`, {
+      const res = await fetch("http://localhost:5000/api/admin/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password }),
