@@ -6,7 +6,7 @@ import { logout } from "./utils/logout";
 import "./ManagerNotifications.css";
 
 const API_BASE = "http://localhost:5000";
-const MANAGER_NOTIF_TYPES = ["ORPHANS_ENDORSEMENTS"];
+const BRANCH_KPI_NOTIF_TYPES = ["BRANCH_KPI_ASSIGNED", "BRANCH_KPI_TARGET_UPDATED", "BRANCH_KPI_UNASSIGNED"];
 
 function ManagerNotifications({ roleType }) {
   const navigate = useNavigate();
@@ -25,19 +25,22 @@ function ManagerNotifications({ roleType }) {
     try { return JSON.parse(localStorage.getItem("managerPortalUser") || "null"); } catch { return null; }
   }, []);
   const normalizedRole = String(roleType || user?.role || "UM").trim().toLowerCase();
+  const managerNotifTypes = normalizedRole === "um"
+    ? ["ORPHANS_ENDORSEMENTS", ...BRANCH_KPI_NOTIF_TYPES]
+    : BRANCH_KPI_NOTIF_TYPES;
 
   useEffect(() => {
-    const isUmRoute = normalizedRole === "um";
-    const isUmSession = String(user?.role || "").trim().toUpperCase() === "UM";
+    const sessionRole = String(user?.role || "").trim().toLowerCase();
+    const hasMatchingManagerSession = ["aum", "um", "bm"].includes(normalizedRole) && sessionRole === normalizedRole;
 
-    if (!user || !isUmRoute || !isUmSession) {
-      localStorage.setItem("role", "UM");
+    if (!user || !hasMatchingManagerSession) {
+      localStorage.setItem("role", normalizedRole.toUpperCase());
       navigate("/login", { replace: true });
       return;
     }
 
     if (user.username !== username) {
-      navigate(`/um/${user.username}/notifications`, { replace: true });
+      navigate(`/${normalizedRole}/${user.username}/notifications`, { replace: true });
     }
   }, [user, username, normalizedRole, navigate]);
 
@@ -122,16 +125,23 @@ function ManagerNotifications({ roleType }) {
     }
   };
 
-  const typePillClass = () => "notif-pill added";
+  const typePillClass = (type) => {
+    if (type === "BRANCH_KPI_ASSIGNED") return "notif-pill kpi-assigned";
+    if (type === "BRANCH_KPI_TARGET_UPDATED") return "notif-pill kpi-updated";
+    if (type === "BRANCH_KPI_UNASSIGNED") return "notif-pill kpi-unassigned";
+    return "notif-pill added";
+  };
 
   const handleManagerSideNav = (key) => {
-    navigate(`/um/${user?.username || username}`, { state: { activeView: key } });
+    navigate(`/${normalizedRole}/${user?.username || username}`, { state: { activeView: key } });
   };
 
   const openNotif = async (notification) => {
     if (notification?.status === "Unread") await markNotifAsRead(notification._id);
     navigate(`/${normalizedRole}/${username}`, { state: { activeView: "orphan_endorsements" } });
   };
+
+  const canOpenReadNotification = (notification) => !BRANCH_KPI_NOTIF_TYPES.includes(notification?.type) && normalizedRole === "um";
 
   const NotifRow = ({ n }) => (
     <div className={`notif-row ${n.status === "Unread" ? "unread" : ""}`}>
@@ -155,11 +165,11 @@ function ManagerNotifications({ roleType }) {
           >
             {markingNotifId === String(n._id) ? "Marking..." : "Mark as Read"}
           </button>
-        ) : (
+        ) : canOpenReadNotification(n) ? (
           <button type="button" className="notif-btn secondary" onClick={() => openNotif(n)}>
             Open
           </button>
-        )}
+        ) : null}
       </div>
     </div>
   );
@@ -171,14 +181,14 @@ function ManagerNotifications({ roleType }) {
       <TopNav
         user={user}
         onLogoClick={() => navigate(`/${normalizedRole}/${username}`)}
-        onLogout={() => logout(navigate, "UM")}
+        onLogout={() => logout(navigate, normalizedRole.toUpperCase())}
         onProfileClick={() => navigate(`/${normalizedRole}/${username}/profile`)}
         onNotificationsClick={() => navigate(`/${normalizedRole}/${username}/notifications`)}
       />
 
       <div className="notifs-body">
         <ManagerSideNav
-          roleLabel="UM"
+          roleLabel={normalizedRole.toUpperCase()}
           active=""
           onNavigate={handleManagerSideNav}
           collapsed={sideNavCollapsed}
@@ -201,7 +211,7 @@ function ManagerNotifications({ roleType }) {
             <div className="notifs-filter">
               <select className="notifs-select" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} aria-label="Notification type filter">
                 <option value="">All Types</option>
-                {MANAGER_NOTIF_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
+                {managerNotifTypes.map((type) => <option key={type} value={type}>{type}</option>)}
               </select>
               <button type="button" className="notif-btn ghost" onClick={() => setTypeFilter("")} disabled={!typeFilter}>Clear</button>
               <button type="button" className="notif-btn secondary" onClick={markAllAsRead} disabled={tab !== "unread" || markingAllRead || counts.unread <= 0}>{markingAllRead ? "Marking..." : "Mark All as Read"}</button>
