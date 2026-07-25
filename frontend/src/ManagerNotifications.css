@@ -239,6 +239,12 @@
   color: #0b5c8a;
 }
 
+.notif-pill.kpi {
+  background: #e7f6ff;
+  border-color: #bfe8ff;
+  color: #0b5c8a;
+}
+
 .notif-right {
   display: flex;
   align-items: center;
