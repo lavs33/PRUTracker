@@ -3663,7 +3663,7 @@ function ManagerPortal({ roleType }) {
         onLogoClick={() => setActiveView("dashboard")}
         onLogout={handleLogout}
         onProfileClick={() => navigate(`/${normalizedRole.toLowerCase()}/${user?.username || username}/profile`)}
-        showAlerts={normalizedRole === "UM"}
+        showAlerts={["AUM", "UM", "BM"].includes(normalizedRole)}
         onNotificationsClick={() => navigate(`/${normalizedRole.toLowerCase()}/${user?.username || username}/notifications`)}
         showDate
         profileClickable
