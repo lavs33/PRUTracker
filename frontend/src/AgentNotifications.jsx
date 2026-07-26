@@ -5,7 +5,8 @@ import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
 import "./AgentNotifications.css";
 
-const NOTIF_TYPES = ["TASK_ADDED", "TASK_DUE_TODAY", "TASK_MISSED", "PAYMENT_TRANSFER_REMINDER", "PAYMENT_EOR_REMINDER", "PAYMENT_MISSED_TRANSFER", "PAYMENT_POLICY_LAPSED", "POLICY_PAID_UP", "POLICY_MATURED", "POLICY_PAID_UP_MATURED", "POLICY_CANCELLED", "ORPHAN_CLIENT_ASSIGNED", "ORPHAN_CLIENT_TRANSFERRED"];
+const UNIT_KPI_NOTIF_TYPES = ["UNIT_KPI_ASSIGNED", "UNIT_KPI_TARGET_UPDATED", "UNIT_KPI_UNASSIGNED"];
+const NOTIF_TYPES = ["TASK_ADDED", "TASK_DUE_TODAY", "TASK_MISSED", "PAYMENT_TRANSFER_REMINDER", "PAYMENT_EOR_REMINDER", "PAYMENT_MISSED_TRANSFER", "PAYMENT_POLICY_LAPSED", "POLICY_PAID_UP", "POLICY_MATURED", "POLICY_PAID_UP_MATURED", "POLICY_CANCELLED", "ORPHAN_CLIENT_ASSIGNED", "ORPHAN_CLIENT_TRANSFERRED", ...UNIT_KPI_NOTIF_TYPES];
 
 function AgentNotifications() {
   const navigate = useNavigate();
@@ -110,24 +111,19 @@ function AgentNotifications() {
   const fetchCounts = useCallback(
     async (signal) => {
       if (!user?.id) return;
-
-      const qs = new URLSearchParams({
-        userId: user.id,
-      });
-      if (typeFilter) qs.set("type", typeFilter);
-
-      const res = await fetch(
-        `${API_BASE}/api/notifications/counts?${qs.toString()}`,
-        signal ? { signal } : undefined
-      );
-      const data = await res.json();
-
-      if (!res.ok) throw new Error(data?.message || "Failed to fetch notification counts.");
-
-      setCounts({
-        unread: Number(data?.unread || 0),
-        read: Number(data?.read || 0),
-      });
+      const loadStatusCount = async (status) => {
+        const qs = new URLSearchParams({ userId: user.id, status });
+        const res = await fetch(`${API_BASE}/api/notifications?${qs.toString()}`, { ...(signal ? { signal } : {}), cache: "no-store" });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data?.message || "Failed to fetch notification counts.");
+        const notifications = Array.isArray(data?.notifications) ? data.notifications : [];
+        const normalizedFilter = String(typeFilter || "").trim().toUpperCase();
+        return normalizedFilter
+          ? notifications.filter((notification) => String(notification?.type || "").trim().toUpperCase() === normalizedFilter).length
+          : notifications.length;
+      };
+      const [unread, read] = await Promise.all([loadStatusCount("Unread"), loadStatusCount("Read")]);
+      setCounts({ unread, read });
     },
     [API_BASE, user?.id, typeFilter]
   );
@@ -145,18 +141,19 @@ function AgentNotifications() {
         includeRefs: "1",
       });
 
-      if (typeFilter) qs.set("type", typeFilter);
-
       const res = await fetch(
         `${API_BASE}/api/notifications?${qs.toString()}`,
-        signal ? { signal } : undefined
+        { ...(signal ? { signal } : {}), cache: "no-store" }
       );
       const data = await res.json();
 
       if (!res.ok) throw new Error(data?.message || "Failed to fetch notifications.");
 
       const arr = Array.isArray(data?.notifications) ? data.notifications : [];
-      setNotifs(arr);
+      const normalizedFilter = String(typeFilter || "").trim().toUpperCase();
+      setNotifs(normalizedFilter
+        ? arr.filter((notification) => String(notification?.type || "").trim().toUpperCase() === normalizedFilter)
+        : arr);
     },
     [API_BASE, user?.id, tab, typeFilter]
   );
@@ -193,6 +190,9 @@ function AgentNotifications() {
     if (t === "TASK_MISSED") return "notif-pill missed";
     if (t === "PAYMENT_TRANSFER_REMINDER" || t === "PAYMENT_EOR_REMINDER" || t === "PAYMENT_MISSED_TRANSFER" || t === "PAYMENT_POLICY_LAPSED" || t === "POLICY_PAID_UP" || t === "POLICY_MATURED" || t === "POLICY_PAID_UP_MATURED" || t === "POLICY_CANCELLED") return "notif-pill payment";
     if (t === "ORPHAN_CLIENT_ASSIGNED" || t === "ORPHAN_CLIENT_TRANSFERRED") return "notif-pill orphan";
+    if (t === "UNIT_KPI_ASSIGNED") return "notif-pill kpi-assigned";
+    if (t === "UNIT_KPI_TARGET_UPDATED") return "notif-pill kpi-updated";
+    if (t === "UNIT_KPI_UNASSIGNED") return "notif-pill kpi-unassigned";
     return "notif-pill";
   };
 
@@ -294,7 +294,7 @@ function AgentNotifications() {
           >
             {markingNotifId === String(n._id) ? "Marking..." : "Mark as Read"}
           </button>
-        ) : (
+        ) : !UNIT_KPI_NOTIF_TYPES.includes(String(n?.type || "").toUpperCase()) ? (
           <button
             type="button"
             className="notif-btn secondary"
@@ -304,7 +304,7 @@ function AgentNotifications() {
           >
             Open
           </button>
-        )}
+        ) : null}
       </div>
     </div>
   );

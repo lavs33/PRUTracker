@@ -236,6 +236,7 @@
   color: #444;
   font-size: 13px;
   font-weight: 600;
+  white-space: pre-line;
   overflow-wrap: anywhere;
   word-break: break-word;
 }
@@ -315,4 +316,22 @@
   background: #ede9fe;
   border-color: #c4b5fd;
   color: #5b21b6;
+}
+
+.notif-pill.kpi-assigned {
+  background: #e8f7ee;
+  border-color: #9bd7ae;
+  color: #176b36;
+}
+
+.notif-pill.kpi-updated {
+  background: #fff4d6;
+  border-color: #efc65f;
+  color: #755000;
+}
+
+.notif-pill.kpi-unassigned {
+  background: #fde9ec;
+  border-color: #efa7b1;
+  color: #982536;
 }
