@@ -217,6 +217,7 @@
   color: #444;
   font-size: 13px;
   font-weight: 600;
+  white-space: pre-line;
 }
 
 .notif-pill {
@@ -237,6 +238,24 @@
   background: #e7f6ff;
   border-color: #bfe8ff;
   color: #0b5c8a;
+}
+
+.notif-pill.kpi-assigned {
+  background: #e8f7ee;
+  border-color: #9bd7ae;
+  color: #176b36;
+}
+
+.notif-pill.kpi-updated {
+  background: #fff4d6;
+  border-color: #efc65f;
+  color: #755000;
+}
+
+.notif-pill.kpi-unassigned {
+  background: #fde9ec;
+  border-color: #efa7b1;
+  color: #982536;
 }
 
 .notif-right {
