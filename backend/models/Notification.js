@@ -37,6 +37,15 @@ const NOTIF_TYPES = [
   "ORPHANS_ENDORSEMENTS",
   "ORPHAN_CLIENT_ASSIGNED",
   "ORPHAN_CLIENT_TRANSFERRED",
+  "BRANCH_KPI_ASSIGNED",
+  "BRANCH_KPI_TARGET_UPDATED",
+  "BRANCH_KPI_UNASSIGNED",
+  "UNIT_KPI_ASSIGNED",
+  "UNIT_KPI_TARGET_UPDATED",
+  "UNIT_KPI_UNASSIGNED",
+  "AGENT_KPI_ASSIGNED",
+  "AGENT_KPI_TARGET_UPDATED",
+  "AGENT_KPI_UNASSIGNED",
 
   // future
   // "POLICY_LAPSED",
@@ -55,7 +64,7 @@ const NOTIF_STATUS = ["Unread", "Read"];
  * Allowed entity types this notification can reference.
  * This lets the UI know what kind of item to open when clicking a notification.
  */
-const ENTITY_TYPES = ["Task", "Policyholder", "Prospect", "LongLeave"];
+const ENTITY_TYPES = ["Task", "Policyholder", "Prospect", "LongLeave", "KpiAssignment"];
 
 /**
  * notificationSchema
