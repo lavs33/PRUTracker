@@ -5,7 +5,58 @@ import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
 import "./AgentNotifications.css";
 
-const NOTIF_TYPES = ["TASK_ADDED", "TASK_DUE_TODAY", "TASK_MISSED", "PAYMENT_TRANSFER_REMINDER", "PAYMENT_EOR_REMINDER", "PAYMENT_MISSED_TRANSFER", "PAYMENT_POLICY_LAPSED", "POLICY_PAID_UP", "POLICY_MATURED", "POLICY_PAID_UP_MATURED", "POLICY_CANCELLED", "ORPHAN_CLIENT_ASSIGNED", "ORPHAN_CLIENT_TRANSFERRED"];
+const UNIT_KPI_NOTIF_TYPES = ["UNIT_KPI_ASSIGNED", "UNIT_KPI_TARGET_UPDATED", "UNIT_KPI_UNASSIGNED"];
+const AGENT_KPI_NOTIF_TYPES = ["AGENT_KPI_ASSIGNED", "AGENT_KPI_TARGET_UPDATED", "AGENT_KPI_UNASSIGNED"];
+const KPI_NOTIF_TYPES = [...UNIT_KPI_NOTIF_TYPES, ...AGENT_KPI_NOTIF_TYPES];
+const NOTIF_TYPES = ["TASK_ADDED", "TASK_DUE_TODAY", "TASK_MISSED", "PAYMENT_TRANSFER_REMINDER", "PAYMENT_EOR_REMINDER", "PAYMENT_MISSED_TRANSFER", "POLICY_LAPSED", "POLICY_PAID_UP", "POLICY_MATURED", "POLICY_PAID_UP_MATURED", "POLICY_CANCELLED", "ORPHAN_CLIENT_ASSIGNED", "ORPHAN_CLIENT_TRANSFERRED", ...KPI_NOTIF_TYPES];
+const PRIORITY_LEVELS = ["urgent", "high", "normal", "informational"];
+const PRIORITY_BY_TYPE = {
+  POLICY_LAPSED: "urgent",
+  PAYMENT_MISSED_TRANSFER: "urgent",
+  TASK_MISSED: "urgent",
+  TASK_DUE_TODAY: "high",
+  PAYMENT_TRANSFER_REMINDER: "high",
+  PAYMENT_EOR_REMINDER: "high",
+  POLICY_CANCELLED: "high",
+  ORPHAN_CLIENT_ASSIGNED: "high",
+  TASK_ADDED: "normal",
+  AGENT_KPI_ASSIGNED: "normal",
+  AGENT_KPI_TARGET_UPDATED: "normal",
+  AGENT_KPI_UNASSIGNED: "normal",
+  UNIT_KPI_ASSIGNED: "normal",
+  UNIT_KPI_TARGET_UPDATED: "normal",
+  UNIT_KPI_UNASSIGNED: "normal",
+  POLICY_PAID_UP: "informational",
+  POLICY_MATURED: "informational",
+  POLICY_PAID_UP_MATURED: "informational",
+  ORPHAN_CLIENT_TRANSFERRED: "informational",
+};
+
+const notificationPriority = (type) => PRIORITY_BY_TYPE[String(type || "").trim().toUpperCase()] || "normal";
+
+const notificationWithinDateRange = (notification, dateRange) => {
+  if (dateRange === "all") return true;
+  const timestamp = new Date(notification?.updatedAt || notification?.createdAt || 0);
+  if (Number.isNaN(timestamp.getTime())) return false;
+  const now = new Date();
+  let start = new Date(now);
+  if (dateRange === "today") start.setHours(0, 0, 0, 0);
+  else if (dateRange === "7d") start = new Date(now.getTime() - (7 * 24 * 60 * 60 * 1000));
+  else if (dateRange === "30d") start = new Date(now.getTime() - (30 * 24 * 60 * 60 * 1000));
+  else if (dateRange === "90d") start = new Date(now.getTime() - (90 * 24 * 60 * 60 * 1000));
+  else if (dateRange === "6m") start.setMonth(start.getMonth() - 6);
+  else if (dateRange === "12m") start.setFullYear(start.getFullYear() - 1);
+  return timestamp >= start && timestamp <= now;
+};
+
+const filterNotifications = (notifications, { typeFilter, priorityFilter, dateRange, ignorePriority = false }) => {
+  const normalizedType = String(typeFilter || "").trim().toUpperCase();
+  return notifications.filter((notification) => (
+    (!normalizedType || String(notification?.type || "").trim().toUpperCase() === normalizedType)
+    && (ignorePriority || priorityFilter === "all" || notificationPriority(notification?.type) === priorityFilter)
+    && notificationWithinDateRange(notification, dateRange)
+  ));
+};
 
 function AgentNotifications() {
   const navigate = useNavigate();
@@ -26,6 +77,8 @@ function AgentNotifications() {
 
   // Filter: type only
   const [typeFilter, setTypeFilter] = useState("");
+  const [priorityFilter, setPriorityFilter] = useState("all");
+  const [dateRange, setDateRange] = useState("all");
 
   // list state
   const [loading, setLoading] = useState(true);
@@ -36,6 +89,7 @@ function AgentNotifications() {
 
   // counts state (always numeric)
   const [counts, setCounts] = useState({ unread: 0, read: 0 });
+  const [priorityCounts, setPriorityCounts] = useState({ urgent: 0, high: 0, normal: 0, informational: 0 });
 
   // Guard
   useEffect(() => {
@@ -110,26 +164,18 @@ function AgentNotifications() {
   const fetchCounts = useCallback(
     async (signal) => {
       if (!user?.id) return;
-
-      const qs = new URLSearchParams({
-        userId: user.id,
-      });
-      if (typeFilter) qs.set("type", typeFilter);
-
-      const res = await fetch(
-        `${API_BASE}/api/notifications/counts?${qs.toString()}`,
-        signal ? { signal } : undefined
-      );
-      const data = await res.json();
-
-      if (!res.ok) throw new Error(data?.message || "Failed to fetch notification counts.");
-
-      setCounts({
-        unread: Number(data?.unread || 0),
-        read: Number(data?.read || 0),
-      });
+      const loadStatusCount = async (status) => {
+        const qs = new URLSearchParams({ userId: user.id, status });
+        const res = await fetch(`${API_BASE}/api/notifications?${qs.toString()}`, { ...(signal ? { signal } : {}), cache: "no-store" });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data?.message || "Failed to fetch notification counts.");
+        const notifications = Array.isArray(data?.notifications) ? data.notifications : [];
+        return filterNotifications(notifications, { typeFilter, priorityFilter, dateRange }).length;
+      };
+      const [unread, read] = await Promise.all([loadStatusCount("Unread"), loadStatusCount("Read")]);
+      setCounts({ unread, read });
     },
-    [API_BASE, user?.id, typeFilter]
+    [API_BASE, user?.id, typeFilter, priorityFilter, dateRange]
   );
 
   // Fetch notifications list for current tab + filters
@@ -145,20 +191,31 @@ function AgentNotifications() {
         includeRefs: "1",
       });
 
-      if (typeFilter) qs.set("type", typeFilter);
-
       const res = await fetch(
         `${API_BASE}/api/notifications?${qs.toString()}`,
-        signal ? { signal } : undefined
+        { ...(signal ? { signal } : {}), cache: "no-store" }
       );
       const data = await res.json();
 
       if (!res.ok) throw new Error(data?.message || "Failed to fetch notifications.");
 
       const arr = Array.isArray(data?.notifications) ? data.notifications : [];
-      setNotifs(arr);
+      const typeFiltered = filterNotifications(arr, { typeFilter, priorityFilter, dateRange, ignorePriority: true });
+      setPriorityCounts(PRIORITY_LEVELS.reduce((result, priority) => ({
+        ...result,
+        [priority]: typeFiltered.filter((notification) => notificationPriority(notification?.type) === priority).length,
+      }), {}));
+      const priorityFiltered = priorityFilter === "all"
+        ? typeFiltered
+        : typeFiltered.filter((notification) => notificationPriority(notification?.type) === priorityFilter);
+      const priorityRank = { urgent: 0, high: 1, normal: 2, informational: 3 };
+      setNotifs([...priorityFiltered].sort((a, b) => {
+        const priorityDifference = priorityRank[notificationPriority(a?.type)] - priorityRank[notificationPriority(b?.type)];
+        if (priorityDifference !== 0) return priorityDifference;
+        return new Date(b?.updatedAt || b?.createdAt || 0) - new Date(a?.updatedAt || a?.createdAt || 0);
+      }));
     },
-    [API_BASE, user?.id, tab, typeFilter]
+    [API_BASE, user?.id, tab, typeFilter, priorityFilter, dateRange]
   );
 
   // Load counts + list
@@ -177,6 +234,7 @@ function AgentNotifications() {
           setApiError(err?.message || "Cannot connect to server. Is backend running?");
           setNotifs([]);
           setCounts({ unread: 0, read: 0 });
+          setPriorityCounts({ urgent: 0, high: 0, normal: 0, informational: 0 });
         }
       } finally {
         setLoading(false);
@@ -191,8 +249,11 @@ function AgentNotifications() {
     if (t === "TASK_ADDED") return "notif-pill added";
     if (t === "TASK_DUE_TODAY") return "notif-pill due";
     if (t === "TASK_MISSED") return "notif-pill missed";
-    if (t === "PAYMENT_TRANSFER_REMINDER" || t === "PAYMENT_EOR_REMINDER" || t === "PAYMENT_MISSED_TRANSFER" || t === "PAYMENT_POLICY_LAPSED" || t === "POLICY_PAID_UP" || t === "POLICY_MATURED" || t === "POLICY_PAID_UP_MATURED" || t === "POLICY_CANCELLED") return "notif-pill payment";
+    if (t === "PAYMENT_TRANSFER_REMINDER" || t === "PAYMENT_EOR_REMINDER" || t === "PAYMENT_MISSED_TRANSFER" || t === "POLICY_LAPSED" || t === "POLICY_PAID_UP" || t === "POLICY_MATURED" || t === "POLICY_PAID_UP_MATURED" || t === "POLICY_CANCELLED") return "notif-pill payment";
     if (t === "ORPHAN_CLIENT_ASSIGNED" || t === "ORPHAN_CLIENT_TRANSFERRED") return "notif-pill orphan";
+    if (t === "UNIT_KPI_ASSIGNED" || t === "AGENT_KPI_ASSIGNED") return "notif-pill kpi-assigned";
+    if (t === "UNIT_KPI_TARGET_UPDATED" || t === "AGENT_KPI_TARGET_UPDATED") return "notif-pill kpi-updated";
+    if (t === "UNIT_KPI_UNASSIGNED" || t === "AGENT_KPI_UNASSIGNED") return "notif-pill kpi-unassigned";
     return "notif-pill";
   };
 
@@ -217,6 +278,15 @@ function AgentNotifications() {
     if (!user?.id) return;
     setMarkingAllRead(true);
     try {
+      if (priorityFilter !== "all" || dateRange !== "all") {
+        const responses = await Promise.all(notifs.map((notification) => fetch(
+          `${API_BASE}/api/notifications/${notification._id}/read?userId=${user.id}`,
+          { method: "PATCH" }
+        )));
+        if (responses.some((response) => !response.ok)) throw new Error("Failed to mark all priority notifications as read.");
+        await Promise.all([fetchCounts(), fetchNotifs()]);
+        return;
+      }
       const qs = new URLSearchParams({
         userId: user.id,
       });
@@ -277,6 +347,7 @@ function AgentNotifications() {
         <div className="notif-topline">
           {n.status === "Unread" ? <span className="notif-dot" aria-label="Unread" /> : null}
           <span className={typePillClass(n.type)}>{n.type}</span>
+          <span className={`notif-priority notif-priority--${notificationPriority(n.type)}`}>{notificationPriority(n.type)}</span>
           <span className="notif-time">{formatWhen(n.updatedAt || n.createdAt)}</span>
         </div>
 
@@ -294,7 +365,7 @@ function AgentNotifications() {
           >
             {markingNotifId === String(n._id) ? "Marking..." : "Mark as Read"}
           </button>
-        ) : (
+        ) : !KPI_NOTIF_TYPES.includes(String(n?.type || "").toUpperCase()) ? (
           <button
             type="button"
             className="notif-btn secondary"
@@ -304,7 +375,7 @@ function AgentNotifications() {
           >
             Open
           </button>
-        )}
+        ) : null}
       </div>
     </div>
   );
@@ -354,6 +425,18 @@ function AgentNotifications() {
             <div className="notifs-filter">
               <select
                 className="notifs-select"
+                value={priorityFilter}
+                onChange={(e) => setPriorityFilter(e.target.value)}
+                aria-label="Notification priority filter"
+              >
+                <option value="all">All Priorities ({PRIORITY_LEVELS.reduce((total, priority) => total + Number(priorityCounts[priority] || 0), 0)})</option>
+                {PRIORITY_LEVELS.map((priority) => (
+                  <option key={priority} value={priority}>{priority.charAt(0).toUpperCase() + priority.slice(1)} ({priorityCounts[priority]})</option>
+                ))}
+              </select>
+
+              <select
+                className="notifs-select"
                 value={typeFilter}
                 onChange={(e) => setTypeFilter(e.target.value)}
               >
@@ -365,7 +448,22 @@ function AgentNotifications() {
                 ))}
               </select>
 
-              <button type="button" className="notif-btn ghost" onClick={() => setTypeFilter("")}>
+              <select
+                className="notifs-select"
+                value={dateRange}
+                onChange={(e) => setDateRange(e.target.value)}
+                aria-label="Notification date range filter"
+              >
+                <option value="all">All Time</option>
+                <option value="today">This Day</option>
+                <option value="7d">Last 7 Days</option>
+                <option value="30d">Last 30 Days</option>
+                <option value="90d">Last 90 Days</option>
+                <option value="6m">Last 6 Months</option>
+                <option value="12m">Last 12 Months</option>
+              </select>
+
+              <button type="button" className="notif-btn ghost" onClick={() => { setTypeFilter(""); setPriorityFilter("all"); setDateRange("all"); }} disabled={!typeFilter && priorityFilter === "all" && dateRange === "all"}>
                 Clear
               </button>
 
