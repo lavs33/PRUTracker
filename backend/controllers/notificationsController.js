@@ -1,10 +1,20 @@
-const PAYMENT_NOTIFICATION_TYPES = ["PAYMENT_TRANSFER_REMINDER", "PAYMENT_EOR_REMINDER", "PAYMENT_MISSED_TRANSFER", "PAYMENT_POLICY_LAPSED"];
+const PAYMENT_NOTIFICATION_TYPES = ["PAYMENT_TRANSFER_REMINDER", "PAYMENT_EOR_REMINDER", "PAYMENT_MISSED_TRANSFER", "POLICY_LAPSED"];
 const POLICY_LIFECYCLE_NOTIFICATION_TYPES = ["POLICY_PAID_UP", "POLICY_MATURED", "POLICY_PAID_UP_MATURED", "POLICY_CANCELLED"];
 const TASK_NOTIFICATION_TYPES = ["TASK_ADDED", "TASK_DUE_TODAY", "TASK_MISSED"];
 const MANAGER_NOTIFICATION_TYPES = ["ORPHANS_ENDORSEMENTS"];
 const AGENT_ORPHAN_NOTIFICATION_TYPES = ["ORPHAN_CLIENT_ASSIGNED", "ORPHAN_CLIENT_TRANSFERRED"];
-const NOTIFICATION_TYPES = [...TASK_NOTIFICATION_TYPES, ...PAYMENT_NOTIFICATION_TYPES, ...POLICY_LIFECYCLE_NOTIFICATION_TYPES, ...MANAGER_NOTIFICATION_TYPES, ...AGENT_ORPHAN_NOTIFICATION_TYPES];
-const NOTIFICATION_ENTITY_TYPES = ["Task", "Policyholder", "Prospect", "LongLeave"];
+const BRANCH_KPI_NOTIFICATION_TYPES = ["BRANCH_KPI_ASSIGNED", "BRANCH_KPI_TARGET_UPDATED", "BRANCH_KPI_UNASSIGNED"];
+const UNIT_KPI_NOTIFICATION_TYPES = ["UNIT_KPI_ASSIGNED", "UNIT_KPI_TARGET_UPDATED", "UNIT_KPI_UNASSIGNED"];
+const AGENT_KPI_NOTIFICATION_TYPES = ["AGENT_KPI_ASSIGNED", "AGENT_KPI_TARGET_UPDATED", "AGENT_KPI_UNASSIGNED"];
+const NOTIFICATION_TYPES = [...TASK_NOTIFICATION_TYPES, ...PAYMENT_NOTIFICATION_TYPES, ...POLICY_LIFECYCLE_NOTIFICATION_TYPES, ...MANAGER_NOTIFICATION_TYPES, ...AGENT_ORPHAN_NOTIFICATION_TYPES, ...BRANCH_KPI_NOTIFICATION_TYPES, ...UNIT_KPI_NOTIFICATION_TYPES, ...AGENT_KPI_NOTIFICATION_TYPES];
+const NOTIFICATION_ENTITY_TYPES = ["Task", "Policyholder", "Prospect", "LongLeave", "Retirement", "KpiAssignment"];
+const RESOLUTION_REQUIRED_NOTIFICATION_TYPES = [...TASK_NOTIFICATION_TYPES, ...PAYMENT_NOTIFICATION_TYPES, ...MANAGER_NOTIFICATION_TYPES];
+
+function defaultResolutionStatus(notification) {
+  const requiresResolution = RESOLUTION_REQUIRED_NOTIFICATION_TYPES.includes(String(notification?.type || "").toUpperCase());
+  if (!requiresResolution) return "Not Applicable";
+  return notification?.resolutionStatus === "Resolved" ? "Resolved" : "Unresolved";
+}
 
 function effectivePolicyholderOwnerFilter(userId) {
   return {
@@ -151,7 +161,7 @@ function paymentNotificationTimestamp(baseDate, type) {
   const normalizedType = String(type || "").toUpperCase();
   if (normalizedType === "PAYMENT_EOR_REMINDER") return new Date(base.getTime() + 1);
   if (normalizedType === "PAYMENT_MISSED_TRANSFER") return new Date(base.getTime() + 1);
-  if (normalizedType === "PAYMENT_POLICY_LAPSED") return new Date(base.getTime() + 2);
+  if (normalizedType === "POLICY_LAPSED") return new Date(base.getTime() + 2);
   return base;
 }
 
@@ -184,6 +194,9 @@ function createNotificationsController({
   Policyholder,
   AnnualPayment,
   Payment,
+  ScheduledMeeting,
+  LongLeave,
+  Retirement,
   Product,
   Policy,
   mongoose,
@@ -521,9 +534,9 @@ function createNotificationsController({
           const policyName = productNameById.get(String(policyholder.productId || "")) || "—";
           const policyNumber = policyholder.policyNumber || "—";
           const policyholderCode = policyholder.policyholderCode || "—";
-          const lapseDedupeKey = `PAYMENT_POLICY_LAPSED:${policyholder._id}:${annualPayment._id}:${paymentDateKey}`;
+          const lapseDedupeKey = `POLICY_LAPSED:${policyholder._id}:${annualPayment._id}:${paymentDateKey}`;
           const lapseMessage = `This policyholder is marked as lapsed now due to prolonged payment transfer inactivity. Policyholder Code: ${policyholderCode}. Policyholder Name: ${policyholderName}. Policy Name: ${policyName}. Policy Number: ${policyNumber}.`;
-          const notificationTimestamp = paymentNotificationTimestamp(paymentNotificationBaseAt, "PAYMENT_POLICY_LAPSED");
+          const notificationTimestamp = paymentNotificationTimestamp(paymentNotificationBaseAt, "POLICY_LAPSED");
           policyholderWrites.push({
             updateOne: {
               filter: { _id: policyholder._id, ...effectivePolicyholderOwnerFilter(uid), status: { $ne: "Lapsed" } },
@@ -535,7 +548,7 @@ function createNotificationsController({
               filter: { assignedToUserId: uid, dedupeKey: lapseDedupeKey },
               update: {
                 $set: {
-                  type: "PAYMENT_POLICY_LAPSED",
+                  type: "POLICY_LAPSED",
                   title: "Policy lapsed due to missed premium payment",
                   message: lapseMessage,
                   entityType: "Policyholder",
@@ -714,7 +727,7 @@ function createNotificationsController({
 
       let notifs = await Notification.find(query)
         .sort({ updatedAt: -1, createdAt: -1 })
-        .select("assignedToUserId type title message status readAt entityType entityId metadata createdAt updatedAt")
+        .select("assignedToUserId type title message status readAt resolutionStatus resolvedAt entityType entityId metadata createdAt updatedAt")
         .lean();
 
       if (String(includeRefs) === "1" && notifs.length) {
@@ -728,10 +741,46 @@ function createNotificationsController({
         ];
 
         const tasks = taskIds.length
-          ? await Task.find({ _id: { $in: taskIds } }).select("prospectId leadEngagementId type").lean()
+              ? await Task.find({ _id: { $in: taskIds } }).select("prospectId leadEngagementId type title dueAt status completedAt").lean()
           : [];
 
         const taskMap = new Map(tasks.map((t) => [String(t._id), t]));
+        const longLeaveIds = uniqueValidIds(notifs.filter((notification) => notification.entityType === "LongLeave").map((notification) => notification.entityId));
+        const retirementIds = uniqueValidIds(notifs.filter((notification) => notification.entityType === "Retirement").map((notification) => notification.entityId));
+        const [longLeaves, retirements] = await Promise.all([
+          LongLeave && longLeaveIds.length ? LongLeave.find({ _id: { $in: longLeaveIds } }).select("affectedProspects affectedPolicyholders updatedAt").lean() : [],
+          Retirement && retirementIds.length ? Retirement.find({ _id: { $in: retirementIds } }).select("affectedProspects affectedPolicyholders updatedAt").lean() : [],
+        ]);
+        const endorsementMap = new Map([...longLeaves, ...retirements].map((endorsement) => [String(endorsement._id), endorsement]));
+        const endorsementIsResolved = (endorsement) => {
+          if (!endorsement) return false;
+          const affectedRecords = [...(endorsement.affectedProspects || []), ...(endorsement.affectedPolicyholders || [])];
+          return affectedRecords.every((record) => record?.reassigned === true);
+        };
+        const taskEngagementIds = uniqueValidIds(tasks.map((task) => task.leadEngagementId));
+        const completedMeetings = ScheduledMeeting && taskEngagementIds.length
+          ? await ScheduledMeeting.find({ leadEngagementId: { $in: taskEngagementIds }, status: "Completed" })
+            .select("leadEngagementId meetingType endAt updatedAt")
+            .lean()
+          : [];
+        const taskHasCompletedMeeting = (task) => {
+          if (!task?.leadEngagementId || !task?.dueAt) return false;
+          const title = String(task.title || "").toLowerCase();
+          const expectedMeetingType = title.includes("needs assessment")
+            ? "Needs Assessment"
+            : title.includes("proposal")
+              ? "Proposal Presentation"
+              : title.includes("application")
+                ? "Application Submission"
+                : "";
+          if (!expectedMeetingType) return false;
+          const taskDueAt = new Date(task.dueAt).getTime();
+          return completedMeetings.some((meeting) => (
+            String(meeting.leadEngagementId) === String(task.leadEngagementId)
+            && meeting.meetingType === expectedMeetingType
+            && Math.abs(taskDueAt - new Date(meeting.endAt).getTime()) <= (20 * 60 * 1000)
+          ));
+        };
 
         const engagementIds = uniqueValidIds(tasks.map((t) => t.leadEngagementId));
 
@@ -785,8 +834,21 @@ function createNotificationsController({
           const reassignedToViewer = prospectRef?.reassignedToUserId && prospectRef.reassignedToUserId === String(uid);
           const transferredAwayForViewer = Boolean(prospectRef?.reassignedToUserId && !reassignedToViewer);
 
+          const taskResolved = n.entityType === "Task" && (t?.status === "Done" || taskHasCompletedMeeting(t));
+          const endorsement = n.type === "ORPHANS_ENDORSEMENTS" ? endorsementMap.get(String(n.entityId || "")) : null;
+          const endorsementResolved = n.type === "ORPHANS_ENDORSEMENTS" && endorsementIsResolved(endorsement);
           return {
             ...n,
+            resolutionStatus: n.entityType === "Task"
+              ? (taskResolved ? "Resolved" : "Unresolved")
+              : n.type === "ORPHANS_ENDORSEMENTS"
+                ? (endorsementResolved ? "Resolved" : "Unresolved")
+                : defaultResolutionStatus(n),
+            resolvedAt: taskResolved
+              ? (t.completedAt || n.resolvedAt || null)
+              : endorsementResolved
+                ? (endorsement?.updatedAt || n.resolvedAt || null)
+                : (n.resolvedAt || null),
             prospectId,
             leadId,
             prospectName: prospectRef?.fullName || (prospectId ? "—" : "—"),
@@ -795,6 +857,12 @@ function createNotificationsController({
           };
         });
       }
+
+      notifs = notifs.map((notification) => ({
+        ...notification,
+        resolutionStatus: defaultResolutionStatus(notification),
+        resolvedAt: notification.resolvedAt || null,
+      }));
 
       return res.json({ notifications: sortNotificationsForDisplay(notifs.map(normalizeNotificationForDisplay)) });
     } catch (err) {
