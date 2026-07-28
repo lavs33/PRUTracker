@@ -29,7 +29,7 @@ const NOTIF_TYPES = [
   "PAYMENT_TRANSFER_REMINDER",
   "PAYMENT_EOR_REMINDER",
   "PAYMENT_MISSED_TRANSFER",
-  "PAYMENT_POLICY_LAPSED",
+  "POLICY_LAPSED",
   "POLICY_PAID_UP",
   "POLICY_MATURED",
   "POLICY_PAID_UP_MATURED",
@@ -37,9 +37,15 @@ const NOTIF_TYPES = [
   "ORPHANS_ENDORSEMENTS",
   "ORPHAN_CLIENT_ASSIGNED",
   "ORPHAN_CLIENT_TRANSFERRED",
-
-  // future
-  // "POLICY_LAPSED",
+  "BRANCH_KPI_ASSIGNED",
+  "BRANCH_KPI_TARGET_UPDATED",
+  "BRANCH_KPI_UNASSIGNED",
+  "UNIT_KPI_ASSIGNED",
+  "UNIT_KPI_TARGET_UPDATED",
+  "UNIT_KPI_UNASSIGNED",
+  "AGENT_KPI_ASSIGNED",
+  "AGENT_KPI_TARGET_UPDATED",
+  "AGENT_KPI_UNASSIGNED",
 ];
 
 /**
@@ -48,6 +54,12 @@ const NOTIF_TYPES = [
  * Allowed notification read states.
  */
 const NOTIF_STATUS = ["Unread", "Read"];
+const RESOLUTION_STATUS = ["Unresolved", "Resolved", "Not Applicable"];
+const RESOLUTION_REQUIRED_TYPES = [
+  "TASK_ADDED", "TASK_DUE_TODAY", "TASK_MISSED",
+  "PAYMENT_TRANSFER_REMINDER", "PAYMENT_EOR_REMINDER", "PAYMENT_MISSED_TRANSFER", "POLICY_LAPSED",
+  "ORPHANS_ENDORSEMENTS",
+];
 
 /**
  * ENTITY_TYPES
@@ -55,7 +67,7 @@ const NOTIF_STATUS = ["Unread", "Read"];
  * Allowed entity types this notification can reference.
  * This lets the UI know what kind of item to open when clicking a notification.
  */
-const ENTITY_TYPES = ["Task", "Policyholder", "Prospect", "LongLeave"];
+const ENTITY_TYPES = ["Task", "Policyholder", "Prospect", "LongLeave", "Retirement", "KpiAssignment"];
 
 /**
  * notificationSchema
@@ -162,6 +174,19 @@ const notificationSchema = new mongoose.Schema(
      * index: true helps analytics/reporting on read times.
      */
     readAt: {
+      type: Date,
+      default: null,
+      index: true,
+    },
+    resolutionStatus: {
+      type: String,
+      enum: RESOLUTION_STATUS,
+      default() {
+        return RESOLUTION_REQUIRED_TYPES.includes(String(this.type || "").toUpperCase()) ? "Unresolved" : "Not Applicable";
+      },
+      index: true,
+    },
+    resolvedAt: {
       type: Date,
       default: null,
       index: true,
