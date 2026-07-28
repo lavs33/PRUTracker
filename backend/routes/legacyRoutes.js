@@ -430,7 +430,7 @@ function registerLegacyRoutes(app, deps) {
     "PAYMENT_TRANSFER_REMINDER",
     "PAYMENT_EOR_REMINDER",
     "PAYMENT_MISSED_TRANSFER",
-    "PAYMENT_POLICY_LAPSED",
+    "POLICY_LAPSED",
   ];
 
   function deriveCoverageEndDate(policy = {}) {

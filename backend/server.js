@@ -571,9 +571,9 @@ const KPI_DEFINITIONS = {
   ],
   BRANCH: [
     { key: "monthly_sales_production", label: "Sales Production", period: "Monthly", valueType: "Currency", targetMin: null, targetMax: null, targetValue: null, assigned: true },
+    { key: "monthly_target_achievement_index", label: "Target Achievement Index", period: "Monthly", valueType: "Percent", targetMin: null, targetMax: null, targetValue: 100, assigned: true },
     { key: "monthly_active_agents", label: "Number of Active Agents", period: "Monthly", valueType: "Count", targetMin: null, targetMax: null, targetValue: null, assigned: true },
     { key: "monthly_persistency_rate", label: "Branch Persistency Rate", period: "Monthly", valueType: "Percent", targetMin: null, targetMax: null, targetValue: 85, assigned: true },
-    { key: "monthly_target_achievement_index", label: "Target Achievement Index", period: "Monthly", valueType: "Percent", targetMin: null, targetMax: null, targetValue: 100, assigned: true },
   ],
 };
 
@@ -588,11 +588,16 @@ function buildDefaultKpiTargets(definition = {}, saved = {}) {
 
   return KPI_FREQUENCIES.map((period) => {
     const target = savedTargetsByPeriod.get(period) || {};
+    const targetHasConfiguredValue = [target.targetMin, target.targetMax, target.targetValue]
+      .some((value) => value !== null && value !== undefined);
+    const savedHasConfiguredValue = [saved.targetMin, saved.targetMax, saved.targetValue]
+      .some((value) => value !== null && value !== undefined);
+    const source = targetHasConfiguredValue ? target : savedHasConfiguredValue ? saved : definition;
     return {
       period,
-      targetMin: target.targetMin !== undefined ? target.targetMin : (saved.targetMin !== undefined ? saved.targetMin : definition.targetMin),
-      targetMax: target.targetMax !== undefined ? target.targetMax : (saved.targetMax !== undefined ? saved.targetMax : definition.targetMax),
-      targetValue: target.targetValue !== undefined ? target.targetValue : (saved.targetValue !== undefined ? saved.targetValue : definition.targetValue),
+      targetMin: source.targetMin ?? null,
+      targetMax: source.targetMax ?? null,
+      targetValue: source.targetValue ?? null,
     };
   });
 }
@@ -624,6 +629,151 @@ function parseOptionalNumber(value) {
   return Number.isFinite(numberValue) ? numberValue : null;
 }
 
+function kpiTargetsSignature(kpi = {}) {
+  return JSON.stringify({
+    period: kpi.period || "",
+    targets: (Array.isArray(kpi.targets) ? kpi.targets : []).map(({ period, targetMin, targetMax, targetValue }) => ({
+      period, targetMin: targetMin ?? null, targetMax: targetMax ?? null, targetValue: targetValue ?? null,
+    })),
+  });
+}
+
+function formatKpiNotificationValue(value, valueType = "") {
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue)) return "Not set";
+  const formattedNumber = numberValue.toLocaleString("en-PH", { maximumFractionDigits: 2 });
+  if (valueType === "Currency") return `Php ${formattedNumber}`;
+  if (valueType === "Percent" || valueType === "Index") return `${formattedNumber}%`;
+  return formattedNumber;
+}
+
+function formatKpiNotificationTarget(target = {}, valueType = "") {
+  if (target.targetValue !== null && target.targetValue !== undefined) return formatKpiNotificationValue(target.targetValue, valueType);
+  const hasMin = target.targetMin !== null && target.targetMin !== undefined;
+  const hasMax = target.targetMax !== null && target.targetMax !== undefined;
+  if (hasMin && hasMax) return `${formatKpiNotificationValue(target.targetMin, valueType)} - ${formatKpiNotificationValue(target.targetMax, valueType)}`;
+  if (hasMin) return `${formatKpiNotificationValue(target.targetMin, valueType)} and above`;
+  if (hasMax) return `Up to ${formatKpiNotificationValue(target.targetMax, valueType)}`;
+  return "Not set";
+}
+
+async function createBranchKpiNotifications({ branchId, branchName, assignmentId, previousKpi, nextKpi }) {
+  const wasAssigned = previousKpi?.assigned === true;
+  const isAssigned = nextKpi?.assigned === true;
+  let type = "";
+  if (!wasAssigned && isAssigned) type = "BRANCH_KPI_ASSIGNED";
+  else if (wasAssigned && !isAssigned) type = "BRANCH_KPI_UNASSIGNED";
+  else if (wasAssigned && isAssigned && kpiTargetsSignature(previousKpi) !== kpiTargetsSignature(nextKpi)) type = "BRANCH_KPI_TARGET_UPDATED";
+  if (!type) return;
+
+  const unitIds = (await Unit.find({ branchId }).select("_id").lean()).map((unit) => unit._id);
+  const notifyUnitManagers = nextKpi?.key === "monthly_sales_production" || previousKpi?.key === "monthly_sales_production";
+  const [branchManagers, unitManagers, assistantUnitManagers] = await Promise.all([
+    BM.find({ branchId, isBlocked: { $ne: true } }).select("userId").lean(),
+    notifyUnitManagers ? UM.find({ unitId: { $in: unitIds }, isBlocked: { $ne: true } }).select("userId").lean() : [],
+    notifyUnitManagers ? AUM.find({ unitId: { $in: unitIds }, isBlocked: { $ne: true } }).select("userId").lean() : [],
+  ]);
+  const recipientIds = [...new Set([...branchManagers, ...unitManagers, ...assistantUnitManagers].map((manager) => String(manager.userId || "")).filter(Boolean))];
+  if (!recipientIds.length) return;
+
+  const label = nextKpi?.label || previousKpi?.label || "KPI";
+  const frequencies = (Array.isArray((isAssigned ? nextKpi : previousKpi)?.targets) ? (isAssigned ? nextKpi : previousKpi).targets : [])
+    .map((target) => target.period).filter(Boolean);
+  const titleAction = type === "BRANCH_KPI_UNASSIGNED" ? "unassigned" : type === "BRANCH_KPI_ASSIGNED" ? "assigned" : "target updated";
+  const message = type === "BRANCH_KPI_UNASSIGNED"
+    ? `Frequencies unassigned: ${frequencies.join(", ") || "None"}.`
+    : `Targets by frequency:\n${(nextKpi.targets || []).map((target) => `• ${target.period}: ${formatKpiNotificationTarget(target, nextKpi.valueType)}`).join("\n")}\n\nDefault standard to track: ${nextKpi.period || "Not set"}.`;
+
+  await Notification.insertMany(recipientIds.map((assignedToUserId) => ({
+    assignedToUserId,
+    type,
+    title: `${label} KPI ${titleAction} for ${branchName || "Branch"}.`,
+    message,
+    entityType: "KpiAssignment",
+    entityId: assignmentId,
+    metadata: { scopeType: "BRANCH", scopeId: String(branchId), kpiKey: nextKpi?.key || previousKpi?.key || "" },
+  })));
+}
+
+async function createUnitKpiNotifications({ branchId, assignmentId, previousKpi, nextKpi }) {
+  const wasAssigned = previousKpi?.assigned === true;
+  const isAssigned = nextKpi?.assigned === true;
+  let type = "";
+  if (!wasAssigned && isAssigned) type = "UNIT_KPI_ASSIGNED";
+  else if (wasAssigned && !isAssigned) type = "UNIT_KPI_UNASSIGNED";
+  else if (wasAssigned && isAssigned && kpiTargetsSignature(previousKpi) !== kpiTargetsSignature(nextKpi)) type = "UNIT_KPI_TARGET_UPDATED";
+  if (!type) return;
+
+  const units = await Unit.find({ branchId }).select("_id unitName").lean();
+  if (!units.length) return;
+  const unitIds = units.map((unit) => unit._id);
+  const [unitManagers, assistantUnitManagers, agents] = await Promise.all([
+    UM.find({ unitId: { $in: unitIds }, isBlocked: { $ne: true } }).select("unitId userId").lean(),
+    AUM.find({ unitId: { $in: unitIds }, isBlocked: { $ne: true } }).select("unitId userId").lean(),
+    Agent.find({ unitId: { $in: unitIds }, status: { $ne: "Retired" } }).select("unitId userId").lean(),
+  ]);
+  const recipientsByUnit = new Map(units.map((unit) => [String(unit._id), new Set()]));
+  [...unitManagers, ...assistantUnitManagers, ...agents].forEach((recipient) => {
+    const recipients = recipientsByUnit.get(String(recipient.unitId || ""));
+    if (recipients && recipient.userId) recipients.add(String(recipient.userId));
+  });
+
+  const label = nextKpi?.label || previousKpi?.label || "KPI";
+  const frequencies = (Array.isArray((isAssigned ? nextKpi : previousKpi)?.targets) ? (isAssigned ? nextKpi : previousKpi).targets : [])
+    .map((target) => target.period).filter(Boolean);
+  const titleAction = type === "UNIT_KPI_UNASSIGNED" ? "unassigned" : type === "UNIT_KPI_ASSIGNED" ? "assigned" : "target updated";
+  const message = type === "UNIT_KPI_UNASSIGNED"
+    ? `Frequencies unassigned: ${frequencies.join(", ") || "None"}.`
+    : `Targets by frequency:\n${(nextKpi.targets || []).map((target) => `• ${target.period}: ${formatKpiNotificationTarget(target, nextKpi.valueType)}`).join("\n")}\n\nDefault standard to track: ${nextKpi.period || "Not set"}.`;
+  const notifications = units.flatMap((unit) => [...(recipientsByUnit.get(String(unit._id)) || [])].map((assignedToUserId) => ({
+    assignedToUserId,
+    type,
+    title: `${label} KPI ${titleAction} for ${unit.unitName || "Unit"}.`,
+    message,
+    entityType: "KpiAssignment",
+    entityId: assignmentId,
+    metadata: { scopeType: "UNIT", scopeId: String(unit._id), branchAssignmentScopeId: String(branchId), kpiKey: nextKpi?.key || previousKpi?.key || "" },
+  })));
+  if (notifications.length) await Notification.insertMany(notifications);
+}
+
+async function createAgentKpiNotifications({ branchId, branchName, assignmentId, previousKpi, nextKpi }) {
+  const wasAssigned = previousKpi?.assigned === true;
+  const isAssigned = nextKpi?.assigned === true;
+  let type = "";
+  if (!wasAssigned && isAssigned) type = "AGENT_KPI_ASSIGNED";
+  else if (wasAssigned && !isAssigned) type = "AGENT_KPI_UNASSIGNED";
+  else if (wasAssigned && isAssigned && kpiTargetsSignature(previousKpi) !== kpiTargetsSignature(nextKpi)) type = "AGENT_KPI_TARGET_UPDATED";
+  if (!type) return;
+
+  const unitIds = (await Unit.find({ branchId }).select("_id").lean()).map((unit) => unit._id);
+  const agentProfiles = unitIds.length
+    ? await Agent.find({ unitId: { $in: unitIds }, status: { $ne: "Retired" } }).select("userId").lean()
+    : [];
+  const agentUserIds = [...new Set(agentProfiles.map((agent) => String(agent.userId || "")).filter(Boolean))];
+  const recipients = agentUserIds.length
+    ? await User.find({ _id: { $in: agentUserIds }, role: "AG" }).select("_id").lean()
+    : [];
+  if (!recipients.length) return;
+
+  const label = nextKpi?.label || previousKpi?.label || "KPI";
+  const frequencies = (Array.isArray((isAssigned ? nextKpi : previousKpi)?.targets) ? (isAssigned ? nextKpi : previousKpi).targets : [])
+    .map((target) => target.period).filter(Boolean);
+  const titleAction = type === "AGENT_KPI_UNASSIGNED" ? "unassigned" : type === "AGENT_KPI_ASSIGNED" ? "assigned" : "target updated";
+  const message = type === "AGENT_KPI_UNASSIGNED"
+    ? `Frequencies unassigned: ${frequencies.join(", ") || "None"}.`
+    : `Targets by frequency:\n${(nextKpi.targets || []).map((target) => `• ${target.period}: ${formatKpiNotificationTarget(target, nextKpi.valueType)}`).join("\n")}\n\nDefault standard to track: ${nextKpi.period || "Not set"}.`;
+  await Notification.insertMany(recipients.map((recipient) => ({
+    assignedToUserId: recipient._id,
+    type,
+    title: `${label} KPI ${titleAction} for agents in ${branchName || "Branch"}.`,
+    message,
+    entityType: "KpiAssignment",
+    entityId: assignmentId,
+    metadata: { scopeType: "AGENT", scopeId: String(branchId), kpiKey: nextKpi?.key || previousKpi?.key || "" },
+  })));
+}
+
 async function buildKpiAssignmentPayload(user) {
   await reactivateEndedLongLeaveAgents();
   const context = await getManagerScopeContext(user);
@@ -640,7 +790,7 @@ async function buildKpiAssignmentPayload(user) {
           scopeType: "AGENT",
           scopeId: branchId,
           code: "",
-          name: "All Agents in Branch",
+          name: `All Agents in ${branchName}`,
           unitName: "All Units",
           branchName,
         },
@@ -648,7 +798,7 @@ async function buildKpiAssignmentPayload(user) {
           scopeType: "UNIT",
           scopeId: branchId,
           code: "",
-          name: "All Units in Branch",
+          name: `All Units in ${branchName}`,
           unitName: "All Units",
           branchName,
         },
@@ -666,7 +816,7 @@ async function buildKpiAssignmentPayload(user) {
           scopeType: "AGENT",
           scopeId: branchId,
           code: "",
-          name: "All Agents in Branch",
+          name: `All Agents in ${branchName}`,
           unitName: "All Units",
           branchName,
         },
@@ -674,7 +824,7 @@ async function buildKpiAssignmentPayload(user) {
           scopeType: "UNIT",
           scopeId: branchId,
           code: "",
-          name: "All Units in Branch",
+          name: `All Units in ${branchName}`,
           unitName,
           branchName,
         },
@@ -2970,6 +3120,7 @@ app.put("/api/manager/kpi-assignments/:scopeType/:scopeId", async (req, res) => 
     }
 
     const existingAssignment = await KpiAssignment.findOne({ scopeType, scopeId }).select("kpis").lean();
+    const previousNormalizedKpis = normalizeKpiList(scopeType, existingAssignment?.kpis || []);
     const existingByKey = new Map((Array.isArray(existingAssignment?.kpis) ? existingAssignment.kpis : []).map((kpi) => [String(kpi?.key || ""), kpi]));
     const defaults = KPI_DEFINITIONS[scopeType] || [];
     const inputByKey = new Map((Array.isArray(kpis) ? kpis : []).map((kpi) => [String(kpi?.key || ""), kpi]));
@@ -3071,11 +3222,55 @@ app.put("/api/manager/kpi-assignments/:scopeType/:scopeId", async (req, res) => 
       });
     }
 
+    const changedKeys = new Set(inputByKey.keys());
+    if (scopeType === "BRANCH") {
+      const previousSalesProduction = previousNormalizedKpis.find((kpi) => kpi.key === "monthly_sales_production");
+      const nextSalesProduction = normalizedKpis.find((kpi) => kpi.key === "monthly_sales_production");
+      const previousTargetAchievement = previousNormalizedKpis.find((kpi) => kpi.key === "monthly_target_achievement_index");
+      const nextTargetAchievement = normalizedKpis.find((kpi) => kpi.key === "monthly_target_achievement_index");
+
+      if (previousSalesProduction?.assigned === true && nextSalesProduction?.assigned === false && nextTargetAchievement) {
+        nextTargetAchievement.assigned = false;
+        changedKeys.add("monthly_target_achievement_index");
+      } else if (previousTargetAchievement?.assigned === false && nextTargetAchievement?.assigned === true && nextSalesProduction) {
+        nextSalesProduction.assigned = true;
+        changedKeys.add("monthly_sales_production");
+      }
+    }
+
     const updated = await KpiAssignment.findOneAndUpdate(
       { scopeType, scopeId },
       { $set: { kpis: normalizedKpis, updatedByUserId: userId } },
       { new: true, upsert: true, setDefaultsOnInsert: true }
     ).lean();
+
+    if (scopeType === "BRANCH") {
+      const nextNormalizedKpis = normalizeKpiList(scopeType, updated?.kpis || []);
+      await Promise.all([...changedKeys].map((key) => createBranchKpiNotifications({
+        branchId: scopeId,
+        branchName: context.branchName,
+        assignmentId: updated._id,
+        previousKpi: previousNormalizedKpis.find((kpi) => kpi.key === key),
+        nextKpi: nextNormalizedKpis.find((kpi) => kpi.key === key),
+      })));
+    } else if (scopeType === "UNIT") {
+      const nextNormalizedKpis = normalizeKpiList(scopeType, updated?.kpis || []);
+      await Promise.all([...changedKeys].map((key) => createUnitKpiNotifications({
+        branchId: scopeId,
+        assignmentId: updated._id,
+        previousKpi: previousNormalizedKpis.find((kpi) => kpi.key === key),
+        nextKpi: nextNormalizedKpis.find((kpi) => kpi.key === key),
+      })));
+    } else if (scopeType === "AGENT") {
+      const nextNormalizedKpis = normalizeKpiList(scopeType, updated?.kpis || []);
+      await Promise.all([...changedKeys].map((key) => createAgentKpiNotifications({
+        branchId: scopeId,
+        branchName: context.branchName,
+        assignmentId: updated._id,
+        previousKpi: previousNormalizedKpis.find((kpi) => kpi.key === key),
+        nextKpi: nextNormalizedKpis.find((kpi) => kpi.key === key),
+      })));
+    }
 
     return res.json({
       message: "KPI assignment saved.",
@@ -3383,6 +3578,7 @@ app.use(
     Policyholder,
     AnnualPayment,
     Payment,
+    ScheduledMeeting,
     Product,
     Policy,
     mongoose,

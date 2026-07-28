@@ -3663,7 +3663,7 @@ function ManagerPortal({ roleType }) {
         onLogoClick={() => setActiveView("dashboard")}
         onLogout={handleLogout}
         onProfileClick={() => navigate(`/${normalizedRole.toLowerCase()}/${user?.username || username}/profile`)}
-        showAlerts={normalizedRole === "UM"}
+        showAlerts={["AUM", "UM", "BM"].includes(normalizedRole)}
         onNotificationsClick={() => navigate(`/${normalizedRole.toLowerCase()}/${user?.username || username}/notifications`)}
         showDate
         profileClickable
@@ -5264,7 +5264,7 @@ function ManagerPortal({ roleType }) {
                   </h2>
                   <p>
                     {normalizedRole === "BM"
-                      ? "Assign or unassign branch-level KPI sets for all agents in the branch, all units in the branch, and the branch itself."
+                      ? `Assign or unassign branch-level KPI sets for all agents in ${scope.branchName || "the branch"}, all units in ${scope.branchName || "the branch"}, and ${scope.branchName || "the branch"} itself.`
                       : "View branch KPI assignments for your manager scope."}
                   </p>
                 </div>

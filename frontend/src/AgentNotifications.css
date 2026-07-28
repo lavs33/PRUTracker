@@ -139,7 +139,9 @@
 .notifs-filter {
   display: inline-flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 12px;
+  flex-wrap: wrap;
 }
 
 .notifs-select {
@@ -151,6 +153,7 @@
   background: #fff;
   outline: none;
   color: #5b6770;
+  min-width: 150px;
 }
 
 .notifs-list {
@@ -236,6 +239,7 @@
   color: #444;
   font-size: 13px;
   font-weight: 600;
+  white-space: pre-line;
   overflow-wrap: anywhere;
   word-break: break-word;
 }
@@ -251,6 +255,32 @@
   background: #f6f6f6;
   color: #333;
 }
+
+.notif-priority {
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  padding: 4px 8px;
+  text-transform: uppercase;
+}
+
+.notif-priority--urgent { background: #fde9ec; color: #982536; }
+.notif-priority--high { background: #fff0df; color: #9a4d00; }
+.notif-priority--normal { background: #e7f6ff; color: #0b5c8a; }
+.notif-priority--informational { background: #edf0f2; color: #4e5961; }
+
+.notif-resolution {
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 900;
+  padding: 4px 8px;
+  text-transform: uppercase;
+}
+
+.notif-resolution--unresolved { background: #fff0df; border-color: #efbd83; color: #8b4600; }
+.notif-resolution--resolved { background: #e8f7ee; border-color: #9bd7ae; color: #176b36; }
 
 .notif-pill.added,
 .notif-pill.due,
@@ -315,4 +345,22 @@
   background: #ede9fe;
   border-color: #c4b5fd;
   color: #5b21b6;
+}
+
+.notif-pill.kpi-assigned {
+  background: #e8f7ee;
+  border-color: #9bd7ae;
+  color: #176b36;
+}
+
+.notif-pill.kpi-updated {
+  background: #fff4d6;
+  border-color: #efc65f;
+  color: #755000;
+}
+
+.notif-pill.kpi-unassigned {
+  background: #fde9ec;
+  border-color: #efa7b1;
+  color: #982536;
 }
