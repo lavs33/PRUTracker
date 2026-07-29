@@ -93,7 +93,8 @@ const formatDate = (value) => {
 const formatReportPeriod = (reportContext) => {
   const start = reportContext?.startDate ? formatDate(reportContext.startDate) : null;
   const end = reportContext?.endDate ? formatDate(reportContext.endDate) : formatDate(reportContext?.generatedAt);
-  return start ? `${start} to ${end}` : `Through ${end}`;
+  if (!start) return `Through ${end}`;
+  return start === end ? start : `${start} to ${end}`;
 };
 
 const getOptionLabel = (options, value) => options.find((option) => option.value === value)?.label || value || "All";
@@ -201,7 +202,6 @@ function AgentSalesPerformance() {
     ...(Array.isArray(data?.monthlyConvertedLeads) ? data.monthlyConvertedLeads.map((x) => Number(x?.converted || 0)) : [0]),
     1
   );
-  const sourceMixMax = Math.max(...sourcePerformanceRows.map((row) => Number(row?.convertedLeads || 0)), 1);
   const salesRows = Array.isArray(data?.salesRows) ? data.salesRows : [];
   const kpis = [
     { label: "Total Leads", value: data.totalLeads || 0 },
@@ -661,7 +661,7 @@ function AgentSalesPerformance() {
                       <span>{row.convertedLeads || 0}/{row.totalLeads || 0} converted • {row.conversionRatePct || 0}%</span>
                     </div>
                     <div className="sp-sourceTrack">
-                      <span style={{ width: `${Math.round((Number(row.convertedLeads || 0) / sourceMixMax) * 100)}%` }} />
+                      <span style={{ width: `${Math.max(0, Math.min(100, Number(row.conversionRatePct || 0)))}%` }} />
                     </div>
                   </div>
                 )) : <p className="sp-muted">No lead source rows for the selected filters.</p>}
