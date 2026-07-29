@@ -4065,6 +4065,11 @@ app.get("/api/clients/relationship/dashboard", async (req, res) => {
       return prospectIdSet.has(normalizeKey(lead.prospectId));
     }).length;
 
+    const activePolicyholderLeadIds = new Set(activePolicyholders.map((policyholder) => {
+      const engagement = engagementById.get(normalizeKey(policyholder.leadEngagementId));
+      return engagement ? normalizeKey(engagement.leadId) : "";
+    }).filter(Boolean));
+
     const sourceBuckets = ["Agent-Sourced", "System-Assigned"].map((label) => {
       const sourceProspects = prospects.filter((prospect) => prospect.source === label);
       const sourceProspectIds = new Set(sourceProspects.map((prospect) => normalizeKey(prospect._id)));
@@ -4084,13 +4089,15 @@ app.get("/api/clients/relationship/dashboard", async (req, res) => {
       { group: "Prospect Type", label: "Ordinary", predicate: (prospect) => prospect.prospectType === "Ordinary" },
     ].map((bucket) => {
       const bucketProspects = prospects.filter(bucket.predicate);
-      const converted = countActivePoliciesForProspectSet(new Set(bucketProspects.map((prospect) => normalizeKey(prospect._id))));
+      const bucketProspectIds = new Set(bucketProspects.map((prospect) => normalizeKey(prospect._id)));
+      const bucketLeads = leads.filter((lead) => bucketProspectIds.has(normalizeKey(lead.prospectId)));
+      const convertedLeads = bucketLeads.filter((lead) => activePolicyholderLeadIds.has(normalizeKey(lead._id))).length;
       return {
         group: bucket.group,
         label: bucket.label,
-        prospects: bucketProspects.length,
-        policyholders: converted,
-        conversionRatePct: toPct(converted, bucketProspects.length),
+        leads: bucketLeads.length,
+        convertedLeads,
+        conversionRatePct: toPct(convertedLeads, bucketLeads.length),
       };
     });
 
@@ -4104,6 +4111,7 @@ app.get("/api/clients/relationship/dashboard", async (req, res) => {
         const linkedActiveLeads = activeLeadByProspectId.get(prospectId) || [];
         const linkedActivePolicies = activePolicyholdersByProspectId.get(prospectId) || [];
         return {
+          prospectId,
           prospectCode: prospect.prospectCode || "—",
           fullName: [prospect.firstName, prospect.middleName, prospect.lastName].filter(Boolean).join(" "),
           marketType: prospect.marketType || "—",

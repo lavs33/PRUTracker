@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import TopNav from "./components/TopNav";
 import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
@@ -363,7 +363,8 @@ function AgentClientsRelationship() {
           <tr>
             <td>${escapeHtml(row.group || "Segment")}</td>
             <td>${escapeHtml(row.label)}</td>
-            <td>${Number(row.policyholders || 0)}</td>
+            <td>${Number(row.leads || 0)}</td>
+            <td>${Number(row.convertedLeads || 0)}</td>
             <td>${Number(row.conversionRatePct || 0)}%</td>
           </tr>
         `
@@ -476,10 +477,10 @@ function AgentClientsRelationship() {
               </table>
             </div>
             <div class="panel">
-              <h4>Segment Conversion Comparison</h4><p class="panel-note">Conversion counts include active policyholders only.</p>
+              <h4>Segment Conversion Comparison</h4><p class="panel-note">Lead conversion counts include active policyholders only.</p>
               <table>
-                <thead><tr><th>Category</th><th>Segment</th><th>Active Policyholders</th><th>Conversion</th></tr></thead>
-                <tbody>${segmentMixRows || '<tr><td colspan="4">No segment mix data available.</td></tr>'}</tbody>
+                <thead><tr><th>Category</th><th>Segment</th><th>Leads</th><th>Converted Leads</th><th>Conversion</th></tr></thead>
+                <tbody>${segmentMixRows || '<tr><td colspan="5">No segment mix data available.</td></tr>'}</tbody>
               </table>
             </div>
           </div>
@@ -916,7 +917,7 @@ function AgentClientsRelationship() {
               <section className="cr-panel">
                 <div className="cr-panelHeader">
                   <h3 className="cr-panelTitle">Segment Conversion Comparison</h3>
-                  <span className="cr-panelMeta">Warm/cold and elite/ordinary; active policyholders only</span>
+                  <span className="cr-panelMeta">Lead-to-active-policyholder conversion by segment</span>
                 </div>
                 <div className="cr-compareList">
                   {dashboard.marketConversion.map((row) => (
@@ -925,7 +926,7 @@ function AgentClientsRelationship() {
                         <span>{row.label}</span>
                         <strong>{row.conversionRatePct}%</strong>
                       </div>
-                      <p>{row.policyholders}/{row.prospects} converted to active policyholders.</p>
+                      <p>{row.convertedLeads}/{row.leads} leads converted to active policyholders.</p>
                     </div>
                   ))}
                 </div>
@@ -1022,8 +1023,8 @@ function AgentClientsRelationship() {
                       {dashboard.recentProspects.length ? (
                         dashboard.recentProspects.map((row) => (
                           <tr key={`${row.prospectCode}-${row.createdAt}`}>
-                            <td>{row.prospectCode || "—"}</td>
-                            <td>{row.fullName || "—"}</td>
+                            <td><Link className="cr-prospectLink" to={`/agent/${username}/prospects/${row.prospectId}`}>{row.prospectCode || "—"}</Link></td>
+                            <td><Link className="cr-prospectLink" to={`/agent/${username}/prospects/${row.prospectId}`}>{row.fullName || "—"}</Link></td>
                             <td>{row.marketType || "—"}</td>
                             <td>{row.prospectType || "—"}</td>
                             <td>{row.source || "—"}</td>

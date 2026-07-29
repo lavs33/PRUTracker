@@ -3579,6 +3579,8 @@ app.use(
     AnnualPayment,
     Payment,
     ScheduledMeeting,
+    LongLeave,
+    Retirement,
     Product,
     Policy,
     mongoose,
