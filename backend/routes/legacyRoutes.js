@@ -4104,6 +4104,7 @@ app.get("/api/clients/relationship/dashboard", async (req, res) => {
         const linkedActiveLeads = activeLeadByProspectId.get(prospectId) || [];
         const linkedActivePolicies = activePolicyholdersByProspectId.get(prospectId) || [];
         return {
+          prospectId,
           prospectCode: prospect.prospectCode || "—",
           fullName: [prospect.firstName, prospect.middleName, prospect.lastName].filter(Boolean).join(" "),
           marketType: prospect.marketType || "—",
@@ -15539,6 +15540,8 @@ app.get("/api/tasks/progress", async (req, res) => {
       const key = String(t.leadEngagementId);
       const row = leadWorkloadMap.get(key) || {
         leadEngagementId: key,
+        leadId: t?.leadId || "",
+        prospectId: t?.prospectId || "",
         leadCode: t?.leadCode || "—",
         prospectName: t?.prospectName || "—",
         leadStatus: t?.leadStatus || "—",
@@ -15572,9 +15575,9 @@ app.get("/api/tasks/progress", async (req, res) => {
       .slice(0, reportMax);
 
     const totalTasks = filtered.length;
-    const completionRate = totalTasks ? Math.round((onTimeDone.length / totalTasks) * 100) : 0;
-    const onTimeRate = done.length ? Math.round((onTimeDone.length / done.length) * 100) : 0;
-    const lateCompletionRate = done.length ? Math.round((delayedDone.length / done.length) * 100) : 0;
+    const completionRate = totalTasks ? Math.round((done.length / totalTasks) * 100) : 0;
+    const onTimeRate = totalTasks ? Math.round((onTimeDone.length / totalTasks) * 100) : 0;
+    const lateCompletionRate = totalTasks ? Math.round((delayedDone.length / totalTasks) * 100) : 0;
     const openPool = open.length + overdue.length;
     const overdueOpenRate = openPool ? Math.round((overdue.length / openPool) * 100) : 0;
 
