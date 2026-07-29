@@ -185,6 +185,23 @@ function sortNotificationsForDisplay(notifications) {
   });
 }
 
+function orphanEndorsementAffectedRecords(kind, record) {
+  return kind === "retirement"
+    ? [...(record?.affectedProspects || [])]
+    : [...(record?.affectedProspects || []), ...(record?.affectedPolicyholders || [])];
+}
+
+function orphanEndorsementIsResolved(kind, record) {
+  if (!record) return false;
+  return orphanEndorsementAffectedRecords(kind, record).every((item) => (
+    item?.reassigned === true
+    || String(item?.reassigned || "").toLowerCase() === "true"
+    || Boolean(item?.reassignedAt)
+    || Boolean(item?.reassignedToUserId)
+    || Boolean(item?.reassignedToAgentId)
+  ));
+}
+
 function createNotificationsController({
   Notification,
   Task,
@@ -222,22 +239,6 @@ function createNotificationsController({
       ? uniqueValidObjectIdStrings
       : (values = []) => [...new Set(values.map((value) => toValidId(value)).filter(Boolean))];
 
-  const orphanEndorsementAffectedRecords = (kind, record) => kind === "retirement"
-    ? [...(record?.affectedProspects || [])]
-    : [...(record?.affectedProspects || []), ...(record?.affectedPolicyholders || [])];
-
-  const orphanEndorsementIsResolved = (kind, record) => {
-    if (!record) return false;
-    const affectedRecords = orphanEndorsementAffectedRecords(kind, record);
-    return affectedRecords.every((item) => (
-      item?.reassigned === true
-      || String(item?.reassigned || "").toLowerCase() === "true"
-      || Boolean(item?.reassignedAt)
-      || Boolean(item?.reassignedToUserId)
-      || Boolean(item?.reassignedToAgentId)
-    ));
-  };
-
   const syncOrphanEndorsementResolutions = async (uid) => {
     const resolutionsByNotificationId = new Map();
     if (!LongLeave || !Retirement) return resolutionsByNotificationId;
@@ -260,17 +261,20 @@ function createNotificationsController({
     // Older rows may contain a User id (rather than an Agent id) in metadata,
     // or may not contain a related-record id at all.
     const [longLeaves, retirements] = await Promise.all([
-      LongLeave.find({}).select("agentId affectedProspects affectedPolicyholders createdAt updatedAt").lean(),
-      Retirement.find({}).select("agentId affectedProspects affectedPolicyholders createdAt updatedAt").lean(),
+      LongLeave.find({}).select("agentId userId affectedProspects affectedPolicyholders createdAt updatedAt").lean(),
+      Retirement.find({}).select("agentId userId affectedProspects affectedPolicyholders createdAt updatedAt").lean(),
     ]);
     const longLeaveMap = new Map(longLeaves.map((record) => [String(record._id), record]));
     const retirementMap = new Map(retirements.map((record) => [String(record._id), record]));
     const closestRecordForNotification = (records, notification) => {
       const agentId = String(notification?.metadata?.agentId || "");
-      const candidates = records.filter((record) => agentId && String(record.agentId || "") === agentId);
+      const candidates = records.filter((record) => agentId && (
+        String(record.agentId || "") === agentId || String(record.userId || "") === agentId
+      ));
       const notificationTime = new Date(notification.createdAt || 0).getTime();
-      const eligibleRecords = candidates.length ? candidates : records;
-      return eligibleRecords.sort((a, b) => (
+      // Never borrow another agent's endorsement progress. A legacy
+      // notification without a usable relationship must remain unresolved.
+      return [...candidates].sort((a, b) => (
         Math.abs(new Date(a.createdAt || 0).getTime() - notificationTime)
         - Math.abs(new Date(b.createdAt || 0).getTime() - notificationTime)
       ))[0] || null;
@@ -282,10 +286,10 @@ function createNotificationsController({
         || (notification.entityType === "LongLeave" ? toValidId(notification.entityId) : null);
       const kind = retirementId || notification?.metadata?.endorsementType === "retirement" ? "retirement" : "longLeave";
       const record = retirementId
-        ? (retirementMap.get(retirementId) || closestRecordForNotification(retirements, notification))
+        ? retirementMap.get(retirementId)
         : kind === "retirement"
           ? closestRecordForNotification(retirements, notification)
-          : (longLeaveMap.get(longLeaveId) || closestRecordForNotification(longLeaves, notification));
+          : (longLeaveId ? longLeaveMap.get(longLeaveId) : closestRecordForNotification(longLeaves, notification));
       const resolved = orphanEndorsementIsResolved(kind, record);
       if (!record) return null;
       const resolvedAt = resolved ? (record.updatedAt || new Date()) : null;

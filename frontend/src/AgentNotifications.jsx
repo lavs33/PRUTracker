@@ -50,6 +50,24 @@ const notificationWithinDateRange = (notification, dateRange) => {
 };
 
 const notificationResolution = (notification) => String(notification?.resolutionStatus || "Not Applicable").trim();
+const taskNotificationOrder = {
+  TASK_MISSED: 0,
+  TASK_DUE_TODAY: 1,
+  TASK_ADDED: 2,
+};
+const notificationCreatedTime = (notification) => {
+  const timestamp = new Date(notification?.createdAt || 0).getTime();
+  return Number.isNaN(timestamp) ? 0 : timestamp;
+};
+const compareAgentNotifications = (a, b) => {
+  const createdDifference = notificationCreatedTime(b) - notificationCreatedTime(a);
+  if (createdDifference !== 0) return createdDifference;
+
+  const aTaskOrder = taskNotificationOrder[String(a?.type || "").toUpperCase()];
+  const bTaskOrder = taskNotificationOrder[String(b?.type || "").toUpperCase()];
+  if (aTaskOrder !== undefined && bTaskOrder !== undefined) return aTaskOrder - bTaskOrder;
+  return 0;
+};
 const filterNotifications = (notifications, { typeFilter, priorityFilter, resolutionFilter, dateRange, ignorePriority = false, ignoreResolution = false }) => {
   const normalizedType = String(typeFilter || "").trim().toUpperCase();
   return notifications.filter((notification) => (
@@ -218,13 +236,7 @@ function AgentNotifications() {
       const priorityFiltered = priorityFilter === "all"
         ? typeFiltered
         : typeFiltered.filter((notification) => notificationPriority(notification?.type) === priorityFilter);
-      const priorityRank = { urgent: 0, high: 1, normal: 2, informational: 3 };
-      setNotifs([...priorityFiltered].sort((a, b) => {
-        if (tab === "read") return new Date(b?.createdAt || 0) - new Date(a?.createdAt || 0);
-        const priorityDifference = priorityRank[notificationPriority(a?.type)] - priorityRank[notificationPriority(b?.type)];
-        if (priorityDifference !== 0) return priorityDifference;
-        return new Date(b?.updatedAt || b?.createdAt || 0) - new Date(a?.updatedAt || a?.createdAt || 0);
-      }));
+      setNotifs([...priorityFiltered].sort(compareAgentNotifications));
     },
     [API_BASE, user?.id, tab, typeFilter, priorityFilter, resolutionFilter, dateRange]
   );
