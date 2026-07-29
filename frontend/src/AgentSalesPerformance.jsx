@@ -93,7 +93,8 @@ const formatDate = (value) => {
 const formatReportPeriod = (reportContext) => {
   const start = reportContext?.startDate ? formatDate(reportContext.startDate) : null;
   const end = reportContext?.endDate ? formatDate(reportContext.endDate) : formatDate(reportContext?.generatedAt);
-  return start ? `${start} to ${end}` : `Through ${end}`;
+  if (!start) return `Through ${end}`;
+  return start === end ? start : `${start} to ${end}`;
 };
 
 const getOptionLabel = (options, value) => options.find((option) => option.value === value)?.label || value || "All";

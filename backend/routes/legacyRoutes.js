@@ -4104,6 +4104,7 @@ app.get("/api/clients/relationship/dashboard", async (req, res) => {
         const linkedActiveLeads = activeLeadByProspectId.get(prospectId) || [];
         const linkedActivePolicies = activePolicyholdersByProspectId.get(prospectId) || [];
         return {
+          prospectId,
           prospectCode: prospect.prospectCode || "—",
           fullName: [prospect.firstName, prospect.middleName, prospect.lastName].filter(Boolean).join(" "),
           marketType: prospect.marketType || "—",
@@ -4168,6 +4169,8 @@ app.get("/api/clients/relationship/dashboard", async (req, res) => {
       recentProspects,
       reportContext: {
         periodLabel,
+        startDate,
+        endDate: now,
         generatedAt: now,
       },
       insights: {
@@ -15457,7 +15460,7 @@ app.get("/api/tasks/summary", async (req, res) => {
 // ===========================
 app.get("/api/tasks/progress", async (req, res) => {
   try {
-    const { userId, datePreset = "ALL", type = "ALL", drillType = "", reportLimit = "120" } = req.query;
+    const { userId, datePreset = "ALL", type = "ALL", drillType = "" } = req.query;
     if (!userId) return res.status(400).json({ message: "Missing userId." });
     if (!mongoose.isValidObjectId(userId)) {
       return res.status(400).json({ message: "Invalid userId." });
@@ -15498,6 +15501,7 @@ app.get("/api/tasks/progress", async (req, res) => {
       const normalizedType = String(t?.type || "UPDATE_CONTACT_INFO").toUpperCase().trim();
       const dueAtMs = new Date(t?.dueAt).getTime();
       const createdAtMs = new Date(t?.createdAt).getTime();
+      const completedAtMs = new Date(t?.completedAt).getTime();
       const isOverdue = normalizedStatus === "Open" && Number.isFinite(dueAtMs) && dueAtMs < now;
       return {
         ...t,
@@ -15505,6 +15509,7 @@ app.get("/api/tasks/progress", async (req, res) => {
         type: normalizedType,
         dueAtMs,
         createdAtMs,
+        completedAtMs,
         isOverdue,
         wasDelayed: Boolean(t?.wasDelayed),
       };
@@ -15514,8 +15519,13 @@ app.get("/api/tasks/progress", async (req, res) => {
       if (String(type) !== "ALL" && t.type !== String(type).toUpperCase().trim()) return false;
 
       if (fromMs != null) {
-        const refMs = Number.isFinite(t.dueAtMs) ? t.dueAtMs : t.createdAtMs;
-        if (!Number.isFinite(refMs) || refMs < fromMs) return false;
+        if (t.status === "Done") {
+          if (!Number.isFinite(t.completedAtMs) || t.completedAtMs < fromMs || t.completedAtMs > now) return false;
+        } else if (t.isOverdue) {
+          if (!Number.isFinite(t.createdAtMs) || t.createdAtMs > now) return false;
+        } else if (!Number.isFinite(t.createdAtMs) || t.createdAtMs < fromMs || t.createdAtMs > now) {
+          return false;
+        }
       }
       return true;
     });
@@ -15539,6 +15549,8 @@ app.get("/api/tasks/progress", async (req, res) => {
       const key = String(t.leadEngagementId);
       const row = leadWorkloadMap.get(key) || {
         leadEngagementId: key,
+        leadId: t?.leadId || "",
+        prospectId: t?.prospectId || "",
         leadCode: t?.leadCode || "—",
         prospectName: t?.prospectName || "—",
         leadStatus: t?.leadStatus || "—",
@@ -15558,8 +15570,6 @@ app.get("/api/tasks/progress", async (req, res) => {
     const leadWorkloadRows = [...leadWorkloadMap.values()].sort(compareLeadCodes);
 
     const normalizedDrillType = String(drillType || "").toUpperCase().trim();
-    const reportMax = Math.max(20, Math.min(500, Number(reportLimit) || 120));
-
     const drillTasks = normalizedDrillType
       ? filtered
           .filter((t) => t.type === normalizedDrillType)
@@ -15568,11 +15578,10 @@ app.get("/api/tasks/progress", async (req, res) => {
 
     const reportTasks = filtered
       .slice()
-      .sort((a, b) => (Number.isFinite(a.dueAtMs) ? a.dueAtMs : Infinity) - (Number.isFinite(b.dueAtMs) ? b.dueAtMs : Infinity))
-      .slice(0, reportMax);
+      .sort((a, b) => (Number.isFinite(a.dueAtMs) ? a.dueAtMs : Infinity) - (Number.isFinite(b.dueAtMs) ? b.dueAtMs : Infinity));
 
     const totalTasks = filtered.length;
-    const completionRate = totalTasks ? Math.round((onTimeDone.length / totalTasks) * 100) : 0;
+    const completionRate = totalTasks ? Math.round((done.length / totalTasks) * 100) : 0;
     const onTimeRate = done.length ? Math.round((onTimeDone.length / done.length) * 100) : 0;
     const lateCompletionRate = done.length ? Math.round((delayedDone.length / done.length) * 100) : 0;
     const openPool = open.length + overdue.length;
