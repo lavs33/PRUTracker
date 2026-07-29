@@ -1,6 +1,6 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import TopNav from "./components/TopNav";
 import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
@@ -47,6 +47,7 @@ function AgentTasksProgress() {
     totalTasks: 0,
     openTasks: 0,
     doneTasks: 0,
+    allDoneTasks: 0,
     overdueTasks: 0,
     completionRate: 0,
     onTimeRate: 0,
@@ -93,6 +94,7 @@ function AgentTasksProgress() {
         totalTasks: Number(payload?.totalTasks || 0),
         openTasks: Number(payload?.openTasks || 0),
         doneTasks: Number(payload?.doneTasks || 0),
+        allDoneTasks: Number(payload?.allDoneTasks || 0),
         overdueTasks: Number(payload?.overdueTasks || 0),
         completionRate: Number(payload?.completionRate || 0),
         onTimeRate: Number(payload?.onTimeRate || 0),
@@ -210,7 +212,7 @@ function AgentTasksProgress() {
     document.title = reportFilename;
     reportDoc.open();
     const detailChunkSize = 18;
-    const workloadChunkSize = 20;
+    const workloadChunkSize = 35;
     const chunk = (arr, size) => {
       const out = [];
       for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
@@ -218,8 +220,8 @@ function AgentTasksProgress() {
     };
 
     const detailSourceRows = selectedTypeDrill && Array.isArray(data.drillTasks) ? data.drillTasks : data.reportTasks;
-    const detailItems = Array.isArray(detailSourceRows) ? detailSourceRows.slice(0, 120) : [];
-    const workloadItems = Array.isArray(data.leadWorkloadRows) ? data.leadWorkloadRows.slice(0, 30) : [];
+    const detailItems = Array.isArray(detailSourceRows) ? detailSourceRows : [];
+    const workloadItems = Array.isArray(data.leadWorkloadRows) ? data.leadWorkloadRows.slice(0, 140) : [];
     const detailChunks = chunk(detailItems, detailChunkSize);
     const workloadChunks = chunk(workloadItems, workloadChunkSize);
 
@@ -260,11 +262,12 @@ function AgentTasksProgress() {
             <div class="kpi primary"><div class="label">Total Tasks</div><div class="val">${data.totalTasks}</div></div>
             <div class="kpi"><div class="label">Open</div><div class="val">${data.openTasks}</div></div>
             <div class="kpi accent"><div class="label">Overdue</div><div class="val">${data.overdueTasks}</div></div>
+            <div class="kpi secondary"><div class="label">Done</div><div class="val">${data.allDoneTasks}</div></div>
             <div class="kpi secondary"><div class="label">On-Time Done</div><div class="val">${data.doneTasks}</div></div>
-            <div class="kpi info"><div class="label">Completion Rate</div><div class="val">${data.completionRate}%</div></div>
-            <div class="kpi secondary"><div class="label">On-Time Rate</div><div class="val">${data.onTimeRate}%</div></div>
+            <div class="kpi accent"><div class="label">Late Done</div><div class="val">${data.delayedDoneTasks}</div></div>
+            <div class="kpi info"><div class="label">Overall Completion Rate</div><div class="val">${data.completionRate}%</div></div>
+            <div class="kpi secondary"><div class="label">On-Time Completion Rate</div><div class="val">${data.onTimeRate}%</div></div>
             <div class="kpi accent"><div class="label">Late Completion Rate</div><div class="val">${data.lateCompletionRate}%</div></div>
-            <div class="kpi primary"><div class="label">Overdue Open Rate</div><div class="val">${data.overdueOpenRate}%</div></div>
           </div>
         </section>
 
@@ -538,19 +541,20 @@ function AgentTasksProgress() {
             <div className="tp-kpi"><span>Total Tasks</span><strong>{data.totalTasks}</strong></div>
             <div className="tp-kpi"><span>Open</span><strong>{data.openTasks}</strong></div>
             <div className="tp-kpi"><span>Overdue</span><strong>{data.overdueTasks}</strong></div>
+            <div className="tp-kpi"><span>Done</span><strong>{data.allDoneTasks}</strong></div>
             <div className="tp-kpi"><span>On-Time Done</span><strong>{data.doneTasks}</strong></div>
-            <div className="tp-kpi"><span>Completion Rate</span><strong>{data.completionRate}%</strong></div>
-            <div className="tp-kpi"><span>On-Time Completion</span><strong>{data.onTimeRate}%</strong></div>
+            <div className="tp-kpi"><span>Late Done</span><strong>{data.delayedDoneTasks}</strong></div>
+            <div className="tp-kpi"><span>Overall Completion Rate</span><strong>{data.completionRate}%</strong></div>
+            <div className="tp-kpi"><span>On-Time Completion Rate</span><strong>{data.onTimeRate}%</strong></div>
             <div className="tp-kpi"><span>Late Completion Rate</span><strong>{data.lateCompletionRate}%</strong></div>
           </div>
 
           <div className="tp-grid">
             <section className="tp-card">
               <h3>Progress Overview</h3>
-              <div className="tp-progressRow"><label>Completion</label><div className="tp-track"><span style={{ width: `${data.completionRate}%` }} /></div><b>{data.completionRate}%</b></div>
+              <div className="tp-progressRow"><label>Overall Completion</label><div className="tp-track"><span style={{ width: `${data.completionRate}%` }} /></div><b>{data.completionRate}%</b></div>
               <div className="tp-progressRow"><label>On-Time Done</label><div className="tp-track alt"><span style={{ width: `${data.onTimeRate}%` }} /></div><b>{data.onTimeRate}%</b></div>
-              <div className="tp-progressRow"><label>Overdue Open Tasks</label><div className="tp-track warn"><span style={{ width: `${data.overdueOpenRate}%` }} /></div><b>{data.overdueOpenRate}%</b></div>
-              <div className="tp-progressRow"><label>Late Completion Rate</label><div className="tp-track warn"><span style={{ width: `${data.lateCompletionRate}%` }} /></div><b>{data.lateCompletionRate}%</b></div>
+              <div className="tp-progressRow"><label>Late Done</label><div className="tp-track warn"><span style={{ width: `${data.lateCompletionRate}%` }} /></div><b>{data.lateCompletionRate}%</b></div>
             </section>
 
             <section className="tp-card">
@@ -612,8 +616,8 @@ function AgentTasksProgress() {
                           <td>{t.isOverdue ? "Yes" : "No"}</td>
                           <td>{t.status === "Done" ? (t.wasDelayed ? "Yes" : "No") : "—"}</td>
                           <td>{t?.dueAt ? new Date(t.dueAt).toLocaleString() : "—"}</td>
-                          <td>{t?.leadCode || "—"}</td>
-                          <td>{t?.prospectName || "—"}</td>
+                          <td><Link className="tp-contextLink" to={`/agent/${username}/prospects/${t.prospectId}/leads/${t.leadId}`}>{t?.leadCode || "—"}</Link></td>
+                          <td><Link className="tp-contextLink" to={`/agent/${username}/prospects/${t.prospectId}/leads/${t.leadId}`}>{t?.prospectName || "—"}</Link></td>
                           <td>{t?.leadStatus || "—"}</td>
                         </tr>
                       ))}
@@ -644,8 +648,8 @@ function AgentTasksProgress() {
                     <tbody>
                       {data.leadWorkloadRows.map((r) => (
                         <tr key={r.leadEngagementId}>
-                          <td>{r.leadCode}</td>
-                          <td>{r.prospectName}</td>
+                          <td><Link className="tp-contextLink" to={`/agent/${username}/prospects/${r.prospectId}/leads/${r.leadId}`}>{r.leadCode}</Link></td>
+                          <td><Link className="tp-contextLink" to={`/agent/${username}/prospects/${r.prospectId}/leads/${r.leadId}`}>{r.prospectName}</Link></td>
                           <td>{r.leadStatus || "—"}</td>
                           <td>{r.total}</td>
                           <td className={Number(r.open || 0) > 0 ? "tp-cellOpen" : ""}>{r.open}</td>
