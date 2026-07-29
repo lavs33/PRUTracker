@@ -4104,6 +4104,7 @@ app.get("/api/clients/relationship/dashboard", async (req, res) => {
         const linkedActiveLeads = activeLeadByProspectId.get(prospectId) || [];
         const linkedActivePolicies = activePolicyholdersByProspectId.get(prospectId) || [];
         return {
+          prospectId,
           prospectCode: prospect.prospectCode || "—",
           fullName: [prospect.firstName, prospect.middleName, prospect.lastName].filter(Boolean).join(" "),
           marketType: prospect.marketType || "—",
