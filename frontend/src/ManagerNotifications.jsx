@@ -8,17 +8,23 @@ import "./ManagerNotifications.css";
 const API_BASE = "http://localhost:5000";
 const BRANCH_KPI_NOTIF_TYPES = ["BRANCH_KPI_ASSIGNED", "BRANCH_KPI_TARGET_UPDATED", "BRANCH_KPI_UNASSIGNED"];
 const UNIT_KPI_NOTIF_TYPES = ["UNIT_KPI_ASSIGNED", "UNIT_KPI_TARGET_UPDATED", "UNIT_KPI_UNASSIGNED"];
-const KPI_NOTIF_TYPES = [...BRANCH_KPI_NOTIF_TYPES, ...UNIT_KPI_NOTIF_TYPES];
+const AGENT_KPI_NOTIF_TYPES = ["AGENT_KPI_ASSIGNED", "AGENT_KPI_TARGET_UPDATED", "AGENT_KPI_UNASSIGNED"];
+const KPI_NOTIF_TYPES = [...BRANCH_KPI_NOTIF_TYPES, ...UNIT_KPI_NOTIF_TYPES, ...AGENT_KPI_NOTIF_TYPES];
+const KPI_UNASSIGNED_NOTIF_TYPES = ["BRANCH_KPI_UNASSIGNED", "UNIT_KPI_UNASSIGNED", "AGENT_KPI_UNASSIGNED"];
 const PRIORITY_LEVELS = ["urgent", "high", "normal"];
 const notificationPriority = (type) => {
   const normalizedType = String(type || "").trim().toUpperCase();
   if (normalizedType === "ORPHANS_ENDORSEMENTS") return "urgent";
-  if (UNIT_KPI_NOTIF_TYPES.includes(normalizedType)) return "high";
+  if (KPI_UNASSIGNED_NOTIF_TYPES.includes(normalizedType)) return "urgent";
   return "normal";
+};
+const notificationCreatedTime = (notification) => {
+  const timestamp = new Date(notification?.createdAt || 0).getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
 };
 const notificationWithinDateRange = (notification, dateRange) => {
   if (dateRange === "all") return true;
-  const timestamp = new Date(notification?.updatedAt || notification?.createdAt || 0);
+  const timestamp = new Date(notificationCreatedTime(notification));
   if (Number.isNaN(timestamp.getTime())) return false;
   const now = new Date();
   let start = new Date(now);
@@ -63,12 +69,12 @@ function ManagerNotifications({ roleType }) {
     try { return JSON.parse(localStorage.getItem("managerPortalUser") || "null"); } catch { return null; }
   }, []);
   const normalizedRole = String(roleType || user?.role || "UM").trim().toLowerCase();
-  const availablePriorityLevels = normalizedRole === "aum" ? ["high", "normal"] : PRIORITY_LEVELS;
+  const availablePriorityLevels = normalizedRole === "bm" ? ["urgent", "normal"] : normalizedRole === "aum" ? ["high", "normal"] : PRIORITY_LEVELS;
   const managerNotifTypes = normalizedRole === "um"
     ? ["ORPHANS_ENDORSEMENTS", ...BRANCH_KPI_NOTIF_TYPES, ...UNIT_KPI_NOTIF_TYPES]
     : normalizedRole === "aum"
       ? [...BRANCH_KPI_NOTIF_TYPES, ...UNIT_KPI_NOTIF_TYPES]
-      : BRANCH_KPI_NOTIF_TYPES;
+      : [...BRANCH_KPI_NOTIF_TYPES, ...UNIT_KPI_NOTIF_TYPES, ...AGENT_KPI_NOTIF_TYPES];
 
   useEffect(() => {
     const sessionRole = String(user?.role || "").trim().toLowerCase();
@@ -87,7 +93,7 @@ function ManagerNotifications({ roleType }) {
 
   useEffect(() => {
     if (normalizedRole === "aum" && priorityFilter === "urgent") setPriorityFilter("all");
-    if (normalizedRole !== "um" && resolutionFilter !== "all") setResolutionFilter("all");
+    if (!["um", "bm"].includes(normalizedRole) && resolutionFilter !== "all") setResolutionFilter("all");
   }, [normalizedRole, priorityFilter, resolutionFilter]);
 
   useEffect(() => { document.title = `${username} | Notifications`; }, [username]);
@@ -114,10 +120,13 @@ function ManagerNotifications({ roleType }) {
     if (!res.ok) throw new Error(data?.message || "Failed to fetch notifications.");
     const notifications = Array.isArray(data?.notifications) ? data.notifications : [];
     const resolutionCountBase = filterNotifications(notifications, { typeFilter, priorityFilter, resolutionFilter, dateRange, ignoreResolution: true });
+    const resolutionNotifications = normalizedRole === "bm"
+      ? resolutionCountBase.filter((notification) => KPI_NOTIF_TYPES.includes(notification.type))
+      : resolutionCountBase.filter((notification) => notification.type === "ORPHANS_ENDORSEMENTS");
     setResolutionCounts({
-      all: resolutionCountBase.filter((notification) => notification.type === "ORPHANS_ENDORSEMENTS").length,
-      unresolved: resolutionCountBase.filter((notification) => notification.type === "ORPHANS_ENDORSEMENTS" && notificationResolution(notification) === "Unresolved").length,
-      resolved: resolutionCountBase.filter((notification) => notification.type === "ORPHANS_ENDORSEMENTS" && notificationResolution(notification) === "Resolved").length,
+      all: resolutionNotifications.length,
+      unresolved: resolutionNotifications.filter((notification) => notificationResolution(notification) === "Unresolved").length,
+      resolved: resolutionNotifications.filter((notification) => notificationResolution(notification) === "Resolved").length,
     });
     const typeAndDateFiltered = filterNotifications(notifications, { typeFilter, priorityFilter, resolutionFilter, dateRange, ignorePriority: true });
     setPriorityCounts(PRIORITY_LEVELS.reduce((result, priority) => ({
@@ -127,13 +136,8 @@ function ManagerNotifications({ roleType }) {
     const visibleNotifications = priorityFilter === "all"
       ? typeAndDateFiltered
       : typeAndDateFiltered.filter((notification) => notificationPriority(notification?.type) === priorityFilter);
-    const priorityRank = { urgent: 0, high: 1, normal: 2 };
-    setNotifs([...visibleNotifications].sort((a, b) => {
-      const priorityDifference = priorityRank[notificationPriority(a?.type)] - priorityRank[notificationPriority(b?.type)];
-      if (priorityDifference !== 0) return priorityDifference;
-      return new Date(b?.updatedAt || b?.createdAt || 0) - new Date(a?.updatedAt || a?.createdAt || 0);
-    }));
-  }, [user?.id, tab, typeFilter, priorityFilter, resolutionFilter, dateRange]);
+    setNotifs([...visibleNotifications].sort((a, b) => notificationCreatedTime(b) - notificationCreatedTime(a)));
+  }, [user?.id, tab, typeFilter, priorityFilter, resolutionFilter, dateRange, normalizedRole]);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -208,7 +212,7 @@ function ManagerNotifications({ roleType }) {
   const typePillClass = (type) => {
     if (type === "BRANCH_KPI_ASSIGNED" || type === "UNIT_KPI_ASSIGNED") return "notif-pill kpi-assigned";
     if (type === "BRANCH_KPI_TARGET_UPDATED" || type === "UNIT_KPI_TARGET_UPDATED") return "notif-pill kpi-updated";
-    if (type === "BRANCH_KPI_UNASSIGNED" || type === "UNIT_KPI_UNASSIGNED") return "notif-pill kpi-unassigned";
+    if (KPI_UNASSIGNED_NOTIF_TYPES.includes(type)) return "notif-pill kpi-unassigned";
     return "notif-pill added";
   };
 
@@ -218,10 +222,15 @@ function ManagerNotifications({ roleType }) {
 
   const openNotif = async (notification) => {
     if (notification?.status === "Unread") await markNotifAsRead(notification._id);
-    navigate(`/${normalizedRole}/${username}`, { state: { activeView: "orphan_endorsements" } });
+    navigate(`/${normalizedRole}/${username}`, {
+      state: { activeView: normalizedRole === "bm" && KPI_UNASSIGNED_NOTIF_TYPES.includes(notification?.type) ? "kpi_assignment" : "orphan_endorsements" },
+    });
   };
 
-  const canOpenReadNotification = (notification) => !KPI_NOTIF_TYPES.includes(notification?.type) && normalizedRole === "um";
+  const canOpenReadNotification = (notification) => (
+    (normalizedRole === "um" && !KPI_NOTIF_TYPES.includes(notification?.type))
+    || (normalizedRole === "bm" && KPI_UNASSIGNED_NOTIF_TYPES.includes(notification?.type))
+  );
 
   const NotifRow = ({ n }) => (
     <div className={`notif-row ${n.status === "Unread" ? "unread" : ""}`}>
@@ -229,9 +238,10 @@ function ManagerNotifications({ roleType }) {
         <div className="notif-topline">
           {n.status === "Unread" ? <span className="notif-dot" aria-label="Unread" /> : null}
           <span className={typePillClass(n.type)}>{n.type}</span>
-          {normalizedRole !== "bm" ? <span className={`notif-priority notif-priority--${notificationPriority(n.type)}`}>{notificationPriority(n.type)}</span> : null}
+          <span className={`notif-priority notif-priority--${notificationPriority(n.type)}`}>{notificationPriority(n.type)}</span>
           {normalizedRole === "um" && n.type === "ORPHANS_ENDORSEMENTS" ? <span className={`notif-resolution notif-resolution--${notificationResolution(n).toLowerCase()}`}>{notificationResolution(n)}</span> : null}
-          <span className="notif-time">{formatWhen(n.updatedAt || n.createdAt)}</span>
+          {normalizedRole === "bm" && KPI_NOTIF_TYPES.includes(n.type) ? <span className={`notif-resolution notif-resolution--${notificationResolution(n).toLowerCase().replaceAll(" ", "-")}`}>{notificationResolution(n) === "Not Applicable" ? "No action required" : notificationResolution(n)}</span> : null}
+          <span className="notif-time">{formatWhen(n.createdAt)}</span>
         </div>
         <div className="notif-title">{n.title}</div>
         {String(n.message || "").trim() ? <div className="notif-msg">{n.message}</div> : null}
@@ -291,17 +301,15 @@ function ManagerNotifications({ roleType }) {
             </div>
 
             <div className="notifs-filter">
-              {normalizedRole !== "bm" ? (
-                <select className="notifs-select" value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)} aria-label="Notification priority filter">
-                  <option value="all">All Priorities ({availablePriorityLevels.reduce((total, priority) => total + Number(priorityCounts[priority] || 0), 0)})</option>
-                  {availablePriorityLevels.map((priority) => <option key={priority} value={priority}>{priority.charAt(0).toUpperCase() + priority.slice(1)} ({priorityCounts[priority]})</option>)}
-                </select>
-              ) : null}
+              <select className="notifs-select" value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)} aria-label="Notification priority filter">
+                <option value="all">All Priorities ({availablePriorityLevels.reduce((total, priority) => total + Number(priorityCounts[priority] || 0), 0)})</option>
+                {availablePriorityLevels.map((priority) => <option key={priority} value={priority}>{priority.charAt(0).toUpperCase() + priority.slice(1)} ({priorityCounts[priority]})</option>)}
+              </select>
               <select className="notifs-select" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} aria-label="Notification type filter">
                 <option value="">All Types</option>
                 {managerNotifTypes.map((type) => <option key={type} value={type}>{type}</option>)}
               </select>
-              {normalizedRole === "um" ? (
+              {["um", "bm"].includes(normalizedRole) ? (
                 <select className="notifs-select" value={resolutionFilter} onChange={(e) => setResolutionFilter(e.target.value)} aria-label="Orphan endorsement resolution filter">
                   <option value="all">All Resolutions ({resolutionCounts.all})</option>
                   <option value="Unresolved">Unresolved ({resolutionCounts.unresolved})</option>
