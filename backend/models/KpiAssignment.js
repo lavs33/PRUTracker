@@ -31,6 +31,15 @@ const kpiAssignmentSchema = new mongoose.Schema(
             targetValue: { type: Number, default: null },
           },
         ],
+        monthlyAssignments: [
+          {
+            monthKey: { type: String, required: true, match: /^\d{4}-(0[1-9]|1[0-2])$/ },
+            assigned: { type: Boolean, default: false },
+            targetMin: { type: Number, default: null },
+            targetMax: { type: Number, default: null },
+            targetValue: { type: Number, default: null },
+          },
+        ],
       },
     ],
     updatedByUserId: {

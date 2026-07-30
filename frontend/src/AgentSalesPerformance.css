@@ -115,3 +115,13 @@
 @media (max-width: 860px) {
   .sp-miniBreakdowns { grid-template-columns: 1fr; }
 }
+.sp-contextLink {
+  color: #b42318;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.sp-contextLink:hover,
+.sp-contextLink:focus-visible {
+  text-decoration: underline;
+}

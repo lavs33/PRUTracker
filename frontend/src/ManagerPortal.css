@@ -2251,3 +2251,16 @@
   gap: 8px;
   color: #374151;
 }
+.manager-kpi-month-select {
+  min-width: 220px;
+}
+
+.manager-kpi-month-target-grid {
+  grid-template-columns: minmax(280px, 520px);
+}
+
+.manager-kpi-readonly-label {
+  color: #6b7280;
+  font-weight: 700;
+  font-size: 12px;
+}
