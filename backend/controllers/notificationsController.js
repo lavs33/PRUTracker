@@ -8,7 +8,8 @@ const UNIT_KPI_NOTIFICATION_TYPES = ["UNIT_KPI_ASSIGNED", "UNIT_KPI_TARGET_UPDAT
 const AGENT_KPI_NOTIFICATION_TYPES = ["AGENT_KPI_ASSIGNED", "AGENT_KPI_TARGET_UPDATED", "AGENT_KPI_UNASSIGNED"];
 const NOTIFICATION_TYPES = [...TASK_NOTIFICATION_TYPES, ...PAYMENT_NOTIFICATION_TYPES, ...POLICY_LIFECYCLE_NOTIFICATION_TYPES, ...MANAGER_NOTIFICATION_TYPES, ...AGENT_ORPHAN_NOTIFICATION_TYPES, ...BRANCH_KPI_NOTIFICATION_TYPES, ...UNIT_KPI_NOTIFICATION_TYPES, ...AGENT_KPI_NOTIFICATION_TYPES];
 const NOTIFICATION_ENTITY_TYPES = ["Task", "Policyholder", "Prospect", "LongLeave", "Retirement", "KpiAssignment"];
-const RESOLUTION_REQUIRED_NOTIFICATION_TYPES = [...TASK_NOTIFICATION_TYPES, ...PAYMENT_NOTIFICATION_TYPES, ...MANAGER_NOTIFICATION_TYPES];
+const KPI_UNASSIGNED_NOTIFICATION_TYPES = ["BRANCH_KPI_UNASSIGNED", "UNIT_KPI_UNASSIGNED", "AGENT_KPI_UNASSIGNED"];
+const RESOLUTION_REQUIRED_NOTIFICATION_TYPES = [...TASK_NOTIFICATION_TYPES, ...PAYMENT_NOTIFICATION_TYPES, ...MANAGER_NOTIFICATION_TYPES, ...KPI_UNASSIGNED_NOTIFICATION_TYPES];
 
 function defaultResolutionStatus(notification) {
   const requiresResolution = RESOLUTION_REQUIRED_NOTIFICATION_TYPES.includes(String(notification?.type || "").toUpperCase());
@@ -56,6 +57,16 @@ function formatDateInManila(date) {
     day: "2-digit",
     year: "numeric",
   }).format(d);
+}
+
+function individualPaymentPeriodLabel(payment = {}) {
+  const period = payment?.recordPremiumPaymentTransfer?.paymentPeriod || {};
+  const storedLabel = String(period.label || "").trim();
+  if (storedLabel) return storedLabel;
+  const start = period.startDate ? formatDateInManila(period.startDate) : "";
+  const end = period.endDate ? formatDateInManila(period.endDate) : "";
+  if (start && end) return `${start} - ${end}`;
+  return start || end || "the applicable payment period";
 }
 
 function fullName(prospect) {
@@ -185,6 +196,23 @@ function sortNotificationsForDisplay(notifications) {
   });
 }
 
+function orphanEndorsementAffectedRecords(kind, record) {
+  return kind === "retirement"
+    ? [...(record?.affectedProspects || [])]
+    : [...(record?.affectedProspects || []), ...(record?.affectedPolicyholders || [])];
+}
+
+function orphanEndorsementIsResolved(kind, record) {
+  if (!record) return false;
+  return orphanEndorsementAffectedRecords(kind, record).every((item) => (
+    item?.reassigned === true
+    || String(item?.reassigned || "").toLowerCase() === "true"
+    || Boolean(item?.reassignedAt)
+    || Boolean(item?.reassignedToUserId)
+    || Boolean(item?.reassignedToAgentId)
+  ));
+}
+
 function createNotificationsController({
   Notification,
   Task,
@@ -197,6 +225,7 @@ function createNotificationsController({
   ScheduledMeeting,
   LongLeave,
   Retirement,
+  KpiAssignment,
   Product,
   Policy,
   mongoose,
@@ -222,22 +251,6 @@ function createNotificationsController({
       ? uniqueValidObjectIdStrings
       : (values = []) => [...new Set(values.map((value) => toValidId(value)).filter(Boolean))];
 
-  const orphanEndorsementAffectedRecords = (kind, record) => kind === "retirement"
-    ? [...(record?.affectedProspects || [])]
-    : [...(record?.affectedProspects || []), ...(record?.affectedPolicyholders || [])];
-
-  const orphanEndorsementIsResolved = (kind, record) => {
-    if (!record) return false;
-    const affectedRecords = orphanEndorsementAffectedRecords(kind, record);
-    return affectedRecords.every((item) => (
-      item?.reassigned === true
-      || String(item?.reassigned || "").toLowerCase() === "true"
-      || Boolean(item?.reassignedAt)
-      || Boolean(item?.reassignedToUserId)
-      || Boolean(item?.reassignedToAgentId)
-    ));
-  };
-
   const syncOrphanEndorsementResolutions = async (uid) => {
     const resolutionsByNotificationId = new Map();
     if (!LongLeave || !Retirement) return resolutionsByNotificationId;
@@ -260,17 +273,20 @@ function createNotificationsController({
     // Older rows may contain a User id (rather than an Agent id) in metadata,
     // or may not contain a related-record id at all.
     const [longLeaves, retirements] = await Promise.all([
-      LongLeave.find({}).select("agentId affectedProspects affectedPolicyholders createdAt updatedAt").lean(),
-      Retirement.find({}).select("agentId affectedProspects affectedPolicyholders createdAt updatedAt").lean(),
+      LongLeave.find({}).select("agentId userId affectedProspects affectedPolicyholders createdAt updatedAt").lean(),
+      Retirement.find({}).select("agentId userId affectedProspects affectedPolicyholders createdAt updatedAt").lean(),
     ]);
     const longLeaveMap = new Map(longLeaves.map((record) => [String(record._id), record]));
     const retirementMap = new Map(retirements.map((record) => [String(record._id), record]));
     const closestRecordForNotification = (records, notification) => {
       const agentId = String(notification?.metadata?.agentId || "");
-      const candidates = records.filter((record) => agentId && String(record.agentId || "") === agentId);
+      const candidates = records.filter((record) => agentId && (
+        String(record.agentId || "") === agentId || String(record.userId || "") === agentId
+      ));
       const notificationTime = new Date(notification.createdAt || 0).getTime();
-      const eligibleRecords = candidates.length ? candidates : records;
-      return eligibleRecords.sort((a, b) => (
+      // Never borrow another agent's endorsement progress. A legacy
+      // notification without a usable relationship must remain unresolved.
+      return [...candidates].sort((a, b) => (
         Math.abs(new Date(a.createdAt || 0).getTime() - notificationTime)
         - Math.abs(new Date(b.createdAt || 0).getTime() - notificationTime)
       ))[0] || null;
@@ -282,10 +298,10 @@ function createNotificationsController({
         || (notification.entityType === "LongLeave" ? toValidId(notification.entityId) : null);
       const kind = retirementId || notification?.metadata?.endorsementType === "retirement" ? "retirement" : "longLeave";
       const record = retirementId
-        ? (retirementMap.get(retirementId) || closestRecordForNotification(retirements, notification))
+        ? retirementMap.get(retirementId)
         : kind === "retirement"
           ? closestRecordForNotification(retirements, notification)
-          : (longLeaveMap.get(longLeaveId) || closestRecordForNotification(longLeaves, notification));
+          : (longLeaveId ? longLeaveMap.get(longLeaveId) : closestRecordForNotification(longLeaves, notification));
       const resolved = orphanEndorsementIsResolved(kind, record);
       if (!record) return null;
       const resolvedAt = resolved ? (record.updatedAt || new Date()) : null;
@@ -300,6 +316,136 @@ function createNotificationsController({
         },
       };
     }).filter(Boolean);
+    if (writes.length) await Notification.bulkWrite(writes, { ordered: false });
+    return resolutionsByNotificationId;
+  };
+
+  const syncPaymentNotificationResolutions = async (uid) => {
+    const resolutionsByNotificationId = new Map();
+    if (!Payment) return resolutionsByNotificationId;
+
+    const notifications = await Notification.find({
+      assignedToUserId: uid,
+      type: { $in: ["PAYMENT_TRANSFER_REMINDER", "PAYMENT_EOR_REMINDER", "PAYMENT_MISSED_TRANSFER"] },
+      softDeletedAt: null,
+    }).select("_id type entityId metadata dedupeKey resolvedAt").lean();
+    if (!notifications.length) return resolutionsByNotificationId;
+
+    const paymentIds = uniqueValidIds(notifications.map((notification) => notification?.metadata?.paymentId));
+    const annualPaymentIds = uniqueValidIds(notifications.flatMap((notification) => [
+      notification?.metadata?.annualPaymentId,
+      String(notification?.dedupeKey || "").split(":")[2],
+    ]));
+    const policyholderIds = uniqueValidIds(notifications.map((notification) => (
+      notification?.metadata?.policyholderId || notification?.entityId
+    )));
+    const policyholders = Policyholder && policyholderIds.length
+      ? await Policyholder.find({ _id: { $in: policyholderIds } }).select("annualPaymentRecords").lean()
+      : [];
+    const allAnnualPaymentIds = uniqueValidIds([
+      ...annualPaymentIds,
+      ...policyholders.flatMap((policyholder) => (
+        policyholder.annualPaymentRecords || []
+      ).map((record) => record?.annualPaymentId)),
+    ]);
+    const payments = await Payment.find({
+      $or: [
+        ...(paymentIds.length ? [{ _id: { $in: paymentIds } }] : []),
+        ...(allAnnualPaymentIds.length ? [{ annualPaymentId: { $in: allAnnualPaymentIds } }] : []),
+      ],
+    }).select("annualPaymentId status recordPremiumPaymentTransfer uploadPremiumPaymentEor updatedAt").lean();
+    const paymentById = new Map(payments.map((payment) => [String(payment._id), payment]));
+    const paymentsByAnnualPaymentId = new Map();
+    for (const payment of payments) {
+      const annualPaymentId = String(payment?.annualPaymentId || "");
+      if (!paymentsByAnnualPaymentId.has(annualPaymentId)) paymentsByAnnualPaymentId.set(annualPaymentId, []);
+      paymentsByAnnualPaymentId.get(annualPaymentId).push(payment);
+    }
+    const annualPaymentIdsByPolicyholderId = new Map(policyholders.map((policyholder) => [
+      String(policyholder._id),
+      uniqueValidIds((policyholder.annualPaymentRecords || []).map((record) => record?.annualPaymentId)),
+    ]));
+
+    const writes = notifications.map((notification) => {
+      const paymentId = toValidId(notification?.metadata?.paymentId);
+      const directPayment = paymentId ? paymentById.get(paymentId) : null;
+      const metadataAnnualPaymentId = toValidId(notification?.metadata?.annualPaymentId);
+      const dedupeAnnualPaymentId = toValidId(String(notification?.dedupeKey || "").split(":")[2]);
+      const candidateAnnualPaymentIds = uniqueValidIds([
+        metadataAnnualPaymentId,
+        dedupeAnnualPaymentId,
+        ...(annualPaymentIdsByPolicyholderId.get(String(notification?.metadata?.policyholderId || notification?.entityId || "")) || []),
+      ]);
+      const paymentDateKey = String(notification?.metadata?.nextPaymentDateKey || "");
+      const periodPayments = candidateAnnualPaymentIds
+        .flatMap((annualPaymentId) => paymentsByAnnualPaymentId.get(annualPaymentId) || [])
+        .filter((payment) => {
+          if (!paymentDateKey) return false;
+          return dateKeyInTZ(
+            payment?.recordPremiumPaymentTransfer?.paymentPeriod?.startDate
+              || payment?.recordPremiumPaymentTransfer?.paymentDate
+          ) === paymentDateKey;
+        });
+      const concernedPayments = directPayment ? [directPayment] : periodPayments;
+      const resolved = notification.type === "PAYMENT_EOR_REMINDER"
+        ? concernedPayments.some(paymentHasEor)
+        : concernedPayments.some(paymentHasTransfer);
+      const resolvedAt = resolved
+        ? (concernedPayments.find((payment) => (
+            notification.type === "PAYMENT_EOR_REMINDER" ? paymentHasEor(payment) : paymentHasTransfer(payment)
+          ))?.updatedAt || new Date())
+        : null;
+      resolutionsByNotificationId.set(String(notification._id), {
+        resolutionStatus: resolved ? "Resolved" : "Unresolved",
+        resolvedAt,
+      });
+      return {
+        updateOne: {
+          filter: { _id: notification._id },
+          update: { $set: { resolutionStatus: resolved ? "Resolved" : "Unresolved", resolvedAt } },
+        },
+      };
+    });
+    if (writes.length) await Notification.bulkWrite(writes, { ordered: false });
+    return resolutionsByNotificationId;
+  };
+
+  const syncKpiUnassignedNotificationResolutions = async (uid) => {
+    const resolutionsByNotificationId = new Map();
+    if (!KpiAssignment) return resolutionsByNotificationId;
+    const notifications = await Notification.find({
+      assignedToUserId: uid,
+      type: { $in: KPI_UNASSIGNED_NOTIFICATION_TYPES },
+      softDeletedAt: null,
+    }).select("_id entityId metadata resolutionStatus resolvedAt createdAt").lean();
+    if (!notifications.length) return resolutionsByNotificationId;
+
+    const assignmentIds = uniqueValidIds(notifications.map((notification) => notification.entityId));
+    const assignments = assignmentIds.length
+      ? await KpiAssignment.find({ _id: { $in: assignmentIds } }).select("kpis updatedAt").lean()
+      : [];
+    const assignmentById = new Map(assignments.map((assignment) => [String(assignment._id), assignment]));
+    const writes = notifications.map((notification) => {
+      const assignment = assignmentById.get(String(notification.entityId || ""));
+      const kpiKey = String(notification?.metadata?.kpiKey || "");
+      const createdAt = new Date(notification.createdAt || 0);
+      const fallbackMonthKey = Number.isNaN(createdAt.getTime())
+        ? ""
+        : `${createdAt.getFullYear()}-${String(createdAt.getMonth() + 1).padStart(2, "0")}`;
+      const monthKey = String(notification?.metadata?.monthKey || fallbackMonthKey);
+      const kpi = assignment?.kpis?.find((row) => String(row?.key || "") === kpiKey);
+      const monthAssignment = kpi?.monthlyAssignments?.find((row) => String(row?.monthKey || "") === monthKey);
+      const resolved = monthAssignment?.assigned === true;
+      const resolutionStatus = resolved ? "Resolved" : "Unresolved";
+      const resolvedAt = resolved ? (notification.resolvedAt || assignment?.updatedAt || new Date()) : null;
+      resolutionsByNotificationId.set(String(notification._id), { resolutionStatus, resolvedAt });
+      return {
+        updateOne: {
+          filter: { _id: notification._id },
+          update: { $set: { resolutionStatus, resolvedAt } },
+        },
+      };
+    });
     if (writes.length) await Notification.bulkWrite(writes, { ordered: false });
     return resolutionsByNotificationId;
   };
@@ -562,7 +708,7 @@ function createNotificationsController({
         }
         notificationType = "PAYMENT_EOR_REMINDER";
         title = "Upload premium payment eOR";
-        actionMessage = "The premium payment transfer has been recorded, but the eOR has not been uploaded yet.";
+        actionMessage = `The premium payment transfer has been recorded for ${individualPaymentPeriodLabel(pendingPayment)}, but the eOR has not been uploaded yet.`;
         paymentId = pendingPayment._id;
       } else {
         const paymentDay = dayNumberFromDateKey(paymentDateKey);
@@ -787,7 +933,11 @@ function createNotificationsController({
       // freshly calculated values also guarantees legacy notifications use the
       // current reassignment progress in this response, even before persistence
       // is observed by a subsequent database read.
-      const orphanResolutions = await syncOrphanEndorsementResolutions(uid);
+      const [orphanResolutions, paymentResolutions, kpiResolutions] = await Promise.all([
+        syncOrphanEndorsementResolutions(uid),
+        syncPaymentNotificationResolutions(uid),
+        syncKpiUnassignedNotificationResolutions(uid),
+      ]);
 
       const query = { assignedToUserId: uid, softDeletedAt: null };
 
@@ -928,11 +1078,18 @@ function createNotificationsController({
       }
 
       notifs = notifs.map((notification) => {
+        const paymentResolution = isPaymentNotification(notification)
+          ? paymentResolutions.get(String(notification._id))
+          : null;
         const orphanResolution = notification.type === "ORPHANS_ENDORSEMENTS"
           ? orphanResolutions.get(String(notification._id))
           : null;
-        const normalizedNotification = orphanResolution
-          ? { ...notification, ...orphanResolution }
+        const kpiResolution = KPI_UNASSIGNED_NOTIFICATION_TYPES.includes(notification.type)
+          ? kpiResolutions.get(String(notification._id))
+          : null;
+        const calculatedResolution = paymentResolution || orphanResolution || kpiResolution;
+        const normalizedNotification = calculatedResolution
+          ? { ...notification, ...calculatedResolution }
           : notification;
         return {
           ...normalizedNotification,
