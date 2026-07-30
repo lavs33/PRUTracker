@@ -16,9 +16,13 @@ const notificationPriority = (type) => {
   if (UNIT_KPI_NOTIF_TYPES.includes(normalizedType)) return "high";
   return "normal";
 };
+const notificationCreatedTime = (notification) => {
+  const timestamp = new Date(notification?.createdAt || 0).getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
+};
 const notificationWithinDateRange = (notification, dateRange) => {
   if (dateRange === "all") return true;
-  const timestamp = new Date(notification?.updatedAt || notification?.createdAt || 0);
+  const timestamp = new Date(notificationCreatedTime(notification));
   if (Number.isNaN(timestamp.getTime())) return false;
   const now = new Date();
   let start = new Date(now);
@@ -127,12 +131,7 @@ function ManagerNotifications({ roleType }) {
     const visibleNotifications = priorityFilter === "all"
       ? typeAndDateFiltered
       : typeAndDateFiltered.filter((notification) => notificationPriority(notification?.type) === priorityFilter);
-    const priorityRank = { urgent: 0, high: 1, normal: 2 };
-    setNotifs([...visibleNotifications].sort((a, b) => {
-      const priorityDifference = priorityRank[notificationPriority(a?.type)] - priorityRank[notificationPriority(b?.type)];
-      if (priorityDifference !== 0) return priorityDifference;
-      return new Date(b?.updatedAt || b?.createdAt || 0) - new Date(a?.updatedAt || a?.createdAt || 0);
-    }));
+    setNotifs([...visibleNotifications].sort((a, b) => notificationCreatedTime(b) - notificationCreatedTime(a)));
   }, [user?.id, tab, typeFilter, priorityFilter, resolutionFilter, dateRange]);
 
   useEffect(() => {
@@ -231,7 +230,7 @@ function ManagerNotifications({ roleType }) {
           <span className={typePillClass(n.type)}>{n.type}</span>
           {normalizedRole !== "bm" ? <span className={`notif-priority notif-priority--${notificationPriority(n.type)}`}>{notificationPriority(n.type)}</span> : null}
           {normalizedRole === "um" && n.type === "ORPHANS_ENDORSEMENTS" ? <span className={`notif-resolution notif-resolution--${notificationResolution(n).toLowerCase()}`}>{notificationResolution(n)}</span> : null}
-          <span className="notif-time">{formatWhen(n.updatedAt || n.createdAt)}</span>
+          <span className="notif-time">{formatWhen(n.createdAt)}</span>
         </div>
         <div className="notif-title">{n.title}</div>
         {String(n.message || "").trim() ? <div className="notif-msg">{n.message}</div> : null}
