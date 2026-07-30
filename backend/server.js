@@ -579,6 +579,61 @@ const KPI_DEFINITIONS = {
 
 const KPI_FREQUENCIES = ["Daily", "Weekly", "Monthly", "Quarterly", "Semi-Annually", "Annually"];
 
+function monthKeyForDate(value = new Date()) {
+  const date = new Date(value);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function nextMonthKey(value = new Date()) {
+  const date = new Date(value);
+  date.setMonth(date.getMonth() + 1, 1);
+  return monthKeyForDate(date);
+}
+
+function availableKpiMonthKeys() {
+  const keys = [];
+  const cursor = new Date("2026-01-01T00:00:00");
+  const end = new Date(`${nextMonthKey()}-01T00:00:00`);
+  while (cursor <= end) {
+    keys.push(monthKeyForDate(cursor));
+    cursor.setMonth(cursor.getMonth() + 1, 1);
+  }
+  return keys;
+}
+
+function formatKpiMonthLabel(monthKey = "") {
+  const [year, month] = String(monthKey).split("-").map(Number);
+  if (!year || !month) return String(monthKey || "Month");
+  const monthName = new Intl.DateTimeFormat("en-US", { month: "long", timeZone: "UTC" }).format(new Date(Date.UTC(year, month - 1, 1)));
+  return `${year} - ${monthName}`;
+}
+
+function normalizeMonthlyAssignments(saved = {}, definition = {}) {
+  const rows = (Array.isArray(saved.monthlyAssignments) ? saved.monthlyAssignments : [])
+    .filter((row) => /^\d{4}-(0[1-9]|1[0-2])$/.test(String(row?.monthKey || "")))
+    .map((row) => ({
+      monthKey: String(row.monthKey),
+      assigned: row.assigned === true,
+      targetMin: row.targetMin ?? null,
+      targetMax: row.targetMax ?? null,
+      targetValue: row.targetValue ?? null,
+    }));
+  if (!rows.length && Object.keys(saved || {}).length) {
+    rows.push({
+      monthKey: monthKeyForDate(),
+      assigned: saved.assigned !== undefined ? saved.assigned === true : definition.assigned,
+      targetMin: saved.targetMin ?? definition.targetMin ?? null,
+      targetMax: saved.targetMax ?? definition.targetMax ?? null,
+      targetValue: saved.targetValue ?? definition.targetValue ?? null,
+    });
+  }
+  const existingMonths = new Set(rows.map((row) => row.monthKey));
+  for (const monthKey of availableKpiMonthKeys()) {
+    if (!existingMonths.has(monthKey)) rows.push({ monthKey, assigned: false, targetMin: null, targetMax: null, targetValue: null });
+  }
+  return rows.sort((a, b) => a.monthKey.localeCompare(b.monthKey));
+}
+
 function buildDefaultKpiTargets(definition = {}, saved = {}) {
   const savedTargetsByPeriod = new Map(
     (Array.isArray(saved.targets) ? saved.targets : [])
@@ -607,7 +662,11 @@ function normalizeKpiList(scopeType, savedKpis = []) {
   const savedByKey = new Map((Array.isArray(savedKpis) ? savedKpis : []).map((kpi) => [String(kpi?.key || ""), kpi]));
   return defaults.map((definition) => {
     const saved = savedByKey.get(definition.key) || {};
-    const assigned = saved.assigned !== undefined ? saved.assigned === true : definition.assigned;
+    const monthlyAssignments = normalizeMonthlyAssignments(saved, definition);
+    const currentMonthAssignment = monthlyAssignments.find((row) => row.monthKey === monthKeyForDate());
+    const assigned = currentMonthAssignment
+      ? currentMonthAssignment.assigned
+      : (saved.assigned !== undefined ? saved.assigned === true : definition.assigned);
     const targets = buildDefaultKpiTargets(definition, saved);
     const normalizedPeriod = KPI_FREQUENCIES.includes(String(saved.period || "")) ? saved.period : definition.period;
     const primaryTarget = targets.find((target) => target.period === normalizedPeriod) || targets[0] || {};
@@ -615,10 +674,11 @@ function normalizeKpiList(scopeType, savedKpis = []) {
       ...definition,
       assigned,
       period: normalizedPeriod,
-      targetMin: primaryTarget.targetMin ?? null,
-      targetMax: primaryTarget.targetMax ?? null,
-      targetValue: primaryTarget.targetValue ?? null,
+      targetMin: currentMonthAssignment ? currentMonthAssignment.targetMin : (primaryTarget.targetMin ?? null),
+      targetMax: currentMonthAssignment ? currentMonthAssignment.targetMax : (primaryTarget.targetMax ?? null),
+      targetValue: currentMonthAssignment ? currentMonthAssignment.targetValue : (primaryTarget.targetValue ?? null),
       targets,
+      monthlyAssignments,
     };
   });
 }
@@ -635,6 +695,11 @@ function kpiTargetsSignature(kpi = {}) {
     targets: (Array.isArray(kpi.targets) ? kpi.targets : []).map(({ period, targetMin, targetMax, targetValue }) => ({
       period, targetMin: targetMin ?? null, targetMax: targetMax ?? null, targetValue: targetValue ?? null,
     })),
+    monthlyAssignments: (Array.isArray(kpi.monthlyAssignments) ? kpi.monthlyAssignments : []).map(
+      ({ monthKey, assigned, targetMin, targetMax, targetValue }) => ({
+        monthKey, assigned: assigned === true, targetMin: targetMin ?? null, targetMax: targetMax ?? null, targetValue: targetValue ?? null,
+      })
+    ),
   });
 }
 
@@ -657,13 +722,38 @@ function formatKpiNotificationTarget(target = {}, valueType = "") {
   return "Not set";
 }
 
-async function createBranchKpiNotifications({ branchId, branchName, assignmentId, previousKpi, nextKpi }) {
-  const wasAssigned = previousKpi?.assigned === true;
-  const isAssigned = nextKpi?.assigned === true;
+function getMonthlyKpiChange(previousKpi = {}, nextKpi = {}) {
+  const previousMonths = new Map((previousKpi.monthlyAssignments || []).map((row) => [row.monthKey, row]));
+  const nextMonths = new Map((nextKpi.monthlyAssignments || []).map((row) => [row.monthKey, row]));
+  const monthKey = [...new Set([...previousMonths.keys(), ...nextMonths.keys()])].find((key) => (
+    JSON.stringify(previousMonths.get(key) || null) !== JSON.stringify(nextMonths.get(key) || null)
+  )) || monthKeyForDate();
+  return {
+    monthKey,
+    monthLabel: formatKpiMonthLabel(monthKey),
+    previousMonth: previousMonths.get(monthKey) || { assigned: false },
+    nextMonth: nextMonths.get(monthKey) || { assigned: false },
+  };
+}
+
+function monthlyKpiNotificationDetails(previousKpi = {}, nextKpi = {}, typePrefix = "") {
+  const change = getMonthlyKpiChange(previousKpi, nextKpi);
+  const wasAssigned = change.previousMonth.assigned === true;
+  const isAssigned = change.nextMonth.assigned === true;
   let type = "";
-  if (!wasAssigned && isAssigned) type = "BRANCH_KPI_ASSIGNED";
-  else if (wasAssigned && !isAssigned) type = "BRANCH_KPI_UNASSIGNED";
-  else if (wasAssigned && isAssigned && kpiTargetsSignature(previousKpi) !== kpiTargetsSignature(nextKpi)) type = "BRANCH_KPI_TARGET_UPDATED";
+  if (!wasAssigned && isAssigned) type = `${typePrefix}_KPI_ASSIGNED`;
+  else if (wasAssigned && !isAssigned) type = `${typePrefix}_KPI_UNASSIGNED`;
+  else if (wasAssigned && isAssigned && JSON.stringify(change.previousMonth) !== JSON.stringify(change.nextMonth)) type = `${typePrefix}_KPI_TARGET_UPDATED`;
+  const message = type.endsWith("_UNASSIGNED")
+    ? `KPI unassigned for ${change.monthLabel}.`
+    : type.endsWith("_TARGET_UPDATED")
+      ? `KPI target for ${change.monthLabel}:\nPrevious target: ${formatKpiNotificationTarget(change.previousMonth, nextKpi.valueType)}\nUpdated target: ${formatKpiNotificationTarget(change.nextMonth, nextKpi.valueType)}.`
+      : `KPI target for ${change.monthLabel}: ${formatKpiNotificationTarget(change.nextMonth, nextKpi.valueType)}.`;
+  return { ...change, type, message };
+}
+
+async function createBranchKpiNotifications({ branchId, branchName, assignmentId, previousKpi, nextKpi }) {
+  const { type, message, monthKey } = monthlyKpiNotificationDetails(previousKpi, nextKpi, "BRANCH");
   if (!type) return;
 
   const unitIds = (await Unit.find({ branchId }).select("_id").lean()).map((unit) => unit._id);
@@ -677,12 +767,7 @@ async function createBranchKpiNotifications({ branchId, branchName, assignmentId
   if (!recipientIds.length) return;
 
   const label = nextKpi?.label || previousKpi?.label || "KPI";
-  const frequencies = (Array.isArray((isAssigned ? nextKpi : previousKpi)?.targets) ? (isAssigned ? nextKpi : previousKpi).targets : [])
-    .map((target) => target.period).filter(Boolean);
   const titleAction = type === "BRANCH_KPI_UNASSIGNED" ? "unassigned" : type === "BRANCH_KPI_ASSIGNED" ? "assigned" : "target updated";
-  const message = type === "BRANCH_KPI_UNASSIGNED"
-    ? `Frequencies unassigned: ${frequencies.join(", ") || "None"}.`
-    : `Targets by frequency:\n${(nextKpi.targets || []).map((target) => `• ${target.period}: ${formatKpiNotificationTarget(target, nextKpi.valueType)}`).join("\n")}\n\nDefault standard to track: ${nextKpi.period || "Not set"}.`;
 
   await Notification.insertMany(recipientIds.map((assignedToUserId) => ({
     assignedToUserId,
@@ -691,17 +776,12 @@ async function createBranchKpiNotifications({ branchId, branchName, assignmentId
     message,
     entityType: "KpiAssignment",
     entityId: assignmentId,
-    metadata: { scopeType: "BRANCH", scopeId: String(branchId), kpiKey: nextKpi?.key || previousKpi?.key || "" },
+    metadata: { scopeType: "BRANCH", scopeId: String(branchId), kpiKey: nextKpi?.key || previousKpi?.key || "", monthKey },
   })));
 }
 
 async function createUnitKpiNotifications({ branchId, assignmentId, previousKpi, nextKpi }) {
-  const wasAssigned = previousKpi?.assigned === true;
-  const isAssigned = nextKpi?.assigned === true;
-  let type = "";
-  if (!wasAssigned && isAssigned) type = "UNIT_KPI_ASSIGNED";
-  else if (wasAssigned && !isAssigned) type = "UNIT_KPI_UNASSIGNED";
-  else if (wasAssigned && isAssigned && kpiTargetsSignature(previousKpi) !== kpiTargetsSignature(nextKpi)) type = "UNIT_KPI_TARGET_UPDATED";
+  const { type, message, monthKey } = monthlyKpiNotificationDetails(previousKpi, nextKpi, "UNIT");
   if (!type) return;
 
   const units = await Unit.find({ branchId }).select("_id unitName").lean();
@@ -719,12 +799,7 @@ async function createUnitKpiNotifications({ branchId, assignmentId, previousKpi,
   });
 
   const label = nextKpi?.label || previousKpi?.label || "KPI";
-  const frequencies = (Array.isArray((isAssigned ? nextKpi : previousKpi)?.targets) ? (isAssigned ? nextKpi : previousKpi).targets : [])
-    .map((target) => target.period).filter(Boolean);
   const titleAction = type === "UNIT_KPI_UNASSIGNED" ? "unassigned" : type === "UNIT_KPI_ASSIGNED" ? "assigned" : "target updated";
-  const message = type === "UNIT_KPI_UNASSIGNED"
-    ? `Frequencies unassigned: ${frequencies.join(", ") || "None"}.`
-    : `Targets by frequency:\n${(nextKpi.targets || []).map((target) => `• ${target.period}: ${formatKpiNotificationTarget(target, nextKpi.valueType)}`).join("\n")}\n\nDefault standard to track: ${nextKpi.period || "Not set"}.`;
   const notifications = units.flatMap((unit) => [...(recipientsByUnit.get(String(unit._id)) || [])].map((assignedToUserId) => ({
     assignedToUserId,
     type,
@@ -732,18 +807,13 @@ async function createUnitKpiNotifications({ branchId, assignmentId, previousKpi,
     message,
     entityType: "KpiAssignment",
     entityId: assignmentId,
-    metadata: { scopeType: "UNIT", scopeId: String(unit._id), branchAssignmentScopeId: String(branchId), kpiKey: nextKpi?.key || previousKpi?.key || "" },
+    metadata: { scopeType: "UNIT", scopeId: String(unit._id), branchAssignmentScopeId: String(branchId), kpiKey: nextKpi?.key || previousKpi?.key || "", monthKey },
   })));
   if (notifications.length) await Notification.insertMany(notifications);
 }
 
 async function createAgentKpiNotifications({ branchId, branchName, assignmentId, previousKpi, nextKpi }) {
-  const wasAssigned = previousKpi?.assigned === true;
-  const isAssigned = nextKpi?.assigned === true;
-  let type = "";
-  if (!wasAssigned && isAssigned) type = "AGENT_KPI_ASSIGNED";
-  else if (wasAssigned && !isAssigned) type = "AGENT_KPI_UNASSIGNED";
-  else if (wasAssigned && isAssigned && kpiTargetsSignature(previousKpi) !== kpiTargetsSignature(nextKpi)) type = "AGENT_KPI_TARGET_UPDATED";
+  const { type, message, monthKey } = monthlyKpiNotificationDetails(previousKpi, nextKpi, "AGENT");
   if (!type) return;
 
   const unitIds = (await Unit.find({ branchId }).select("_id").lean()).map((unit) => unit._id);
@@ -757,12 +827,7 @@ async function createAgentKpiNotifications({ branchId, branchName, assignmentId,
   if (!recipients.length) return;
 
   const label = nextKpi?.label || previousKpi?.label || "KPI";
-  const frequencies = (Array.isArray((isAssigned ? nextKpi : previousKpi)?.targets) ? (isAssigned ? nextKpi : previousKpi).targets : [])
-    .map((target) => target.period).filter(Boolean);
   const titleAction = type === "AGENT_KPI_UNASSIGNED" ? "unassigned" : type === "AGENT_KPI_ASSIGNED" ? "assigned" : "target updated";
-  const message = type === "AGENT_KPI_UNASSIGNED"
-    ? `Frequencies unassigned: ${frequencies.join(", ") || "None"}.`
-    : `Targets by frequency:\n${(nextKpi.targets || []).map((target) => `• ${target.period}: ${formatKpiNotificationTarget(target, nextKpi.valueType)}`).join("\n")}\n\nDefault standard to track: ${nextKpi.period || "Not set"}.`;
   await Notification.insertMany(recipients.map((recipient) => ({
     assignedToUserId: recipient._id,
     type,
@@ -770,7 +835,7 @@ async function createAgentKpiNotifications({ branchId, branchName, assignmentId,
     message,
     entityType: "KpiAssignment",
     entityId: assignmentId,
-    metadata: { scopeType: "AGENT", scopeId: String(branchId), kpiKey: nextKpi?.key || previousKpi?.key || "" },
+    metadata: { scopeType: "AGENT", scopeId: String(branchId), kpiKey: nextKpi?.key || previousKpi?.key || "", monthKey },
   })));
 }
 
@@ -3126,115 +3191,85 @@ app.put("/api/manager/kpi-assignments/:scopeType/:scopeId", async (req, res) => 
     const inputByKey = new Map((Array.isArray(kpis) ? kpis : []).map((kpi) => [String(kpi?.key || ""), kpi]));
     const normalizedKpis = [];
 
-    for (const definition of defaults) {
-      const hasInput = inputByKey.has(definition.key);
-      const input = hasInput ? (inputByKey.get(definition.key) || {}) : (existingByKey.get(definition.key) || {});
-      const defaultPeriod = KPI_FREQUENCIES.includes(String(input.period || "")) ? String(input.period) : definition.period;
-      const inputTargetsByPeriod = new Map(
-        (Array.isArray(input.targets) ? input.targets : [])
-          .map((target) => [String(target?.period || ""), target])
-          .filter(([period]) => KPI_FREQUENCIES.includes(period))
-      );
-      const assigned = input.assigned !== undefined ? input.assigned === true : definition.assigned;
-      const normalizedTargets = [];
-
-      if (assigned === false) {
-        for (const period of KPI_FREQUENCIES) {
-          const targetInput = inputTargetsByPeriod.get(period) || {};
-          const hasMin = targetInput.targetMin !== null && targetInput.targetMin !== undefined && String(targetInput.targetMin).trim() !== "";
-          const hasMax = targetInput.targetMax !== null && targetInput.targetMax !== undefined && String(targetInput.targetMax).trim() !== "";
-          const hasTarget = targetInput.targetValue !== null && targetInput.targetValue !== undefined && String(targetInput.targetValue).trim() !== "";
-          const targetMin = parseOptionalNumber(targetInput.targetMin);
-          const targetMax = parseOptionalNumber(targetInput.targetMax);
-          const targetValue = parseOptionalNumber(targetInput.targetValue);
+    if (["AGENT", "UNIT", "BRANCH"].includes(scopeType)) {
+      const editableMonths = new Set([monthKeyForDate(), nextMonthKey()]);
+      for (const definition of defaults) {
+        const existing = existingByKey.get(definition.key) || {};
+        const input = inputByKey.get(definition.key);
+        const monthlyAssignments = normalizeMonthlyAssignments(existing, definition);
+        if (input) {
+          const monthAssignment = input.monthAssignment || {};
+          const monthKey = String(monthAssignment.monthKey || "");
+          if (!editableMonths.has(monthKey)) {
+            return res.status(400).json({ message: "Only the current and next month KPI assignments can be edited." });
+          }
+          const assigned = monthAssignment.assigned === true;
+          const hasMin = String(monthAssignment.targetMin ?? "").trim() !== "";
+          const hasMax = String(monthAssignment.targetMax ?? "").trim() !== "";
+          const hasTarget = String(monthAssignment.targetValue ?? "").trim() !== "";
+          const targetMin = parseOptionalNumber(monthAssignment.targetMin);
+          const targetMax = parseOptionalNumber(monthAssignment.targetMax);
+          const targetValue = parseOptionalNumber(monthAssignment.targetValue);
+          if (assigned && !hasMin && !hasMax && !hasTarget) {
+            return res.status(400).json({ message: `${definition.label} (${monthKey}): Target or min/max is required.` });
+          }
           if ((hasMin && targetMin === null) || (hasMax && targetMax === null) || (hasTarget && targetValue === null)) {
-            return res.status(400).json({ message: `${definition.label} (${period}): Targets must be valid numbers.` });
+            return res.status(400).json({ message: `${definition.label} (${monthKey}): Targets must be valid numbers.` });
           }
-          if ((hasMin && targetMin < 0) || (hasMax && targetMax < 0) || (hasTarget && targetValue < 0)) {
-            return res.status(400).json({ message: `${definition.label} (${period}): Negative values are not allowed.` });
+          if ([targetMin, targetMax, targetValue].some((value) => value !== null && (value < 0 || !Number.isInteger(value)))) {
+            return res.status(400).json({ message: `${definition.label} (${monthKey}): Targets must be non-negative whole numbers.` });
           }
-          if ((hasMin && !Number.isInteger(targetMin)) || (hasMax && !Number.isInteger(targetMax)) || (hasTarget && !Number.isInteger(targetValue))) {
-            return res.status(400).json({ message: `${definition.label} (${period}): Whole numbers are counted only.` });
+          if (hasMin && hasMax && targetMin >= targetMax) {
+            return res.status(400).json({ message: `${definition.label} (${monthKey}): Min must be less than max.` });
           }
-          normalizedTargets.push({
-            period,
-            targetMin: hasTarget ? null : targetMin,
-            targetMax: hasTarget ? null : targetMax,
-            targetValue: hasMin || hasMax ? null : targetValue,
-          });
+          const nextRow = {
+            monthKey,
+            assigned,
+            targetMin: assigned && !hasTarget ? targetMin : null,
+            targetMax: assigned && !hasTarget ? targetMax : null,
+            targetValue: assigned && !hasMin && !hasMax ? targetValue : null,
+          };
+          const rowIndex = monthlyAssignments.findIndex((row) => row.monthKey === monthKey);
+          if (rowIndex >= 0) monthlyAssignments[rowIndex] = nextRow;
+          else monthlyAssignments.push(nextRow);
         }
-        const primaryTarget = normalizedTargets.find((target) => target.period === defaultPeriod) || normalizedTargets[0] || {};
+        const current = monthlyAssignments.find((row) => row.monthKey === monthKeyForDate()) || {
+          assigned: false, targetMin: null, targetMax: null, targetValue: null,
+        };
+        const targets = buildDefaultKpiTargets(definition, existing).map((target) => target.period === definition.period ? {
+          ...target,
+          targetMin: current.targetMin,
+          targetMax: current.targetMax,
+          targetValue: current.targetValue,
+        } : target);
         normalizedKpis.push({
           ...definition,
-          assigned: false,
-          period: defaultPeriod,
-          targetMin: primaryTarget.targetMin ?? null,
-          targetMax: primaryTarget.targetMax ?? null,
-          targetValue: primaryTarget.targetValue ?? null,
-          targets: normalizedTargets,
-        });
-        continue;
-      }
-
-      for (const period of KPI_FREQUENCIES) {
-        const targetInput = inputTargetsByPeriod.get(period) || {};
-        const targetMin = parseOptionalNumber(targetInput.targetMin);
-        const targetMax = parseOptionalNumber(targetInput.targetMax);
-        const targetValue = parseOptionalNumber(targetInput.targetValue);
-        const hasMin = targetInput.targetMin !== null && targetInput.targetMin !== undefined && String(targetInput.targetMin).trim() !== "";
-        const hasMax = targetInput.targetMax !== null && targetInput.targetMax !== undefined && String(targetInput.targetMax).trim() !== "";
-        const hasTarget = targetInput.targetValue !== null && targetInput.targetValue !== undefined && String(targetInput.targetValue).trim() !== "";
-
-        if (hasInput && !hasTarget && !hasMin && !hasMax) {
-          return res.status(400).json({ message: `${definition.label} (${period}): Target or min/max is required.` });
-        }
-        if ((hasMin && targetMin === null) || (hasMax && targetMax === null) || (hasTarget && targetValue === null)) {
-          return res.status(400).json({ message: `${definition.label} (${period}): Targets must be valid numbers.` });
-        }
-        if ((hasMin && targetMin < 0) || (hasMax && targetMax < 0) || (hasTarget && targetValue < 0)) {
-          return res.status(400).json({ message: `${definition.label} (${period}): Negative values are not allowed.` });
-        }
-        if ((hasMin && !Number.isInteger(targetMin)) || (hasMax && !Number.isInteger(targetMax)) || (hasTarget && !Number.isInteger(targetValue))) {
-          return res.status(400).json({ message: `${definition.label} (${period}): Whole numbers are counted only.` });
-        }
-        if (hasMin && hasMax && targetMin >= targetMax) {
-          return res.status(400).json({ message: `${definition.label} (${period}): Min must be less than max.` });
-        }
-
-        normalizedTargets.push({
-          period,
-          targetMin: hasTarget ? null : targetMin,
-          targetMax: hasTarget ? null : targetMax,
-          targetValue: hasMin || hasMax ? null : targetValue,
+          assigned: current.assigned,
+          targetMin: current.targetMin,
+          targetMax: current.targetMax,
+          targetValue: current.targetValue,
+          targets,
+          monthlyAssignments: monthlyAssignments.sort((a, b) => a.monthKey.localeCompare(b.monthKey)),
         });
       }
-
-      const primaryTarget = normalizedTargets.find((target) => target.period === defaultPeriod) || normalizedTargets[0] || {};
-
-      normalizedKpis.push({
-        ...definition,
-        assigned,
-        period: defaultPeriod,
-        targetMin: primaryTarget.targetMin ?? null,
-        targetMax: primaryTarget.targetMax ?? null,
-        targetValue: primaryTarget.targetValue ?? null,
-        targets: normalizedTargets,
-      });
     }
 
     const changedKeys = new Set(inputByKey.keys());
     if (scopeType === "BRANCH") {
-      const previousSalesProduction = previousNormalizedKpis.find((kpi) => kpi.key === "monthly_sales_production");
       const nextSalesProduction = normalizedKpis.find((kpi) => kpi.key === "monthly_sales_production");
-      const previousTargetAchievement = previousNormalizedKpis.find((kpi) => kpi.key === "monthly_target_achievement_index");
       const nextTargetAchievement = normalizedKpis.find((kpi) => kpi.key === "monthly_target_achievement_index");
-
-      if (previousSalesProduction?.assigned === true && nextSalesProduction?.assigned === false && nextTargetAchievement) {
-        nextTargetAchievement.assigned = false;
-        changedKeys.add("monthly_target_achievement_index");
-      } else if (previousTargetAchievement?.assigned === false && nextTargetAchievement?.assigned === true && nextSalesProduction) {
-        nextSalesProduction.assigned = true;
-        changedKeys.add("monthly_sales_production");
+      const editedMonthKeys = [...inputByKey.values()]
+        .map((input) => String(input?.monthAssignment?.monthKey || ""))
+        .filter(Boolean);
+      for (const monthKey of editedMonthKeys) {
+        const salesRow = nextSalesProduction?.monthlyAssignments?.find((row) => row.monthKey === monthKey);
+        const achievementRow = nextTargetAchievement?.monthlyAssignments?.find((row) => row.monthKey === monthKey);
+        if (inputByKey.has("monthly_sales_production") && salesRow?.assigned !== true && achievementRow?.assigned === true) {
+          Object.assign(achievementRow, { assigned: false, targetMin: null, targetMax: null, targetValue: null });
+          changedKeys.add("monthly_target_achievement_index");
+        } else if (inputByKey.has("monthly_target_achievement_index") && achievementRow?.assigned === true && salesRow?.assigned !== true) {
+          return res.status(400).json({ message: `Monthly Sales Production must be assigned for ${formatKpiMonthLabel(monthKey)} before assigning Monthly Target Achievement Index.` });
+        }
       }
     }
 
@@ -3271,6 +3306,20 @@ app.put("/api/manager/kpi-assignments/:scopeType/:scopeId", async (req, res) => 
         nextKpi: nextNormalizedKpis.find((kpi) => kpi.key === key),
       })));
     }
+
+    // All KPI scopes persist monthly history only. Remove any legacy fields
+    // that arrived from a document awaiting its one-time cleanup.
+    await KpiAssignment.collection.updateOne(
+      { _id: updated._id },
+      { $unset: {
+        "kpis.$[].period": "",
+        "kpis.$[].assigned": "",
+        "kpis.$[].targetMin": "",
+        "kpis.$[].targetMax": "",
+        "kpis.$[].targetValue": "",
+        "kpis.$[].targets": "",
+      } }
+    );
 
     return res.json({
       message: "KPI assignment saved.",
@@ -3337,27 +3386,19 @@ app.get("/api/agent/kpi-progress", async (req, res) => {
     const unitSalesProductionKpi = normalizeKpiList("UNIT", unitAssignment?.kpis || [])
       .find((kpi) => kpi.key === "monthly_sales_production" && kpi.assigned !== false);
     const unitSalesProductionKpiForPeriod = unitSalesProductionKpi ? (() => {
-      const periodTarget = (Array.isArray(unitSalesProductionKpi.targets) ? unitSalesProductionKpi.targets : []).find((target) => target.period === preset.frequency) || {};
       return {
         ...unitSalesProductionKpi,
-        period: preset.frequency,
-        targetMin: periodTarget.targetMin ?? unitSalesProductionKpi.targetMin ?? null,
-        targetMax: periodTarget.targetMax ?? unitSalesProductionKpi.targetMax ?? null,
-        targetValue: periodTarget.targetValue ?? unitSalesProductionKpi.targetValue ?? null,
+        period: "Monthly",
       };
     })() : null;
     const assignedKpis = normalizeKpiList("AGENT", assignment?.kpis || [])
       .filter((kpi) => kpi.assigned !== false)
       .map((kpi) => {
         const defaultPeriod = kpi.period;
-        const periodTarget = (Array.isArray(kpi.targets) ? kpi.targets : []).find((target) => target.period === preset.frequency) || {};
         return {
           ...kpi,
           defaultPeriod,
-          period: preset.frequency,
-          targetMin: periodTarget.targetMin ?? kpi.targetMin ?? null,
-          targetMax: periodTarget.targetMax ?? kpi.targetMax ?? null,
-          targetValue: periodTarget.targetValue ?? kpi.targetValue ?? null,
+          period: "Monthly",
         };
       });
 
@@ -3579,6 +3620,8 @@ app.use(
     AnnualPayment,
     Payment,
     ScheduledMeeting,
+    LongLeave,
+    Retirement,
     Product,
     Policy,
     mongoose,
