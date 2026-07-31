@@ -3699,6 +3699,16 @@ app.get("/api/agent/home", async (req, res) => {
     const now = new Date();
     const nowMs = now.getTime();
     const todayKey = dateKeyInTZ(now, "Asia/Manila");
+    const currentMonthParts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Manila", year: "numeric", month: "2-digit",
+    }).formatToParts(now);
+    const currentYear = Number(currentMonthParts.find((part) => part.type === "year")?.value);
+    const currentMonthNumber = Number(currentMonthParts.find((part) => part.type === "month")?.value);
+    const currentMonthStart = new Date(Date.UTC(currentYear, currentMonthNumber - 1, 1) - (8 * 60 * 60 * 1000));
+    const nextMonthStart = new Date(Date.UTC(currentYear, currentMonthNumber, 1) - (8 * 60 * 60 * 1000));
+    const currentMonthLabel = new Intl.DateTimeFormat("en-US", {
+      timeZone: "Asia/Manila", month: "long", year: "numeric",
+    }).format(now);
     const normalizedTasks = openTasks.map((task) => {
       const dueMs = new Date(task?.dueAt).getTime();
       const isOverdue = Number.isFinite(dueMs) ? dueMs < nowMs : false;
@@ -3748,13 +3758,13 @@ app.get("/api/agent/home", async (req, res) => {
 
     const policyholders = engagementIds.length
       ? await Policyholder.find({ leadEngagementId: { $in: engagementIds } })
-          .select("status leadEngagementId createdAt")
+          .select("status leadEngagementId createdAt annualPaymentRecords")
           .lean()
       : [];
 
     const annualPayments = engagementIds.length
       ? await AnnualPayment.find({ leadEngagementId: { $in: engagementIds } })
-          .select("leadEngagementId totalAnnualPremiumPhp")
+          .select("leadEngagementId annualPaymentPeriod totalAnnualPremiumPhp createdAt updatedAt")
           .lean()
       : [];
 
@@ -3768,6 +3778,8 @@ app.get("/api/agent/home", async (req, res) => {
     const engagementById = new Map(engagements.map((engagement) => [String(engagement._id), engagement]));
 
     const totalProspects = prospects.length;
+    const activeProspects = prospects.filter((prospect) => prospect.status === "Active").length;
+    const ongoingLeads = leads.filter((lead) => ["New", "In Progress"].includes(String(lead?.status || "").trim())).length;
     const totalPolicyholders = policyholders.length;
     const activePolicies = policyholders.filter((policyholder) => policyholder.status === "Active").length;
     const conversionRate = totalProspects ? Math.round((totalPolicyholders / totalProspects) * 100) : 0;
@@ -3798,6 +3810,36 @@ app.get("/api/agent/home", async (req, res) => {
       activePolicyholderLeadIds.add(String(engagement.leadId));
     });
 
+    // The conversion denominator is the leads created during the reporting
+    // month. A lead is converted for this metric only when its actual policy
+    // issuance date is in that same month and the resulting policy is active.
+    const currentMonthLeadIds = new Set(leads
+      .filter((lead) => {
+        const createdAt = new Date(lead?.createdAt || 0).getTime();
+        return Number.isFinite(createdAt) && createdAt >= currentMonthStart.getTime() && createdAt < nextMonthStart.getTime();
+      })
+      .map((lead) => String(lead._id || "")));
+    const issuedPolicies = activePolicyholderEngagementIds.size
+      ? await Policy.find({
+          leadEngagementId: { $in: [...activePolicyholderEngagementIds] },
+          "recordPolicyApplicationStatus.status": "Issued",
+          "recordPolicyApplicationStatus.issuanceDate": { $gte: currentMonthStart, $lt: nextMonthStart },
+        })
+          .select("leadEngagementId recordPolicyApplicationStatus.issuanceDate")
+          .lean()
+      : [];
+    const currentMonthActiveEngagementIds = new Set(
+      issuedPolicies.map((policy) => String(policy?.leadEngagementId || "")).filter(Boolean)
+    );
+    const currentMonthConvertedLeadIds = new Set(
+      [...currentMonthActiveEngagementIds]
+        .map((engagementId) => String(engagementById.get(engagementId)?.leadId || ""))
+        .filter((leadId) => leadId && currentMonthLeadIds.has(leadId))
+    );
+    const currentMonthConversionRatePct = currentMonthLeadIds.size
+      ? Math.round((currentMonthConvertedLeadIds.size / currentMonthLeadIds.size) * 100)
+      : 0;
+
     const leadSourceBreakdown = new Map();
     leads.forEach((lead) => {
       const label = String(lead?.source || "Other").trim() || "Other";
@@ -3819,9 +3861,32 @@ app.get("/api/agent/home", async (req, res) => {
         return b.activePolicyholders - a.activePolicyholders;
       })[0] || null;
 
-    const totalAnnualPremiumPhp = annualPayments
-      .filter((annualPayment) => activePolicyholderEngagementIds.has(String(annualPayment?.leadEngagementId || "")))
-      .reduce((sum, annualPayment) => sum + Number(annualPayment?.totalAnnualPremiumPhp || 0), 0);
+    const annualPaymentById = new Map(annualPayments.map((annualPayment) => [String(annualPayment?._id || ""), annualPayment]));
+    const annualPaymentsByEngagement = new Map();
+    const annualPaymentTimestamp = (record) => new Date(record?.annualPaymentPeriod?.startDate || record?.updatedAt || record?.createdAt || 0).getTime() || 0;
+    annualPayments.forEach((annualPayment) => {
+      const engagementId = String(annualPayment?.leadEngagementId || "");
+      if (!engagementId) return;
+      const records = annualPaymentsByEngagement.get(engagementId) || [];
+      records.push(annualPayment);
+      records.sort((left, right) => annualPaymentTimestamp(right) - annualPaymentTimestamp(left));
+      annualPaymentsByEngagement.set(engagementId, records);
+    });
+    const resolvePolicyholderAnnualPremium = (policyholder) => {
+      const linkedRecords = (policyholder?.annualPaymentRecords || [])
+        .map((record) => annualPaymentById.get(String(record?.annualPaymentId || "")))
+        .filter(Boolean)
+        .sort((left, right) => annualPaymentTimestamp(right) - annualPaymentTimestamp(left));
+      const fallbackRecords = annualPaymentsByEngagement.get(String(policyholder?.leadEngagementId || "")) || [];
+      return Number((linkedRecords[0] || fallbackRecords[0])?.totalAnnualPremiumPhp || 0);
+    };
+    const activePolicyholders = policyholders.filter((policyholder) => policyholder.status === "Active");
+    const totalAnnualPremiumPhp = activePolicyholders.reduce(
+      (sum, policyholder) => sum + resolvePolicyholderAnnualPremium(policyholder), 0
+    );
+    const currentMonthAnnualPremiumPhp = activePolicyholders
+      .filter((policyholder) => currentMonthActiveEngagementIds.has(String(policyholder?.leadEngagementId || "")))
+      .reduce((sum, policyholder) => sum + resolvePolicyholderAnnualPremium(policyholder), 0);
 
     return res.json({
       tasks: {
@@ -3833,8 +3898,10 @@ app.get("/api/agent/home", async (req, res) => {
       },
       clients: {
         totalProspects,
+        activeProspects,
         totalPolicyholders,
         totalLeads: leads.length,
+        ongoingLeads,
         activePolicyholders: activePolicies,
         conversionRate,
         activePolicyRate,
@@ -3845,6 +3912,9 @@ app.get("/api/agent/home", async (req, res) => {
         totalPolicies: activePolicies,
         totalAnnualPremiumPhp,
         bestSource,
+        currentMonthLabel,
+        currentMonthConversionRatePct,
+        currentMonthAnnualPremiumPhp,
       },
     });
   } catch (err) {

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { FaBullseye, FaChartLine, FaTasks, FaUsers } from "react-icons/fa";
-import { FiAlertCircle, FiArrowRight, FiCheckCircle, FiClock, FiTrendingUp } from "react-icons/fi";
+import { FiAlertCircle, FiArrowRight, FiCheckCircle } from "react-icons/fi";
 import "./AgentHome.css";
 import TopNav from "./components/TopNav";
 import { logout } from "./utils/logout";
@@ -11,8 +11,10 @@ const API_BASE = "http://localhost:5000";
 const DEFAULT_HOME_DATA = {
   clients: {
     totalProspects: 0,
+    activeProspects: 0,
     totalPolicyholders: 0,
     totalLeads: 0,
+    ongoingLeads: 0,
     activePolicyholders: 0,
     conversionRate: 0,
     activePolicyRate: 0,
@@ -30,10 +32,15 @@ const DEFAULT_HOME_DATA = {
     totalPolicies: 0,
     totalAnnualPremiumPhp: 0,
     bestSource: null,
+    currentMonthLabel: "Current Month",
+    currentMonthConversionRatePct: 0,
+    currentMonthAnnualPremiumPhp: 0,
   },
   kpiProgress: {
     assignedKpis: [],
-    periodLabel: "This Day",
+    assignedCount: 0,
+    assignmentUpdatedAt: null,
+    periodLabel: "Current Month",
   },
 };
 
@@ -92,7 +99,7 @@ function AgentHome() {
     if (!homeResponse.ok) throw new Error(payload?.message || "Failed to load agent home preview.");
     if (!kpiResponse.ok) throw new Error(kpiPayload?.message || "Failed to load KPI progress preview.");
     if (!notificationsResponse.ok) throw new Error(notificationsPayload?.message || "Failed to load action items.");
-    const assignedKpiPreview = (Array.isArray(kpiPayload?.kpis) ? kpiPayload.kpis : []).slice(0, 3);
+    const assignedKpis = Array.isArray(kpiPayload?.kpis) ? kpiPayload.kpis : [];
     const priorityByType = {
       POLICY_LAPSED: "urgent", PAYMENT_MISSED_TRANSFER: "urgent", TASK_MISSED: "urgent",
       TASK_DUE_TODAY: "high", PAYMENT_TRANSFER_REMINDER: "high", PAYMENT_EOR_REMINDER: "high",
@@ -115,8 +122,10 @@ function AgentHome() {
       },
       clients: {
         totalProspects: Number(payload?.clients?.totalProspects || 0),
+        activeProspects: Number(payload?.clients?.activeProspects || 0),
         totalPolicyholders: Number(payload?.clients?.totalPolicyholders || 0),
         totalLeads: Number(payload?.clients?.totalLeads || 0),
+        ongoingLeads: Number(payload?.clients?.ongoingLeads || 0),
         activePolicyholders: Number(payload?.clients?.activePolicyholders || 0),
         conversionRate: Number(payload?.clients?.conversionRate || 0),
         activePolicyRate: Number(payload?.clients?.activePolicyRate || 0),
@@ -127,10 +136,15 @@ function AgentHome() {
         totalPolicies: Number(payload?.sales?.totalPolicies || 0),
         totalAnnualPremiumPhp: Number(payload?.sales?.totalAnnualPremiumPhp || 0),
         bestSource: payload?.sales?.bestSource || null,
+        currentMonthLabel: payload?.sales?.currentMonthLabel || "Current Month",
+        currentMonthConversionRatePct: Number(payload?.sales?.currentMonthConversionRatePct || 0),
+        currentMonthAnnualPremiumPhp: Number(payload?.sales?.currentMonthAnnualPremiumPhp || 0),
       },
       kpiProgress: {
-        assignedKpis: assignedKpiPreview,
+        assignedKpis: assignedKpis.slice(0, 3),
+        assignedCount: assignedKpis.length,
         periodLabel: kpiPayload?.reportContext?.periodLabel || "Current Month",
+        assignmentUpdatedAt: kpiPayload?.reportContext?.assignmentUpdatedAt || null,
       },
     });
   }, [user?.id]);
@@ -191,50 +205,56 @@ function AgentHome() {
   const dueTodayCount = homeData.tasks.dueTodayCount;
   const recentTaskCount = homeData.tasks.recentlyAddedTop5.length;
   const recentProspectsCount = homeData.clients.recentProspects.length;
-
-  const topMetrics = [
-    { label: "Prospects", value: homeData.clients.totalProspects, icon: <FaUsers aria-hidden="true" /> },
-    { label: "Due Today", value: dueTodayCount, icon: <FiClock aria-hidden="true" /> },
-    { label: "Active Policies", value: homeData.sales.totalPolicies, icon: <FiCheckCircle aria-hidden="true" /> },
-    { label: "Active Policy Conversion", value: `${homeData.sales.conversionRatePct}%`, icon: <FiTrendingUp aria-hidden="true" /> },
-  ];
+  const kpiLastUpdated = homeData.kpiProgress.assignmentUpdatedAt
+    ? new Date(homeData.kpiProgress.assignmentUpdatedAt).toLocaleString("en-US", {
+        timeZone: "Asia/Manila", month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit",
+      })
+    : "Not yet updated";
 
   const moduleCards = [
     {
       key: "clients",
       title: "Clients",
-      description: "Relationship visibility, recent prospects, and policyholder overview.",
       icon: <FaUsers size={28} className="module-icon" />,
       onClick: () => navigateToTop(`/agent/${user.username}/clients`),
       accent: "clients",
-      insights: [`${homeData.clients.totalLeads} leads`, `${homeData.clients.activePolicyholders} active policyholders`],
+      insights: [
+        { label: "Ongoing leads", value: homeData.clients.ongoingLeads },
+        { label: "Active policyholders", value: homeData.clients.activePolicyholders },
+      ],
     },
     {
       key: "tasks",
       title: "Tasks",
-      description: "Open today’s follow-ups, due items, and execution queues.",
       icon: <FaTasks size={28} className="module-icon" />,
       onClick: () => navigateToTop(`/agent/${user.username}/tasks`),
       accent: "tasks",
-      insights: [`${homeData.tasks.openCount} open`, `${homeData.tasks.overdueCount} overdue`],
+      insights: [
+        { label: "Overdue tasks", value: homeData.tasks.overdueCount },
+        { label: "Tasks due today", value: homeData.tasks.dueTodayCount },
+      ],
     },
     {
       key: "sales",
       title: "Sales Performance",
-      description: "Monitor conversion, premium production, and source quality.",
       icon: <FaChartLine size={28} className="module-icon" />,
       onClick: () => navigateToTop(`/agent/${user.username}/sales/performance`),
       accent: "sales",
-      insights: [`${homeData.sales.totalPolicies} active policies`, `₱ ${money(homeData.sales.totalAnnualPremiumPhp)} annual premium`],
+      insights: [
+        { label: `${homeData.sales.currentMonthLabel} active-policy conversion rate`, value: `${homeData.sales.currentMonthConversionRatePct}%` },
+        { label: `${homeData.sales.currentMonthLabel} active annual premium generated`, value: `₱ ${money(homeData.sales.currentMonthAnnualPremiumPhp)}` },
+      ],
     },
     {
       key: "kpi-progress",
       title: "KPI Progress",
-      description: "Review assigned KPI targets, current progress, and production contribution.",
       icon: <FaBullseye size={28} className="module-icon" />,
       onClick: () => navigateToTop(`/agent/${user.username}/kpi/progress`),
       accent: "kpi",
-      insights: [`${homeData.kpiProgress.assignedKpis.length} assigned KPIs`, homeData.kpiProgress.periodLabel],
+      insights: [
+        { label: "Reporting month", value: homeData.kpiProgress.periodLabel },
+        { label: `Assigned KPIs (last updated: ${kpiLastUpdated})`, value: homeData.kpiProgress.assignedCount },
+      ],
     },
   ];
 
@@ -266,45 +286,12 @@ function AgentHome() {
             <span className="home-kicker">Agent command center</span>
             <h1 className="welcome-text">Welcome back, {user.firstName}.</h1>
             <p className="home-subtext">
-              Preview your client pipeline, task queue, and sales momentum before jumping into a module.
+              Review current client activity, overdue and due-today tasks, this month’s active-policy results, and assigned KPI reporting at a glance.
             </p>
 
-            <div className="home-quickActions">
-              <button type="button" className="home-actionBtn primary" onClick={() => navigateToTop(`/agent/${user.username}/tasks`)}>
-                Review tasks
-              </button>
-              <button type="button" className="home-actionBtn" onClick={() => navigateToTop(`/agent/${user.username}/clients/relationship`)}>
-                Open client dashboard
-              </button>
-              <button type="button" className="home-actionBtn" onClick={() => navigateToTop(`/agent/${user.username}/sales/performance`)}>
-                View sales performance
-              </button>
-              <button type="button" className="home-actionBtn" onClick={() => navigateToTop(`/agent/${user.username}/kpi/progress`)}>
-                Check KPI progress
-              </button>
-            </div>
           </div>
 
-          <div className="home-metricsGrid">
-            {topMetrics.map((metric) => (
-              <div key={metric.label} className="home-metricCard">
-                <div className="home-metricIcon">{metric.icon}</div>
-                <span className="home-metricLabel">{metric.label}</span>
-                <strong className="home-metricValue">{metric.value}</strong>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <section className="home-modulesSection">
-          <div className="home-cardHeader home-cardHeaderStandalone">
-            <div>
-              <span className="home-cardKicker">Navigation</span>
-              <h2>Jump into a module</h2>
-            </div>
-          </div>
-
-          <div className="module-grid">
+          <div className="module-grid home-heroModules" aria-label="Module navigation">
             {moduleCards.map((module) => (
               <div
                 key={module.key}
@@ -316,9 +303,13 @@ function AgentHome() {
               >
                 <div className="module-iconWrap">{module.icon}</div>
                 <strong>{module.title}</strong>
-                <p>{module.description}</p>
                 <div className="module-insights">
-                  {module.insights.map((insight) => <span key={insight}>{insight}</span>)}
+                  {module.insights.map((insight) => (
+                    <span key={insight.label}>
+                      <small>{insight.label}</small>
+                      <b>{insight.value}</b>
+                    </span>
+                  ))}
                 </div>
                 <span className="module-linkText">
                   Open module
@@ -342,8 +333,8 @@ function AgentHome() {
               <span className="home-cardKicker">Action required</span>
               <h2>Urgent and high-priority concerns</h2>
             </div>
-            <button type="button" className="home-inlineLink" onClick={() => navigateToTop(`/agent/${user.username}/notifications`)}>
-              View notifications
+            <button type="button" className="home-inlineLink home-actionAlertsLink" onClick={() => navigateToTop(`/agent/${user.username}/notifications?resolution=Unresolved`)}>
+              View all unresolved alerts
               <FiArrowRight aria-hidden="true" />
             </button>
           </div>
