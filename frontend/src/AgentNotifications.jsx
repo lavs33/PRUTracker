@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import TopNav from "./components/TopNav";
 import SideNav from "./components/SideNav";
@@ -8,8 +8,10 @@ import "./AgentNotifications.css";
 const UNIT_KPI_NOTIF_TYPES = ["UNIT_KPI_ASSIGNED", "UNIT_KPI_TARGET_UPDATED", "UNIT_KPI_UNASSIGNED"];
 const AGENT_KPI_NOTIF_TYPES = ["AGENT_KPI_ASSIGNED", "AGENT_KPI_TARGET_UPDATED", "AGENT_KPI_UNASSIGNED"];
 const KPI_NOTIF_TYPES = [...UNIT_KPI_NOTIF_TYPES, ...AGENT_KPI_NOTIF_TYPES];
+const KPI_UNASSIGNED_NOTIF_TYPES = ["UNIT_KPI_UNASSIGNED", "AGENT_KPI_UNASSIGNED"];
 const NOTIF_TYPES = ["TASK_ADDED", "TASK_DUE_TODAY", "TASK_MISSED", "PAYMENT_TRANSFER_REMINDER", "PAYMENT_EOR_REMINDER", "PAYMENT_MISSED_TRANSFER", "POLICY_LAPSED", "POLICY_PAID_UP", "POLICY_MATURED", "POLICY_PAID_UP_MATURED", "POLICY_CANCELLED", "ORPHAN_CLIENT_ASSIGNED", "ORPHAN_CLIENT_TRANSFERRED", ...KPI_NOTIF_TYPES];
 const PRIORITY_LEVELS = ["urgent", "high", "normal", "informational"];
+const NOTIFICATIONS_PER_PAGE = 15;
 const PRIORITY_BY_TYPE = {
   POLICY_LAPSED: "urgent",
   PAYMENT_MISSED_TRANSFER: "urgent",
@@ -49,7 +51,9 @@ const notificationWithinDateRange = (notification, dateRange) => {
   return timestamp >= start && timestamp <= now;
 };
 
-const notificationResolution = (notification) => String(notification?.resolutionStatus || "Not Applicable").trim();
+const notificationResolution = (notification) => KPI_UNASSIGNED_NOTIF_TYPES.includes(String(notification?.type || "").trim().toUpperCase())
+  ? "Not Applicable"
+  : String(notification?.resolutionStatus || "Not Applicable").trim();
 const taskNotificationOrder = {
   TASK_MISSED: 0,
   TASK_DUE_TODAY: 1,
@@ -99,7 +103,10 @@ function AgentNotifications() {
   const [typeFilter, setTypeFilter] = useState("");
   const [priorityFilter, setPriorityFilter] = useState("all");
   const [dateRange, setDateRange] = useState("all");
-  const [resolutionFilter, setResolutionFilter] = useState("all");
+  const [resolutionFilter, setResolutionFilter] = useState(() => {
+    const requestedResolution = new URLSearchParams(window.location.search).get("resolution");
+    return ["Unresolved", "Resolved"].includes(requestedResolution) ? requestedResolution : "all";
+  });
 
   // list state
   const [loading, setLoading] = useState(true);
@@ -107,6 +114,8 @@ function AgentNotifications() {
   const [notifs, setNotifs] = useState([]);
   const [markingAllRead, setMarkingAllRead] = useState(false);
   const [markingNotifId, setMarkingNotifId] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const tabsRef = useRef(null);
 
   // counts state (always numeric)
   const [counts, setCounts] = useState({ unread: 0, read: 0 });
@@ -123,6 +132,10 @@ function AgentNotifications() {
   useEffect(() => {
     document.title = `${username} | Notifications`;
   }, [username]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [tab, typeFilter, priorityFilter, resolutionFilter, dateRange]);
 
   const formatWhen = (d) => {
     if (!d) return "—";
@@ -182,34 +195,14 @@ function AgentNotifications() {
     }
   };
 
-  // Fetch counts from backend (Unread + Read)
-  const fetchCounts = useCallback(
-    async (signal) => {
-      if (!user?.id) return;
-      const loadStatusCount = async (status) => {
-        const qs = new URLSearchParams({ userId: user.id, status, includeRefs: "1" });
-        const res = await fetch(`${API_BASE}/api/notifications?${qs.toString()}`, { ...(signal ? { signal } : {}), cache: "no-store" });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data?.message || "Failed to fetch notification counts.");
-        const notifications = Array.isArray(data?.notifications) ? data.notifications : [];
-        return filterNotifications(notifications, { typeFilter, priorityFilter, resolutionFilter, dateRange }).length;
-      };
-      const [unread, read] = await Promise.all([loadStatusCount("Unread"), loadStatusCount("Read")]);
-      setCounts({ unread, read });
-    },
-    [API_BASE, user?.id, typeFilter, priorityFilter, resolutionFilter, dateRange]
-  );
-
-  // Fetch notifications list for current tab + filters
+  // One request supplies both tabs and their counts. Previously this screen
+  // requested the same expensive notification hydration three times per load.
   const fetchNotifs = useCallback(
     async (signal) => {
       if (!user?.id) return;
 
-      const status = tab === "read" ? "Read" : "Unread";
-
       const qs = new URLSearchParams({
         userId: user.id,
-        status,
         includeRefs: "1",
       });
 
@@ -221,7 +214,13 @@ function AgentNotifications() {
 
       if (!res.ok) throw new Error(data?.message || "Failed to fetch notifications.");
 
-      const arr = Array.isArray(data?.notifications) ? data.notifications : [];
+      const allNotifications = Array.isArray(data?.notifications) ? data.notifications : [];
+      const countForStatus = (status) => filterNotifications(
+        allNotifications.filter((notification) => notification.status === status),
+        { typeFilter, priorityFilter, resolutionFilter, dateRange }
+      ).length;
+      setCounts({ unread: countForStatus("Unread"), read: countForStatus("Read") });
+      const arr = allNotifications.filter((notification) => notification.status === (tab === "read" ? "Read" : "Unread"));
       const resolutionCountBase = filterNotifications(arr, { typeFilter, priorityFilter, resolutionFilter, dateRange, ignoreResolution: true });
       setResolutionCounts({
         all: resolutionCountBase.length,
@@ -251,7 +250,7 @@ function AgentNotifications() {
       try {
         setLoading(true);
         setApiError("");
-        await Promise.all([fetchCounts(controller.signal), fetchNotifs(controller.signal)]);
+        await fetchNotifs(controller.signal);
       } catch (err) {
         if (err?.name !== "AbortError") {
           setApiError(err?.message || "Cannot connect to server. Is backend running?");
@@ -266,7 +265,7 @@ function AgentNotifications() {
     })();
 
     return () => controller.abort();
-  }, [user?.id, fetchCounts, fetchNotifs]);
+  }, [user?.id, fetchNotifs]);
 
   const typePillClass = (type) => {
     const t = String(type || "").toUpperCase();
@@ -290,7 +289,7 @@ function AgentNotifications() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.message || "Failed to mark notification as read.");
-      await Promise.all([fetchCounts(), fetchNotifs()]);
+      await fetchNotifs();
     } catch (err) {
       setApiError(err?.message || "Failed to mark notification as read.");
     } finally {
@@ -308,7 +307,7 @@ function AgentNotifications() {
           { method: "PATCH" }
         )));
         if (responses.some((response) => !response.ok)) throw new Error("Failed to mark all priority notifications as read.");
-        await Promise.all([fetchCounts(), fetchNotifs()]);
+        await fetchNotifs();
         return;
       }
       const qs = new URLSearchParams({
@@ -321,7 +320,7 @@ function AgentNotifications() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.message || "Failed to mark all notifications as read.");
-      await Promise.all([fetchCounts(), fetchNotifs()]);
+      await fetchNotifs();
     } catch (err) {
       setApiError(err?.message || "Failed to mark all notifications as read.");
     } finally {
@@ -405,6 +404,17 @@ function AgentNotifications() {
     </div>
   );
 
+  const totalPages = Math.max(1, Math.ceil(notifs.length / NOTIFICATIONS_PER_PAGE));
+  const safeCurrentPage = Math.min(currentPage, totalPages);
+  const paginatedNotifs = notifs.slice(
+    (safeCurrentPage - 1) * NOTIFICATIONS_PER_PAGE,
+    safeCurrentPage * NOTIFICATIONS_PER_PAGE
+  );
+  const changePage = (nextPage) => {
+    setCurrentPage(Math.max(1, Math.min(totalPages, nextPage)));
+    window.requestAnimationFrame(() => tabsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  };
+
   if (!user || user.username !== username) return null;
 
   return (
@@ -428,7 +438,7 @@ function AgentNotifications() {
           </div>
 
           {/* Tabs + Type filter */}
-          <div className="notifs-toolbar">
+          <div ref={tabsRef} className="notifs-toolbar">
             <div className="notifs-tabs">
               <button
                 type="button"
@@ -531,9 +541,21 @@ function AgentNotifications() {
                   {tab === "unread" ? "No unread notifications." : "No read notifications."}
                 </div>
               ) : (
-                notifs.map((n) => <NotifRow key={n._id} n={n} />)
+                paginatedNotifs.map((n) => <NotifRow key={n._id} n={n} />)
               )}
             </div>
+          ) : null}
+          {!loading && !apiError && notifs.length > 0 ? (
+            <nav className="notifs-pagination" aria-label="Notifications pagination">
+              <span>
+                Showing {(safeCurrentPage - 1) * NOTIFICATIONS_PER_PAGE + 1}–{Math.min(safeCurrentPage * NOTIFICATIONS_PER_PAGE, notifs.length)} of {notifs.length}
+              </span>
+              <div>
+                <button type="button" className="notif-btn ghost" onClick={() => changePage(safeCurrentPage - 1)} disabled={safeCurrentPage === 1}>Previous</button>
+                <strong>Page {safeCurrentPage} of {totalPages}</strong>
+                <button type="button" className="notif-btn ghost" onClick={() => changePage(safeCurrentPage + 1)} disabled={safeCurrentPage === totalPages}>Next</button>
+              </div>
+            </nav>
           ) : null}
         </main>
       </div>

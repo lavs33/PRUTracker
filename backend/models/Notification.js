@@ -295,6 +295,7 @@ const notificationSchema = new mongoose.Schema(
  * createdAt: -1 means descending order index.
  */
 notificationSchema.index({ assignedToUserId: 1, status: 1, createdAt: -1 });
+notificationSchema.index({ assignedToUserId: 1, softDeletedAt: 1, updatedAt: -1, createdAt: -1 });
 
 /**
  * Partial Unique Index: { assignedToUserId, dedupeKey }
