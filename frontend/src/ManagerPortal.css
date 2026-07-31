@@ -2251,3 +2251,47 @@
   gap: 8px;
   color: #374151;
 }
+.manager-kpi-month-select {
+  width: 190px;
+  min-width: 0;
+  max-width: 190px;
+  justify-self: start;
+}
+
+.manager-kpi-month-select span,
+.manager-kpi-month-select select {
+  font-size: 11px;
+}
+
+.manager-kpi-month-editor {
+  display: grid;
+  gap: 12px;
+  padding: 18px 16px 0;
+}
+
+.manager-kpi-edit-row--agent .manager-kpi-edit-row__head,
+.manager-kpi-edit-row--agent.expanded .manager-kpi-edit-row__head {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.manager-kpi-edit-row--agent .manager-kpi-row-actions {
+  justify-self: end;
+  margin-left: auto;
+}
+
+.manager-kpi-month-target-grid {
+  grid-template-columns: minmax(280px, 520px);
+}
+
+.manager-kpi-readonly-label {
+  color: #6b7280;
+  font-weight: 700;
+  font-size: 12px;
+  text-align: center;
+}
+
+.manager-kpi-agent-toggle-stack {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+}

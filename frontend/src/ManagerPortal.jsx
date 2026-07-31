@@ -16,6 +16,27 @@ const DATE_PRESETS = [
   { value: "12m", label: "Last 12 Months" },
 ];
 const KPI_FREQUENCIES = ["Daily", "Weekly", "Monthly", "Quarterly", "Semi-Annually", "Annually"];
+const KPI_MONTH_START = "2026-01";
+const monthKey = (date = new Date()) => {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Manila", year: "numeric", month: "2-digit" }).formatToParts(date);
+  return `${parts.find((part) => part.type === "year")?.value}-${parts.find((part) => part.type === "month")?.value}`;
+};
+const followingMonthKey = (value) => {
+  const [year, month] = String(value).split("-").map(Number);
+  return month === 12 ? `${year + 1}-01` : `${year}-${String(month + 1).padStart(2, "0")}`;
+};
+const currentKpiMonth = monthKey();
+const nextKpiMonth = followingMonthKey(currentKpiMonth);
+const buildKpiMonthOptions = (throughMonth = nextKpiMonth) => {
+  const rows = [];
+  let cursor = KPI_MONTH_START;
+  while (cursor <= throughMonth) {
+    const [year, month] = cursor.split("-").map(Number);
+    rows.push({ value: cursor, label: new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString("en-US", { timeZone: "UTC", month: "long", year: "numeric" }) });
+    cursor = followingMonthKey(cursor);
+  }
+  return rows;
+};
 const KPI_FREQUENCY_WEIGHTS = {
   Daily: 1,
   Weekly: 7,
@@ -123,7 +144,21 @@ function getKpiTargets(kpi = {}) {
 }
 
 function cloneKpiDraft(kpi = {}) {
-  return { ...kpi, targets: getKpiTargets(kpi).map((target) => ({ ...target })) };
+  return {
+    ...kpi,
+    targets: getKpiTargets(kpi).map((target) => ({ ...target })),
+    monthlyAssignments: (Array.isArray(kpi.monthlyAssignments) ? kpi.monthlyAssignments : []).map((row) => ({ ...row })),
+  };
+}
+
+function getMonthlyKpiAssignment(kpi = {}, selectedMonth = currentKpiMonth) {
+  return (Array.isArray(kpi.monthlyAssignments) ? kpi.monthlyAssignments : []).find((row) => row.monthKey === selectedMonth) || {
+    monthKey: selectedMonth,
+    assigned: false,
+    targetMin: "",
+    targetMax: "",
+    targetValue: "",
+  };
 }
 
 function buildKpiTargetsFromDefault(kpi = {}, defaultPeriodOverride = "") {
@@ -776,6 +811,10 @@ function ManagerPortal({ roleType }) {
   const normalizedRole = String(roleType || "")
     .trim()
     .toUpperCase();
+  const [kpiCalendarDate, setKpiCalendarDate] = useState(() => new Date());
+  const activeCurrentKpiMonth = monthKey(kpiCalendarDate);
+  const activeNextKpiMonth = followingMonthKey(activeCurrentKpiMonth);
+  const activeKpiMonthOptions = useMemo(() => buildKpiMonthOptions(activeNextKpiMonth), [activeNextKpiMonth]);
   const agentTableTopScrollRef = useRef(null);
   const agentTableScrollRef = useRef(null);
   const orphanTableTopScrollRef = useRef(null);
@@ -847,6 +886,17 @@ function ManagerPortal({ roleType }) {
   const [expandedKpiKey, setExpandedKpiKey] = useState("");
   const [kpiFieldErrors, setKpiFieldErrors] = useState({});
   const [kpiMessage, setKpiMessage] = useState("");
+  const [kpiSelectedMonths, setKpiSelectedMonths] = useState({});
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setKpiCalendarDate((current) => {
+        if (monthKey(current) === monthKey()) return current;
+        setKpiSelectedMonths({});
+        return new Date();
+      });
+    }, 60 * 1000);
+    return () => window.clearInterval(timer);
+  }, []);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [sideNavCollapsed, setSideNavCollapsed] = useState(false);
@@ -1041,7 +1091,7 @@ function ManagerPortal({ roleType }) {
     };
     fetchKpis();
     return () => controller.abort();
-  }, [activeView, normalizedRole, refreshCount, user?.id, user?.role]);
+  }, [activeView, normalizedRole, refreshCount, user?.id, user?.role, activeCurrentKpiMonth]);
 
   const updateKpiDraft = (assignment, kpiKey, field, value) => {
     const assignmentKey = `${assignment.scopeType}:${assignment.scopeId}`;
@@ -1123,6 +1173,27 @@ function ManagerPortal({ roleType }) {
     });
   };
 
+  const updateAgentMonthlyKpiDraft = (assignment, kpiKey, field, value) => {
+    const assignmentKey = `${assignment.scopeType}:${assignment.scopeId}`;
+    const rowKey = `${assignmentKey}:${kpiKey}`;
+    const selectedMonth = kpiSelectedMonths[rowKey] || activeCurrentKpiMonth;
+    setKpiDrafts((current) => ({
+      ...current,
+      [assignmentKey]: (current[assignmentKey] || assignment.kpis || []).map((kpi) => {
+        if (kpi.key !== kpiKey) return kpi;
+        const rows = (Array.isArray(kpi.monthlyAssignments) ? kpi.monthlyAssignments : []).map((row) => ({ ...row }));
+        const index = rows.findIndex((row) => row.monthKey === selectedMonth);
+        const nextRow = { ...getMonthlyKpiAssignment(kpi, selectedMonth), [field]: value };
+        if (field === "targetValue" && String(value).trim() !== "") Object.assign(nextRow, { targetMin: "", targetMax: "" });
+        if ((field === "targetMin" || field === "targetMax") && String(value).trim() !== "") nextRow.targetValue = "";
+        if (index >= 0) rows[index] = nextRow;
+        else rows.push(nextRow);
+        return { ...kpi, monthlyAssignments: rows };
+      }),
+    }));
+    setKpiFieldErrors((current) => ({ ...current, [rowKey]: {} }));
+  };
+
   const prefillKpiTargetsFromDefault = (assignment, kpiKey, defaultPeriodOverride = "") => {
     const assignmentKey = `${assignment.scopeType}:${assignment.scopeId}`;
     const rowKey = `${assignmentKey}:${kpiKey}`;
@@ -1189,6 +1260,27 @@ function ManagerPortal({ roleType }) {
     return errors;
   };
 
+  const validateMonthlyKpiAssignment = (kpi, row) => {
+    if (row?.assigned !== true) return {};
+    const errors = {};
+    const hasMin = String(row.targetMin ?? "").trim() !== "";
+    const hasMax = String(row.targetMax ?? "").trim() !== "";
+    const hasTarget = String(row.targetValue ?? "").trim() !== "";
+    const values = { targetMin: Number(row.targetMin), targetMax: Number(row.targetMax), targetValue: Number(row.targetValue) };
+    if (!hasMin && !hasMax && !hasTarget) errors.targetValue = "Target or min/max is required.";
+    for (const field of ["targetMin", "targetMax", "targetValue"]) {
+      const present = field === "targetMin" ? hasMin : field === "targetMax" ? hasMax : hasTarget;
+      if (present && (!Number.isFinite(values[field]) || values[field] < 0 || !Number.isInteger(values[field]))) {
+        errors[field] = "Enter a non-negative whole number.";
+      }
+    }
+    if (hasMin && hasMax && values.targetMin >= values.targetMax) {
+      errors.targetMin = "Min must be less than max.";
+      errors.targetMax = "Max must be greater than min.";
+    }
+    return errors;
+  };
+
   const saveKpi = async (assignment, kpiKey, kpiOverride = null) => {
     const assignmentKey = `${assignment.scopeType}:${assignment.scopeId}`;
     const draftList = kpiOverride
@@ -1196,7 +1288,12 @@ function ManagerPortal({ roleType }) {
       : (kpiDrafts[assignmentKey] || assignment.kpis || []);
     const kpi = kpiOverride || draftList.find((item) => item.key === kpiKey);
     const rowKey = `${assignmentKey}:${kpiKey}`;
-    const validationErrors = validateKpiDraft(kpi || {});
+    const selectedMonth = kpiSelectedMonths[rowKey] || activeCurrentKpiMonth;
+    const isMonthlyScope = ["AGENT", "UNIT", "BRANCH"].includes(assignment.scopeType);
+    const monthlyAssignment = isMonthlyScope ? getMonthlyKpiAssignment(kpi, selectedMonth) : null;
+    const validationErrors = isMonthlyScope
+      ? validateMonthlyKpiAssignment(kpi, monthlyAssignment)
+      : validateKpiDraft(kpi || {});
     if (Object.keys(validationErrors).length) {
       setKpiFieldErrors((current) => ({ ...current, [rowKey]: validationErrors }));
       setExpandedKpiKey(rowKey);
@@ -1204,7 +1301,9 @@ function ManagerPortal({ roleType }) {
     }
     setKpiFieldErrors((current) => ({ ...current, [rowKey]: {} }));
 
-    const currentDraft = cloneKpiDraft(kpi || {});
+    const currentDraft = isMonthlyScope
+      ? { ...cloneKpiDraft(kpi || {}), monthAssignment: monthlyAssignment }
+      : cloneKpiDraft(kpi || {});
 
     const savingKey = `${assignmentKey}:${kpiKey}`;
     setKpiSavingKey(savingKey);
@@ -1234,7 +1333,10 @@ function ManagerPortal({ roleType }) {
         setLastAssignedKpiDrafts((current) => ({ ...current, [rowKey]: cloneKpiDraft(savedKpi || kpi) }));
       }
       setEditingKpiKey("");
-      setExpandedKpiKey("");
+      // Keep the saved KPI open with its month selector unlocked. Saving next
+      // month must not turn the still-current month into a historical record;
+      // the manager can immediately switch back and continue editing it.
+      setExpandedKpiKey(rowKey);
       setKpiMessage(kpi?.assigned === false ? "KPI unassigned." : "KPI saved.");
     } catch (err) {
       setKpiMessage(err.message || "Failed to save KPI assignment.");
@@ -5289,6 +5391,74 @@ function ManagerPortal({ roleType }) {
                         const isExpanded = expandedKpiKey === rowKey;
                         const rowErrors = kpiFieldErrors[rowKey] || {};
                         const kpiTargets = getKpiTargets(kpi);
+                        if (["AGENT", "UNIT", "BRANCH"].includes(assignment.scopeType)) {
+                          const selectedMonth = kpiSelectedMonths[rowKey] || activeCurrentKpiMonth;
+                          const monthAssignment = getMonthlyKpiAssignment(kpi, selectedMonth);
+                          const canEditMonth = [activeCurrentKpiMonth, activeNextKpiMonth].includes(selectedMonth);
+                          return (
+                            <div className={`manager-kpi-edit-row manager-kpi-edit-row--agent ${isEditing ? "editing" : ""} ${isExpanded ? "expanded" : ""}`} key={kpi.key}>
+                              <div className="manager-kpi-edit-row__head">
+                                <button type="button" className="manager-kpi-collapse-btn" aria-expanded={isExpanded} onClick={() => setExpandedKpiKey(isExpanded ? "" : rowKey)}>
+                                  <span className="manager-kpi-caret">{isExpanded ? "−" : "+"}</span>
+                                  <span className="manager-kpi-name">
+                                    <strong>{formatKpiLabel(kpi, assignment.scopeType)}</strong>
+                                    <span>{formatScopeLabel(assignment.scopeType)} • {kpi.valueType}</span>
+                                  </span>
+                                </button>
+                                <div className="manager-kpi-row-actions">
+                                  <div className="manager-kpi-agent-toggle-stack">
+                                    <button
+                                      type="button"
+                                      className={`manager-kpi-toggle ${monthAssignment.assigned === true ? "assigned" : ""}`}
+                                      disabled={!kpiData?.canEdit || !isEditing || !canEditMonth}
+                                      onClick={() => updateAgentMonthlyKpiDraft(assignment, kpi.key, "assigned", monthAssignment.assigned !== true)}
+                                    >
+                                      {monthAssignment.assigned === true ? "Assigned" : "Unassigned"}
+                                    </button>
+                                    {!canEditMonth ? <span className="manager-kpi-readonly-label">Historical record</span> : null}
+                                  </div>
+                                  {kpiData?.canEdit && canEditMonth ? (isEditing ? (
+                                    <>
+                                      <button type="button" className="manager-refresh-btn" onClick={() => cancelKpiEdit(assignment, kpi.key)} disabled={isSaving}>Cancel</button>
+                                      <button type="button" className="manager-refresh-btn" onClick={() => saveKpi(assignment, kpi.key)} disabled={isSaving}>{isSaving ? "Saving..." : "Save"}</button>
+                                    </>
+                                  ) : <button type="button" className="manager-refresh-btn" onClick={() => { setEditingKpiKey(rowKey); setExpandedKpiKey(rowKey); }}>Edit</button>) : null}
+                                </div>
+                              </div>
+                              {isExpanded ? <div className="manager-kpi-month-editor">
+                                <label className="manager-select manager-kpi-month-select">
+                                  <span>Assignment Month</span>
+                                  <select disabled={isEditing || isSaving} value={selectedMonth} onChange={(event) => { setKpiSelectedMonths((current) => ({ ...current, [rowKey]: event.target.value })); setKpiFieldErrors((current) => ({ ...current, [rowKey]: {} })); }}>
+                                    {activeKpiMonthOptions.map((month) => <option key={month.value} value={month.value}>{month.label}</option>)}
+                                  </select>
+                                </label>
+                                <div className="manager-kpi-frequency-grid manager-kpi-month-target-grid">
+                                {monthAssignment.assigned === true ? (
+                                  <div className="manager-kpi-frequency-card">
+                                    <div className="manager-kpi-frequency-card__head"><strong>Monthly Target</strong></div>
+                                    {["targetValue", "targetMin", "targetMax"].map((field) => (
+                                      <label key={field}>
+                                        <span>{field === "targetValue" ? "Target" : field === "targetMin" ? "Min" : "Max"}</span>
+                                        <input
+                                          className={`manager-kpi-input ${rowErrors[field] ? "has-error" : ""}`}
+                                          type="number"
+                                          step="1"
+                                          value={monthAssignment[field] ?? ""}
+                                          disabled={!isEditing || !canEditMonth}
+                                          onChange={(event) => updateAgentMonthlyKpiDraft(assignment, kpi.key, field, event.target.value)}
+                                        />
+                                        {rowErrors[field] ? <em className="manager-kpi-field-error">{rowErrors[field]}</em> : null}
+                                      </label>
+                                    ))}
+                                    <div className="manager-kpi-target-display"><span>Display Target</span><strong>{formatRequiredKpiTarget({ ...monthAssignment, valueType: kpi.valueType })}</strong></div>
+                                  </div>
+                                ) : <div className="manager-empty-state">Unassigned for this month. Target remains blank.</div>}
+                                </div>
+                              </div>
+                              : null}
+                            </div>
+                          );
+                        }
                         return (
                           <div className={`manager-kpi-edit-row ${isEditing ? "editing" : ""} ${isExpanded ? "expanded" : ""}`} key={kpi.key}>
                             <div className="manager-kpi-edit-row__head">

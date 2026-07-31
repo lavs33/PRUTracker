@@ -72,3 +72,13 @@
 
 .tp-table td.tp-cellOpen { background:#fffbeb; color:#92400e; font-weight:900; }
 .tp-table td.tp-cellOverdue { background:#fef2f2; color:#991b1b; font-weight:900; }
+.tp-contextLink {
+  color: #b42318;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.tp-contextLink:hover,
+.tp-contextLink:focus-visible {
+  text-decoration: underline;
+}

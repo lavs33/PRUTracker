@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import TopNav from "./components/TopNav";
 import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
@@ -83,6 +83,13 @@ const formatDate = (value) => {
         month: "short",
         day: "numeric",
       });
+};
+
+const formatReportPeriod = (reportContext) => {
+  const start = reportContext?.startDate ? formatDate(reportContext.startDate) : null;
+  const end = reportContext?.endDate ? formatDate(reportContext.endDate) : formatDate(reportContext?.generatedAt || new Date());
+  if (!start) return `Through ${end}`;
+  return start === end ? start : `${start} to ${end}`;
 };
 
 const getOptionLabel = (options, value) => options.find((option) => option.value === value)?.label || value || "All";
@@ -363,6 +370,7 @@ function AgentClientsRelationship() {
           <tr>
             <td>${escapeHtml(row.group || "Segment")}</td>
             <td>${escapeHtml(row.label)}</td>
+            <td>${Number(row.prospects || 0)}</td>
             <td>${Number(row.policyholders || 0)}</td>
             <td>${Number(row.conversionRatePct || 0)}%</td>
           </tr>
@@ -395,7 +403,7 @@ function AgentClientsRelationship() {
       })
       .join("");
 
-    const recentChunks = chunk(dashboard.recentProspects, 14);
+    const recentChunks = chunk(dashboard.recentProspects, 20);
     const pages = [];
 
     pages.push(`
@@ -405,7 +413,7 @@ function AgentClientsRelationship() {
           <div class="top-grid">
             <div>
               <h1 class="report-title">Agent Clients Relationship Report</h1>
-              <div class="report-period">Report Period: ${escapeHtml(dashboard.reportContext?.periodLabel || "All available records")}</div>
+              <div class="report-period">Report Period: ${escapeHtml(formatReportPeriod(dashboard.reportContext))}</div>
             </div>
             <div class="details-card">
               <h3>Agent Details</h3>
@@ -442,11 +450,6 @@ function AgentClientsRelationship() {
             <div class="kpi primary"><div class="label">Active Policyholder Rate</div><div class="val">${dashboard.activePolicyRate}%</div></div>
           </div>
         </section>
-      </section>
-    `);
-
-    pages.push(`
-      <section class="pdf-page">
         <section class="section compact-top">
           <h2 class="section-title">Relationship Distribution</h2>
           <div class="analytics-grid">
@@ -478,12 +481,17 @@ function AgentClientsRelationship() {
             <div class="panel">
               <h4>Segment Conversion Comparison</h4><p class="panel-note">Conversion counts include active policyholders only.</p>
               <table>
-                <thead><tr><th>Category</th><th>Segment</th><th>Active Policyholders</th><th>Conversion</th></tr></thead>
-                <tbody>${segmentMixRows || '<tr><td colspan="4">No segment mix data available.</td></tr>'}</tbody>
+                <thead><tr><th>Category</th><th>Segment</th><th>Prospects</th><th>Active Policyholders</th><th>Conversion</th></tr></thead>
+                <tbody>${segmentMixRows || '<tr><td colspan="5">No segment mix data available.</td></tr>'}</tbody>
               </table>
             </div>
           </div>
         </section>
+      </section>
+    `);
+
+    pages.push(`
+      <section class="pdf-page">
         <section class="section compact-top">
           <h2 class="section-title">Relationship Pipeline Progress</h2>
           <table>
@@ -491,12 +499,6 @@ function AgentClientsRelationship() {
             <tbody>${stageRows || '<tr><td colspan="3">No stage data available.</td></tr>'}</tbody>
           </table>
         </section>
-      </section>
-    `);
-
-
-    pages.push(`
-      <section class="pdf-page">
         <section class="section spacious-section">
           <h2 class="section-title">Source Conversion Quality</h2>
           <p class="panel-note">Policyholder counts include active policyholders only.</p>
@@ -1022,8 +1024,8 @@ function AgentClientsRelationship() {
                       {dashboard.recentProspects.length ? (
                         dashboard.recentProspects.map((row) => (
                           <tr key={`${row.prospectCode}-${row.createdAt}`}>
-                            <td>{row.prospectCode || "—"}</td>
-                            <td>{row.fullName || "—"}</td>
+                            <td><Link className="cr-prospectLink" to={`/agent/${username}/prospects/${row.prospectId}`}>{row.prospectCode || "—"}</Link></td>
+                            <td><Link className="cr-prospectLink" to={`/agent/${username}/prospects/${row.prospectId}`}>{row.fullName || "—"}</Link></td>
                             <td>{row.marketType || "—"}</td>
                             <td>{row.prospectType || "—"}</td>
                             <td>{row.source || "—"}</td>

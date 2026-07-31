@@ -457,6 +457,17 @@
   overflow-x: auto;
 }
 
+.cr-prospectLink {
+  color: #b42318;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.cr-prospectLink:hover,
+.cr-prospectLink:focus-visible {
+  text-decoration: underline;
+}
+
 .cr-table {
   width: 100%;
   border-collapse: collapse;
