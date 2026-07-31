@@ -8,6 +8,7 @@ import "./AgentNotifications.css";
 const UNIT_KPI_NOTIF_TYPES = ["UNIT_KPI_ASSIGNED", "UNIT_KPI_TARGET_UPDATED", "UNIT_KPI_UNASSIGNED"];
 const AGENT_KPI_NOTIF_TYPES = ["AGENT_KPI_ASSIGNED", "AGENT_KPI_TARGET_UPDATED", "AGENT_KPI_UNASSIGNED"];
 const KPI_NOTIF_TYPES = [...UNIT_KPI_NOTIF_TYPES, ...AGENT_KPI_NOTIF_TYPES];
+const KPI_UNASSIGNED_NOTIF_TYPES = ["UNIT_KPI_UNASSIGNED", "AGENT_KPI_UNASSIGNED"];
 const NOTIF_TYPES = ["TASK_ADDED", "TASK_DUE_TODAY", "TASK_MISSED", "PAYMENT_TRANSFER_REMINDER", "PAYMENT_EOR_REMINDER", "PAYMENT_MISSED_TRANSFER", "POLICY_LAPSED", "POLICY_PAID_UP", "POLICY_MATURED", "POLICY_PAID_UP_MATURED", "POLICY_CANCELLED", "ORPHAN_CLIENT_ASSIGNED", "ORPHAN_CLIENT_TRANSFERRED", ...KPI_NOTIF_TYPES];
 const PRIORITY_LEVELS = ["urgent", "high", "normal", "informational"];
 const PRIORITY_BY_TYPE = {
@@ -49,7 +50,9 @@ const notificationWithinDateRange = (notification, dateRange) => {
   return timestamp >= start && timestamp <= now;
 };
 
-const notificationResolution = (notification) => String(notification?.resolutionStatus || "Not Applicable").trim();
+const notificationResolution = (notification) => KPI_UNASSIGNED_NOTIF_TYPES.includes(String(notification?.type || "").trim().toUpperCase())
+  ? "Not Applicable"
+  : String(notification?.resolutionStatus || "Not Applicable").trim();
 const taskNotificationOrder = {
   TASK_MISSED: 0,
   TASK_DUE_TODAY: 1,
@@ -99,7 +102,10 @@ function AgentNotifications() {
   const [typeFilter, setTypeFilter] = useState("");
   const [priorityFilter, setPriorityFilter] = useState("all");
   const [dateRange, setDateRange] = useState("all");
-  const [resolutionFilter, setResolutionFilter] = useState("all");
+  const [resolutionFilter, setResolutionFilter] = useState(() => {
+    const requestedResolution = new URLSearchParams(window.location.search).get("resolution");
+    return ["Unresolved", "Resolved"].includes(requestedResolution) ? requestedResolution : "all";
+  });
 
   // list state
   const [loading, setLoading] = useState(true);

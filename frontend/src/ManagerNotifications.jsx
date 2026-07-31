@@ -37,6 +37,11 @@ const notificationWithinDateRange = (notification, dateRange) => {
   return timestamp >= start && timestamp <= now;
 };
 const notificationResolution = (notification) => String(notification?.resolutionStatus || "Not Applicable").trim();
+const normalizeResolutionForRole = (notification, role) => (
+  role !== "bm" && KPI_UNASSIGNED_NOTIF_TYPES.includes(String(notification?.type || "").trim().toUpperCase())
+    ? { ...notification, resolutionStatus: "Not Applicable" }
+    : notification
+);
 const filterNotifications = (notifications, { typeFilter, priorityFilter, resolutionFilter, dateRange, ignorePriority = false, ignoreResolution = false }) => {
   const normalizedType = String(typeFilter || "").trim().toUpperCase();
   return notifications.filter((notification) => (
@@ -105,12 +110,13 @@ function ManagerNotifications({ roleType }) {
       const res = await fetch(`${API_BASE}/api/notifications?${qs.toString()}`, { ...(signal ? { signal } : {}), cache: "no-store" });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to fetch notification counts.");
-      const notifications = Array.isArray(data?.notifications) ? data.notifications : [];
+      const notifications = (Array.isArray(data?.notifications) ? data.notifications : [])
+        .map((notification) => normalizeResolutionForRole(notification, normalizedRole));
       return filterNotifications(notifications, { typeFilter, priorityFilter, resolutionFilter, dateRange }).length;
     };
     const [unread, read] = await Promise.all([loadStatusCount("Unread"), loadStatusCount("Read")]);
     setCounts({ unread, read });
-  }, [user?.id, typeFilter, priorityFilter, resolutionFilter, dateRange]);
+  }, [user?.id, typeFilter, priorityFilter, resolutionFilter, dateRange, normalizedRole]);
 
   const fetchNotifs = useCallback(async (signal) => {
     if (!user?.id) return;
@@ -118,7 +124,8 @@ function ManagerNotifications({ roleType }) {
     const res = await fetch(`${API_BASE}/api/notifications?${qs.toString()}`, { ...(signal ? { signal } : {}), cache: "no-store" });
     const data = await res.json();
     if (!res.ok) throw new Error(data?.message || "Failed to fetch notifications.");
-    const notifications = Array.isArray(data?.notifications) ? data.notifications : [];
+    const notifications = (Array.isArray(data?.notifications) ? data.notifications : [])
+      .map((notification) => normalizeResolutionForRole(notification, normalizedRole));
     const resolutionCountBase = filterNotifications(notifications, { typeFilter, priorityFilter, resolutionFilter, dateRange, ignoreResolution: true });
     const resolutionNotifications = normalizedRole === "bm"
       ? resolutionCountBase.filter((notification) => KPI_UNASSIGNED_NOTIF_TYPES.includes(notification.type))

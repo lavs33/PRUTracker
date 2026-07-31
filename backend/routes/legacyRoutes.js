@@ -3768,6 +3768,8 @@ app.get("/api/agent/home", async (req, res) => {
     const engagementById = new Map(engagements.map((engagement) => [String(engagement._id), engagement]));
 
     const totalProspects = prospects.length;
+    const activeProspects = prospects.filter((prospect) => prospect.status === "Active").length;
+    const ongoingLeads = leads.filter((lead) => ["New", "In Progress"].includes(String(lead?.status || "").trim())).length;
     const totalPolicyholders = policyholders.length;
     const activePolicies = policyholders.filter((policyholder) => policyholder.status === "Active").length;
     const conversionRate = totalProspects ? Math.round((totalPolicyholders / totalProspects) * 100) : 0;
@@ -3833,8 +3835,10 @@ app.get("/api/agent/home", async (req, res) => {
       },
       clients: {
         totalProspects,
+        activeProspects,
         totalPolicyholders,
         totalLeads: leads.length,
+        ongoingLeads,
         activePolicyholders: activePolicies,
         conversionRate,
         activePolicyRate,
