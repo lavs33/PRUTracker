@@ -976,6 +976,42 @@ function createNotificationsController({
     ]);
   };
 
+  // Notification reconciliation touches policy, payment, KPI, and endorsement
+  // collections. Keep it off the critical path when it runs long, and share a
+  // recent/in-flight result across repeated notification requests for a user.
+  const notificationMaintenanceByUser = new Map();
+  const NOTIFICATION_MAINTENANCE_TTL_MS = 60 * 1000;
+  const NOTIFICATION_MAINTENANCE_WAIT_MS = 1200;
+  const emptyMaintenanceResult = () => ({
+    orphanResolutions: new Map(),
+    paymentResolutions: new Map(),
+    kpiResolutions: new Map(),
+  });
+  const notificationMaintenance = (uid) => {
+    const key = String(uid);
+    const cached = notificationMaintenanceByUser.get(key);
+    if (cached && (cached.promise || Date.now() - cached.completedAt < NOTIFICATION_MAINTENANCE_TTL_MS)) {
+      return cached.promise || Promise.resolve(cached.result);
+    }
+    const promise = (async () => {
+      await Promise.all([ensureTaskMissed(uid), ensurePaymentReminders(uid)]);
+      const [orphanResolutions, paymentResolutions, kpiResolutions] = await Promise.all([
+        syncOrphanEndorsementResolutions(uid),
+        syncPaymentNotificationResolutions(uid),
+        syncKpiUnassignedNotificationResolutions(uid),
+      ]);
+      return { orphanResolutions, paymentResolutions, kpiResolutions };
+    })();
+    notificationMaintenanceByUser.set(key, { promise, completedAt: 0, result: null });
+    promise.then((result) => {
+      notificationMaintenanceByUser.set(key, { promise: null, completedAt: Date.now(), result });
+    }).catch((error) => {
+      notificationMaintenanceByUser.delete(key);
+      console.error("Notification maintenance error:", error);
+    });
+    return promise;
+  };
+
   const listNotifications = async (req, res) => {
     try {
       const { userId, status, type, entityType, includeRefs } = req.query;
@@ -984,16 +1020,11 @@ function createNotificationsController({
       if (!mongoose.isValidObjectId(userId)) return res.status(400).json({ message: "Invalid userId." });
 
       const uid = new mongoose.Types.ObjectId(userId);
-      await Promise.all([ensureTaskMissed(uid), ensurePaymentReminders(uid)]);
-      // Keep orphan resolution independent from display priority. Returning the
-      // freshly calculated values also guarantees legacy notifications use the
-      // current reassignment progress in this response, even before persistence
-      // is observed by a subsequent database read.
-      const [orphanResolutions, paymentResolutions, kpiResolutions] = await Promise.all([
-        syncOrphanEndorsementResolutions(uid),
-        syncPaymentNotificationResolutions(uid),
-        syncKpiUnassignedNotificationResolutions(uid),
+      const maintenanceResult = await Promise.race([
+        notificationMaintenance(uid),
+        new Promise((resolve) => setTimeout(() => resolve(null), NOTIFICATION_MAINTENANCE_WAIT_MS)),
       ]);
+      const { orphanResolutions, paymentResolutions, kpiResolutions } = maintenanceResult || emptyMaintenanceResult();
 
       const query = { assignedToUserId: uid, softDeletedAt: null };
 
@@ -1240,7 +1271,6 @@ function createNotificationsController({
       if (!mongoose.isValidObjectId(userId)) return res.status(400).json({ message: "Invalid userId." });
 
       const uid = new mongoose.Types.ObjectId(userId);
-      await Promise.all([ensureTaskMissed(uid), ensurePaymentReminders(uid)]);
 
       const q = { assignedToUserId: uid, status: "Unread", softDeletedAt: null };
 

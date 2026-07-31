@@ -4,6 +4,9 @@ import { FiActivity, FiCalendar, FiShield } from "react-icons/fi";
 import logo from "../assets/prutracker-navbar-logo.png";
 import "./TopNav.css";
 
+const unreadCountCache = new Map();
+const UNREAD_COUNT_CACHE_MS = 30_000;
+
 function TopNav({
   user,
   onLogoClick,
@@ -16,7 +19,7 @@ function TopNav({
 }) {
   const API_BASE = "http://localhost:5000";
 
-  const [unreadCount, setUnreadCount] = useState(0);
+  const [unreadCount, setUnreadCount] = useState(() => Number(unreadCountCache.get(String(user?.id))?.count || 0));
 
   const fetchUnreadCount = useCallback(async (signal) => {
     if (!user?.id) {
@@ -25,6 +28,12 @@ function TopNav({
     }
 
     try {
+      const cacheKey = String(user.id);
+      const cached = unreadCountCache.get(cacheKey);
+      if (cached && Date.now() - cached.loadedAt < UNREAD_COUNT_CACHE_MS) {
+        setUnreadCount(cached.count);
+        return;
+      }
       const res = await fetch(
         `${API_BASE}/api/notifications/unread-count?userId=${user.id}`,
         signal ? { signal } : undefined
@@ -33,7 +42,9 @@ function TopNav({
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to fetch unread count.");
 
-      setUnreadCount(Number(data?.unreadCount || 0));
+      const nextCount = Number(data?.unreadCount || 0);
+      unreadCountCache.set(cacheKey, { count: nextCount, loadedAt: Date.now() });
+      setUnreadCount(nextCount);
     } catch (err) {
       setUnreadCount(0);
     }
