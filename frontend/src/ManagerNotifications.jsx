@@ -12,6 +12,7 @@ const AGENT_KPI_NOTIF_TYPES = ["AGENT_KPI_ASSIGNED", "AGENT_KPI_TARGET_UPDATED",
 const KPI_NOTIF_TYPES = [...BRANCH_KPI_NOTIF_TYPES, ...UNIT_KPI_NOTIF_TYPES, ...AGENT_KPI_NOTIF_TYPES];
 const KPI_UNASSIGNED_NOTIF_TYPES = ["BRANCH_KPI_UNASSIGNED", "UNIT_KPI_UNASSIGNED", "AGENT_KPI_UNASSIGNED"];
 const PRIORITY_LEVELS = ["urgent", "high", "normal"];
+const NOTIFICATIONS_PER_PAGE = 15;
 const notificationPriority = (type) => {
   const normalizedType = String(type || "").trim().toUpperCase();
   if (normalizedType === "ORPHANS_ENDORSEMENTS") return "urgent";
@@ -37,6 +38,11 @@ const notificationWithinDateRange = (notification, dateRange) => {
   return timestamp >= start && timestamp <= now;
 };
 const notificationResolution = (notification) => String(notification?.resolutionStatus || "Not Applicable").trim();
+const normalizeResolutionForRole = (notification, role) => (
+  role !== "bm" && KPI_UNASSIGNED_NOTIF_TYPES.includes(String(notification?.type || "").trim().toUpperCase())
+    ? { ...notification, resolutionStatus: "Not Applicable" }
+    : notification
+);
 const filterNotifications = (notifications, { typeFilter, priorityFilter, resolutionFilter, dateRange, ignorePriority = false, ignoreResolution = false }) => {
   const normalizedType = String(typeFilter || "").trim().toUpperCase();
   return notifications.filter((notification) => (
@@ -64,6 +70,7 @@ function ManagerNotifications({ roleType }) {
   const [markingAllRead, setMarkingAllRead] = useState(false);
   const [markingNotifId, setMarkingNotifId] = useState("");
   const [sideNavCollapsed, setSideNavCollapsed] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
 
   const user = useMemo(() => {
     try { return JSON.parse(localStorage.getItem("managerPortalUser") || "null"); } catch { return null; }
@@ -98,6 +105,10 @@ function ManagerNotifications({ roleType }) {
 
   useEffect(() => { document.title = `${username} | Notifications`; }, [username]);
 
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [tab, typeFilter, priorityFilter, resolutionFilter, dateRange]);
+
   const fetchCounts = useCallback(async (signal) => {
     if (!user?.id) return;
     const loadStatusCount = async (status) => {
@@ -105,12 +116,13 @@ function ManagerNotifications({ roleType }) {
       const res = await fetch(`${API_BASE}/api/notifications?${qs.toString()}`, { ...(signal ? { signal } : {}), cache: "no-store" });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to fetch notification counts.");
-      const notifications = Array.isArray(data?.notifications) ? data.notifications : [];
+      const notifications = (Array.isArray(data?.notifications) ? data.notifications : [])
+        .map((notification) => normalizeResolutionForRole(notification, normalizedRole));
       return filterNotifications(notifications, { typeFilter, priorityFilter, resolutionFilter, dateRange }).length;
     };
     const [unread, read] = await Promise.all([loadStatusCount("Unread"), loadStatusCount("Read")]);
     setCounts({ unread, read });
-  }, [user?.id, typeFilter, priorityFilter, resolutionFilter, dateRange]);
+  }, [user?.id, typeFilter, priorityFilter, resolutionFilter, dateRange, normalizedRole]);
 
   const fetchNotifs = useCallback(async (signal) => {
     if (!user?.id) return;
@@ -118,7 +130,8 @@ function ManagerNotifications({ roleType }) {
     const res = await fetch(`${API_BASE}/api/notifications?${qs.toString()}`, { ...(signal ? { signal } : {}), cache: "no-store" });
     const data = await res.json();
     if (!res.ok) throw new Error(data?.message || "Failed to fetch notifications.");
-    const notifications = Array.isArray(data?.notifications) ? data.notifications : [];
+    const notifications = (Array.isArray(data?.notifications) ? data.notifications : [])
+      .map((notification) => normalizeResolutionForRole(notification, normalizedRole));
     const resolutionCountBase = filterNotifications(notifications, { typeFilter, priorityFilter, resolutionFilter, dateRange, ignoreResolution: true });
     const resolutionNotifications = normalizedRole === "bm"
       ? resolutionCountBase.filter((notification) => KPI_UNASSIGNED_NOTIF_TYPES.includes(notification.type))
@@ -266,6 +279,13 @@ function ManagerNotifications({ roleType }) {
     </div>
   );
 
+  const totalPages = Math.max(1, Math.ceil(notifs.length / NOTIFICATIONS_PER_PAGE));
+  const safeCurrentPage = Math.min(currentPage, totalPages);
+  const paginatedNotifs = notifs.slice(
+    (safeCurrentPage - 1) * NOTIFICATIONS_PER_PAGE,
+    safeCurrentPage * NOTIFICATIONS_PER_PAGE
+  );
+
   if (!user || user.username !== username) return null;
 
   return (
@@ -337,9 +357,21 @@ function ManagerNotifications({ roleType }) {
               {notifs.length === 0 ? (
                 <div className="notifs-empty">{tab === "unread" ? "No unread notifications." : "No read notifications."}</div>
               ) : (
-                notifs.map((n) => <NotifRow key={n._id} n={n} />)
+                paginatedNotifs.map((n) => <NotifRow key={n._id} n={n} />)
               )}
             </div>
+          ) : null}
+          {!loading && !apiError && notifs.length > 0 ? (
+            <nav className="notifs-pagination" aria-label="Notifications pagination">
+              <span>
+                Showing {(safeCurrentPage - 1) * NOTIFICATIONS_PER_PAGE + 1}–{Math.min(safeCurrentPage * NOTIFICATIONS_PER_PAGE, notifs.length)} of {notifs.length}
+              </span>
+              <div>
+                <button type="button" className="notif-btn ghost" onClick={() => setCurrentPage((page) => Math.max(1, page - 1))} disabled={safeCurrentPage === 1}>Previous</button>
+                <strong>Page {safeCurrentPage} of {totalPages}</strong>
+                <button type="button" className="notif-btn ghost" onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))} disabled={safeCurrentPage === totalPages}>Next</button>
+              </div>
+            </nav>
           ) : null}
         </main>
       </div>

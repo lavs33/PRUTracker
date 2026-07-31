@@ -8,8 +8,10 @@ import "./AgentNotifications.css";
 const UNIT_KPI_NOTIF_TYPES = ["UNIT_KPI_ASSIGNED", "UNIT_KPI_TARGET_UPDATED", "UNIT_KPI_UNASSIGNED"];
 const AGENT_KPI_NOTIF_TYPES = ["AGENT_KPI_ASSIGNED", "AGENT_KPI_TARGET_UPDATED", "AGENT_KPI_UNASSIGNED"];
 const KPI_NOTIF_TYPES = [...UNIT_KPI_NOTIF_TYPES, ...AGENT_KPI_NOTIF_TYPES];
+const KPI_UNASSIGNED_NOTIF_TYPES = ["UNIT_KPI_UNASSIGNED", "AGENT_KPI_UNASSIGNED"];
 const NOTIF_TYPES = ["TASK_ADDED", "TASK_DUE_TODAY", "TASK_MISSED", "PAYMENT_TRANSFER_REMINDER", "PAYMENT_EOR_REMINDER", "PAYMENT_MISSED_TRANSFER", "POLICY_LAPSED", "POLICY_PAID_UP", "POLICY_MATURED", "POLICY_PAID_UP_MATURED", "POLICY_CANCELLED", "ORPHAN_CLIENT_ASSIGNED", "ORPHAN_CLIENT_TRANSFERRED", ...KPI_NOTIF_TYPES];
 const PRIORITY_LEVELS = ["urgent", "high", "normal", "informational"];
+const NOTIFICATIONS_PER_PAGE = 15;
 const PRIORITY_BY_TYPE = {
   POLICY_LAPSED: "urgent",
   PAYMENT_MISSED_TRANSFER: "urgent",
@@ -49,7 +51,9 @@ const notificationWithinDateRange = (notification, dateRange) => {
   return timestamp >= start && timestamp <= now;
 };
 
-const notificationResolution = (notification) => String(notification?.resolutionStatus || "Not Applicable").trim();
+const notificationResolution = (notification) => KPI_UNASSIGNED_NOTIF_TYPES.includes(String(notification?.type || "").trim().toUpperCase())
+  ? "Not Applicable"
+  : String(notification?.resolutionStatus || "Not Applicable").trim();
 const taskNotificationOrder = {
   TASK_MISSED: 0,
   TASK_DUE_TODAY: 1,
@@ -99,7 +103,10 @@ function AgentNotifications() {
   const [typeFilter, setTypeFilter] = useState("");
   const [priorityFilter, setPriorityFilter] = useState("all");
   const [dateRange, setDateRange] = useState("all");
-  const [resolutionFilter, setResolutionFilter] = useState("all");
+  const [resolutionFilter, setResolutionFilter] = useState(() => {
+    const requestedResolution = new URLSearchParams(window.location.search).get("resolution");
+    return ["Unresolved", "Resolved"].includes(requestedResolution) ? requestedResolution : "all";
+  });
 
   // list state
   const [loading, setLoading] = useState(true);
@@ -107,6 +114,7 @@ function AgentNotifications() {
   const [notifs, setNotifs] = useState([]);
   const [markingAllRead, setMarkingAllRead] = useState(false);
   const [markingNotifId, setMarkingNotifId] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
 
   // counts state (always numeric)
   const [counts, setCounts] = useState({ unread: 0, read: 0 });
@@ -123,6 +131,10 @@ function AgentNotifications() {
   useEffect(() => {
     document.title = `${username} | Notifications`;
   }, [username]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [tab, typeFilter, priorityFilter, resolutionFilter, dateRange]);
 
   const formatWhen = (d) => {
     if (!d) return "—";
@@ -405,6 +417,13 @@ function AgentNotifications() {
     </div>
   );
 
+  const totalPages = Math.max(1, Math.ceil(notifs.length / NOTIFICATIONS_PER_PAGE));
+  const safeCurrentPage = Math.min(currentPage, totalPages);
+  const paginatedNotifs = notifs.slice(
+    (safeCurrentPage - 1) * NOTIFICATIONS_PER_PAGE,
+    safeCurrentPage * NOTIFICATIONS_PER_PAGE
+  );
+
   if (!user || user.username !== username) return null;
 
   return (
@@ -531,9 +550,21 @@ function AgentNotifications() {
                   {tab === "unread" ? "No unread notifications." : "No read notifications."}
                 </div>
               ) : (
-                notifs.map((n) => <NotifRow key={n._id} n={n} />)
+                paginatedNotifs.map((n) => <NotifRow key={n._id} n={n} />)
               )}
             </div>
+          ) : null}
+          {!loading && !apiError && notifs.length > 0 ? (
+            <nav className="notifs-pagination" aria-label="Notifications pagination">
+              <span>
+                Showing {(safeCurrentPage - 1) * NOTIFICATIONS_PER_PAGE + 1}–{Math.min(safeCurrentPage * NOTIFICATIONS_PER_PAGE, notifs.length)} of {notifs.length}
+              </span>
+              <div>
+                <button type="button" className="notif-btn ghost" onClick={() => setCurrentPage((page) => Math.max(1, page - 1))} disabled={safeCurrentPage === 1}>Previous</button>
+                <strong>Page {safeCurrentPage} of {totalPages}</strong>
+                <button type="button" className="notif-btn ghost" onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))} disabled={safeCurrentPage === totalPages}>Next</button>
+              </div>
+            </nav>
           ) : null}
         </main>
       </div>
