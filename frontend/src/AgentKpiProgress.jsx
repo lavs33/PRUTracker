@@ -8,19 +8,29 @@ import "./AgentKpiProgress.css";
 
 const API_BASE = "http://localhost:5000";
 
-const DATE_PRESETS = [
-  { value: "1d", label: "This Day" },
-  { value: "7d", label: "Last 7 Days" },
-  { value: "30d", label: "Last 30 Days" },
-  { value: "90d", label: "Last 90 Days" },
-  { value: "6m", label: "Last 6 Months" },
-  { value: "12m", label: "Last 12 Months" },
-];
+const monthKey = (date = new Date()) => {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Manila", year: "numeric", month: "2-digit" }).formatToParts(date);
+  return `${parts.find((part) => part.type === "year")?.value}-${parts.find((part) => part.type === "month")?.value}`;
+};
+const CURRENT_MONTH = monthKey();
+const MONTH_OPTIONS = (() => {
+  const options = [];
+  let cursor = "2026-01";
+  while (cursor <= CURRENT_MONTH) {
+    const [year, month] = cursor.split("-").map(Number);
+    options.push({
+      value: cursor,
+      label: new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString("en-US", { timeZone: "UTC", month: "long", year: "numeric" }),
+    });
+    cursor = month === 12 ? `${year + 1}-01` : `${year}-${String(month + 1).padStart(2, "0")}`;
+  }
+  return options;
+})();
 
 const DEFAULT_DATA = {
   agent: {},
-  filters: { datePreset: "1d", frequency: "Daily" },
-  reportContext: { periodLabel: "This Day", startDate: null, endDate: null, generatedAt: null },
+  filters: { month: CURRENT_MONTH, frequency: "Monthly" },
+  reportContext: { periodLabel: MONTH_OPTIONS.at(-1)?.label || CURRENT_MONTH, startDate: null, endDate: null, generatedAt: null },
   kpis: [],
   unitSalesContribution: null,
 };
@@ -52,7 +62,7 @@ const formatReportPeriod = (reportContext) => {
   return start === end ? start : `${start} to ${end}`;
 };
 
-const getOptionLabel = (value) => DATE_PRESETS.find((option) => option.value === value)?.label || value || "This Day";
+const getOptionLabel = (value) => MONTH_OPTIONS.find((option) => option.value === value)?.label || value || CURRENT_MONTH;
 
 const money = (value) => Number(value || 0).toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -107,7 +117,7 @@ function AgentKpiProgress() {
     }
   }, []);
 
-  const [datePreset, setDatePreset] = useState("1d");
+  const [selectedMonth, setSelectedMonth] = useState(CURRENT_MONTH);
   const [data, setData] = useState(DEFAULT_DATA);
   const [loading, setLoading] = useState(true);
   const [apiError, setApiError] = useState("");
@@ -123,13 +133,13 @@ function AgentKpiProgress() {
 
   const fetchData = useCallback(async (signal) => {
     if (!user?.id) return;
-    const params = new URLSearchParams({ userId: user.id, datePreset });
+    const params = new URLSearchParams({ userId: user.id, month: selectedMonth });
     const response = await fetch(`${API_BASE}/api/agent/kpi-progress?${params.toString()}`, signal ? { signal } : undefined);
     const payload = await response.json();
     if (!response.ok) throw new Error(payload?.message || "Failed to load KPI progress.");
     setData({ ...DEFAULT_DATA, ...payload, kpis: Array.isArray(payload?.kpis) ? payload.kpis : [] });
     setLastUpdated(new Date());
-  }, [datePreset, user?.id]);
+  }, [selectedMonth, user?.id]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -174,7 +184,7 @@ function AgentKpiProgress() {
       return `
         <tr>
           <td>${escapeHtml(kpi.label)}</td>
-          <td>${escapeHtml(kpi.period || data.filters.frequency)}</td>
+          <td>${escapeHtml(data.reportContext?.periodLabel || getOptionLabel(selectedMonth))}</td>
           <td>${escapeHtml(formatKpiValue(kpi.actual, kpi.valueType))}</td>
           <td>${escapeHtml(formatKpiTarget(kpi))}</td>
           <td>${escapeHtml(comparison.status)}</td>
@@ -261,8 +271,8 @@ function AgentKpiProgress() {
             </section>
             <section class="section">
               <div class="meta-row">
-                <div class="meta-chip"><div class="label">Date Range</div><div class="value">${escapeHtml(getOptionLabel(datePreset))}</div></div>
-                <div class="meta-chip"><div class="label">KPI Frequency</div><div class="value">${escapeHtml(data.filters?.frequency || "Daily")}</div></div>
+                <div class="meta-chip"><div class="label">Selected Month</div><div class="value">${escapeHtml(getOptionLabel(selectedMonth))}</div></div>
+                <div class="meta-chip"><div class="label">KPI Target Period</div><div class="value">Monthly</div></div>
                 <div class="meta-chip"><div class="label">Assigned KPI Cards</div><div class="value">${data.kpis.length}</div></div>
               </div>
             </section>
@@ -275,7 +285,7 @@ function AgentKpiProgress() {
               <div class="panel">
                 <h4>Agent KPI Progress</h4>
                 <table>
-                  <thead><tr><th>KPI</th><th>Frequency</th><th>Actual</th><th>Target</th><th>Status</th><th>Gap / Excess</th></tr></thead>
+                  <thead><tr><th>KPI</th><th>Month</th><th>Actual</th><th>Target</th><th>Status</th><th>Gap / Excess</th></tr></thead>
                   <tbody>${reportRows || `<tr><td colspan="6">No agent KPIs assigned.</td></tr>`}</tbody>
                 </table>
               </div>
@@ -343,7 +353,7 @@ function AgentKpiProgress() {
           <div className="sp-headRow">
             <div>
               <h1 className="sp-title">KPI Progress Dashboard</h1>
-              <p className="sp-subtitle">View the assigned KPI targets and actual progress for the selected date range.</p>
+              <p className="sp-subtitle">View actual KPI progress against the assigned targets for the selected month.</p>
             </div>
             <div className="sp-headActions">
               <span className="sp-lastUpdated">Updated {lastUpdated ? formatDateTime(lastUpdated) : "—"}</span>
@@ -354,9 +364,9 @@ function AgentKpiProgress() {
 
           <section className="sp-card sp-filterBar">
             <div className="sp-filterGroup">
-              <label>Date Range</label>
-              <select value={datePreset} onChange={(event) => setDatePreset(event.target.value)}>
-                {DATE_PRESETS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              <label>Month</label>
+              <select value={selectedMonth} onChange={(event) => setSelectedMonth(event.target.value)}>
+                {MONTH_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
             </div>
           </section>
@@ -377,7 +387,7 @@ function AgentKpiProgress() {
                 return (
                   <article className={`agent-kpi-card ${comparison.className}`} key={kpi.key}>
                     <div className="agent-kpi-card__head">
-                      <span>{data.reportContext?.periodLabel || getOptionLabel(datePreset)} • {kpi.period || data.filters.frequency}</span>
+                      <span>{data.reportContext?.periodLabel || getOptionLabel(selectedMonth)} • Monthly</span>
                       <strong>{kpi.label}</strong>
                     </div>
                     <div className="agent-kpi-values">
@@ -409,7 +419,7 @@ function AgentKpiProgress() {
                 <h2>Contribution in Unit Sales Production</h2>
                 <article className="agent-kpi-contribution-card">
                   <div className="agent-kpi-contribution-period">
-                    <span>{data.reportContext?.periodLabel || getOptionLabel(datePreset)} • {contribution.kpi?.period || data.filters.frequency}</span>
+                    <span>{data.reportContext?.periodLabel || getOptionLabel(selectedMonth)} • Monthly</span>
                   </div>
                   <div className="agent-kpi-values">
                     <div>

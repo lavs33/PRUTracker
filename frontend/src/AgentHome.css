@@ -9,7 +9,8 @@
 .home-previewCard,
 .module-card,
 .home-errorBanner,
-.home-modulesSection {
+.home-modulesSection,
+.home-actionsSection {
   border: 1px solid rgba(226, 232, 240, 0.92);
   background: rgba(255, 255, 255, 0.9);
   box-shadow: 0 20px 40px rgba(15, 23, 42, 0.08);
@@ -316,7 +317,7 @@
 
 .home-modulesSection {
   max-width: 1320px;
-  margin: 0 auto;
+  margin: 0 auto 22px;
 }
 
 .home-cardHeaderStandalone {
@@ -330,7 +331,7 @@
 }
 
 .module-card {
-  min-height: 220px;
+  min-height: 200px;
   border-radius: 24px;
   padding: 22px;
   display: flex;
@@ -378,6 +379,22 @@
   font-size: 15px;
   font-weight: 700;
   line-height: 1.6;
+}
+
+.module-insights {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.module-insights span {
+  border-radius: 999px;
+  padding: 6px 9px;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(203, 213, 225, 0.9);
+  color: #334155;
+  font-size: 11px;
+  font-weight: 900;
 }
 
 .module-linkText {
@@ -440,6 +457,60 @@
   padding: 22px;
 }
 
+.home-actionsSection {
+  max-width: 1320px;
+  margin: 0 auto 22px;
+  border-radius: 26px;
+  padding: 22px;
+}
+
+.home-actionItemsGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.home-actionItem {
+  border: 1px solid #fecaca;
+  border-left: 5px solid #ef4444;
+  border-radius: 18px;
+  padding: 15px;
+  background: #fffafa;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.home-actionItem.high {
+  border-color: #fde68a;
+  border-left-color: #f59e0b;
+  background: #fffdf5;
+}
+
+.home-actionPriority {
+  color: #b91c1c;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.home-actionItem.high .home-actionPriority { color: #a16207; }
+.home-actionItem strong { display: block; margin-top: 5px; color: #0f172a; font-size: 15px; font-weight: 900; }
+.home-actionItem p { margin: 5px 0 0; color: #64748b; font-size: 13px; line-height: 1.45; }
+.home-actionItem button {
+  border: 0;
+  border-radius: 12px;
+  padding: 10px 14px;
+  background: #0f172a;
+  color: #fff;
+  font: 900 13px/1 "FSAlbertArabic", sans-serif;
+  cursor: pointer;
+}
+
+.home-emptyState--success { display: flex; align-items: center; gap: 8px; color: #166534; background: #f0fdf4; border-color: #bbf7d0; }
+
 .home-kpiPreviewGrid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -481,6 +552,10 @@
 
 @media (max-width: 1180px) {
   .home-kpiPreviewGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .home-actionItemsGrid {
     grid-template-columns: 1fr;
   }
 }

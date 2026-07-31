@@ -8,20 +8,12 @@ import { logout } from "./utils/logout";
 
 const API_BASE = "http://localhost:5000";
 
-const KPI_PREVIEW_DATE_PRESETS_BY_PERIOD = {
-  Daily: "1d",
-  Weekly: "7d",
-  Monthly: "30d",
-  Quarterly: "90d",
-  "Semi-Annually": "6m",
-  Annually: "12m",
-};
-const KPI_PREVIEW_DATE_PRESETS = Object.values(KPI_PREVIEW_DATE_PRESETS_BY_PERIOD);
-
 const DEFAULT_HOME_DATA = {
   clients: {
     totalProspects: 0,
     totalPolicyholders: 0,
+    totalLeads: 0,
+    activePolicyholders: 0,
     conversionRate: 0,
     activePolicyRate: 0,
     recentProspects: [],
@@ -29,6 +21,9 @@ const DEFAULT_HOME_DATA = {
   tasks: {
     dueTodayTop5: [],
     recentlyAddedTop5: [],
+    openCount: 0,
+    dueTodayCount: 0,
+    overdueCount: 0,
   },
   sales: {
     conversionRatePct: 0,
@@ -57,6 +52,7 @@ function AgentHome() {
   const [loading, setLoading] = useState(true);
   const [apiError, setApiError] = useState("");
   const [homeData, setHomeData] = useState(DEFAULT_HOME_DATA);
+  const [actionItems, setActionItems] = useState([]);
 
   const navigateToTop = useCallback((path) => {
     navigate(path);
@@ -78,54 +74,50 @@ function AgentHome() {
   const fetchHomeData = useCallback(async (signal) => {
     if (!user?.id) return;
 
-    const [homeResponse, ...kpiResponses] = await Promise.all([
+    const currentMonthParts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Manila", year: "numeric", month: "2-digit" }).formatToParts(new Date());
+    const currentMonth = `${currentMonthParts.find((part) => part.type === "year")?.value}-${currentMonthParts.find((part) => part.type === "month")?.value}`;
+    const [homeResponse, kpiResponse, notificationsResponse] = await Promise.all([
       fetch(
         `${API_BASE}/api/agent/home?${new URLSearchParams({ userId: user.id }).toString()}`,
         signal ? { signal } : undefined
       ),
-      ...KPI_PREVIEW_DATE_PRESETS.map((datePreset) =>
-        fetch(
-          `${API_BASE}/api/agent/kpi-progress?${new URLSearchParams({ userId: user.id, datePreset }).toString()}`,
-          signal ? { signal } : undefined
-        )
-      ),
+      fetch(`${API_BASE}/api/agent/kpi-progress?${new URLSearchParams({ userId: user.id, month: currentMonth }).toString()}`, signal ? { signal } : undefined),
+      fetch(`${API_BASE}/api/notifications?${new URLSearchParams({ userId: user.id, includeRefs: "1" }).toString()}`, signal ? { signal } : undefined),
     ]);
 
     const payload = await homeResponse.json();
-    const kpiPayloads = await Promise.all(kpiResponses.map((response) => response.json()));
+    const kpiPayload = await kpiResponse.json();
+    const notificationsPayload = await notificationsResponse.json();
 
     if (!homeResponse.ok) throw new Error(payload?.message || "Failed to load agent home preview.");
-    const failedKpiIndex = kpiResponses.findIndex((response) => !response.ok);
-    if (failedKpiIndex >= 0) {
-      throw new Error(kpiPayloads[failedKpiIndex]?.message || "Failed to load KPI progress preview.");
-    }
-
-    const kpiPayloadByFrequency = new Map(
-      kpiPayloads.map((kpiPayload) => [String(kpiPayload?.filters?.frequency || ""), kpiPayload])
-    );
-    const baseKpiPayload = kpiPayloads[0] || {};
-    const assignedKpiPreview = (Array.isArray(baseKpiPayload?.kpis) ? baseKpiPayload.kpis : [])
-      .slice(0, 3)
-      .map((kpi) => {
-        const defaultPeriod = String(kpi.defaultPeriod || kpi.period || "");
-        const matchingPayload = kpiPayloadByFrequency.get(defaultPeriod) || baseKpiPayload;
-        const matchingKpi = (Array.isArray(matchingPayload?.kpis) ? matchingPayload.kpis : [])
-          .find((item) => item.key === kpi.key) || kpi;
-        return {
-          ...matchingKpi,
-          defaultPeriod: defaultPeriod || matchingKpi.defaultPeriod || matchingKpi.period,
-          period: defaultPeriod || matchingKpi.period,
-        };
-      });
+    if (!kpiResponse.ok) throw new Error(kpiPayload?.message || "Failed to load KPI progress preview.");
+    if (!notificationsResponse.ok) throw new Error(notificationsPayload?.message || "Failed to load action items.");
+    const assignedKpiPreview = (Array.isArray(kpiPayload?.kpis) ? kpiPayload.kpis : []).slice(0, 3);
+    const priorityByType = {
+      POLICY_LAPSED: "urgent", PAYMENT_MISSED_TRANSFER: "urgent", TASK_MISSED: "urgent",
+      TASK_DUE_TODAY: "high", PAYMENT_TRANSFER_REMINDER: "high", PAYMENT_EOR_REMINDER: "high",
+      POLICY_CANCELLED: "high", ORPHAN_CLIENT_ASSIGNED: "high",
+    };
+    const actionable = (Array.isArray(notificationsPayload?.notifications) ? notificationsPayload.notifications : [])
+      .filter((notification) => notification?.resolutionStatus === "Unresolved" && ["urgent", "high"].includes(priorityByType[notification.type]))
+      .sort((left, right) => new Date(right.createdAt || 0) - new Date(left.createdAt || 0))
+      .slice(0, 6)
+      .map((notification) => ({ ...notification, priority: priorityByType[notification.type] }));
+    setActionItems(actionable);
 
     setHomeData({
       tasks: {
         dueTodayTop5: Array.isArray(payload?.tasks?.dueTodayTop5) ? payload.tasks.dueTodayTop5 : [],
         recentlyAddedTop5: Array.isArray(payload?.tasks?.recentlyAddedTop5) ? payload.tasks.recentlyAddedTop5 : [],
+        openCount: Number(payload?.tasks?.openCount || 0),
+        dueTodayCount: Number(payload?.tasks?.dueTodayCount || 0),
+        overdueCount: Number(payload?.tasks?.overdueCount || 0),
       },
       clients: {
         totalProspects: Number(payload?.clients?.totalProspects || 0),
         totalPolicyholders: Number(payload?.clients?.totalPolicyholders || 0),
+        totalLeads: Number(payload?.clients?.totalLeads || 0),
+        activePolicyholders: Number(payload?.clients?.activePolicyholders || 0),
         conversionRate: Number(payload?.clients?.conversionRate || 0),
         activePolicyRate: Number(payload?.clients?.activePolicyRate || 0),
         recentProspects: Array.isArray(payload?.clients?.recentProspects) ? payload.clients.recentProspects : [],
@@ -138,7 +130,7 @@ function AgentHome() {
       },
       kpiProgress: {
         assignedKpis: assignedKpiPreview,
-        periodLabel: "Default Frequency",
+        periodLabel: kpiPayload?.reportContext?.periodLabel || "Current Month",
       },
     });
   }, [user?.id]);
@@ -157,6 +149,7 @@ function AgentHome() {
         if (err?.name !== "AbortError") {
           setApiError(err?.message || "Cannot connect to server.");
           setHomeData(DEFAULT_HOME_DATA);
+          setActionItems([]);
         }
       } finally {
         setLoading(false);
@@ -195,7 +188,7 @@ function AgentHome() {
     return "No target set";
   };
 
-  const dueTodayCount = homeData.tasks.dueTodayTop5.length;
+  const dueTodayCount = homeData.tasks.dueTodayCount;
   const recentTaskCount = homeData.tasks.recentlyAddedTop5.length;
   const recentProspectsCount = homeData.clients.recentProspects.length;
 
@@ -214,6 +207,7 @@ function AgentHome() {
       icon: <FaUsers size={28} className="module-icon" />,
       onClick: () => navigateToTop(`/agent/${user.username}/clients`),
       accent: "clients",
+      insights: [`${homeData.clients.totalLeads} leads`, `${homeData.clients.activePolicyholders} active policyholders`],
     },
     {
       key: "tasks",
@@ -222,6 +216,7 @@ function AgentHome() {
       icon: <FaTasks size={28} className="module-icon" />,
       onClick: () => navigateToTop(`/agent/${user.username}/tasks`),
       accent: "tasks",
+      insights: [`${homeData.tasks.openCount} open`, `${homeData.tasks.overdueCount} overdue`],
     },
     {
       key: "sales",
@@ -230,6 +225,7 @@ function AgentHome() {
       icon: <FaChartLine size={28} className="module-icon" />,
       onClick: () => navigateToTop(`/agent/${user.username}/sales/performance`),
       accent: "sales",
+      insights: [`${homeData.sales.totalPolicies} active policies`, `₱ ${money(homeData.sales.totalAnnualPremiumPhp)} annual premium`],
     },
     {
       key: "kpi-progress",
@@ -238,8 +234,21 @@ function AgentHome() {
       icon: <FaBullseye size={28} className="module-icon" />,
       onClick: () => navigateToTop(`/agent/${user.username}/kpi/progress`),
       accent: "kpi",
+      insights: [`${homeData.kpiProgress.assignedKpis.length} assigned KPIs`, homeData.kpiProgress.periodLabel],
     },
   ];
+
+  const openActionItem = (notification) => {
+    const policyholderId = notification?.metadata?.policyholderId || (notification?.entityType === "Policyholder" ? notification.entityId : "");
+    const annualPaymentId = notification?.metadata?.annualPaymentId || "";
+    if (policyholderId && annualPaymentId) return navigateToTop(`/agent/${user.username}/policyholders/${policyholderId}/annual-payments/${annualPaymentId}`);
+    if (policyholderId) return navigateToTop(`/agent/${user.username}/policyholders/${policyholderId}`);
+    const prospectId = notification?.prospectId || notification?.metadata?.prospectId || (notification?.entityType === "Prospect" ? notification.entityId : "");
+    const leadId = notification?.leadId || notification?.metadata?.leadId || "";
+    if (prospectId && leadId) return navigateToTop(`/agent/${user.username}/prospects/${prospectId}/leads/${leadId}/engage`);
+    if (prospectId) return navigateToTop(`/agent/${user.username}/prospects/${prospectId}`);
+    return navigateToTop(`/agent/${user.username}/tasks/all`);
+  };
 
   return (
     <>
@@ -287,12 +296,72 @@ function AgentHome() {
           </div>
         </section>
 
+        <section className="home-modulesSection">
+          <div className="home-cardHeader home-cardHeaderStandalone">
+            <div>
+              <span className="home-cardKicker">Navigation</span>
+              <h2>Jump into a module</h2>
+            </div>
+          </div>
+
+          <div className="module-grid">
+            {moduleCards.map((module) => (
+              <div
+                key={module.key}
+                className={`module-card ${module.accent}`}
+                role="button"
+                tabIndex={0}
+                onClick={module.onClick}
+                onKeyDown={(e) => e.key === "Enter" && module.onClick()}
+              >
+                <div className="module-iconWrap">{module.icon}</div>
+                <strong>{module.title}</strong>
+                <p>{module.description}</p>
+                <div className="module-insights">
+                  {module.insights.map((insight) => <span key={insight}>{insight}</span>)}
+                </div>
+                <span className="module-linkText">
+                  Open module
+                  <FiArrowRight aria-hidden="true" />
+                </span>
+              </div>
+            ))}
+          </div>
+        </section>
+
         {apiError ? (
           <div className="home-errorBanner">
             <FiAlertCircle aria-hidden="true" />
             <span>{apiError}</span>
           </div>
         ) : null}
+
+        <section className="home-actionsSection">
+          <div className="home-cardHeader home-cardHeaderStandalone">
+            <div>
+              <span className="home-cardKicker">Action required</span>
+              <h2>Urgent and high-priority concerns</h2>
+            </div>
+            <button type="button" className="home-inlineLink" onClick={() => navigateToTop(`/agent/${user.username}/notifications`)}>
+              View notifications
+              <FiArrowRight aria-hidden="true" />
+            </button>
+          </div>
+          {loading ? <div className="home-emptyState">Loading action items…</div> : actionItems.length ? (
+            <div className="home-actionItemsGrid">
+              {actionItems.map((notification) => (
+                <article key={notification._id} className={`home-actionItem ${notification.priority}`}>
+                  <div>
+                    <span className="home-actionPriority">{notification.priority}</span>
+                    <strong>{notification.title}</strong>
+                    <p>{notification.message || "Open this concern to complete the required action."}</p>
+                  </div>
+                  <button type="button" onClick={() => openActionItem(notification)}>Open</button>
+                </article>
+              ))}
+            </div>
+          ) : <div className="home-emptyState home-emptyState--success"><FiCheckCircle aria-hidden="true" /> No urgent or high-priority actions require resolution.</div>}
+        </section>
 
         <section className="home-previewGrid">
           <article className="home-previewCard">
@@ -464,10 +533,10 @@ function AgentHome() {
                 const defaultPeriod = kpi.defaultPeriod || kpi.period || "—";
                 return (
                   <article key={kpi.key} className="home-kpiPreviewCard">
-                    <span>{defaultPeriod}</span>
+                    <span>{homeData.kpiProgress.periodLabel} • {defaultPeriod}</span>
                     <strong>{kpi.label}</strong>
                     <p>Current progress: {formatKpiValue(kpi.actual, kpi.valueType)}</p>
-                    <small>Default target: {formatKpiTarget(kpi)}</small>
+                    <small>Monthly target: {formatKpiTarget(kpi)}</small>
                   </article>
                 );
               })
@@ -477,35 +546,7 @@ function AgentHome() {
           </div>
         </section>
 
-        <section className="home-modulesSection">
-          <div className="home-cardHeader home-cardHeaderStandalone">
-            <div>
-              <span className="home-cardKicker">Navigation</span>
-              <h2>Jump into a module</h2>
-            </div>
-          </div>
 
-          <div className="module-grid">
-            {moduleCards.map((module) => (
-              <div
-                key={module.key}
-                className={`module-card ${module.accent}`}
-                role="button"
-                tabIndex={0}
-                onClick={module.onClick}
-                onKeyDown={(e) => e.key === "Enter" && module.onClick()}
-              >
-                <div className="module-iconWrap">{module.icon}</div>
-                <strong>{module.title}</strong>
-                <p>{module.description}</p>
-                <span className="module-linkText">
-                  Open module
-                  <FiArrowRight aria-hidden="true" />
-                </span>
-              </div>
-            ))}
-          </div>
-        </section>
       </div>
     </>
   );
