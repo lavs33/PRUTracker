@@ -3730,7 +3730,7 @@ app.get("/api/agent/kpi-progress", async (req, res) => {
         areaName: agent.unitId?.branchId?.areaId?.areaName || "",
       },
       filters: { month: selectedMonth, frequency: "Monthly" },
-      reportContext: { periodLabel, startDate, endDate, generatedAt: now },
+      reportContext: { periodLabel, startDate, endDate, generatedAt: now, assignmentUpdatedAt: assignment?.updatedAt || null },
       kpis: assignedKpis.map((kpi) => ({ ...kpi, actual: Number(actualsByKey[kpi.key] || 0) })),
       unitSalesContribution: unitSalesProductionKpiForPeriod ? {
         kpi: unitSalesProductionKpiForPeriod,
