@@ -5,15 +5,21 @@ import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
 import "./AgentClientsRelationship.css";
 
-const DATE_PRESETS = [
-  { value: "ALL", label: "All Time" },
-  { value: "1d", label: "This Day" },
-  { value: "7d", label: "Last 7 Days" },
-  { value: "30d", label: "Last 30 Days" },
-  { value: "90d", label: "Last 90 Days" },
-  { value: "6m", label: "Last 6 Months" },
-  { value: "12m", label: "Last 12 Months" },
-];
+const MANILA_MONTH_PARTS = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Manila", year: "numeric", month: "2-digit",
+}).formatToParts(new Date());
+const CURRENT_YEAR = Number(MANILA_MONTH_PARTS.find((part) => part.type === "year")?.value);
+const CURRENT_MONTH = Number(MANILA_MONTH_PARTS.find((part) => part.type === "month")?.value);
+const CURRENT_MONTH_KEY = `${CURRENT_YEAR}-${String(CURRENT_MONTH).padStart(2, "0")}`;
+const CURRENT_MONTH_NAME = new Intl.DateTimeFormat("en-US", { month: "long", timeZone: "UTC" })
+  .format(new Date(Date.UTC(CURRENT_YEAR, CURRENT_MONTH - 1, 1)));
+const DATE_PRESETS = [{ value: "YTD", label: `January ${CURRENT_YEAR} - ${CURRENT_MONTH_NAME} ${CURRENT_YEAR}` }, ...Array.from({ length: CURRENT_MONTH }, (_, index) => {
+  const month = index + 1;
+  const value = `${CURRENT_YEAR}-${String(month).padStart(2, "0")}`;
+  const label = new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric", timeZone: "UTC" })
+    .format(new Date(Date.UTC(CURRENT_YEAR, month - 1, 1)));
+  return { value, label };
+})];
 
 const SOURCE_OPTIONS = [
   { value: "ALL", label: "All Sources" },
@@ -42,7 +48,7 @@ const STATUS_OPTIONS = [
 
 const DEFAULT_DASHBOARD = {
   totals: { prospects: 0, prospectsWithLeads: 0, prospectsWithActiveLeads: 0, policyholders: 0, activePolicyholders: 0, engagements: 0, leads: 0, activeLeads: 0 },
-  filters: { datePreset: "ALL", source: "ALL", marketType: "ALL", prospectType: "ALL", status: "ALL" },
+  filters: { datePreset: CURRENT_MONTH_KEY, source: "ALL", marketType: "ALL", prospectType: "ALL", status: "ALL" },
   leadStatusCounts: { new: 0, inProgress: 0 },
   conversionRatePct: 0,
   warmRatePct: 0,
@@ -57,7 +63,7 @@ const DEFAULT_DASHBOARD = {
   marketConversion: [],
   trendSeries: { prospects: [], policyholders: [] },
   recentProspects: [],
-  reportContext: { periodLabel: "All available records", generatedAt: null },
+  reportContext: { periodLabel: DATE_PRESETS.find((option) => option.value === CURRENT_MONTH_KEY)?.label || "Current month", generatedAt: null },
   insights: { topSource: null, leadCoverage: null, policyRiskPct: 0 },
 };
 
@@ -112,7 +118,7 @@ function AgentClientsRelationship() {
   const [apiError, setApiError] = useState("");
   const [lastUpdated, setLastUpdated] = useState(null);
   const [filters, setFilters] = useState({
-    datePreset: "ALL",
+    datePreset: CURRENT_MONTH_KEY,
     source: "ALL",
     marketType: "ALL",
     prospectType: "ALL",
@@ -120,7 +126,7 @@ function AgentClientsRelationship() {
   });
   const defaultFilters = useMemo(
     () => ({
-      datePreset: "ALL",
+      datePreset: CURRENT_MONTH_KEY,
       source: "ALL",
       marketType: "ALL",
       prospectType: "ALL",

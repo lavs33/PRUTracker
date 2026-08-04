@@ -3699,6 +3699,16 @@ app.get("/api/agent/home", async (req, res) => {
     const now = new Date();
     const nowMs = now.getTime();
     const todayKey = dateKeyInTZ(now, "Asia/Manila");
+    const currentMonthParts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Manila", year: "numeric", month: "2-digit",
+    }).formatToParts(now);
+    const currentYear = Number(currentMonthParts.find((part) => part.type === "year")?.value);
+    const currentMonthNumber = Number(currentMonthParts.find((part) => part.type === "month")?.value);
+    const currentMonthStart = new Date(Date.UTC(currentYear, currentMonthNumber - 1, 1) - (8 * 60 * 60 * 1000));
+    const nextMonthStart = new Date(Date.UTC(currentYear, currentMonthNumber, 1) - (8 * 60 * 60 * 1000));
+    const currentMonthLabel = new Intl.DateTimeFormat("en-US", {
+      timeZone: "Asia/Manila", month: "long", year: "numeric",
+    }).format(now);
     const normalizedTasks = openTasks.map((task) => {
       const dueMs = new Date(task?.dueAt).getTime();
       const isOverdue = Number.isFinite(dueMs) ? dueMs < nowMs : false;
@@ -3748,13 +3758,13 @@ app.get("/api/agent/home", async (req, res) => {
 
     const policyholders = engagementIds.length
       ? await Policyholder.find({ leadEngagementId: { $in: engagementIds } })
-          .select("status leadEngagementId createdAt")
+          .select("status leadEngagementId createdAt annualPaymentRecords")
           .lean()
       : [];
 
     const annualPayments = engagementIds.length
       ? await AnnualPayment.find({ leadEngagementId: { $in: engagementIds } })
-          .select("leadEngagementId totalAnnualPremiumPhp")
+          .select("leadEngagementId annualPaymentPeriod totalAnnualPremiumPhp createdAt updatedAt")
           .lean()
       : [];
 
@@ -3768,6 +3778,8 @@ app.get("/api/agent/home", async (req, res) => {
     const engagementById = new Map(engagements.map((engagement) => [String(engagement._id), engagement]));
 
     const totalProspects = prospects.length;
+    const activeProspects = prospects.filter((prospect) => prospect.status === "Active").length;
+    const ongoingLeads = leads.filter((lead) => ["New", "In Progress"].includes(String(lead?.status || "").trim())).length;
     const totalPolicyholders = policyholders.length;
     const activePolicies = policyholders.filter((policyholder) => policyholder.status === "Active").length;
     const conversionRate = totalProspects ? Math.round((totalPolicyholders / totalProspects) * 100) : 0;
@@ -3798,6 +3810,31 @@ app.get("/api/agent/home", async (req, res) => {
       activePolicyholderLeadIds.add(String(engagement.leadId));
     });
 
+    // Match Sales Performance: lead creation time does not determine whether a
+    // sale belongs to the month. Conversion timing comes exclusively from the
+    // actual policy issuance date, and separate leads of one prospect count
+    // separately through their distinct lead ids.
+    const issuedPolicies = activePolicyholderEngagementIds.size
+      ? await Policy.find({
+          leadEngagementId: { $in: [...activePolicyholderEngagementIds] },
+          "recordPolicyApplicationStatus.status": "Issued",
+          "recordPolicyApplicationStatus.issuanceDate": { $gte: currentMonthStart, $lt: nextMonthStart },
+        })
+          .select("leadEngagementId recordPolicyApplicationStatus.issuanceDate")
+          .lean()
+      : [];
+    const currentMonthActiveEngagementIds = new Set(
+      issuedPolicies.map((policy) => String(policy?.leadEngagementId || "")).filter(Boolean)
+    );
+    const currentMonthConvertedLeadIds = new Set(
+      [...currentMonthActiveEngagementIds]
+        .map((engagementId) => String(engagementById.get(engagementId)?.leadId || ""))
+        .filter(Boolean)
+    );
+    const currentMonthConversionRatePct = leads.length
+      ? Math.round((currentMonthConvertedLeadIds.size / leads.length) * 100)
+      : 0;
+
     const leadSourceBreakdown = new Map();
     leads.forEach((lead) => {
       const label = String(lead?.source || "Other").trim() || "Other";
@@ -3819,9 +3856,32 @@ app.get("/api/agent/home", async (req, res) => {
         return b.activePolicyholders - a.activePolicyholders;
       })[0] || null;
 
-    const totalAnnualPremiumPhp = annualPayments
-      .filter((annualPayment) => activePolicyholderEngagementIds.has(String(annualPayment?.leadEngagementId || "")))
-      .reduce((sum, annualPayment) => sum + Number(annualPayment?.totalAnnualPremiumPhp || 0), 0);
+    const annualPaymentById = new Map(annualPayments.map((annualPayment) => [String(annualPayment?._id || ""), annualPayment]));
+    const annualPaymentsByEngagement = new Map();
+    const annualPaymentTimestamp = (record) => new Date(record?.annualPaymentPeriod?.startDate || record?.updatedAt || record?.createdAt || 0).getTime() || 0;
+    annualPayments.forEach((annualPayment) => {
+      const engagementId = String(annualPayment?.leadEngagementId || "");
+      if (!engagementId) return;
+      const records = annualPaymentsByEngagement.get(engagementId) || [];
+      records.push(annualPayment);
+      records.sort((left, right) => annualPaymentTimestamp(right) - annualPaymentTimestamp(left));
+      annualPaymentsByEngagement.set(engagementId, records);
+    });
+    const resolvePolicyholderAnnualPremium = (policyholder) => {
+      const linkedRecords = (policyholder?.annualPaymentRecords || [])
+        .map((record) => annualPaymentById.get(String(record?.annualPaymentId || "")))
+        .filter(Boolean)
+        .sort((left, right) => annualPaymentTimestamp(right) - annualPaymentTimestamp(left));
+      const fallbackRecords = annualPaymentsByEngagement.get(String(policyholder?.leadEngagementId || "")) || [];
+      return Number((linkedRecords[0] || fallbackRecords[0])?.totalAnnualPremiumPhp || 0);
+    };
+    const activePolicyholders = policyholders.filter((policyholder) => policyholder.status === "Active");
+    const totalAnnualPremiumPhp = activePolicyholders.reduce(
+      (sum, policyholder) => sum + resolvePolicyholderAnnualPremium(policyholder), 0
+    );
+    const currentMonthAnnualPremiumPhp = activePolicyholders
+      .filter((policyholder) => currentMonthActiveEngagementIds.has(String(policyholder?.leadEngagementId || "")))
+      .reduce((sum, policyholder) => sum + resolvePolicyholderAnnualPremium(policyholder), 0);
 
     return res.json({
       tasks: {
@@ -3833,8 +3893,10 @@ app.get("/api/agent/home", async (req, res) => {
       },
       clients: {
         totalProspects,
+        activeProspects,
         totalPolicyholders,
         totalLeads: leads.length,
+        ongoingLeads,
         activePolicyholders: activePolicies,
         conversionRate,
         activePolicyRate,
@@ -3845,6 +3907,9 @@ app.get("/api/agent/home", async (req, res) => {
         totalPolicies: activePolicies,
         totalAnnualPremiumPhp,
         bestSource,
+        currentMonthLabel,
+        currentMonthConversionRatePct,
+        currentMonthAnnualPremiumPhp,
       },
     });
   } catch (err) {
@@ -3874,28 +3939,46 @@ app.get("/api/clients/relationship/dashboard", async (req, res) => {
     }
 
     const now = new Date();
-    const presetMap = {
-      "1d": [1, "This day"],
-      "7d": [7, "Last 7 days"],
-      "30d": [30, "Last 30 days"],
-      "90d": [90, "Last 90 days"],
-      "6m": [183, "Last 6 months"],
-      "12m": [365, "Last 12 months"],
-    };
-    const preset = presetMap[String(datePreset || "ALL")];
-    const startDate = (() => {
-      if (!preset) return null;
-      const dt = new Date(now);
-      if (String(datePreset) === "1d") dt.setHours(0, 0, 0, 0);
-      else dt.setDate(dt.getDate() - preset[0]);
-      return dt;
+    const currentParts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Manila", year: "numeric", month: "2-digit",
+    }).formatToParts(now);
+    const currentYear = Number(currentParts.find((part) => part.type === "year")?.value);
+    const currentMonth = Number(currentParts.find((part) => part.type === "month")?.value);
+    const selectedPreset = String(datePreset || "");
+    const rangeContext = (() => {
+      if (selectedPreset === "YTD") {
+        const monthLabel = new Intl.DateTimeFormat("en-US", { month: "long", timeZone: "UTC" })
+          .format(new Date(Date.UTC(currentYear, currentMonth - 1, 1)));
+        return {
+          startDate: new Date(Date.UTC(currentYear, 0, 1) - (8 * 60 * 60 * 1000)),
+          endDate: now,
+          periodLabel: `January ${currentYear} - ${monthLabel} ${currentYear}`,
+        };
+      }
+      if (/^\d{4}-(0[1-9]|1[0-2])$/.test(selectedPreset)) {
+        const [year, month] = selectedPreset.split("-").map(Number);
+        if (year !== currentYear || month > currentMonth) return null;
+        const startDate = new Date(Date.UTC(year, month - 1, 1) - (8 * 60 * 60 * 1000));
+        const nextMonthStart = new Date(Date.UTC(year, month, 1) - (8 * 60 * 60 * 1000));
+        return {
+          startDate,
+          endDate: month === currentMonth ? now : new Date(nextMonthStart.getTime() - 1),
+          periodLabel: new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric", timeZone: "Asia/Manila" })
+            .format(new Date(startDate.getTime() + (8 * 60 * 60 * 1000))),
+        };
+      }
+      return null;
     })();
+    if (!rangeContext) {
+      return res.status(400).json({ message: "Clients relationship month must be between January and the current month of the current year." });
+    }
+    const { startDate, endDate } = rangeContext;
 
     const isInSelectedRange = (value) => {
       const dt = new Date(value);
       if (Number.isNaN(dt.getTime())) return false;
       if (startDate && dt < startDate) return false;
-      return dt <= now;
+      return dt <= endDate;
     };
     const formatDate = (value) => {
       const dt = new Date(value);
@@ -3935,7 +4018,7 @@ app.get("/api/clients/relationship/dashboard", async (req, res) => {
     const buildSeries = (items, dateKey) => {
       const unit = ["1d", "7d"].includes(String(datePreset)) ? "day" : ["30d", "90d"].includes(String(datePreset)) ? "week" : "month";
       const seriesStart = bucketDate(startDate || new Date(now.getFullYear(), now.getMonth() - 5, 1), unit);
-      const seriesEnd = bucketDate(now, unit);
+      const seriesEnd = bucketDate(endDate, unit);
       const buckets = [];
       let cursor = new Date(seriesStart);
       while (cursor <= seriesEnd && buckets.length < 370) {
@@ -3968,7 +4051,7 @@ app.get("/api/clients/relationship/dashboard", async (req, res) => {
         { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
       ],
     };
-    if (startDate) prospectQuery.createdAt = { $gte: startDate, $lte: now };
+    prospectQuery.createdAt = { $gte: startDate, $lte: endDate };
     if (source !== "ALL") prospectQuery.source = source;
     if (marketType !== "ALL") prospectQuery.marketType = marketType;
     if (prospectType !== "ALL") prospectQuery.prospectType = prospectType;
@@ -3980,17 +4063,17 @@ app.get("/api/clients/relationship/dashboard", async (req, res) => {
 
     const prospectIds = prospects.map((p) => p._id);
     const leads = prospectIds.length
-      ? await Lead.find({ prospectId: { $in: prospectIds } }).select("_id prospectId status createdAt").lean()
+      ? await Lead.find({ prospectId: { $in: prospectIds }, createdAt: { $lte: endDate } }).select("_id prospectId status createdAt").lean()
       : [];
     const leadIds = leads.map((l) => l._id);
 
     const engagements = leadIds.length
-      ? await LeadEngagement.find({ leadId: { $in: leadIds } }).select("_id leadId currentStage createdAt").lean()
+      ? await LeadEngagement.find({ leadId: { $in: leadIds }, createdAt: { $lte: endDate } }).select("_id leadId currentStage createdAt").lean()
       : [];
     const engagementIds = engagements.map((e) => e._id);
 
     const policyholders = engagementIds.length
-      ? await Policyholder.find({ leadEngagementId: { $in: engagementIds } })
+      ? await Policyholder.find({ leadEngagementId: { $in: engagementIds }, createdAt: { $lte: endDate } })
           .select("status leadEngagementId createdAt policyholderCode policyNumber")
           .lean()
       : [];
@@ -4137,7 +4220,7 @@ app.get("/api/clients/relationship/dashboard", async (req, res) => {
     const atRiskPolicies = countBy(policyholders, isRiskPolicyholder);
     const policyRiskPct = toPct(atRiskPolicies, totalPolicyholders);
     const leadCoveragePct = toPct(prospectsWithActiveLeads, totalProspects);
-    const periodLabel = startDate ? `${formatDate(startDate)} to ${formatDate(now)}` : "All available records";
+    const periodLabel = rangeContext.periodLabel;
 
     return res.json({
       filters: {
@@ -4180,7 +4263,7 @@ app.get("/api/clients/relationship/dashboard", async (req, res) => {
       reportContext: {
         periodLabel,
         startDate,
-        endDate: now,
+        endDate,
         generatedAt: now,
       },
       insights: {
@@ -4223,6 +4306,37 @@ app.get("/api/sales/performance", async (req, res) => {
     const now = new Date();
 
     const buildSalesReportContext = () => {
+      const selectedMonth = String(datePreset || "");
+      if (selectedMonth === "YTD") {
+        const currentParts = new Intl.DateTimeFormat("en-CA", {
+          timeZone: "Asia/Manila", year: "numeric", month: "2-digit",
+        }).formatToParts(now);
+        const year = Number(currentParts.find((part) => part.type === "year")?.value);
+        const month = Number(currentParts.find((part) => part.type === "month")?.value);
+        const monthLabel = new Intl.DateTimeFormat("en-US", { month: "long", timeZone: "UTC" })
+          .format(new Date(Date.UTC(year, month - 1, 1)));
+        return {
+          startDate: new Date(Date.UTC(year, 0, 1) - (8 * 60 * 60 * 1000)),
+          endDate: now,
+          periodLabel: `January ${year} - ${monthLabel} ${year}`,
+        };
+      }
+      if (/^\d{4}-(0[1-9]|1[0-2])$/.test(selectedMonth)) {
+        const [year, month] = selectedMonth.split("-").map(Number);
+        const currentParts = new Intl.DateTimeFormat("en-CA", {
+          timeZone: "Asia/Manila", year: "numeric", month: "2-digit",
+        }).formatToParts(now);
+        const currentYear = Number(currentParts.find((part) => part.type === "year")?.value);
+        const currentMonth = Number(currentParts.find((part) => part.type === "month")?.value);
+        if (year !== currentYear || month > currentMonth) return null;
+        const startDate = new Date(Date.UTC(year, month - 1, 1) - (8 * 60 * 60 * 1000));
+        const nextMonthStart = new Date(Date.UTC(year, month, 1) - (8 * 60 * 60 * 1000));
+        return {
+          startDate,
+          endDate: month === currentMonth ? now : new Date(nextMonthStart.getTime() - 1),
+          periodLabel: new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric", timeZone: "Asia/Manila" }).format(new Date(startDate.getTime() + (8 * 60 * 60 * 1000))),
+        };
+      }
       const presetMap = {
         "1d": [1, "This day"],
         "7d": [7, "Last 7 days"],
@@ -4237,15 +4351,17 @@ app.get("/api/sales/performance", async (req, res) => {
         const start = new Date(now);
         if (String(datePreset) === "1d") start.setHours(0, 0, 0, 0);
         else start.setDate(start.getDate() - days);
-        return { startDate: start, periodLabel: label };
+        return { startDate: start, endDate: now, periodLabel: label };
       }
       return {
         startDate: null,
+        endDate: now,
         periodLabel: "All available records",
       };
     };
 
     const reportContext = buildSalesReportContext();
+    if (!reportContext) return res.status(400).json({ message: "Sales month must be between January and the current month of the current year." });
     const defaultResponse = {
       filters: {
         datePreset: String(datePreset || "ALL"),
@@ -4254,10 +4370,12 @@ app.get("/api/sales/performance", async (req, res) => {
       reportContext: {
         periodLabel: reportContext.periodLabel,
         startDate: reportContext.startDate,
-        endDate: now,
+        endDate: reportContext.endDate,
         generatedAt: now,
       },
       totalLeads: 0,
+      totalOngoingLeads: 0,
+      totalHandledLeads: 0,
       convertedLeads: 0,
       unconvertedLeads: 0,
       conversionRatePct: 0,
@@ -4302,15 +4420,12 @@ app.get("/api/sales/performance", async (req, res) => {
     }
 
     const leadQuery = { prospectId: { $in: prospectIds } };
-    if (reportContext.startDate) {
-      leadQuery.createdAt = { $gte: reportContext.startDate };
-    }
     if (leadSource !== "ALL") {
       leadQuery.source = String(leadSource);
     }
 
     const leads = await Lead.find(leadQuery)
-      .select("_id prospectId leadCode source otherSource status createdAt")
+      .select("_id prospectId leadCode source otherSource status statusBeforeDrop droppedAt createdAt updatedAt")
       .lean();
     const leadIds = leads.map((l) => l._id);
 
@@ -4367,12 +4482,32 @@ app.get("/api/sales/performance", async (req, res) => {
 
     const policies = engagementIds.length
       ? await Policy.find({ leadEngagementId: { $in: engagementIds } })
-          .select("leadEngagementId attemptCycle recordPolicyApplicationStatus.issuanceDate updatedAt")
+          .select("leadEngagementId attemptCycle recordPolicyApplicationStatus.status recordPolicyApplicationStatus.issuanceDate recordPolicyApplicationStatus.declinedDate updatedAt")
           .sort({ attemptCycle: -1, updatedAt: -1 })
           .lean()
       : [];
 
-    const scopedPolicyholders = policyholders;
+    const issuanceDateByEngagementId = new Map();
+    const declinedDateByEngagementId = new Map();
+    for (const policy of policies) {
+      const engagementId = String(policy?.leadEngagementId || "");
+      const issuanceDate = policy?.recordPolicyApplicationStatus?.issuanceDate || null;
+      const declinedDate = policy?.recordPolicyApplicationStatus?.declinedDate || null;
+      if (policy?.recordPolicyApplicationStatus?.status === "Issued" && engagementId && issuanceDate && !issuanceDateByEngagementId.has(engagementId)) {
+        issuanceDateByEngagementId.set(engagementId, issuanceDate);
+      }
+      if (policy?.recordPolicyApplicationStatus?.status === "Declined" && engagementId && declinedDate && !declinedDateByEngagementId.has(engagementId)) {
+        declinedDateByEngagementId.set(engagementId, declinedDate);
+      }
+    }
+    const issuanceFallsInReportRange = (engagementId) => {
+      if (!reportContext.startDate) return true;
+      const issuanceTime = new Date(issuanceDateByEngagementId.get(String(engagementId)) || 0).getTime();
+      return Number.isFinite(issuanceTime)
+        && issuanceTime >= reportContext.startDate.getTime()
+        && issuanceTime <= reportContext.endDate.getTime();
+    };
+    const scopedPolicyholders = policyholders.filter((policyholder) => issuanceFallsInReportRange(policyholder.leadEngagementId));
     const reportingLeads = leads;
     const totalLeads = reportingLeads.length;
 
@@ -4383,6 +4518,13 @@ app.get("/api/sales/performance", async (req, res) => {
 
     const engagementIdToLeadId = new Map(engagements.map((engagement) => [String(engagement._id), String(engagement.leadId)]));
     const engagementToLead = new Map(engagements.map((e) => [String(e._id), String(e.leadId)]));
+    const engagementsByLeadId = new Map();
+    engagements.forEach((engagement) => {
+      const leadId = String(engagement?.leadId || "");
+      const rows = engagementsByLeadId.get(leadId) || [];
+      rows.push(String(engagement._id));
+      engagementsByLeadId.set(leadId, rows);
+    });
     const activePolicyholders = scopedPolicyholders.filter((p) => p.status === "Active");
     const activeEngagementIds = new Set(activePolicyholders.map((policyholder) => String(policyholder.leadEngagementId || "")));
     const activeLeadIds = new Set(activePolicyholders.map((policyholder) => engagementIdToLeadId.get(String(policyholder.leadEngagementId))).filter(Boolean));
@@ -4528,24 +4670,58 @@ app.get("/api/sales/performance", async (req, res) => {
       const engagementId = String(policyholder?.leadEngagementId || "");
       if (!engagementId) continue;
 
-      const createdAt = new Date(policyholder.createdAt);
+      const issuanceDate = new Date(issuanceDateByEngagementId.get(engagementId) || 0);
+      if (Number.isNaN(issuanceDate.getTime())) continue;
       const existingMoment = convertedLeadMomentsByEngagement.get(engagementId);
 
       if (!existingMoment) {
-        convertedLeadMomentsByEngagement.set(engagementId, createdAt);
+        convertedLeadMomentsByEngagement.set(engagementId, issuanceDate);
         continue;
       }
 
-      if (!Number.isNaN(createdAt.getTime()) && (Number.isNaN(existingMoment.getTime()) || createdAt < existingMoment)) {
-        convertedLeadMomentsByEngagement.set(engagementId, createdAt);
+      if (Number.isNaN(existingMoment.getTime()) || issuanceDate < existingMoment) {
+        convertedLeadMomentsByEngagement.set(engagementId, issuanceDate);
       }
     }
 
     const convertedLeadIds = new Set([...convertedLeadMomentsByEngagement.keys()].map((engagementId) => engagementToLead.get(engagementId)).filter(Boolean));
     const convertedLeads = convertedLeadIds.size;
-    const unconvertedLeads = reportingLeads.filter((lead) => !convertedLeadIds.has(String(lead._id))).length;
-    const leadGap = reportingLeads.filter((lead) => activeLeadGapStatuses.has(String(lead?.status || "").trim().toLowerCase()) && !convertedLeadIds.has(String(lead._id))).length;
-    const conversionRatePct = totalLeads ? Math.round((convertedLeads / totalLeads) * 100) : 0;
+    const reportStartTime = reportContext.startDate?.getTime() ?? Number.NEGATIVE_INFINITY;
+    const reportEndTime = reportContext.endDate.getTime();
+    const leadLifecycleTimes = (lead) => {
+      const engagementIdsForLead = engagementsByLeadId.get(String(lead?._id || "")) || [];
+      return [
+        lead?.droppedAt,
+        ...engagementIdsForLead.map((engagementId) => issuanceDateByEngagementId.get(engagementId)),
+        ...engagementIdsForLead.map((engagementId) => declinedDateByEngagementId.get(engagementId)),
+      ].map((value) => new Date(value || 0).getTime()).filter((timestamp) => Number.isFinite(timestamp) && timestamp > 0);
+    };
+    const leadTerminalTime = (lead) => {
+      const lifecycleTimes = leadLifecycleTimes(lead);
+      return lifecycleTimes.length ? Math.min(...lifecycleTimes) : null;
+    };
+    const leadWasHandledDuringPeriod = (lead) => {
+      const createdTime = new Date(lead?.createdAt || 0).getTime();
+      if (!Number.isFinite(createdTime) || createdTime > reportEndTime) return false;
+      const terminalTime = leadTerminalTime(lead);
+      if (terminalTime !== null) return terminalTime >= reportStartTime;
+      return activeLeadGapStatuses.has(String(lead?.status || "").trim().toLowerCase());
+    };
+    const handledLeads = reportingLeads.filter(leadWasHandledDuringPeriod);
+    const handledLeadIds = new Set(handledLeads.map((lead) => String(lead._id)));
+    const totalHandledLeads = handledLeads.length;
+    const unconvertedLeadRows = handledLeads.filter((lead) => !convertedLeadIds.has(String(lead._id)));
+    const unconvertedLeads = unconvertedLeadRows.length;
+    const leadStatusAtPeriodEnd = (lead) => {
+      const terminalTime = leadTerminalTime(lead);
+      if (terminalTime !== null && terminalTime > reportEndTime) {
+        return ["New", "In Progress"].includes(String(lead?.statusBeforeDrop || ""))
+          ? lead.statusBeforeDrop
+          : "In Progress";
+      }
+      return String(lead?.status || "Unknown").trim() || "Unknown";
+    };
+    const conversionRatePct = totalHandledLeads ? Math.round((convertedLeads / totalHandledLeads) * 100) : 0;
     const activePolicyRatePct = totalPolicies ? Math.round((activePolicies / totalPolicies) * 100) : 0;
     const activeConvertedLeadCount = activeLeadIds.size;
     const averageAnnualPremiumPerConvertedLeadPhp = activeConvertedLeadCount
@@ -4555,34 +4731,43 @@ app.get("/api/sales/performance", async (req, res) => {
       ? Number((totalFrequencyPremiumPhp / activeConvertedLeadCount).toFixed(2))
       : 0;
 
-    const buildLeadStatusBreakdown = (items, total) => {
+    const buildLeadStatusBreakdown = (items, total, statusResolver = (lead) => lead?.status) => {
       const statusMap = new Map();
       for (const lead of items) {
-        const status = String(lead?.status || "Unknown").trim() || "Unknown";
+        const status = String(statusResolver(lead) || "Unknown").trim() || "Unknown";
         statusMap.set(status, (statusMap.get(status) || 0) + 1);
       }
       return [...statusMap.entries()]
         .map(([label, count]) => ({ label, count, sharePct: total ? Math.round((count / total) * 100) : 0 }))
         .sort((a, b) => (b.count - a.count) || a.label.localeCompare(b.label));
     };
-    const leadStatusBreakdown = buildLeadStatusBreakdown(reportingLeads, totalLeads);
-    const unconvertedLeadStatusBreakdown = buildLeadStatusBreakdown(reportingLeads.filter((lead) => !convertedLeadIds.has(String(lead._id))), unconvertedLeads);
+    const leadStatusBreakdown = buildLeadStatusBreakdown(handledLeads, totalHandledLeads);
+    const unconvertedLeadStatusBreakdown = buildLeadStatusBreakdown(unconvertedLeadRows, unconvertedLeads, leadStatusAtPeriodEnd);
+    // Keep Lead Gap exactly reconciled with the status rows displayed in Lead
+    // Conversion Progress: it is New + In Progress from the unconverted set.
+    const leadGap = unconvertedLeadStatusBreakdown
+      .filter((row) => ["new", "in progress"].includes(String(row.label || "").toLowerCase()))
+      .reduce((total, row) => total + Number(row.count || 0), 0);
+    const totalOngoingLeads = leadGap;
 
     const leadSourceBreakdownMap = new Map();
 
     for (const lead of reportingLeads) {
+      const leadId = String(lead._id || "");
+      if (!handledLeadIds.has(leadId)) continue;
       const bucket = normalizeLeadSourceLabel(lead);
       if (!leadSourceBreakdownMap.has(bucket)) {
         leadSourceBreakdownMap.set(bucket, {
           label: bucket,
           totalLeads: 0,
+          handledLeads: 0,
           convertedLeads: 0,
           convertedAndActiveLeads: 0,
           conversionRatePct: 0,
           activeConversionRatePct: 0,
         });
       }
-      leadSourceBreakdownMap.get(bucket).totalLeads += 1;
+      leadSourceBreakdownMap.get(bucket).handledLeads += 1;
     }
 
     for (const lead of reportingLeads) {
@@ -4593,6 +4778,7 @@ app.get("/api/sales/performance", async (req, res) => {
         leadSourceBreakdownMap.set(bucket, {
           label: bucket,
           totalLeads: 0,
+          handledLeads: 0,
           convertedLeads: 0,
           convertedAndActiveLeads: 0,
           conversionRatePct: 0,
@@ -4606,28 +4792,19 @@ app.get("/api/sales/performance", async (req, res) => {
     const leadSourceBreakdown = [...leadSourceBreakdownMap.values()]
       .map((sourceMetrics) => ({
         ...sourceMetrics,
-        conversionRatePct: sourceMetrics.totalLeads
-          ? Math.round((sourceMetrics.convertedLeads / sourceMetrics.totalLeads) * 100)
+        conversionRatePct: sourceMetrics.handledLeads
+          ? Math.round((sourceMetrics.convertedLeads / sourceMetrics.handledLeads) * 100)
           : 0,
-        activeConversionRatePct: sourceMetrics.totalLeads
-          ? Math.round((sourceMetrics.convertedAndActiveLeads / sourceMetrics.totalLeads) * 100)
+        activeConversionRatePct: sourceMetrics.handledLeads
+          ? Math.round((sourceMetrics.convertedAndActiveLeads / sourceMetrics.handledLeads) * 100)
           : 0,
       }))
       .sort((a, b) => {
         if (b.convertedAndActiveLeads !== a.convertedAndActiveLeads) return b.convertedAndActiveLeads - a.convertedAndActiveLeads;
         if (b.convertedLeads !== a.convertedLeads) return b.convertedLeads - a.convertedLeads;
-        if (b.totalLeads !== a.totalLeads) return b.totalLeads - a.totalLeads;
+        if (b.handledLeads !== a.handledLeads) return b.handledLeads - a.handledLeads;
         return a.label.localeCompare(b.label);
       });
-
-    for (const sourceMetrics of leadSourceBreakdown) {
-      sourceMetrics.conversionRatePct = sourceMetrics.totalLeads
-        ? Math.round((sourceMetrics.convertedLeads / sourceMetrics.totalLeads) * 100)
-        : 0;
-      sourceMetrics.activeConversionRatePct = sourceMetrics.totalLeads
-        ? Math.round((sourceMetrics.convertedAndActiveLeads / sourceMetrics.totalLeads) * 100)
-        : 0;
-    }
 
     const getTrendBucket = (dateValue) => {
       const dt = new Date(dateValue);
@@ -4685,15 +4862,6 @@ app.get("/api/sales/performance", async (req, res) => {
         return [String(leadId || ""), annualPayment];
       }).filter(([leadId]) => leadId)
     );
-    const issuanceDateByEngagementId = new Map();
-    for (const policy of policies) {
-      const engagementId = String(policy?.leadEngagementId || "");
-      const issuanceDate = policy?.recordPolicyApplicationStatus?.issuanceDate || null;
-      if (engagementId && issuanceDate && !issuanceDateByEngagementId.has(engagementId)) {
-        issuanceDateByEngagementId.set(engagementId, issuanceDate);
-      }
-    }
-
     const convertedLeadPolicyStatusMap = new Map();
     for (const leadId of convertedLeadIds) {
       const relatedPolicies = [...(leadIdToPolicyholders.get(String(leadId)) || [])].sort(
@@ -4768,6 +4936,8 @@ app.get("/api/sales/performance", async (req, res) => {
     return res.json({
       ...defaultResponse,
       totalLeads,
+      totalOngoingLeads,
+      totalHandledLeads,
       convertedLeads,
       unconvertedLeads,
       conversionRatePct,
