@@ -5,15 +5,21 @@ import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
 import "./AgentSalesPerformance.css";
 
-const DATE_PRESETS = [
-  { value: "ALL", label: "All Time" },
-  { value: "1d", label: "This Day" },
-  { value: "7d", label: "Last 7 Days" },
-  { value: "30d", label: "Last 30 Days" },
-  { value: "90d", label: "Last 90 Days" },
-  { value: "6m", label: "Last 6 Months" },
-  { value: "12m", label: "Last 12 Months" },
-];
+const MANILA_MONTH_PARTS = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Manila", year: "numeric", month: "2-digit",
+}).formatToParts(new Date());
+const CURRENT_YEAR = Number(MANILA_MONTH_PARTS.find((part) => part.type === "year")?.value);
+const CURRENT_MONTH = Number(MANILA_MONTH_PARTS.find((part) => part.type === "month")?.value);
+const CURRENT_MONTH_KEY = `${CURRENT_YEAR}-${String(CURRENT_MONTH).padStart(2, "0")}`;
+const CURRENT_MONTH_NAME = new Intl.DateTimeFormat("en-US", { month: "long", timeZone: "UTC" })
+  .format(new Date(Date.UTC(CURRENT_YEAR, CURRENT_MONTH - 1, 1)));
+const DATE_PRESETS = [{ value: "YTD", label: `January ${CURRENT_YEAR} - ${CURRENT_MONTH_NAME} ${CURRENT_YEAR}` }, ...Array.from({ length: CURRENT_MONTH }, (_, index) => {
+  const month = index + 1;
+  const value = `${CURRENT_YEAR}-${String(month).padStart(2, "0")}`;
+  const label = new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric", timeZone: "UTC" })
+    .format(new Date(Date.UTC(CURRENT_YEAR, month - 1, 1)));
+  return { value, label };
+})];
 
 const LEAD_SOURCE_OPTIONS = [
   { value: "ALL", label: "All Lead Sources" },
@@ -27,14 +33,16 @@ const LEAD_SOURCE_OPTIONS = [
 ];
 
 const DEFAULT_FILTERS = {
-  datePreset: "ALL",
+  datePreset: CURRENT_MONTH_KEY,
   leadSource: "ALL",
 };
 
 const DEFAULT_DATA = {
   filters: DEFAULT_FILTERS,
-  reportContext: { periodLabel: "All available records", generatedAt: null },
+  reportContext: { periodLabel: DATE_PRESETS.find((option) => option.value === CURRENT_MONTH_KEY)?.label || "Current month", generatedAt: null },
   totalLeads: 0,
+  totalOngoingLeads: 0,
+  totalHandledLeads: 0,
   convertedLeads: 0,
   unconvertedLeads: 0,
   conversionRatePct: 0,
@@ -204,7 +212,7 @@ function AgentSalesPerformance() {
   );
   const salesRows = Array.isArray(data?.salesRows) ? data.salesRows : [];
   const kpis = [
-    { label: "Total Leads", value: data.totalLeads || 0 },
+    { label: "Total Leads Handled", value: data.totalHandledLeads || 0 },
     { label: "Converted Leads", value: data.convertedLeads || 0 },
     { label: "Unconverted Leads", value: data.unconvertedLeads || 0 },
     { label: "Conversion Rate", value: `${data.conversionRatePct || 0}%` },
@@ -259,7 +267,7 @@ function AgentSalesPerformance() {
     const sourceRowsHtml = sourcePerformanceRows.map((row) => `
       <tr>
         <td>${escapeHtml(row.label)}</td>
-        <td>${Number(row.totalLeads || 0)}</td>
+        <td>${Number(row.handledLeads || 0)}</td>
         <td>${Number(row.convertedAndActiveLeads || 0)}</td>
         <td>${Number(row.activeConversionRatePct || 0)}%</td>
       </tr>
@@ -267,7 +275,7 @@ function AgentSalesPerformance() {
     const topSourceRowsHtml = topConvertedSourceRows.map((row) => `
       <tr>
         <td>${escapeHtml(row.label)}</td>
-        <td>${Number(row.convertedLeads || 0)}/${Number(row.totalLeads || 0)}</td>
+        <td>${Number(row.convertedLeads || 0)}/${Number(row.handledLeads || 0)}</td>
         <td>${Number(row.conversionRatePct || 0)}%</td>
       </tr>
     `).join("");
@@ -331,8 +339,8 @@ function AgentSalesPerformance() {
         </section>
         <section class="section">
           <div class="insight-grid">
-            <div class="insight-card"><h4>Lead Gap</h4><p>${Number(data.leadGap || 0)} Active Leads still to convert from the current filter scope.</p></div>
-            <div class="insight-card"><h4>Best Lead Source</h4><p>${bestSource ? `${escapeHtml(bestSource.label)} has ${Number(bestSource.convertedAndActiveLeads || 0)} converted leads with active policies (${Number(bestSource.activeConversionRatePct || 0)}% of ${Number(bestSource.totalLeads || 0)} leads).` : "—"}</p></div>
+            <div class="insight-card"><h4>Lead Gap</h4><p>${Number(data.leadGap || 0)} New/In Progress leads remained unconverted at the end of the selected period.</p></div>
+            <div class="insight-card"><h4>Best Lead Source</h4><p>${bestSource ? `${escapeHtml(bestSource.label)} has ${Number(bestSource.convertedAndActiveLeads || 0)} converted leads with active policies (${Number(bestSource.activeConversionRatePct || 0)}% of ${Number(bestSource.handledLeads || 0)} handled leads).` : "—"}</p></div>
             <div class="insight-card"><h4>Policy Health</h4><p>${Number(data.activePolicyRatePct || 0)}% of all policies are active (${Number(data.activePolicies || 0)}/${Number(data.totalPolicies || 0)}).</p></div>
           </div>
         </section>
@@ -355,7 +363,7 @@ function AgentSalesPerformance() {
             <div class="panel">
               <h4>Lead Conversion Progress</h4>
               <table><thead><tr><th>Metric</th><th>Value</th></tr></thead><tbody>
-                <tr><td>Total Leads</td><td>${Number(data.totalLeads || 0)}</td></tr>
+                <tr><td>Total Leads Handled</td><td>${Number(data.totalHandledLeads || 0)}</td></tr>
                 <tr><td>Converted Leads</td><td>${Number(data.convertedLeads || 0)}</td></tr>
                 <tr><td>Conversion Rate</td><td>${Number(data.conversionRatePct || 0)}%</td></tr>
               </tbody></table>
@@ -366,7 +374,7 @@ function AgentSalesPerformance() {
             </div>
             <div class="panel">
               <h4>Top Converted Lead Sources</h4>
-              <table><thead><tr><th>Lead Source</th><th>Converted / Total</th><th>Rate</th></tr></thead><tbody>${topSourceRowsHtml || '<tr><td colspan="3">No converted lead source data.</td></tr>'}</tbody></table>
+              <table><thead><tr><th>Lead Source</th><th>Converted / Handled</th><th>Rate</th></tr></thead><tbody>${topSourceRowsHtml || '<tr><td colspan="3">No converted lead source data.</td></tr>'}</tbody></table>
             </div>
           </div>
         </section>
@@ -382,13 +390,13 @@ function AgentSalesPerformance() {
             </div>
             <div class="panel">
               <h4>Lead Source Quality</h4>
-              <table><thead><tr><th>Lead Source</th><th>Total Leads</th><th>Converted and Active</th><th>Active Rate</th></tr></thead><tbody>${sourceRowsHtml || '<tr><td colspan="4">No lead source data available.</td></tr>'}</tbody></table>
+              <table><thead><tr><th>Lead Source</th><th>Total Leads Handled</th><th>Converted and Active</th><th>Active Rate</th></tr></thead><tbody>${sourceRowsHtml || '<tr><td colspan="4">No lead source data available.</td></tr>'}</tbody></table>
             </div>
           </div>
         </section>
         <section class="section">
           <div class="panel">
-            <div class="panel-title-row"><h4>Converted Leads Trend</h4><strong>${bestTrendMonth ? `${Number(bestTrendMonth.converted || 0)} peak conversions` : "No trend"}</strong></div>
+            <div class="panel-title-row"><h4>Converted Leads Trend</h4><strong>${bestTrendMonth ? `${Number(bestTrendMonth.converted || 0)} peak conversions` : "No trend"} • ${Number(data.totalHandledLeads || 0)} leads handled</strong></div>
             <p class="panel-note">Bars adjust to the selected date range and include all converted leads regardless of policy status.</p>
             <table><thead><tr><th>Bucket</th><th>Converted Leads</th></tr></thead><tbody>${trendRows || '<tr><td colspan="2">No conversion trend data yet.</td></tr>'}</tbody></table>
           </div>
@@ -596,12 +604,12 @@ function AgentSalesPerformance() {
             <div className="sp-highlight">
               <span>Lead Gap</span>
               <strong>{data.leadGap || 0}</strong>
-              <small>Active Leads still to convert from the current filter scope.</small>
+              <small>New/In Progress leads that remained unconverted at the end of the selected period.</small>
             </div>
             <div className="sp-highlight">
               <span>Best Lead Source</span>
               <strong>{bestSource ? bestSource.label : "—"}</strong>
-              <small>{bestSource ? `${bestSource.convertedAndActiveLeads || 0} converted and active (${bestSource.activeConversionRatePct || 0}% of ${bestSource.totalLeads || 0})` : "No active-policy lead source pattern yet."}</small>
+              <small>{bestSource ? `${bestSource.convertedAndActiveLeads || 0} converted and active (${bestSource.activeConversionRatePct || 0}% of ${bestSource.handledLeads || 0} handled)` : "No active-policy lead source pattern yet."}</small>
             </div>
             <div className="sp-highlight">
               <span>Policy Health</span>
@@ -642,11 +650,11 @@ function AgentSalesPerformance() {
             <section className="sp-card">
               <h3>Lead Conversion Progress</h3>
               <div className="sp-progressRow">
-                <label>Converted vs Total Leads</label>
+                <label>Converted vs Total Leads Handled</label>
                 <div className="sp-track"><span style={{ width: `${data.conversionRatePct || 0}%` }} /></div>
                 <b>{data.conversionRatePct || 0}%</b>
               </div>
-              <p className="sp-footnote">{data.convertedLeads || 0} converted leads from {data.totalLeads || 0} total leads.</p>
+              <p className="sp-footnote">{data.convertedLeads || 0} converted leads from {data.totalHandledLeads || 0} leads handled in this period.</p>
               <div className="sp-miniBreakdowns">
                 <div><b>Converted by Policy Status</b>{convertedLeadPolicyStatusRows.map((row) => <small key={row.label}>{row.label}: {row.count} ({row.sharePct}%)</small>)}</div>
                 <div><b>Unconverted by Lead Status</b>{unconvertedLeadStatusRows.map((row) => <small key={row.label}>{row.label}: {row.count} ({row.sharePct}%)</small>)}</div>
@@ -660,7 +668,7 @@ function AgentSalesPerformance() {
                   <div key={row.label} className="sp-sourceRow">
                     <div className="sp-sourceMeta">
                       <strong>{row.label}</strong>
-                      <span>{row.convertedLeads || 0}/{row.totalLeads || 0} converted • {row.conversionRatePct || 0}%</span>
+                      <span>{row.convertedLeads || 0} converted / {row.handledLeads || 0} handled • {row.conversionRatePct || 0}%</span>
                     </div>
                     <div className="sp-sourceTrack">
                       <span style={{ width: `${Math.max(0, Math.min(100, Number(row.conversionRatePct || 0)))}%` }} />
@@ -690,7 +698,7 @@ function AgentSalesPerformance() {
                   <thead>
                     <tr>
                       <th>Lead Source</th>
-                      <th>Total Leads</th>
+                      <th>Total Leads Handled</th>
                       <th>Converted and Active</th>
                       <th>Active Rate</th>
                     </tr>
@@ -699,7 +707,7 @@ function AgentSalesPerformance() {
                     {sourcePerformanceRows.length > 0 ? sourcePerformanceRows.map((row) => (
                       <tr key={row.label}>
                         <td>{row.label}</td>
-                        <td>{row.totalLeads || 0}</td>
+                        <td>{row.handledLeads || 0}</td>
                         <td>{row.convertedAndActiveLeads || 0}</td>
                         <td>{row.activeConversionRatePct || 0}%</td>
                       </tr>
@@ -719,7 +727,7 @@ function AgentSalesPerformance() {
                   <h3>Converted Leads Trend</h3>
                   <p>Bars adjust to the selected date range and include all converted leads regardless of policy status.</p>
                 </div>
-                <strong className="sp-cardTotal">{bestTrendMonth ? `${bestTrendMonth.converted || 0} peak conversions` : "No trend"}</strong>
+                <strong className="sp-cardTotal">{bestTrendMonth ? `${bestTrendMonth.converted || 0} peak conversions` : "No trend"} • {data.totalHandledLeads || 0} leads handled</strong>
               </div>
               {Array.isArray(data.monthlyConvertedLeads) && data.monthlyConvertedLeads.length > 0 ? (
                 <div className="sp-bars">
