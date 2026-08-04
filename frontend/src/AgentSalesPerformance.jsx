@@ -5,15 +5,28 @@ import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
 import "./AgentSalesPerformance.css";
 
-const DATE_PRESETS = [
-  { value: "ALL", label: "All Time" },
-  { value: "1d", label: "This Day" },
-  { value: "7d", label: "Last 7 Days" },
-  { value: "30d", label: "Last 30 Days" },
-  { value: "90d", label: "Last 90 Days" },
-  { value: "6m", label: "Last 6 Months" },
-  { value: "12m", label: "Last 12 Months" },
-];
+const MANILA_MONTH_PARTS = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Manila", year: "numeric", month: "2-digit",
+}).formatToParts(new Date());
+const CURRENT_YEAR = Number(MANILA_MONTH_PARTS.find((part) => part.type === "year")?.value);
+const CURRENT_MONTH = Number(MANILA_MONTH_PARTS.find((part) => part.type === "month")?.value);
+const CURRENT_MONTH_KEY = `${CURRENT_YEAR}-${String(CURRENT_MONTH).padStart(2, "0")}`;
+const buildDatePresets = (dataStartDate) => {
+  const start = new Date(dataStartDate || Date.UTC(CURRENT_YEAR, 0, 1));
+  const startParts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Manila", year: "numeric", month: "2-digit" }).formatToParts(start);
+  const startYear = Number(startParts.find((part) => part.type === "year")?.value);
+  const startMonth = startYear === CURRENT_YEAR ? Number(startParts.find((part) => part.type === "month")?.value) : 1;
+  const monthName = (month) => new Intl.DateTimeFormat("en-US", { month: "long", timeZone: "UTC" })
+    .format(new Date(Date.UTC(CURRENT_YEAR, month - 1, 1)));
+  return [{ value: "YTD", label: `${monthName(startMonth)} ${CURRENT_YEAR} - ${monthName(CURRENT_MONTH)} ${CURRENT_YEAR}` }, ...Array.from({ length: CURRENT_MONTH - startMonth + 1 }, (_, index) => {
+  const month = startMonth + index;
+  const value = `${CURRENT_YEAR}-${String(month).padStart(2, "0")}`;
+  const label = new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric", timeZone: "UTC" })
+    .format(new Date(Date.UTC(CURRENT_YEAR, month - 1, 1)));
+  return { value, label };
+})];
+};
+const DATE_PRESETS = buildDatePresets();
 
 const LEAD_SOURCE_OPTIONS = [
   { value: "ALL", label: "All Lead Sources" },
@@ -27,14 +40,16 @@ const LEAD_SOURCE_OPTIONS = [
 ];
 
 const DEFAULT_FILTERS = {
-  datePreset: "ALL",
+  datePreset: CURRENT_MONTH_KEY,
   leadSource: "ALL",
 };
 
 const DEFAULT_DATA = {
   filters: DEFAULT_FILTERS,
-  reportContext: { periodLabel: "All available records", generatedAt: null },
+  reportContext: { periodLabel: DATE_PRESETS.find((option) => option.value === CURRENT_MONTH_KEY)?.label || "Current month", generatedAt: null },
   totalLeads: 0,
+  totalOngoingLeads: 0,
+  totalHandledLeads: 0,
   convertedLeads: 0,
   unconvertedLeads: 0,
   conversionRatePct: 0,
@@ -115,6 +130,7 @@ function AgentSalesPerformance() {
   const [apiError, setApiError] = useState("");
   const [lastUpdated, setLastUpdated] = useState(null);
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
+  const [datePresets, setDatePresets] = useState(DATE_PRESETS);
   const [data, setData] = useState(DEFAULT_DATA);
 
   useEffect(() => {
@@ -138,6 +154,7 @@ function AgentSalesPerformance() {
     const payload = await res.json();
     if (!res.ok) throw new Error(payload?.message || "Failed to load sales performance.");
     setData({ ...DEFAULT_DATA, ...payload });
+    setDatePresets(buildDatePresets(payload?.dataStartDate));
     setLastUpdated(new Date());
   }, [filters, user?.id]);
 
@@ -204,9 +221,9 @@ function AgentSalesPerformance() {
   );
   const salesRows = Array.isArray(data?.salesRows) ? data.salesRows : [];
   const kpis = [
-    { label: "Total Leads", value: data.totalLeads || 0 },
-    { label: "Converted Leads", value: data.convertedLeads || 0 },
-    { label: "Unconverted Leads", value: data.unconvertedLeads || 0 },
+    { label: "Total Leads Handled", value: data.totalHandledLeads || 0 },
+    { label: "Total Converted Leads", value: data.convertedLeads || 0 },
+    { label: "Total Unconverted Leads", value: data.unconvertedLeads || 0 },
     { label: "Conversion Rate", value: `${data.conversionRatePct || 0}%` },
     { label: "Total Policies", value: data.totalPolicies || 0 },
     { label: "Active Policy Rate", value: `${data.activePolicyRatePct || 0}%` },
@@ -259,7 +276,7 @@ function AgentSalesPerformance() {
     const sourceRowsHtml = sourcePerformanceRows.map((row) => `
       <tr>
         <td>${escapeHtml(row.label)}</td>
-        <td>${Number(row.totalLeads || 0)}</td>
+        <td>${Number(row.handledLeads || 0)}</td>
         <td>${Number(row.convertedAndActiveLeads || 0)}</td>
         <td>${Number(row.activeConversionRatePct || 0)}%</td>
       </tr>
@@ -267,7 +284,7 @@ function AgentSalesPerformance() {
     const topSourceRowsHtml = topConvertedSourceRows.map((row) => `
       <tr>
         <td>${escapeHtml(row.label)}</td>
-        <td>${Number(row.convertedLeads || 0)}/${Number(row.totalLeads || 0)}</td>
+        <td>${Number(row.convertedLeads || 0)}/${Number(row.handledLeads || 0)}</td>
         <td>${Number(row.conversionRatePct || 0)}%</td>
       </tr>
     `).join("");
@@ -325,14 +342,14 @@ function AgentSalesPerformance() {
         </section>
         <section class="section report-body-section">
           <div class="meta-row tight">
-            <div class="meta-chip"><div class="label">Date Range</div><div class="value">${escapeHtml(getOptionLabel(DATE_PRESETS, filters.datePreset))}</div></div>
+            <div class="meta-chip"><div class="label">Date Range</div><div class="value">${escapeHtml(getOptionLabel(datePresets, filters.datePreset))}</div></div>
             <div class="meta-chip"><div class="label">Lead Source</div><div class="value">${escapeHtml(getOptionLabel(LEAD_SOURCE_OPTIONS, filters.leadSource))}</div></div>
           </div>
         </section>
         <section class="section">
           <div class="insight-grid">
-            <div class="insight-card"><h4>Lead Gap</h4><p>${Number(data.leadGap || 0)} Active Leads still to convert from the current filter scope.</p></div>
-            <div class="insight-card"><h4>Best Lead Source</h4><p>${bestSource ? `${escapeHtml(bestSource.label)} has ${Number(bestSource.convertedAndActiveLeads || 0)} converted leads with active policies (${Number(bestSource.activeConversionRatePct || 0)}% of ${Number(bestSource.totalLeads || 0)} leads).` : "—"}</p></div>
+            <div class="insight-card"><h4>Lead Gap</h4><p>${Number(data.leadGap || 0)} Unconverted Active Leads.</p></div>
+            <div class="insight-card"><h4>Best Lead Source</h4><p>${bestSource ? `${escapeHtml(bestSource.label)} has ${Number(bestSource.convertedAndActiveLeads || 0)} converted leads with active policies (${Number(bestSource.activeConversionRatePct || 0)}% of ${Number(bestSource.handledLeads || 0)} handled leads).` : "—"}</p></div>
             <div class="insight-card"><h4>Policy Health</h4><p>${Number(data.activePolicyRatePct || 0)}% of all policies are active (${Number(data.activePolicies || 0)}/${Number(data.totalPolicies || 0)}).</p></div>
           </div>
         </section>
@@ -355,8 +372,9 @@ function AgentSalesPerformance() {
             <div class="panel">
               <h4>Lead Conversion Progress</h4>
               <table><thead><tr><th>Metric</th><th>Value</th></tr></thead><tbody>
-                <tr><td>Total Leads</td><td>${Number(data.totalLeads || 0)}</td></tr>
-                <tr><td>Converted Leads</td><td>${Number(data.convertedLeads || 0)}</td></tr>
+                <tr><td>Total Leads Handled</td><td>${Number(data.totalHandledLeads || 0)}</td></tr>
+                <tr><td>Total Converted Leads</td><td>${Number(data.convertedLeads || 0)}</td></tr>
+                <tr><td>Total Unconverted Leads</td><td>${Number(data.unconvertedLeads || 0)}</td></tr>
                 <tr><td>Conversion Rate</td><td>${Number(data.conversionRatePct || 0)}%</td></tr>
               </tbody></table>
               <div class="mini-grid">
@@ -366,7 +384,7 @@ function AgentSalesPerformance() {
             </div>
             <div class="panel">
               <h4>Top Converted Lead Sources</h4>
-              <table><thead><tr><th>Lead Source</th><th>Converted / Total</th><th>Rate</th></tr></thead><tbody>${topSourceRowsHtml || '<tr><td colspan="3">No converted lead source data.</td></tr>'}</tbody></table>
+              <table><thead><tr><th>Lead Source</th><th>Converted / Handled</th><th>Rate</th></tr></thead><tbody>${topSourceRowsHtml || '<tr><td colspan="3">No converted lead source data.</td></tr>'}</tbody></table>
             </div>
           </div>
         </section>
@@ -382,13 +400,13 @@ function AgentSalesPerformance() {
             </div>
             <div class="panel">
               <h4>Lead Source Quality</h4>
-              <table><thead><tr><th>Lead Source</th><th>Total Leads</th><th>Converted and Active</th><th>Active Rate</th></tr></thead><tbody>${sourceRowsHtml || '<tr><td colspan="4">No lead source data available.</td></tr>'}</tbody></table>
+              <table><thead><tr><th>Lead Source</th><th>Total Leads Handled</th><th>Converted and Active</th><th>Active Rate</th></tr></thead><tbody>${sourceRowsHtml || '<tr><td colspan="4">No lead source data available.</td></tr>'}</tbody></table>
             </div>
           </div>
         </section>
         <section class="section">
           <div class="panel">
-            <div class="panel-title-row"><h4>Converted Leads Trend</h4><strong>${bestTrendMonth ? `${Number(bestTrendMonth.converted || 0)} peak conversions` : "No trend"}</strong></div>
+            <div class="panel-title-row"><h4>Converted Leads Trend</h4><strong>${bestTrendMonth ? `${Number(bestTrendMonth.converted || 0)} peak conversions` : "No trend"} • ${Number(data.totalHandledLeads || 0)} leads handled</strong></div>
             <p class="panel-note">Bars adjust to the selected date range and include all converted leads regardless of policy status.</p>
             <table><thead><tr><th>Bucket</th><th>Converted Leads</th></tr></thead><tbody>${trendRows || '<tr><td colspan="2">No conversion trend data yet.</td></tr>'}</tbody></table>
           </div>
@@ -398,13 +416,16 @@ function AgentSalesPerformance() {
     const pageBodies = [
       overviewPage,
       analyticsPage,
-      ...salesChunks.map((rows) => `
+      ...salesChunks.map((rows, chunkIndex) => `
         <div class="header-band"></div>
-        <section class="section">
+        <section class="section sales-detail-section">
           <h2 class="section-title">Detailed Sales Data</h2>
           <div class="panel">
-            <h4>Current Filter Scope</h4>
-            <table>
+            <div class="panel-title-row">
+              <h4>Current Filter Scope</h4>
+              <strong>Rows ${chunkIndex * 20 + 1}–${chunkIndex * 20 + rows.length} of ${salesRows.length}</strong>
+            </div>
+            <table class="sales-detail-table">
               <thead>
                 <tr>
                   <th>Lead Code</th>
@@ -442,7 +463,7 @@ function AgentSalesPerformance() {
     ];
     const totalPages = pageBodies.length;
     const pagesHtml = pageBodies.map((body, index) => `
-      <section class="pdf-page">
+      <section class="pdf-page ${index >= 2 ? "sales-detail-page" : ""}">
         ${body}
         <div class="report-footer"><div>Generated by PRUTracker • ${escapeHtml(formatDateTime(now))}</div><div>Page ${index + 1} of ${totalPages}</div></div>
       </section>
@@ -456,8 +477,9 @@ function AgentSalesPerformance() {
             @page { size: A4 portrait; margin: 0; }
             * { box-sizing: border-box; }
             body { font-family: Verdana, Geneva, sans-serif; color: #1f2937; margin: 0; font-size: 11px; line-height: 1.3; background:#fff; }
-            .pdf-page { position: relative; min-height: 297mm; padding: 14mm 14mm 22mm; page-break-after: always; overflow: hidden; }
-            .pdf-page:last-child { page-break-after: auto; }
+            .pdf-page { position: relative; width: 210mm; height: 297mm; padding: 14mm 14mm 22mm; break-after: page; page-break-after: always; overflow: hidden; }
+            .pdf-page + .pdf-page { break-before: page; page-break-before: always; }
+            .pdf-page:last-child { break-after: auto; page-break-after: auto; }
             .header-band { height: 6px; background: linear-gradient(90deg, #da291c, #ffb81c, #00539b); border-radius: 6px; margin-bottom: 6px; }
             .top-grid { display:grid; grid-template-columns: minmax(0, 1.7fr) minmax(280px, 1fr); gap: 14px; align-items:start; }
             .report-title { margin: 0; color: #991b1b; font-size: 23px; line-height: 1.08; font-weight: 700; }
@@ -499,6 +521,12 @@ function AgentSalesPerformance() {
             th, td { border: 1px solid #dfe5ec; padding: 4px 5px; text-align:left; vertical-align:top; }
             th { background: #f3f6fa; color:#374151; }
             tbody tr:nth-child(even) td { background:#fcfcfd; }
+            .sales-detail-page { padding: 8mm 8mm 18mm; }
+            .sales-detail-section { margin-bottom: 0; }
+            .sales-detail-table { table-layout: fixed; font-size: 8.2px; line-height: 1.12; }
+            .sales-detail-table th, .sales-detail-table td { padding: 2.5px 2px; overflow-wrap: anywhere; word-break: normal; }
+            .sales-detail-table th { font-size: 7.8px; line-height: 1.08; }
+            .sales-detail-table tr { break-inside: avoid; page-break-inside: avoid; }
             .report-footer { position:absolute; left:16mm; right:16mm; bottom:14mm; font-size:9px; color:#6b7280; display:flex; justify-content:space-between; align-items:center; border-top:1px solid #e5e7eb; padding-top:3px; }
           </style>
         </head>
@@ -523,7 +551,9 @@ function AgentSalesPerformance() {
     setTimeout(() => {
       iframe.contentWindow.focus();
       iframe.contentWindow.print();
-      setTimeout(cleanup, 2000);
+      // Keep every generated sales page alive while the browser builds print
+      // preview; removing the iframe too early can truncate later row pages.
+      setTimeout(cleanup, 60_000);
     }, 250);
   };
 
@@ -578,7 +608,7 @@ function AgentSalesPerformance() {
             <div className="sp-filterGroup">
               <label>Date Range</label>
               <select value={filters.datePreset} onChange={(e) => handleFilterChange("datePreset", e.target.value)}>
-                {DATE_PRESETS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                {datePresets.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
             </div>
             <div className="sp-filterGroup">
@@ -596,12 +626,12 @@ function AgentSalesPerformance() {
             <div className="sp-highlight">
               <span>Lead Gap</span>
               <strong>{data.leadGap || 0}</strong>
-              <small>Active Leads still to convert from the current filter scope.</small>
+              <small>Unconverted Active Leads</small>
             </div>
             <div className="sp-highlight">
               <span>Best Lead Source</span>
               <strong>{bestSource ? bestSource.label : "—"}</strong>
-              <small>{bestSource ? `${bestSource.convertedAndActiveLeads || 0} converted and active (${bestSource.activeConversionRatePct || 0}% of ${bestSource.totalLeads || 0})` : "No active-policy lead source pattern yet."}</small>
+              <small>{bestSource ? `${bestSource.convertedAndActiveLeads || 0} converted and active (${bestSource.activeConversionRatePct || 0}% of ${bestSource.handledLeads || 0} handled)` : "No active-policy lead source pattern yet."}</small>
             </div>
             <div className="sp-highlight">
               <span>Policy Health</span>
@@ -642,11 +672,11 @@ function AgentSalesPerformance() {
             <section className="sp-card">
               <h3>Lead Conversion Progress</h3>
               <div className="sp-progressRow">
-                <label>Converted vs Total Leads</label>
+                <label>Converted vs Total Leads Handled</label>
                 <div className="sp-track"><span style={{ width: `${data.conversionRatePct || 0}%` }} /></div>
                 <b>{data.conversionRatePct || 0}%</b>
               </div>
-              <p className="sp-footnote">{data.convertedLeads || 0} converted leads from {data.totalLeads || 0} total leads.</p>
+              <p className="sp-footnote">{data.convertedLeads || 0} converted leads from {data.totalHandledLeads || 0} leads handled in this period.</p>
               <div className="sp-miniBreakdowns">
                 <div><b>Converted by Policy Status</b>{convertedLeadPolicyStatusRows.map((row) => <small key={row.label}>{row.label}: {row.count} ({row.sharePct}%)</small>)}</div>
                 <div><b>Unconverted by Lead Status</b>{unconvertedLeadStatusRows.map((row) => <small key={row.label}>{row.label}: {row.count} ({row.sharePct}%)</small>)}</div>
@@ -660,7 +690,7 @@ function AgentSalesPerformance() {
                   <div key={row.label} className="sp-sourceRow">
                     <div className="sp-sourceMeta">
                       <strong>{row.label}</strong>
-                      <span>{row.convertedLeads || 0}/{row.totalLeads || 0} converted • {row.conversionRatePct || 0}%</span>
+                      <span>{row.convertedLeads || 0} converted / {row.handledLeads || 0} handled • {row.conversionRatePct || 0}%</span>
                     </div>
                     <div className="sp-sourceTrack">
                       <span style={{ width: `${Math.max(0, Math.min(100, Number(row.conversionRatePct || 0)))}%` }} />
@@ -690,7 +720,7 @@ function AgentSalesPerformance() {
                   <thead>
                     <tr>
                       <th>Lead Source</th>
-                      <th>Total Leads</th>
+                      <th>Total Leads Handled</th>
                       <th>Converted and Active</th>
                       <th>Active Rate</th>
                     </tr>
@@ -699,7 +729,7 @@ function AgentSalesPerformance() {
                     {sourcePerformanceRows.length > 0 ? sourcePerformanceRows.map((row) => (
                       <tr key={row.label}>
                         <td>{row.label}</td>
-                        <td>{row.totalLeads || 0}</td>
+                        <td>{row.handledLeads || 0}</td>
                         <td>{row.convertedAndActiveLeads || 0}</td>
                         <td>{row.activeConversionRatePct || 0}%</td>
                       </tr>
@@ -719,7 +749,7 @@ function AgentSalesPerformance() {
                   <h3>Converted Leads Trend</h3>
                   <p>Bars adjust to the selected date range and include all converted leads regardless of policy status.</p>
                 </div>
-                <strong className="sp-cardTotal">{bestTrendMonth ? `${bestTrendMonth.converted || 0} peak conversions` : "No trend"}</strong>
+                <strong className="sp-cardTotal">{bestTrendMonth ? `${bestTrendMonth.converted || 0} peak conversions` : "No trend"} • {data.totalHandledLeads || 0} leads handled</strong>
               </div>
               {Array.isArray(data.monthlyConvertedLeads) && data.monthlyConvertedLeads.length > 0 ? (
                 <div className="sp-bars">
