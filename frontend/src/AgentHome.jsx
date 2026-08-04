@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { FaBullseye, FaChartLine, FaTasks, FaUsers } from "react-icons/fa";
-import { FiAlertCircle, FiArrowRight, FiCheckCircle, FiClock, FiTrendingUp } from "react-icons/fi";
+import { FiAlertCircle, FiArrowRight, FiCheckCircle } from "react-icons/fi";
 import "./AgentHome.css";
 import TopNav from "./components/TopNav";
 import { logout } from "./utils/logout";
@@ -11,8 +11,10 @@ const API_BASE = "http://localhost:5000";
 const DEFAULT_HOME_DATA = {
   clients: {
     totalProspects: 0,
+    activeProspects: 0,
     totalPolicyholders: 0,
     totalLeads: 0,
+    ongoingLeads: 0,
     activePolicyholders: 0,
     conversionRate: 0,
     activePolicyRate: 0,
@@ -30,10 +32,13 @@ const DEFAULT_HOME_DATA = {
     totalPolicies: 0,
     totalAnnualPremiumPhp: 0,
     bestSource: null,
+    currentMonthLabel: "Current Month",
+    currentMonthConversionRatePct: 0,
+    currentMonthAnnualPremiumPhp: 0,
   },
   kpiProgress: {
-    assignedKpis: [],
-    periodLabel: "This Day",
+    belowTargetCount: 0,
+    periodLabel: "Current Month",
   },
 };
 
@@ -76,33 +81,54 @@ function AgentHome() {
 
     const currentMonthParts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Manila", year: "numeric", month: "2-digit" }).formatToParts(new Date());
     const currentMonth = `${currentMonthParts.find((part) => part.type === "year")?.value}-${currentMonthParts.find((part) => part.type === "month")?.value}`;
-    const [homeResponse, kpiResponse, notificationsResponse] = await Promise.all([
+    const [homeResponse, kpiResponse, notificationsResponse, salesResponse] = await Promise.all([
       fetch(
         `${API_BASE}/api/agent/home?${new URLSearchParams({ userId: user.id }).toString()}`,
         signal ? { signal } : undefined
       ),
       fetch(`${API_BASE}/api/agent/kpi-progress?${new URLSearchParams({ userId: user.id, month: currentMonth }).toString()}`, signal ? { signal } : undefined),
       fetch(`${API_BASE}/api/notifications?${new URLSearchParams({ userId: user.id, includeRefs: "1" }).toString()}`, signal ? { signal } : undefined),
+      fetch(`${API_BASE}/api/sales/performance?${new URLSearchParams({ userId: user.id, datePreset: currentMonth, leadSource: "ALL" }).toString()}`, signal ? { signal } : undefined),
     ]);
 
     const payload = await homeResponse.json();
     const kpiPayload = await kpiResponse.json();
     const notificationsPayload = await notificationsResponse.json();
+    const salesPayload = await salesResponse.json();
 
     if (!homeResponse.ok) throw new Error(payload?.message || "Failed to load agent home preview.");
     if (!kpiResponse.ok) throw new Error(kpiPayload?.message || "Failed to load KPI progress preview.");
     if (!notificationsResponse.ok) throw new Error(notificationsPayload?.message || "Failed to load action items.");
-    const assignedKpiPreview = (Array.isArray(kpiPayload?.kpis) ? kpiPayload.kpis : []).slice(0, 3);
+    if (!salesResponse.ok) throw new Error(salesPayload?.message || "Failed to load current-month sales preview.");
+    const assignedKpis = Array.isArray(kpiPayload?.kpis) ? kpiPayload.kpis : [];
+    const belowTargetCount = assignedKpis.filter((kpi) => {
+      const target = [kpi?.targetValue, kpi?.targetMin, kpi?.targetMax]
+        .map(Number)
+        .find((value) => Number.isFinite(value) && value > 0);
+      return target && Number(kpi?.actual || 0) < target;
+    }).length;
     const priorityByType = {
       POLICY_LAPSED: "urgent", PAYMENT_MISSED_TRANSFER: "urgent", TASK_MISSED: "urgent",
       TASK_DUE_TODAY: "high", PAYMENT_TRANSFER_REMINDER: "high", PAYMENT_EOR_REMINDER: "high",
       POLICY_CANCELLED: "high", ORPHAN_CLIENT_ASSIGNED: "high",
     };
+    const concernKey = (notification) => {
+      const metadata = notification?.metadata || {};
+      if (["PAYMENT_TRANSFER_REMINDER", "PAYMENT_EOR_REMINDER", "PAYMENT_MISSED_TRANSFER", "POLICY_LAPSED"].includes(notification?.type)) {
+        return `payment:${metadata.annualPaymentId || metadata.paymentId || metadata.policyholderId || notification.entityId}`;
+      }
+      if (["TASK_MISSED", "TASK_DUE_TODAY"].includes(notification?.type)) {
+        return `task:${notification?.leadId || metadata.leadId || metadata.taskId || notification?.entityId || notification?._id}`;
+      }
+      return `${notification?.type}:${metadata.leadId || metadata.policyholderId || metadata.prospectId || notification?.entityId || notification?._id}`;
+    };
+    const priorityRank = { urgent: 0, high: 1 };
     const actionable = (Array.isArray(notificationsPayload?.notifications) ? notificationsPayload.notifications : [])
       .filter((notification) => notification?.resolutionStatus === "Unresolved" && ["urgent", "high"].includes(priorityByType[notification.type]))
-      .sort((left, right) => new Date(right.createdAt || 0) - new Date(left.createdAt || 0))
-      .slice(0, 6)
-      .map((notification) => ({ ...notification, priority: priorityByType[notification.type] }));
+      .map((notification) => ({ ...notification, priority: priorityByType[notification.type] }))
+      .sort((left, right) => (priorityRank[left.priority] - priorityRank[right.priority]) || (new Date(right.createdAt || 0) - new Date(left.createdAt || 0)))
+      .filter((notification, index, notifications) => notifications.findIndex((candidate) => concernKey(candidate) === concernKey(notification)) === index)
+      ;
     setActionItems(actionable);
 
     setHomeData({
@@ -115,8 +141,10 @@ function AgentHome() {
       },
       clients: {
         totalProspects: Number(payload?.clients?.totalProspects || 0),
+        activeProspects: Number(payload?.clients?.activeProspects || 0),
         totalPolicyholders: Number(payload?.clients?.totalPolicyholders || 0),
         totalLeads: Number(payload?.clients?.totalLeads || 0),
+        ongoingLeads: Number(payload?.clients?.ongoingLeads || 0),
         activePolicyholders: Number(payload?.clients?.activePolicyholders || 0),
         conversionRate: Number(payload?.clients?.conversionRate || 0),
         activePolicyRate: Number(payload?.clients?.activePolicyRate || 0),
@@ -127,9 +155,12 @@ function AgentHome() {
         totalPolicies: Number(payload?.sales?.totalPolicies || 0),
         totalAnnualPremiumPhp: Number(payload?.sales?.totalAnnualPremiumPhp || 0),
         bestSource: payload?.sales?.bestSource || null,
+        currentMonthLabel: payload?.sales?.currentMonthLabel || "Current Month",
+        currentMonthConversionRatePct: Number(salesPayload?.conversionRatePct || 0),
+        currentMonthAnnualPremiumPhp: Number(salesPayload?.totalAnnualPremiumPhp || 0),
       },
       kpiProgress: {
-        assignedKpis: assignedKpiPreview,
+        belowTargetCount,
         periodLabel: kpiPayload?.reportContext?.periodLabel || "Current Month",
       },
     });
@@ -167,80 +198,60 @@ function AgentHome() {
       maximumFractionDigits: 2,
     });
 
-  const formatKpiValue = (value, valueType) => {
-    if (valueType === "Currency") return `₱ ${money(value)}`;
-    if (valueType === "Percent") return `${Number(value || 0)}%`;
-    return Number(value || 0).toLocaleString();
-  };
-
-  const formatKpiTarget = (kpi = {}) => {
-    const defaultPeriod = kpi.defaultPeriod || kpi.period;
-    const defaultTarget = (Array.isArray(kpi.targets) ? kpi.targets : []).find((target) => target.period === defaultPeriod) || kpi;
-    const targetValue = defaultTarget.targetValue ?? kpi.targetValue;
-    const targetMin = defaultTarget.targetMin ?? kpi.targetMin;
-    const targetMax = defaultTarget.targetMax ?? kpi.targetMax;
-    if (targetValue !== null && targetValue !== undefined && targetValue !== "") return formatKpiValue(targetValue, kpi.valueType);
-    const hasMin = targetMin !== null && targetMin !== undefined && targetMin !== "";
-    const hasMax = targetMax !== null && targetMax !== undefined && targetMax !== "";
-    if (hasMin && hasMax) return `${formatKpiValue(targetMin, kpi.valueType)} - ${formatKpiValue(targetMax, kpi.valueType)}`;
-    if (hasMin) return `${formatKpiValue(targetMin, kpi.valueType)} and above`;
-    if (hasMax) return `Up to ${formatKpiValue(targetMax, kpi.valueType)}`;
-    return "No target set";
-  };
-
-  const dueTodayCount = homeData.tasks.dueTodayCount;
-  const recentTaskCount = homeData.tasks.recentlyAddedTop5.length;
-  const recentProspectsCount = homeData.clients.recentProspects.length;
-
-  const topMetrics = [
-    { label: "Prospects", value: homeData.clients.totalProspects, icon: <FaUsers aria-hidden="true" /> },
-    { label: "Due Today", value: dueTodayCount, icon: <FiClock aria-hidden="true" /> },
-    { label: "Active Policies", value: homeData.sales.totalPolicies, icon: <FiCheckCircle aria-hidden="true" /> },
-    { label: "Active Policy Conversion", value: `${homeData.sales.conversionRatePct}%`, icon: <FiTrendingUp aria-hidden="true" /> },
-  ];
-
   const moduleCards = [
     {
       key: "clients",
       title: "Clients",
-      description: "Relationship visibility, recent prospects, and policyholder overview.",
       icon: <FaUsers size={28} className="module-icon" />,
       onClick: () => navigateToTop(`/agent/${user.username}/clients`),
       accent: "clients",
-      insights: [`${homeData.clients.totalLeads} leads`, `${homeData.clients.activePolicyholders} active policyholders`],
+      insights: [
+        { label: "Ongoing leads", value: homeData.clients.ongoingLeads },
+        { label: "Active policyholders", value: homeData.clients.activePolicyholders },
+      ],
     },
     {
       key: "tasks",
       title: "Tasks",
-      description: "Open today’s follow-ups, due items, and execution queues.",
       icon: <FaTasks size={28} className="module-icon" />,
       onClick: () => navigateToTop(`/agent/${user.username}/tasks`),
       accent: "tasks",
-      insights: [`${homeData.tasks.openCount} open`, `${homeData.tasks.overdueCount} overdue`],
+      insights: [
+        { label: "Overdue tasks", value: homeData.tasks.overdueCount },
+        { label: "Tasks due today", value: homeData.tasks.dueTodayCount },
+      ],
     },
     {
       key: "sales",
       title: "Sales Performance",
-      description: "Monitor conversion, premium production, and source quality.",
       icon: <FaChartLine size={28} className="module-icon" />,
       onClick: () => navigateToTop(`/agent/${user.username}/sales/performance`),
       accent: "sales",
-      insights: [`${homeData.sales.totalPolicies} active policies`, `₱ ${money(homeData.sales.totalAnnualPremiumPhp)} annual premium`],
+      insights: [
+        { label: `${homeData.sales.currentMonthLabel} active-policy conversion rate`, value: `${homeData.sales.currentMonthConversionRatePct}%` },
+        { label: `${homeData.sales.currentMonthLabel} active annual premium generated`, value: `₱ ${money(homeData.sales.currentMonthAnnualPremiumPhp)}` },
+      ],
     },
     {
       key: "kpi-progress",
       title: "KPI Progress",
-      description: "Review assigned KPI targets, current progress, and production contribution.",
       icon: <FaBullseye size={28} className="module-icon" />,
       onClick: () => navigateToTop(`/agent/${user.username}/kpi/progress`),
       accent: "kpi",
-      insights: [`${homeData.kpiProgress.assignedKpis.length} assigned KPIs`, homeData.kpiProgress.periodLabel],
+      insights: [
+        { label: "Reporting month", value: homeData.kpiProgress.periodLabel },
+        { label: "Below target KPIs", value: homeData.kpiProgress.belowTargetCount },
+      ],
     },
   ];
 
   const openActionItem = (notification) => {
     const policyholderId = notification?.metadata?.policyholderId || (notification?.entityType === "Policyholder" ? notification.entityId : "");
     const annualPaymentId = notification?.metadata?.annualPaymentId || "";
+    const paymentId = notification?.metadata?.paymentId || "";
+    if (String(notification?.type || "") === "PAYMENT_EOR_REMINDER" && policyholderId && annualPaymentId && paymentId) {
+      return navigateToTop(`/agent/${user.username}/policyholders/${policyholderId}/annual-payments/${annualPaymentId}/payments/${paymentId}`);
+    }
     if (policyholderId && annualPaymentId) return navigateToTop(`/agent/${user.username}/policyholders/${policyholderId}/annual-payments/${annualPaymentId}`);
     if (policyholderId) return navigateToTop(`/agent/${user.username}/policyholders/${policyholderId}`);
     const prospectId = notification?.prospectId || notification?.metadata?.prospectId || (notification?.entityType === "Prospect" ? notification.entityId : "");
@@ -248,6 +259,42 @@ function AgentHome() {
     if (prospectId && leadId) return navigateToTop(`/agent/${user.username}/prospects/${prospectId}/leads/${leadId}/engage`);
     if (prospectId) return navigateToTop(`/agent/${user.username}/prospects/${prospectId}`);
     return navigateToTop(`/agent/${user.username}/tasks/all`);
+  };
+
+  const concernDetails = (notification) => {
+    const message = String(notification?.message || "Open this concern to complete the required action.");
+    const labels = ["Prospect Code", "Prospect Name", "Lead Code", "Policyholder Code", "Policyholder Name", "Policy Name", "Policy Number"];
+    const details = labels.flatMap((label) => {
+      const match = message.match(new RegExp(`${label}:\\s*([^.]*)`, "i"));
+      return match?.[1]?.trim() ? [{ label, value: match[1].trim() }] : [];
+    });
+    const taskContext = message.match(/\sfor\s+(.+?)\s+\(Lead\s+([^)]+)\)/i);
+    if (taskContext) {
+      if (!details.some((detail) => detail.label === "Prospect Name")) details.push({ label: "Prospect Name", value: taskContext[1].trim() });
+      if (!details.some((detail) => detail.label === "Lead Code")) details.push({ label: "Lead Code", value: taskContext[2].trim() });
+    }
+    let summary = labels.reduce(
+      (value, label) => value.replace(new RegExp(`\\s*${label}:\\s*[^.]*\\.?`, "ig"), ""),
+      message
+    ).trim();
+    if (taskContext) summary = summary.replace(taskContext[0], "").trim();
+    return { summary: summary || notification?.title || "Action required.", details };
+  };
+  const urgentActionItems = actionItems.filter((notification) => notification.priority === "urgent");
+  const highActionItems = actionItems.filter((notification) => notification.priority === "high");
+
+  const renderConcern = (notification) => {
+    const concern = concernDetails(notification);
+    return <article key={notification._id} className={`home-actionItem ${notification.priority}`}>
+      <div>
+        <strong>{notification.title}</strong>
+        <p>{concern.summary}</p>
+        {concern.details.length ? <div className="home-actionDetails">
+          {concern.details.map((detail) => <span key={detail.label}><small>{detail.label}</small><b>{detail.value}</b></span>)}
+        </div> : null}
+      </div>
+      <button type="button" onClick={() => openActionItem(notification)}>Open</button>
+    </article>;
   };
 
   return (
@@ -266,45 +313,12 @@ function AgentHome() {
             <span className="home-kicker">Agent command center</span>
             <h1 className="welcome-text">Welcome back, {user.firstName}.</h1>
             <p className="home-subtext">
-              Preview your client pipeline, task queue, and sales momentum before jumping into a module.
+              Review current client activity, overdue and due-today tasks, this month’s active-policy results, and assigned KPI reporting at a glance.
             </p>
 
-            <div className="home-quickActions">
-              <button type="button" className="home-actionBtn primary" onClick={() => navigateToTop(`/agent/${user.username}/tasks`)}>
-                Review tasks
-              </button>
-              <button type="button" className="home-actionBtn" onClick={() => navigateToTop(`/agent/${user.username}/clients/relationship`)}>
-                Open client dashboard
-              </button>
-              <button type="button" className="home-actionBtn" onClick={() => navigateToTop(`/agent/${user.username}/sales/performance`)}>
-                View sales performance
-              </button>
-              <button type="button" className="home-actionBtn" onClick={() => navigateToTop(`/agent/${user.username}/kpi/progress`)}>
-                Check KPI progress
-              </button>
-            </div>
           </div>
 
-          <div className="home-metricsGrid">
-            {topMetrics.map((metric) => (
-              <div key={metric.label} className="home-metricCard">
-                <div className="home-metricIcon">{metric.icon}</div>
-                <span className="home-metricLabel">{metric.label}</span>
-                <strong className="home-metricValue">{metric.value}</strong>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <section className="home-modulesSection">
-          <div className="home-cardHeader home-cardHeaderStandalone">
-            <div>
-              <span className="home-cardKicker">Navigation</span>
-              <h2>Jump into a module</h2>
-            </div>
-          </div>
-
-          <div className="module-grid">
+          <div className="module-grid home-heroModules" aria-label="Module navigation">
             {moduleCards.map((module) => (
               <div
                 key={module.key}
@@ -316,9 +330,13 @@ function AgentHome() {
               >
                 <div className="module-iconWrap">{module.icon}</div>
                 <strong>{module.title}</strong>
-                <p>{module.description}</p>
                 <div className="module-insights">
-                  {module.insights.map((insight) => <span key={insight}>{insight}</span>)}
+                  {module.insights.map((insight) => (
+                    <span key={insight.label}>
+                      <small>{insight.label}</small>
+                      <b>{insight.value}</b>
+                    </span>
+                  ))}
                 </div>
                 <span className="module-linkText">
                   Open module
@@ -342,209 +360,26 @@ function AgentHome() {
               <span className="home-cardKicker">Action required</span>
               <h2>Urgent and high-priority concerns</h2>
             </div>
-            <button type="button" className="home-inlineLink" onClick={() => navigateToTop(`/agent/${user.username}/notifications`)}>
-              View notifications
-              <FiArrowRight aria-hidden="true" />
-            </button>
           </div>
           {loading ? <div className="home-emptyState">Loading action items…</div> : actionItems.length ? (
-            <div className="home-actionItemsGrid">
-              {actionItems.map((notification) => (
-                <article key={notification._id} className={`home-actionItem ${notification.priority}`}>
-                  <div>
-                    <span className="home-actionPriority">{notification.priority}</span>
-                    <strong>{notification.title}</strong>
-                    <p>{notification.message || "Open this concern to complete the required action."}</p>
-                  </div>
-                  <button type="button" onClick={() => openActionItem(notification)}>Open</button>
-                </article>
-              ))}
+            <div className="home-actionColumns">
+              <section className="home-actionColumn urgent">
+                <div className="home-actionColumnHeader"><span>Urgent</span><b>{urgentActionItems.length}</b></div>
+                <div className="home-actionItemsGrid">
+                  {urgentActionItems.length ? urgentActionItems.map(renderConcern) : <div className="home-emptyState compact">No unresolved urgent concerns.</div>}
+                </div>
+              </section>
+              <section className="home-actionColumn high">
+                <div className="home-actionColumnHeader"><span>High priority</span><b>{highActionItems.length}</b></div>
+                <div className="home-actionItemsGrid">
+                  {highActionItems.length ? highActionItems.map(renderConcern) : <div className="home-emptyState compact">No unresolved high-priority concerns.</div>}
+                </div>
+              </section>
             </div>
           ) : <div className="home-emptyState home-emptyState--success"><FiCheckCircle aria-hidden="true" /> No urgent or high-priority actions require resolution.</div>}
         </section>
 
-        <section className="home-previewGrid">
-          <article className="home-previewCard">
-            <div className="home-cardHeader">
-              <div>
-                <span className="home-cardKicker">Clients</span>
-                <h2>Relationship snapshot</h2>
-              </div>
-              <button type="button" className="home-inlineLink" onClick={() => navigateToTop(`/agent/${user.username}/clients/relationship`)}>
-                Open dashboard
-                <FiArrowRight aria-hidden="true" />
-              </button>
-            </div>
 
-            <div className="home-statRow">
-              <div className="home-statBlock">
-                <span>Total Prospects</span>
-                <strong>{homeData.clients.totalProspects}</strong>
-              </div>
-              <div className="home-statBlock">
-                <span>Policyholders</span>
-                <strong>{homeData.clients.totalPolicyholders}</strong>
-              </div>
-              <div className="home-statBlock">
-                <span>Conversion Rate</span>
-                <strong>{homeData.clients.conversionRate}%</strong>
-              </div>
-              <div className="home-statBlock">
-                <span>Active Policy Rate</span>
-                <strong>{homeData.clients.activePolicyRate}%</strong>
-              </div>
-            </div>
-
-            <div className="home-listBlock">
-              <span className="home-listTitle">Recent prospects</span>
-              {loading ? (
-                <div className="home-emptyState">Loading client preview…</div>
-              ) : recentProspectsCount > 0 ? (
-                homeData.clients.recentProspects.map((prospect) => (
-                  <button
-                    key={prospect._id}
-                    type="button"
-                    className="home-listItem"
-                    onClick={() => navigateToTop(`/agent/${user.username}/prospects/${prospect._id}`)}
-                  >
-                    <div>
-                      <strong>{prospect.fullName || prospect.name || "Unnamed prospect"}</strong>
-                      <span>{prospect.leadCount || 0} leads • {prospect.marketType || "No market type"}</span>
-                    </div>
-                    <FiArrowRight aria-hidden="true" />
-                  </button>
-                ))
-              ) : (
-                <div className="home-emptyState">No recent prospects to preview yet.</div>
-              )}
-            </div>
-          </article>
-
-          <article className="home-previewCard">
-            <div className="home-cardHeader">
-              <div>
-                <span className="home-cardKicker">Tasks</span>
-                <h2>Today’s queue</h2>
-              </div>
-              <button type="button" className="home-inlineLink" onClick={() => navigateToTop(`/agent/${user.username}/tasks`)}>
-                Open tasks
-                <FiArrowRight aria-hidden="true" />
-              </button>
-            </div>
-
-            <div className="home-statRow twoCol">
-              <div className="home-statBlock emphasis">
-                <span>Due Today</span>
-                <strong>{dueTodayCount}</strong>
-              </div>
-              <div className="home-statBlock">
-                <span>Recently Added</span>
-                <strong>{recentTaskCount}</strong>
-              </div>
-            </div>
-
-            <div className="home-listBlock">
-              <span className="home-listTitle">Priority items</span>
-              {loading ? (
-                <div className="home-emptyState">Loading task preview…</div>
-              ) : dueTodayCount > 0 ? (
-                homeData.tasks.dueTodayTop5.slice(0, 3).map((task) => (
-                  <button
-                    key={task._id}
-                    type="button"
-                    className="home-listItem"
-                    onClick={() => navigateToTop(`/agent/${user.username}/tasks`)}
-                  >
-                    <div>
-                      <strong>{task.title || "Untitled task"}</strong>
-                      <span>{task.prospectName || "No linked prospect"}</span>
-                    </div>
-                    <span className="home-pill">Due today</span>
-                  </button>
-                ))
-              ) : (
-                <div className="home-emptyState">No due-today tasks at the moment.</div>
-              )}
-            </div>
-          </article>
-
-          <article className="home-previewCard">
-            <div className="home-cardHeader">
-              <div>
-                <span className="home-cardKicker">Sales</span>
-                <h2>Performance preview</h2>
-              </div>
-              <button type="button" className="home-inlineLink" onClick={() => navigateToTop(`/agent/${user.username}/sales/performance`)}>
-                Open sales
-                <FiArrowRight aria-hidden="true" />
-              </button>
-            </div>
-
-            <div className="home-statRow">
-              <div className="home-statBlock">
-                <span>Active Policy Conversion</span>
-                <strong>{homeData.sales.conversionRatePct}%</strong>
-              </div>
-              <div className="home-statBlock">
-                <span>Active Policies</span>
-                <strong>{homeData.sales.totalPolicies}</strong>
-              </div>
-              <div className="home-statBlock wide">
-                <span>Active Annual Premium</span>
-                <strong>₱ {money(homeData.sales.totalAnnualPremiumPhp)}</strong>
-              </div>
-            </div>
-
-            <div className="home-featureBox">
-              <span className="home-listTitle">Best source right now</span>
-              {loading ? (
-                <div className="home-emptyState compact">Loading sales preview…</div>
-              ) : homeData.sales.bestSource ? (
-                <>
-                  <strong>{homeData.sales.bestSource.label || "Unspecified source"}</strong>
-                  <p>
-                    {homeData.sales.bestSource.conversionRatePct || 0}% active-policy conversion across {homeData.sales.bestSource.activePolicyholders || homeData.sales.bestSource.convertedLeads || 0} active policyholders.
-                  </p>
-                </>
-              ) : (
-                <div className="home-emptyState compact">No sales source data available yet.</div>
-              )}
-            </div>
-          </article>
-        </section>
-
-        <section className="home-kpiPreviewSection">
-          <div className="home-cardHeader home-cardHeaderStandalone">
-            <div>
-              <span className="home-cardKicker">KPI Progress</span>
-              <h2>Assigned KPI preview</h2>
-            </div>
-            <button type="button" className="home-inlineLink" onClick={() => navigateToTop(`/agent/${user.username}/kpi/progress`)}>
-              Open KPI progress
-              <FiArrowRight aria-hidden="true" />
-            </button>
-          </div>
-
-          <div className="home-kpiPreviewGrid">
-            {loading ? (
-              <div className="home-emptyState">Loading KPI progress preview…</div>
-            ) : homeData.kpiProgress.assignedKpis.length > 0 ? (
-              homeData.kpiProgress.assignedKpis.map((kpi) => {
-                const defaultPeriod = kpi.defaultPeriod || kpi.period || "—";
-                return (
-                  <article key={kpi.key} className="home-kpiPreviewCard">
-                    <span>{homeData.kpiProgress.periodLabel} • {defaultPeriod}</span>
-                    <strong>{kpi.label}</strong>
-                    <p>Current progress: {formatKpiValue(kpi.actual, kpi.valueType)}</p>
-                    <small>Monthly target: {formatKpiTarget(kpi)}</small>
-                  </article>
-                );
-              })
-            ) : (
-              <div className="home-emptyState">No assigned KPIs to preview yet.</div>
-            )}
-          </div>
-        </section>
 
 
       </div>

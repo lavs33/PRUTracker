@@ -13,9 +13,15 @@ const monthKey = (date = new Date()) => {
   return `${parts.find((part) => part.type === "year")?.value}-${parts.find((part) => part.type === "month")?.value}`;
 };
 const CURRENT_MONTH = monthKey();
-const MONTH_OPTIONS = (() => {
+const buildMonthOptions = (dataStartDate) => {
   const options = [];
-  let cursor = "2026-01";
+  const currentYear = CURRENT_MONTH.split("-")[0];
+  const startParts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Manila", year: "numeric", month: "2-digit" })
+    .formatToParts(new Date(dataStartDate || `${currentYear}-01-01T00:00:00.000Z`));
+  const dataYear = startParts.find((part) => part.type === "year")?.value || currentYear;
+  const startYear = dataYear === currentYear ? dataYear : currentYear;
+  const startMonth = dataYear === currentYear ? (startParts.find((part) => part.type === "month")?.value || "01") : "01";
+  let cursor = `${startYear}-${startMonth}`;
   while (cursor <= CURRENT_MONTH) {
     const [year, month] = cursor.split("-").map(Number);
     options.push({
@@ -25,7 +31,8 @@ const MONTH_OPTIONS = (() => {
     cursor = month === 12 ? `${year + 1}-01` : `${year}-${String(month + 1).padStart(2, "0")}`;
   }
   return options;
-})();
+};
+const MONTH_OPTIONS = buildMonthOptions();
 
 const DEFAULT_DATA = {
   agent: {},
@@ -62,7 +69,7 @@ const formatReportPeriod = (reportContext) => {
   return start === end ? start : `${start} to ${end}`;
 };
 
-const getOptionLabel = (value) => MONTH_OPTIONS.find((option) => option.value === value)?.label || value || CURRENT_MONTH;
+const getOptionLabel = (options, value) => options.find((option) => option.value === value)?.label || value || CURRENT_MONTH;
 
 const money = (value) => Number(value || 0).toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -118,6 +125,7 @@ function AgentKpiProgress() {
   }, []);
 
   const [selectedMonth, setSelectedMonth] = useState(CURRENT_MONTH);
+  const [monthOptions, setMonthOptions] = useState(MONTH_OPTIONS);
   const [data, setData] = useState(DEFAULT_DATA);
   const [loading, setLoading] = useState(true);
   const [apiError, setApiError] = useState("");
@@ -138,6 +146,7 @@ function AgentKpiProgress() {
     const payload = await response.json();
     if (!response.ok) throw new Error(payload?.message || "Failed to load KPI progress.");
     setData({ ...DEFAULT_DATA, ...payload, kpis: Array.isArray(payload?.kpis) ? payload.kpis : [] });
+    setMonthOptions(buildMonthOptions(payload?.dataStartDate));
     setLastUpdated(new Date());
   }, [selectedMonth, user?.id]);
 
@@ -184,7 +193,7 @@ function AgentKpiProgress() {
       return `
         <tr>
           <td>${escapeHtml(kpi.label)}</td>
-          <td>${escapeHtml(data.reportContext?.periodLabel || getOptionLabel(selectedMonth))}</td>
+          <td>${escapeHtml(data.reportContext?.periodLabel || getOptionLabel(monthOptions, selectedMonth))}</td>
           <td>${escapeHtml(formatKpiValue(kpi.actual, kpi.valueType))}</td>
           <td>${escapeHtml(formatKpiTarget(kpi))}</td>
           <td>${escapeHtml(comparison.status)}</td>
@@ -271,7 +280,7 @@ function AgentKpiProgress() {
             </section>
             <section class="section">
               <div class="meta-row">
-                <div class="meta-chip"><div class="label">Selected Month</div><div class="value">${escapeHtml(getOptionLabel(selectedMonth))}</div></div>
+                <div class="meta-chip"><div class="label">Selected Month</div><div class="value">${escapeHtml(getOptionLabel(monthOptions, selectedMonth))}</div></div>
                 <div class="meta-chip"><div class="label">KPI Target Period</div><div class="value">Monthly</div></div>
                 <div class="meta-chip"><div class="label">Assigned KPI Cards</div><div class="value">${data.kpis.length}</div></div>
               </div>
@@ -366,7 +375,7 @@ function AgentKpiProgress() {
             <div className="sp-filterGroup">
               <label>Month</label>
               <select value={selectedMonth} onChange={(event) => setSelectedMonth(event.target.value)}>
-                {MONTH_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                {monthOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
             </div>
           </section>
@@ -387,7 +396,7 @@ function AgentKpiProgress() {
                 return (
                   <article className={`agent-kpi-card ${comparison.className}`} key={kpi.key}>
                     <div className="agent-kpi-card__head">
-                      <span>{data.reportContext?.periodLabel || getOptionLabel(selectedMonth)} • Monthly</span>
+                      <span>{data.reportContext?.periodLabel || getOptionLabel(monthOptions, selectedMonth)} • Monthly</span>
                       <strong>{kpi.label}</strong>
                     </div>
                     <div className="agent-kpi-values">
@@ -419,7 +428,7 @@ function AgentKpiProgress() {
                 <h2>Contribution in Unit Sales Production</h2>
                 <article className="agent-kpi-contribution-card">
                   <div className="agent-kpi-contribution-period">
-                    <span>{data.reportContext?.periodLabel || getOptionLabel(selectedMonth)} • Monthly</span>
+                    <span>{data.reportContext?.periodLabel || getOptionLabel(monthOptions, selectedMonth)} • Monthly</span>
                   </div>
                   <div className="agent-kpi-values">
                     <div>
