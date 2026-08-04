@@ -18,7 +18,7 @@ const MODULES = [
     highlights: [
       "Prospect, lead, and policyholder lists with complete client details",
       "Lead engagement history, policy information, and payment records in agent views",
-      "Long-leave and retirement orphan clients reassigned without losing original history",
+      "Long-leave and resignation orphan clients reassigned without losing original history",
     ],
     imageSrc: module1Image,
   },
@@ -47,9 +47,9 @@ const MODULES = [
   {
     title: "Orphan and KPI Assignment",
     summary:
-      "Support BM and UM workflows for KPI setup, long-leave or retirement endorsements, recommended-agent review, and orphan reassignment.",
+      "Support BM and UM workflows for KPI setup, long-leave or resignation endorsements, recommended-agent review, and orphan reassignment.",
     highlights: [
-      "Record long leave or retirement and confirm affected orphan clients",
+      "Record long leave or resignation and confirm affected orphan clients",
       "Endorse orphan clients to the UM for reassignment follow-through",
       "Track reassignment progress and recommended-agent metrics",
     ],
