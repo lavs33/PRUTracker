@@ -3510,8 +3510,9 @@ app.get("/api/agent/kpi-progress", async (req, res) => {
     const now = new Date();
     const selectedMonth = String(month || "");
     const currentMonth = monthKeyForDate(now);
-    if (!/^2026-(0[1-9]|1[0-2])$/.test(selectedMonth) || selectedMonth > currentMonth) {
-      return res.status(400).json({ message: "KPI month must be between January 2026 and the current month." });
+    const currentYear = currentMonth.split("-")[0];
+    if (!new RegExp(`^${currentYear}-(0[1-9]|1[0-2])$`).test(selectedMonth) || selectedMonth > currentMonth) {
+      return res.status(400).json({ message: `KPI month must be between January ${currentYear} and the current month.` });
     }
     const [selectedYear, selectedMonthNumber] = selectedMonth.split("-").map(Number);
     const startDate = new Date(Date.UTC(selectedYear, selectedMonthNumber - 1, 1) - (8 * 60 * 60 * 1000));
@@ -3715,6 +3716,16 @@ app.get("/api/agent/kpi-progress", async (req, res) => {
       monthly_new_prospects: newProspects,
       monthly_closing_ratio: closingRatio,
     };
+    const dataStartDate = [
+      ...tasks.map((task) => task?.createdAt),
+      ...prospects.map((prospect) => prospect?.createdAt),
+      ...policyholders.map((policyholder) => (
+        issuanceDateByEngagementId.get(String(policyholder?.leadEngagementId || "")) || policyholder?.createdAt
+      )),
+    ]
+      .map((value) => new Date(value || 0))
+      .filter((value) => !Number.isNaN(value.getTime()) && value.getTime() > 0)
+      .sort((left, right) => left - right)[0] || now;
 
     return res.json({
       agent: {
@@ -3730,7 +3741,8 @@ app.get("/api/agent/kpi-progress", async (req, res) => {
         areaName: agent.unitId?.branchId?.areaId?.areaName || "",
       },
       filters: { month: selectedMonth, frequency: "Monthly" },
-      reportContext: { periodLabel, startDate, endDate, generatedAt: now },
+      dataStartDate,
+      reportContext: { periodLabel, startDate, endDate, generatedAt: now, assignmentUpdatedAt: assignment?.updatedAt || null },
       kpis: assignedKpis.map((kpi) => ({ ...kpi, actual: Number(actualsByKey[kpi.key] || 0) })),
       unitSalesContribution: unitSalesProductionKpiForPeriod ? {
         kpi: unitSalesProductionKpiForPeriod,
