@@ -339,7 +339,7 @@ function AgentSalesPerformance() {
         </section>
         <section class="section">
           <div class="insight-grid">
-            <div class="insight-card"><h4>Lead Gap</h4><p>${Number(data.leadGap || 0)} New/In Progress leads remained unconverted at the end of the selected period.</p></div>
+            <div class="insight-card"><h4>Lead Gap</h4><p>${Number(data.leadGap || 0)} of the unconverted leads were still New/In Progress at the end of the selected period.</p></div>
             <div class="insight-card"><h4>Best Lead Source</h4><p>${bestSource ? `${escapeHtml(bestSource.label)} has ${Number(bestSource.convertedAndActiveLeads || 0)} converted leads with active policies (${Number(bestSource.activeConversionRatePct || 0)}% of ${Number(bestSource.handledLeads || 0)} handled leads).` : "—"}</p></div>
             <div class="insight-card"><h4>Policy Health</h4><p>${Number(data.activePolicyRatePct || 0)}% of all policies are active (${Number(data.activePolicies || 0)}/${Number(data.totalPolicies || 0)}).</p></div>
           </div>
@@ -604,7 +604,7 @@ function AgentSalesPerformance() {
             <div className="sp-highlight">
               <span>Lead Gap</span>
               <strong>{data.leadGap || 0}</strong>
-              <small>New/In Progress leads that remained unconverted at the end of the selected period.</small>
+              <small>Unconverted leads that were still New/In Progress at the end of the selected period.</small>
             </div>
             <div className="sp-highlight">
               <span>Best Lead Source</span>

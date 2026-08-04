@@ -4692,16 +4692,18 @@ app.get("/api/sales/performance", async (req, res) => {
     const handledLeads = reportingLeads.filter(leadWasHandledDuringPeriod);
     const handledLeadIds = new Set(handledLeads.map((lead) => String(lead._id)));
     const totalHandledLeads = handledLeads.length;
-    const ongoingLeadsAtPeriodEnd = handledLeads.filter((lead) => (
-      !convertedLeadIds.has(String(lead?._id || ""))
-      && (leadTerminalTime(lead) !== null
-        ? leadTerminalTime(lead) > reportEndTime
-        : activeLeadGapStatuses.has(String(lead?.status || "").trim().toLowerCase()))
-    ));
-    const totalOngoingLeads = ongoingLeadsAtPeriodEnd.length;
     const unconvertedLeadRows = handledLeads.filter((lead) => !convertedLeadIds.has(String(lead._id)));
     const unconvertedLeads = unconvertedLeadRows.length;
-    const leadGap = totalOngoingLeads;
+    const leadWasOngoingAtPeriodEnd = (lead) => {
+      const terminalTime = leadTerminalTime(lead);
+      if (terminalTime !== null) return terminalTime > reportEndTime;
+      return activeLeadGapStatuses.has(String(lead?.status || "").trim().toLowerCase());
+    };
+    // Lead Gap is intentionally a subset of Unconverted Leads: only leads
+    // whose historical status was still New/In Progress at period end count.
+    const leadGapRows = unconvertedLeadRows.filter(leadWasOngoingAtPeriodEnd);
+    const totalOngoingLeads = leadGapRows.length;
+    const leadGap = leadGapRows.length;
     const conversionRatePct = totalHandledLeads ? Math.round((convertedLeads / totalHandledLeads) * 100) : 0;
     const activePolicyRatePct = totalPolicies ? Math.round((activePolicies / totalPolicies) * 100) : 0;
     const activeConvertedLeadCount = activeLeadIds.size;
