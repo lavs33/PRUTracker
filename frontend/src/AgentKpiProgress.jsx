@@ -13,9 +13,20 @@ const monthKey = (date = new Date()) => {
   return `${parts.find((part) => part.type === "year")?.value}-${parts.find((part) => part.type === "month")?.value}`;
 };
 const CURRENT_MONTH = monthKey();
-const MONTH_OPTIONS = (() => {
+const TASK_KPI_TYPE_BY_KEY = {
+  weekly_approaches: "APPROACH",
+  weekly_appointments: "APPOINTMENT",
+  weekly_presentations: "PRESENTATION",
+};
+const buildMonthOptions = (dataStartDate) => {
   const options = [];
-  let cursor = "2026-01";
+  const currentYear = CURRENT_MONTH.split("-")[0];
+  const startParts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Manila", year: "numeric", month: "2-digit" })
+    .formatToParts(new Date(dataStartDate || `${currentYear}-01-01T00:00:00.000Z`));
+  const dataYear = startParts.find((part) => part.type === "year")?.value || currentYear;
+  const startYear = dataYear === currentYear ? dataYear : currentYear;
+  const startMonth = dataYear === currentYear ? (startParts.find((part) => part.type === "month")?.value || "01") : "01";
+  let cursor = `${startYear}-${startMonth}`;
   while (cursor <= CURRENT_MONTH) {
     const [year, month] = cursor.split("-").map(Number);
     options.push({
@@ -25,7 +36,8 @@ const MONTH_OPTIONS = (() => {
     cursor = month === 12 ? `${year + 1}-01` : `${year}-${String(month + 1).padStart(2, "0")}`;
   }
   return options;
-})();
+};
+const MONTH_OPTIONS = buildMonthOptions();
 
 const DEFAULT_DATA = {
   agent: {},
@@ -62,7 +74,7 @@ const formatReportPeriod = (reportContext) => {
   return start === end ? start : `${start} to ${end}`;
 };
 
-const getOptionLabel = (value) => MONTH_OPTIONS.find((option) => option.value === value)?.label || value || CURRENT_MONTH;
+const getOptionLabel = (options, value) => options.find((option) => option.value === value)?.label || value || CURRENT_MONTH;
 
 const money = (value) => Number(value || 0).toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -118,10 +130,12 @@ function AgentKpiProgress() {
   }, []);
 
   const [selectedMonth, setSelectedMonth] = useState(CURRENT_MONTH);
+  const [monthOptions, setMonthOptions] = useState(MONTH_OPTIONS);
   const [data, setData] = useState(DEFAULT_DATA);
   const [loading, setLoading] = useState(true);
   const [apiError, setApiError] = useState("");
   const [lastUpdated, setLastUpdated] = useState(null);
+  const [recommendationTasks, setRecommendationTasks] = useState([]);
 
   useEffect(() => {
     if (!user || user.username !== username) navigate("/", { replace: true });
@@ -134,10 +148,17 @@ function AgentKpiProgress() {
   const fetchData = useCallback(async (signal) => {
     if (!user?.id) return;
     const params = new URLSearchParams({ userId: user.id, month: selectedMonth });
-    const response = await fetch(`${API_BASE}/api/agent/kpi-progress?${params.toString()}`, signal ? { signal } : undefined);
+    const kpiRequest = fetch(`${API_BASE}/api/agent/kpi-progress?${params.toString()}`, signal ? { signal } : undefined);
+    const tasksRequest = selectedMonth === CURRENT_MONTH
+      ? fetch(`${API_BASE}/api/tasks?${new URLSearchParams({ userId: user.id, status: "Open", includeRefs: "1" }).toString()}`, signal ? { signal } : undefined)
+      : Promise.resolve(null);
+    const [response, tasksResponse] = await Promise.all([kpiRequest, tasksRequest]);
     const payload = await response.json();
+    const tasksPayload = tasksResponse ? await tasksResponse.json() : { tasks: [] };
     if (!response.ok) throw new Error(payload?.message || "Failed to load KPI progress.");
     setData({ ...DEFAULT_DATA, ...payload, kpis: Array.isArray(payload?.kpis) ? payload.kpis : [] });
+    setMonthOptions(buildMonthOptions(payload?.dataStartDate));
+    setRecommendationTasks(tasksResponse?.ok && Array.isArray(tasksPayload?.tasks) ? tasksPayload.tasks : []);
     setLastUpdated(new Date());
   }, [selectedMonth, user?.id]);
 
@@ -170,6 +191,41 @@ function AgentKpiProgress() {
     }
   };
 
+  const getKpiRecommendations = (kpi, comparison) => {
+    if (selectedMonth !== CURRENT_MONTH || comparison.className !== "warning") return [];
+    const missingCount = Math.max(1, Math.ceil(Number(kpi.targetValue || kpi.targetMin || kpi.targetMax || 0) - Number(kpi.actual || 0)));
+    const taskType = TASK_KPI_TYPE_BY_KEY[kpi.key];
+    if (taskType) {
+      const matchingTasks = recommendationTasks
+        .filter((task) => String(task?.type || "").toUpperCase() === taskType && String(task?.status || "").toLowerCase() !== "done")
+        .sort((left, right) => new Date(left?.dueAt || left?.createdAt || 0) - new Date(right?.dueAt || right?.createdAt || 0))
+        .slice(0, 3);
+      return [{
+        title: `Complete ${Math.min(missingCount, Math.max(matchingTasks.length, 1))} ${taskType.toLowerCase()} task${Math.min(missingCount, Math.max(matchingTasks.length, 1)) === 1 ? "" : "s"}`,
+        description: matchingTasks.length
+          ? `These open ${taskType.toLowerCase()} tasks can directly add to this month's KPI progress when completed.`
+          : `No open ${taskType.toLowerCase()} tasks are available yet; create or schedule the next client activity to close the KPI gap.`,
+        tasks: matchingTasks,
+      }];
+    }
+    if (kpi.key === "monthly_new_prospects") {
+      return [{ title: `Add ${missingCount} new prospect${missingCount === 1 ? "" : "s"}`, description: "Create new prospect records this month to increase this KPI.", path: `/agent/${username}/prospects` }];
+    }
+    if (kpi.key === "monthly_policies") {
+      return [{ title: `Convert ${missingCount} additional active polic${missingCount === 1 ? "y" : "ies"}`, description: "Prioritize active lead engagement and issued-policy follow-through for this month.", path: `/agent/${username}/sales/performance` }];
+    }
+    if (kpi.key === "monthly_closing_ratio") {
+      return [{ title: "Improve current-month closing quality", description: "Review in-progress leads and application follow-ups so submitted cases are more likely to become issued policies.", path: `/agent/${username}/sales/performance` }];
+    }
+    return [{ title: "Focus on this KPI gap", description: "Review related client, task, and sales records for the current month and complete the next action that contributes to this KPI." }];
+  };
+
+  const openTask = (task) => {
+    if (task?.prospectId && task?.leadId) return navigate(`/agent/${username}/prospects/${task.prospectId}/leads/${task.leadId}/engage`);
+    if (task?.prospectId) return navigate(`/agent/${username}/prospects/${task.prospectId}`);
+    return navigate(`/agent/${username}/tasks/all`);
+  };
+
   const generatePdfReport = () => {
     const agentCode = user?.username || "Agent";
     const agentName = [data.agent?.firstName, data.agent?.middleName, data.agent?.lastName].filter(Boolean).join(" ") || agentCode;
@@ -184,7 +240,7 @@ function AgentKpiProgress() {
       return `
         <tr>
           <td>${escapeHtml(kpi.label)}</td>
-          <td>${escapeHtml(data.reportContext?.periodLabel || getOptionLabel(selectedMonth))}</td>
+          <td>${escapeHtml(data.reportContext?.periodLabel || getOptionLabel(monthOptions, selectedMonth))}</td>
           <td>${escapeHtml(formatKpiValue(kpi.actual, kpi.valueType))}</td>
           <td>${escapeHtml(formatKpiTarget(kpi))}</td>
           <td>${escapeHtml(comparison.status)}</td>
@@ -271,7 +327,7 @@ function AgentKpiProgress() {
             </section>
             <section class="section">
               <div class="meta-row">
-                <div class="meta-chip"><div class="label">Selected Month</div><div class="value">${escapeHtml(getOptionLabel(selectedMonth))}</div></div>
+                <div class="meta-chip"><div class="label">Selected Month</div><div class="value">${escapeHtml(getOptionLabel(monthOptions, selectedMonth))}</div></div>
                 <div class="meta-chip"><div class="label">KPI Target Period</div><div class="value">Monthly</div></div>
                 <div class="meta-chip"><div class="label">Assigned KPI Cards</div><div class="value">${data.kpis.length}</div></div>
               </div>
@@ -366,7 +422,7 @@ function AgentKpiProgress() {
             <div className="sp-filterGroup">
               <label>Month</label>
               <select value={selectedMonth} onChange={(event) => setSelectedMonth(event.target.value)}>
-                {MONTH_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                {monthOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
             </div>
           </section>
@@ -384,10 +440,11 @@ function AgentKpiProgress() {
             <section className="agent-kpi-grid">
               {data.kpis.map((kpi) => {
                 const comparison = getKpiComparison(kpi.actual, kpi);
+                const recommendations = getKpiRecommendations(kpi, comparison);
                 return (
                   <article className={`agent-kpi-card ${comparison.className}`} key={kpi.key}>
                     <div className="agent-kpi-card__head">
-                      <span>{data.reportContext?.periodLabel || getOptionLabel(selectedMonth)} • Monthly</span>
+                      <span>{data.reportContext?.periodLabel || getOptionLabel(monthOptions, selectedMonth)} • Monthly</span>
                       <strong>{kpi.label}</strong>
                     </div>
                     <div className="agent-kpi-values">
@@ -405,6 +462,24 @@ function AgentKpiProgress() {
                     </div>
                     <em>{comparison.status}</em>
                     <small>{comparison.deltaLabel}</small>
+                    {recommendations.length ? <div className="agent-kpi-recommendations">
+                      <span className="agent-kpi-recommendations__label">Recommended actions</span>
+                      {recommendations.map((recommendation) => (
+                        <div className="agent-kpi-recommendation" key={recommendation.title}>
+                          <strong>{recommendation.title}</strong>
+                          <p>{recommendation.description}</p>
+                          {recommendation.path ? <button type="button" onClick={() => navigate(recommendation.path)}>Open related dashboard</button> : null}
+                          {recommendation.tasks?.length ? <div className="agent-kpi-recommendation__tasks">
+                            {recommendation.tasks.map((task) => (
+                              <button type="button" key={task._id} onClick={() => openTask(task)}>
+                                <b>{task.title || `${task.type} task`}</b>
+                                <span>{task.prospectName || "Prospect"} • {task.leadCode || "Lead —"}</span>
+                              </button>
+                            ))}
+                          </div> : null}
+                        </div>
+                      ))}
+                    </div> : null}
                   </article>
                 );
               })}
@@ -419,7 +494,7 @@ function AgentKpiProgress() {
                 <h2>Contribution in Unit Sales Production</h2>
                 <article className="agent-kpi-contribution-card">
                   <div className="agent-kpi-contribution-period">
-                    <span>{data.reportContext?.periodLabel || getOptionLabel(selectedMonth)} • Monthly</span>
+                    <span>{data.reportContext?.periodLabel || getOptionLabel(monthOptions, selectedMonth)} • Monthly</span>
                   </div>
                   <div className="agent-kpi-values">
                     <div>
