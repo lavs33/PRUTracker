@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { FaBullseye, FaChartLine, FaTasks, FaUsers } from "react-icons/fa";
-import { FiAlertCircle, FiArrowRight, FiCheckCircle, FiClock, FiTrendingUp } from "react-icons/fi";
+import { FiAlertCircle, FiArrowRight, FiCheckCircle } from "react-icons/fi";
 import "./AgentHome.css";
 import TopNav from "./components/TopNav";
 import { logout } from "./utils/logout";
@@ -11,8 +11,10 @@ const API_BASE = "http://localhost:5000";
 const DEFAULT_HOME_DATA = {
   clients: {
     totalProspects: 0,
+    activeProspects: 0,
     totalPolicyholders: 0,
     totalLeads: 0,
+    ongoingLeads: 0,
     activePolicyholders: 0,
     conversionRate: 0,
     activePolicyRate: 0,
@@ -30,10 +32,15 @@ const DEFAULT_HOME_DATA = {
     totalPolicies: 0,
     totalAnnualPremiumPhp: 0,
     bestSource: null,
+    currentMonthLabel: "Current Month",
+    currentMonthConversionRatePct: 0,
+    currentMonthAnnualPremiumPhp: 0,
   },
   kpiProgress: {
     assignedKpis: [],
-    periodLabel: "This Day",
+    assignedCount: 0,
+    assignmentUpdatedAt: null,
+    periodLabel: "Current Month",
   },
 };
 
@@ -76,31 +83,42 @@ function AgentHome() {
 
     const currentMonthParts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Manila", year: "numeric", month: "2-digit" }).formatToParts(new Date());
     const currentMonth = `${currentMonthParts.find((part) => part.type === "year")?.value}-${currentMonthParts.find((part) => part.type === "month")?.value}`;
-    const [homeResponse, kpiResponse, notificationsResponse] = await Promise.all([
+    const [homeResponse, kpiResponse, notificationsResponse, salesResponse] = await Promise.all([
       fetch(
         `${API_BASE}/api/agent/home?${new URLSearchParams({ userId: user.id }).toString()}`,
         signal ? { signal } : undefined
       ),
       fetch(`${API_BASE}/api/agent/kpi-progress?${new URLSearchParams({ userId: user.id, month: currentMonth }).toString()}`, signal ? { signal } : undefined),
       fetch(`${API_BASE}/api/notifications?${new URLSearchParams({ userId: user.id, includeRefs: "1" }).toString()}`, signal ? { signal } : undefined),
+      fetch(`${API_BASE}/api/sales/performance?${new URLSearchParams({ userId: user.id, datePreset: currentMonth, leadSource: "ALL" }).toString()}`, signal ? { signal } : undefined),
     ]);
 
     const payload = await homeResponse.json();
     const kpiPayload = await kpiResponse.json();
     const notificationsPayload = await notificationsResponse.json();
+    const salesPayload = await salesResponse.json();
 
     if (!homeResponse.ok) throw new Error(payload?.message || "Failed to load agent home preview.");
     if (!kpiResponse.ok) throw new Error(kpiPayload?.message || "Failed to load KPI progress preview.");
     if (!notificationsResponse.ok) throw new Error(notificationsPayload?.message || "Failed to load action items.");
-    const assignedKpiPreview = (Array.isArray(kpiPayload?.kpis) ? kpiPayload.kpis : []).slice(0, 3);
+    if (!salesResponse.ok) throw new Error(salesPayload?.message || "Failed to load current-month sales preview.");
+    const assignedKpis = Array.isArray(kpiPayload?.kpis) ? kpiPayload.kpis : [];
     const priorityByType = {
       POLICY_LAPSED: "urgent", PAYMENT_MISSED_TRANSFER: "urgent", TASK_MISSED: "urgent",
       TASK_DUE_TODAY: "high", PAYMENT_TRANSFER_REMINDER: "high", PAYMENT_EOR_REMINDER: "high",
       POLICY_CANCELLED: "high", ORPHAN_CLIENT_ASSIGNED: "high",
     };
+    const concernKey = (notification) => {
+      const metadata = notification?.metadata || {};
+      if (["PAYMENT_TRANSFER_REMINDER", "PAYMENT_EOR_REMINDER", "PAYMENT_MISSED_TRANSFER", "POLICY_LAPSED"].includes(notification?.type)) {
+        return `payment:${metadata.annualPaymentId || metadata.paymentId || metadata.policyholderId || notification.entityId}`;
+      }
+      return `${notification?.type}:${metadata.leadId || metadata.policyholderId || metadata.prospectId || notification?.entityId || notification?._id}`;
+    };
     const actionable = (Array.isArray(notificationsPayload?.notifications) ? notificationsPayload.notifications : [])
       .filter((notification) => notification?.resolutionStatus === "Unresolved" && ["urgent", "high"].includes(priorityByType[notification.type]))
       .sort((left, right) => new Date(right.createdAt || 0) - new Date(left.createdAt || 0))
+      .filter((notification, index, notifications) => notifications.findIndex((candidate) => concernKey(candidate) === concernKey(notification)) === index)
       .slice(0, 6)
       .map((notification) => ({ ...notification, priority: priorityByType[notification.type] }));
     setActionItems(actionable);
@@ -115,8 +133,10 @@ function AgentHome() {
       },
       clients: {
         totalProspects: Number(payload?.clients?.totalProspects || 0),
+        activeProspects: Number(payload?.clients?.activeProspects || 0),
         totalPolicyholders: Number(payload?.clients?.totalPolicyholders || 0),
         totalLeads: Number(payload?.clients?.totalLeads || 0),
+        ongoingLeads: Number(payload?.clients?.ongoingLeads || 0),
         activePolicyholders: Number(payload?.clients?.activePolicyholders || 0),
         conversionRate: Number(payload?.clients?.conversionRate || 0),
         activePolicyRate: Number(payload?.clients?.activePolicyRate || 0),
@@ -127,10 +147,15 @@ function AgentHome() {
         totalPolicies: Number(payload?.sales?.totalPolicies || 0),
         totalAnnualPremiumPhp: Number(payload?.sales?.totalAnnualPremiumPhp || 0),
         bestSource: payload?.sales?.bestSource || null,
+        currentMonthLabel: payload?.sales?.currentMonthLabel || "Current Month",
+        currentMonthConversionRatePct: Number(salesPayload?.conversionRatePct || 0),
+        currentMonthAnnualPremiumPhp: Number(salesPayload?.totalAnnualPremiumPhp || 0),
       },
       kpiProgress: {
-        assignedKpis: assignedKpiPreview,
+        assignedKpis: assignedKpis.slice(0, 3),
+        assignedCount: assignedKpis.length,
         periodLabel: kpiPayload?.reportContext?.periodLabel || "Current Month",
+        assignmentUpdatedAt: kpiPayload?.reportContext?.assignmentUpdatedAt || null,
       },
     });
   }, [user?.id]);
@@ -191,56 +216,66 @@ function AgentHome() {
   const dueTodayCount = homeData.tasks.dueTodayCount;
   const recentTaskCount = homeData.tasks.recentlyAddedTop5.length;
   const recentProspectsCount = homeData.clients.recentProspects.length;
-
-  const topMetrics = [
-    { label: "Prospects", value: homeData.clients.totalProspects, icon: <FaUsers aria-hidden="true" /> },
-    { label: "Due Today", value: dueTodayCount, icon: <FiClock aria-hidden="true" /> },
-    { label: "Active Policies", value: homeData.sales.totalPolicies, icon: <FiCheckCircle aria-hidden="true" /> },
-    { label: "Active Policy Conversion", value: `${homeData.sales.conversionRatePct}%`, icon: <FiTrendingUp aria-hidden="true" /> },
-  ];
+  const kpiLastUpdated = homeData.kpiProgress.assignmentUpdatedAt
+    ? new Date(homeData.kpiProgress.assignmentUpdatedAt).toLocaleString("en-US", {
+        timeZone: "Asia/Manila", month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit",
+      })
+    : "Not yet updated";
 
   const moduleCards = [
     {
       key: "clients",
       title: "Clients",
-      description: "Relationship visibility, recent prospects, and policyholder overview.",
       icon: <FaUsers size={28} className="module-icon" />,
       onClick: () => navigateToTop(`/agent/${user.username}/clients`),
       accent: "clients",
-      insights: [`${homeData.clients.totalLeads} leads`, `${homeData.clients.activePolicyholders} active policyholders`],
+      insights: [
+        { label: "Ongoing leads", value: homeData.clients.ongoingLeads },
+        { label: "Active policyholders", value: homeData.clients.activePolicyholders },
+      ],
     },
     {
       key: "tasks",
       title: "Tasks",
-      description: "Open today’s follow-ups, due items, and execution queues.",
       icon: <FaTasks size={28} className="module-icon" />,
       onClick: () => navigateToTop(`/agent/${user.username}/tasks`),
       accent: "tasks",
-      insights: [`${homeData.tasks.openCount} open`, `${homeData.tasks.overdueCount} overdue`],
+      insights: [
+        { label: "Overdue tasks", value: homeData.tasks.overdueCount },
+        { label: "Tasks due today", value: homeData.tasks.dueTodayCount },
+      ],
     },
     {
       key: "sales",
       title: "Sales Performance",
-      description: "Monitor conversion, premium production, and source quality.",
       icon: <FaChartLine size={28} className="module-icon" />,
       onClick: () => navigateToTop(`/agent/${user.username}/sales/performance`),
       accent: "sales",
-      insights: [`${homeData.sales.totalPolicies} active policies`, `₱ ${money(homeData.sales.totalAnnualPremiumPhp)} annual premium`],
+      insights: [
+        { label: `${homeData.sales.currentMonthLabel} active-policy conversion rate`, value: `${homeData.sales.currentMonthConversionRatePct}%` },
+        { label: `${homeData.sales.currentMonthLabel} active annual premium generated`, value: `₱ ${money(homeData.sales.currentMonthAnnualPremiumPhp)}` },
+      ],
     },
     {
       key: "kpi-progress",
       title: "KPI Progress",
-      description: "Review assigned KPI targets, current progress, and production contribution.",
       icon: <FaBullseye size={28} className="module-icon" />,
       onClick: () => navigateToTop(`/agent/${user.username}/kpi/progress`),
       accent: "kpi",
-      insights: [`${homeData.kpiProgress.assignedKpis.length} assigned KPIs`, homeData.kpiProgress.periodLabel],
+      insights: [
+        { label: "Reporting month", value: homeData.kpiProgress.periodLabel },
+        { label: `Assigned KPIs (last updated: ${kpiLastUpdated})`, value: homeData.kpiProgress.assignedCount },
+      ],
     },
   ];
 
   const openActionItem = (notification) => {
     const policyholderId = notification?.metadata?.policyholderId || (notification?.entityType === "Policyholder" ? notification.entityId : "");
     const annualPaymentId = notification?.metadata?.annualPaymentId || "";
+    const paymentId = notification?.metadata?.paymentId || "";
+    if (String(notification?.type || "") === "PAYMENT_EOR_REMINDER" && policyholderId && annualPaymentId && paymentId) {
+      return navigateToTop(`/agent/${user.username}/policyholders/${policyholderId}/annual-payments/${annualPaymentId}/payments/${paymentId}`);
+    }
     if (policyholderId && annualPaymentId) return navigateToTop(`/agent/${user.username}/policyholders/${policyholderId}/annual-payments/${annualPaymentId}`);
     if (policyholderId) return navigateToTop(`/agent/${user.username}/policyholders/${policyholderId}`);
     const prospectId = notification?.prospectId || notification?.metadata?.prospectId || (notification?.entityType === "Prospect" ? notification.entityId : "");
@@ -248,6 +283,20 @@ function AgentHome() {
     if (prospectId && leadId) return navigateToTop(`/agent/${user.username}/prospects/${prospectId}/leads/${leadId}/engage`);
     if (prospectId) return navigateToTop(`/agent/${user.username}/prospects/${prospectId}`);
     return navigateToTop(`/agent/${user.username}/tasks/all`);
+  };
+
+  const concernDetails = (notification) => {
+    const message = String(notification?.message || "Open this concern to complete the required action.");
+    const labels = ["Prospect Code", "Prospect Name", "Lead Code", "Policyholder Code", "Policyholder Name", "Policy Name", "Policy Number"];
+    const details = labels.flatMap((label) => {
+      const match = message.match(new RegExp(`${label}:\\s*([^.]*)`, "i"));
+      return match?.[1]?.trim() ? [{ label, value: match[1].trim() }] : [];
+    });
+    const summary = labels.reduce(
+      (value, label) => value.replace(new RegExp(`\\s*${label}:\\s*[^.]*\\.?`, "ig"), ""),
+      message
+    ).trim();
+    return { summary: summary || notification?.title || "Action required.", details };
   };
 
   return (
@@ -266,45 +315,12 @@ function AgentHome() {
             <span className="home-kicker">Agent command center</span>
             <h1 className="welcome-text">Welcome back, {user.firstName}.</h1>
             <p className="home-subtext">
-              Preview your client pipeline, task queue, and sales momentum before jumping into a module.
+              Review current client activity, overdue and due-today tasks, this month’s active-policy results, and assigned KPI reporting at a glance.
             </p>
 
-            <div className="home-quickActions">
-              <button type="button" className="home-actionBtn primary" onClick={() => navigateToTop(`/agent/${user.username}/tasks`)}>
-                Review tasks
-              </button>
-              <button type="button" className="home-actionBtn" onClick={() => navigateToTop(`/agent/${user.username}/clients/relationship`)}>
-                Open client dashboard
-              </button>
-              <button type="button" className="home-actionBtn" onClick={() => navigateToTop(`/agent/${user.username}/sales/performance`)}>
-                View sales performance
-              </button>
-              <button type="button" className="home-actionBtn" onClick={() => navigateToTop(`/agent/${user.username}/kpi/progress`)}>
-                Check KPI progress
-              </button>
-            </div>
           </div>
 
-          <div className="home-metricsGrid">
-            {topMetrics.map((metric) => (
-              <div key={metric.label} className="home-metricCard">
-                <div className="home-metricIcon">{metric.icon}</div>
-                <span className="home-metricLabel">{metric.label}</span>
-                <strong className="home-metricValue">{metric.value}</strong>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <section className="home-modulesSection">
-          <div className="home-cardHeader home-cardHeaderStandalone">
-            <div>
-              <span className="home-cardKicker">Navigation</span>
-              <h2>Jump into a module</h2>
-            </div>
-          </div>
-
-          <div className="module-grid">
+          <div className="module-grid home-heroModules" aria-label="Module navigation">
             {moduleCards.map((module) => (
               <div
                 key={module.key}
@@ -316,9 +332,13 @@ function AgentHome() {
               >
                 <div className="module-iconWrap">{module.icon}</div>
                 <strong>{module.title}</strong>
-                <p>{module.description}</p>
                 <div className="module-insights">
-                  {module.insights.map((insight) => <span key={insight}>{insight}</span>)}
+                  {module.insights.map((insight) => (
+                    <span key={insight.label}>
+                      <small>{insight.label}</small>
+                      <b>{insight.value}</b>
+                    </span>
+                  ))}
                 </div>
                 <span className="module-linkText">
                   Open module
@@ -342,23 +362,27 @@ function AgentHome() {
               <span className="home-cardKicker">Action required</span>
               <h2>Urgent and high-priority concerns</h2>
             </div>
-            <button type="button" className="home-inlineLink" onClick={() => navigateToTop(`/agent/${user.username}/notifications`)}>
-              View notifications
+            <button type="button" className="home-inlineLink home-actionAlertsLink" onClick={() => navigateToTop(`/agent/${user.username}/notifications?resolution=Unresolved`)}>
+              View all unresolved alerts
               <FiArrowRight aria-hidden="true" />
             </button>
           </div>
           {loading ? <div className="home-emptyState">Loading action items…</div> : actionItems.length ? (
             <div className="home-actionItemsGrid">
-              {actionItems.map((notification) => (
-                <article key={notification._id} className={`home-actionItem ${notification.priority}`}>
+              {actionItems.map((notification) => {
+                const concern = concernDetails(notification);
+                return <article key={notification._id} className={`home-actionItem ${notification.priority}`}>
                   <div>
                     <span className="home-actionPriority">{notification.priority}</span>
                     <strong>{notification.title}</strong>
-                    <p>{notification.message || "Open this concern to complete the required action."}</p>
+                    <p>{concern.summary}</p>
+                    {concern.details.length ? <div className="home-actionDetails">
+                      {concern.details.map((detail) => <span key={detail.label}><small>{detail.label}</small><b>{detail.value}</b></span>)}
+                    </div> : null}
                   </div>
                   <button type="button" onClick={() => openActionItem(notification)}>Open</button>
-                </article>
-              ))}
+                </article>;
+              })}
             </div>
           ) : <div className="home-emptyState home-emptyState--success"><FiCheckCircle aria-hidden="true" /> No urgent or high-priority actions require resolution.</div>}
         </section>
