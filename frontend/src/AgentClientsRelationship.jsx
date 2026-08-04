@@ -5,15 +5,28 @@ import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
 import "./AgentClientsRelationship.css";
 
-const DATE_PRESETS = [
-  { value: "ALL", label: "All Time" },
-  { value: "1d", label: "This Day" },
-  { value: "7d", label: "Last 7 Days" },
-  { value: "30d", label: "Last 30 Days" },
-  { value: "90d", label: "Last 90 Days" },
-  { value: "6m", label: "Last 6 Months" },
-  { value: "12m", label: "Last 12 Months" },
-];
+const MANILA_MONTH_PARTS = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Manila", year: "numeric", month: "2-digit",
+}).formatToParts(new Date());
+const CURRENT_YEAR = Number(MANILA_MONTH_PARTS.find((part) => part.type === "year")?.value);
+const CURRENT_MONTH = Number(MANILA_MONTH_PARTS.find((part) => part.type === "month")?.value);
+const CURRENT_MONTH_KEY = `${CURRENT_YEAR}-${String(CURRENT_MONTH).padStart(2, "0")}`;
+const buildDatePresets = (dataStartDate) => {
+  const start = new Date(dataStartDate || Date.UTC(CURRENT_YEAR, 0, 1));
+  const startParts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Manila", year: "numeric", month: "2-digit" }).formatToParts(start);
+  const startYear = Number(startParts.find((part) => part.type === "year")?.value);
+  const startMonth = startYear === CURRENT_YEAR ? Number(startParts.find((part) => part.type === "month")?.value) : 1;
+  const monthName = (month) => new Intl.DateTimeFormat("en-US", { month: "long", timeZone: "UTC" })
+    .format(new Date(Date.UTC(CURRENT_YEAR, month - 1, 1)));
+  return [{ value: "YTD", label: `${monthName(startMonth)} ${CURRENT_YEAR} - ${monthName(CURRENT_MONTH)} ${CURRENT_YEAR}` }, ...Array.from({ length: CURRENT_MONTH - startMonth + 1 }, (_, index) => {
+  const month = startMonth + index;
+  const value = `${CURRENT_YEAR}-${String(month).padStart(2, "0")}`;
+  const label = new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric", timeZone: "UTC" })
+    .format(new Date(Date.UTC(CURRENT_YEAR, month - 1, 1)));
+  return { value, label };
+})];
+};
+const DATE_PRESETS = buildDatePresets();
 
 const SOURCE_OPTIONS = [
   { value: "ALL", label: "All Sources" },
@@ -41,8 +54,8 @@ const STATUS_OPTIONS = [
 ];
 
 const DEFAULT_DASHBOARD = {
-  totals: { prospects: 0, prospectsWithLeads: 0, prospectsWithActiveLeads: 0, policyholders: 0, activePolicyholders: 0, engagements: 0, leads: 0, activeLeads: 0 },
-  filters: { datePreset: "ALL", source: "ALL", marketType: "ALL", prospectType: "ALL", status: "ALL" },
+  totals: { prospects: 0, newProspects: 0, prospectsWithLeads: 0, prospectsWithActiveLeads: 0, policyholders: 0, newPolicyholders: 0, activePolicyholders: 0, engagements: 0, leads: 0, activeLeads: 0 },
+  filters: { datePreset: CURRENT_MONTH_KEY, source: "ALL", marketType: "ALL", prospectType: "ALL", status: "ALL" },
   leadStatusCounts: { new: 0, inProgress: 0 },
   conversionRatePct: 0,
   warmRatePct: 0,
@@ -57,7 +70,7 @@ const DEFAULT_DASHBOARD = {
   marketConversion: [],
   trendSeries: { prospects: [], policyholders: [] },
   recentProspects: [],
-  reportContext: { periodLabel: "All available records", generatedAt: null },
+  reportContext: { periodLabel: DATE_PRESETS.find((option) => option.value === CURRENT_MONTH_KEY)?.label || "Current month", generatedAt: null },
   insights: { topSource: null, leadCoverage: null, policyRiskPct: 0 },
 };
 
@@ -111,8 +124,9 @@ function AgentClientsRelationship() {
   const [loading, setLoading] = useState(true);
   const [apiError, setApiError] = useState("");
   const [lastUpdated, setLastUpdated] = useState(null);
+  const [datePresets, setDatePresets] = useState(DATE_PRESETS);
   const [filters, setFilters] = useState({
-    datePreset: "ALL",
+    datePreset: CURRENT_MONTH_KEY,
     source: "ALL",
     marketType: "ALL",
     prospectType: "ALL",
@@ -120,7 +134,7 @@ function AgentClientsRelationship() {
   });
   const defaultFilters = useMemo(
     () => ({
-      datePreset: "ALL",
+      datePreset: CURRENT_MONTH_KEY,
       source: "ALL",
       marketType: "ALL",
       prospectType: "ALL",
@@ -161,6 +175,7 @@ function AgentClientsRelationship() {
       const payload = await res.json();
       if (!res.ok) throw new Error(payload?.message || "Failed to load dashboard metrics.");
       setDashboardData({ ...DEFAULT_DASHBOARD, ...payload });
+      setDatePresets(buildDatePresets(payload?.dataStartDate));
       setLastUpdated(new Date());
     },
     [filters, user?.id]
@@ -199,8 +214,10 @@ function AgentClientsRelationship() {
 
     return {
       totalProspects: Number(totals.prospects || 0),
+      newProspects: Number(totals.newProspects || 0),
       prospectsWithLeads: Number(totals.prospectsWithActiveLeads || totals.prospectsWithLeads || 0),
       totalPolicyholders: Number(totals.policyholders || 0),
+      newPolicyholders: Number(totals.newPolicyholders || 0),
       activePolicyholders: Number(totals.activePolicyholders || policyStatus.active || 0),
       totalLeads: Number(totals.leads || 0),
       activeLeads: Number(totals.activeLeads || 0),
@@ -245,12 +262,12 @@ function AgentClientsRelationship() {
     const topSource = dashboard.insights?.topSource;
     const leadCoverage = dashboard.insights?.leadCoverage;
     const sourceMessage = topSource
-      ? `${topSource.label} converts to active policyholders at ${topSource.conversionRatePct}% (${topSource.policyholders}/${topSource.prospects}).`
+      ? `${topSource.label} converts to active policyholders at ${topSource.conversionRatePct}% (${topSource.policyholders}/${topSource.prospects}) within the selected period.`
       : "No source conversion pattern available yet.";
     const coverageMessage = leadCoverage
-      ? `${leadCoverage.prospectsWithActiveLeads || leadCoverage.prospectsWithLeads || 0} of ${dashboard.totalProspects} prospects have active leads (${leadCoverage.leadCoveragePct}% coverage). ${leadCoverage.prospectsWithClosedLeadsAndActivePolicies || 0} prospects have closed leads with active policies, and ${leadCoverage.activeLeads || 0} active leads are still going on, leaving ${leadCoverage.prospectsWithActiveLeads || leadCoverage.prospectsWithLeads || 0} prospects still in active engagement stages.`
+      ? `${leadCoverage.prospectsWithActiveLeads || leadCoverage.prospectsWithLeads || 0} of ${dashboard.totalProspects} cumulative prospects have active leads (${leadCoverage.leadCoveragePct}% coverage). ${leadCoverage.prospectsWithClosedLeadsAndActivePolicies || 0} prospects have closed leads with active policies, and ${leadCoverage.activeLeads || 0} active leads are still going on.`
       : "No lead coverage insight available yet.";
-    const riskMessage = `${Number(dashboard.insights?.policyRiskPct || 0)}% of policyholders are at risk or lapsed (${Number(dashboard.insights?.atRiskPolicies || 0)} policies).`;
+    const riskMessage = `${Number(dashboard.insights?.policyRiskPct || 0)}% of cumulative policyholders through the selected period are at risk or lapsed (${Number(dashboard.insights?.atRiskPolicies || 0)} policies).`;
     return [
       { title: "Best Conversion Source", body: sourceMessage },
       { title: "Lead Coverage Opportunity", body: coverageMessage },
@@ -327,7 +344,7 @@ function AgentClientsRelationship() {
           <tr>
             <td>${escapeHtml(row.label)}</td>
             <td>${Number(row.value || 0)}</td>
-            <td>${dashboard.totalProspects ? Math.round((Number(row.value || 0) / dashboard.totalProspects) * 100) : 0}%</td>
+            <td>${dashboard.newProspects ? Math.round((Number(row.value || 0) / dashboard.newProspects) * 100) : 0}%</td>
           </tr>
         `
       )
@@ -346,7 +363,7 @@ function AgentClientsRelationship() {
           <tr>
             <td>${escapeHtml(row.status || row.label)}</td>
             <td>${Number(row.value || 0)}</td>
-            <td>${dashboard.totalPolicyholders ? Math.round((Number(row.value || 0) / dashboard.totalPolicyholders) * 100) : 0}%</td>
+            <td>${dashboard.newPolicyholders ? Math.round((Number(row.value || 0) / dashboard.newPolicyholders) * 100) : 0}%</td>
           </tr>
         `
       )
@@ -358,7 +375,7 @@ function AgentClientsRelationship() {
           <tr>
             <td>${escapeHtml(row.status)}</td>
             <td>${Number(row.value || 0)}</td>
-            <td>${dashboard.totalProspects ? Math.round((Number(row.value || 0) / dashboard.totalProspects) * 100) : 0}%</td>
+            <td>${dashboard.newProspects ? Math.round((Number(row.value || 0) / dashboard.newProspects) * 100) : 0}%</td>
           </tr>
         `
       )
@@ -430,7 +447,7 @@ function AgentClientsRelationship() {
         </section>
         <section class="section">
           <div class="meta-row">
-            <div class="meta-chip"><div class="label">Date Range</div><div class="value">${escapeHtml(getOptionLabel(DATE_PRESETS, filters.datePreset))}</div></div>
+            <div class="meta-chip"><div class="label">Date Range</div><div class="value">${escapeHtml(getOptionLabel(datePresets, filters.datePreset))}</div></div>
             <div class="meta-chip"><div class="label">Source</div><div class="value">${escapeHtml(getOptionLabel(SOURCE_OPTIONS, filters.source))}</div></div>
             <div class="meta-chip"><div class="label">Market Type</div><div class="value">${escapeHtml(getOptionLabel(MARKET_OPTIONS, filters.marketType))}</div></div>
             <div class="meta-chip"><div class="label">Prospect Type</div><div class="value">${escapeHtml(getOptionLabel(PROSPECT_TYPE_OPTIONS, filters.prospectType))}</div></div>
@@ -440,12 +457,14 @@ function AgentClientsRelationship() {
         <section class="section">
           <div class="kpi-grid">
             <div class="kpi primary"><div class="label">Total Prospects</div><div class="val">${dashboard.totalProspects}</div></div>
+            <div class="kpi accent"><div class="label">Total New Prospects</div><div class="val">${dashboard.newProspects}</div></div>
             <div class="kpi"><div class="label">Prospects With Active Leads</div><div class="val">${dashboard.prospectsWithLeads}</div></div>
             <div class="kpi secondary"><div class="label">Total Leads</div><div class="val">${dashboard.totalLeads}</div></div>
             <div class="kpi"><div class="label">New Leads</div><div class="val">${dashboard.newLeads}</div></div>
             <div class="kpi"><div class="label">In Progress Leads</div><div class="val">${dashboard.inProgressLeads}</div></div>
             <div class="kpi info"><div class="label">Conversion Rate</div><div class="val">${dashboard.conversionRate}%</div><div class="hint">All policyholder statuses</div></div>
             <div class="kpi secondary"><div class="label">Total Policyholders</div><div class="val">${dashboard.totalPolicyholders}</div></div>
+            <div class="kpi accent"><div class="label">Total New Policyholders</div><div class="val">${dashboard.newPolicyholders}</div></div>
             <div class="kpi secondary"><div class="label">Active Policyholders</div><div class="val">${dashboard.activePolicyholders}</div></div>
             <div class="kpi primary"><div class="label">Active Policyholder Rate</div><div class="val">${dashboard.activePolicyRate}%</div></div>
           </div>
@@ -527,7 +546,7 @@ function AgentClientsRelationship() {
       pages.push(`
         <section class="pdf-page">
           <section class="section compact-top">
-            <h2 class="section-title">Newly Created Prospects in Scope</h2>
+            <h2 class="section-title">Prospects in Scope</h2>
             <table>
               <thead><tr><th>Prospect Code</th><th>Name</th><th>Market</th><th>Type</th><th>Source</th><th>Status</th><th>Active Leads</th><th>Active Policies</th><th>Created</th></tr></thead>
               <tbody><tr><td colspan="9">No newly created prospects available for the selected filters.</td></tr></tbody>
@@ -540,7 +559,7 @@ function AgentClientsRelationship() {
         pages.push(`
           <section class="pdf-page">
             <section class="section compact-top">
-              <h2 class="section-title">Newly Created Prospects in Scope</h2>
+              <h2 class="section-title">Prospects in Scope</h2>
               <table>
                 <thead><tr><th>Prospect Code</th><th>Name</th><th>Market</th><th>Type</th><th>Source</th><th>Status</th><th>Active Leads</th><th>Active Policies</th><th>Created</th></tr></thead>
                 <tbody>
@@ -741,7 +760,7 @@ function AgentClientsRelationship() {
               <label>
                 <span>Date Range</span>
                 <select value={filters.datePreset} onChange={(e) => handleFilterChange("datePreset", e.target.value)}>
-                  {DATE_PRESETS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  {datePresets.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                 </select>
               </label>
               <label>
@@ -777,47 +796,57 @@ function AgentClientsRelationship() {
               <div className="cr-kpiTile">
                 <span className="cr-kpiLabel">Total Prospects</span>
                 <span className="cr-kpiValue">{dashboard.totalProspects}</span>
-                <span className="cr-kpiHint">Selected relationship universe</span>
+                <span className="cr-kpiHint">Cumulative through the selected period</span>
+              </div>
+              <div className="cr-kpiTile">
+                <span className="cr-kpiLabel">Total New Prospects</span>
+                <span className="cr-kpiValue">{dashboard.newProspects}</span>
+                <span className="cr-kpiHint">Created within the selected period</span>
               </div>
               <div className="cr-kpiTile">
                 <span className="cr-kpiLabel">Prospects With Active Leads</span>
                 <span className="cr-kpiValue">{dashboard.prospectsWithLeads}</span>
-                <span className="cr-kpiHint">New/In Progress leads only</span>
+                <span className="cr-kpiHint">Cumulative New/In Progress leads</span>
               </div>
               <div className="cr-kpiTile">
                 <span className="cr-kpiLabel">Total Leads</span>
                 <span className="cr-kpiValue">{dashboard.totalLeads}</span>
-                <span className="cr-kpiHint">All lead records currently in scope</span>
+                <span className="cr-kpiHint">Cumulative through the selected period</span>
               </div>
               <div className="cr-kpiTile">
                 <span className="cr-kpiLabel">New Leads</span>
                 <span className="cr-kpiValue">{dashboard.newLeads}</span>
-                <span className="cr-kpiHint">Lead records still in new status</span>
+                <span className="cr-kpiHint">Cumulative leads still in New status</span>
               </div>
               <div className="cr-kpiTile">
                 <span className="cr-kpiLabel">In Progress Leads</span>
                 <span className="cr-kpiValue">{dashboard.inProgressLeads}</span>
-                <span className="cr-kpiHint">Active working leads</span>
+                <span className="cr-kpiHint">Cumulative leads still In Progress</span>
               </div>
               <div className="cr-kpiTile">
                 <span className="cr-kpiLabel">Prospect → Policyholder</span>
                 <span className="cr-kpiValue">{dashboard.conversionRate}%</span>
-                <span className="cr-kpiHint">All policyholder statuses</span>
+                <span className="cr-kpiHint">Selected-period creations only</span>
               </div>
               <div className="cr-kpiTile">
                 <span className="cr-kpiLabel">Total Policyholders</span>
                 <span className="cr-kpiValue">{dashboard.totalPolicyholders}</span>
-                <span className="cr-kpiHint">All policyholder statuses</span>
+                <span className="cr-kpiHint">Cumulative through the selected period</span>
+              </div>
+              <div className="cr-kpiTile">
+                <span className="cr-kpiLabel">Total New Policyholders</span>
+                <span className="cr-kpiValue">{dashboard.newPolicyholders}</span>
+                <span className="cr-kpiHint">Created within the selected period</span>
               </div>
               <div className="cr-kpiTile">
                 <span className="cr-kpiLabel">Active Policyholders</span>
                 <span className="cr-kpiValue">{dashboard.activePolicyholders}</span>
-                <span className="cr-kpiHint">Policies with Active status only</span>
+                <span className="cr-kpiHint">Cumulative Active policies</span>
               </div>
               <div className="cr-kpiTile">
                 <span className="cr-kpiLabel">Active Policyholder Rate</span>
                 <span className="cr-kpiValue">{dashboard.activePolicyRate}%</span>
-                <span className="cr-kpiHint">Active policies vs all policyholders</span>
+                <span className="cr-kpiHint">Cumulative through the selected period</span>
               </div>
             </div>
 
@@ -867,10 +896,10 @@ function AgentClientsRelationship() {
               <section className="cr-panel">
                 <div className="cr-panelHeader">
                   <h3 className="cr-panelTitle">Source Mix</h3>
-                  <span className="cr-panelMeta">Agent vs system-assigned prospects</span>
+                  <span className="cr-panelMeta">Prospects created within the selected period</span>
                 </div>
                 <div className="cr-donutWrap">
-                  <div className="cr-donutChart" style={sourceChartStyle}><span>{dashboard.totalProspects}</span></div>
+                  <div className="cr-donutChart" style={sourceChartStyle}><span>{dashboard.newProspects}</span></div>
                   <div className="cr-legend">
                     <span><i className="dot agent" />Agent-Sourced ({dashboard.agentSourced})</span>
                     <span><i className="dot system" />System-Assigned ({dashboard.systemAssigned})</span>
@@ -881,10 +910,10 @@ function AgentClientsRelationship() {
               <section className="cr-panel">
                 <div className="cr-panelHeader">
                   <h3 className="cr-panelTitle">Policyholder Health</h3>
-                  <span className="cr-panelMeta">All policy statuses in scope</span>
+                  <span className="cr-panelMeta">Policyholders created within the selected period</span>
                 </div>
                 <div className="cr-donutWrap">
-                  <div className="cr-donutChart" style={policyChartStyle}><span>{dashboard.totalPolicyholders}</span></div>
+                  <div className="cr-donutChart" style={policyChartStyle}><span>{dashboard.newPolicyholders}</span></div>
                   <div className="cr-legend">
                     {(dashboard.policyStatusRows.length ? dashboard.policyStatusRows : [
                       { status: "Active", value: dashboard.activePolicies },
@@ -903,13 +932,13 @@ function AgentClientsRelationship() {
               <section className="cr-panel">
                 <div className="cr-panelHeader">
                   <h3 className="cr-panelTitle">Prospect Relationship Status</h3>
-                  <span className="cr-panelMeta">Current quality of prospect records</span>
+                  <span className="cr-panelMeta">Prospects created within the selected period</span>
                 </div>
                 <div className="cr-barList">
                   {dashboard.statusCounts.map((item) => (
                     <div key={item.status} className="cr-barItem">
                       <div className="cr-barTop"><span>{item.status}</span><strong>{item.value}</strong></div>
-                      <div className="cr-progressTrack"><span style={{ width: `${dashboard.totalProspects ? (item.value / dashboard.totalProspects) * 100 : 0}%` }} /></div>
+                      <div className="cr-progressTrack"><span style={{ width: `${dashboard.newProspects ? (item.value / dashboard.newProspects) * 100 : 0}%` }} /></div>
                     </div>
                   ))}
                 </div>
@@ -918,7 +947,7 @@ function AgentClientsRelationship() {
               <section className="cr-panel">
                 <div className="cr-panelHeader">
                   <h3 className="cr-panelTitle">Segment Conversion Comparison</h3>
-                  <span className="cr-panelMeta">Warm/cold and elite/ordinary; active policyholders only</span>
+                  <span className="cr-panelMeta">Selected-period prospects; active policyholders only</span>
                 </div>
                 <div className="cr-compareList">
                   {dashboard.marketConversion.map((row) => (
@@ -934,14 +963,14 @@ function AgentClientsRelationship() {
                 <div className="cr-chartRows compact">
                   <div className="cr-rowLabel">Warm vs Cold Share</div>
                   <div className="cr-stackedTrack">
-                    <span className="warm" style={{ width: `${dashboard.totalProspects ? (dashboard.warm / dashboard.totalProspects) * 100 : 0}%` }} />
-                    <span className="cold" style={{ width: `${dashboard.totalProspects ? (dashboard.cold / dashboard.totalProspects) * 100 : 0}%` }} />
+                    <span className="warm" style={{ width: `${dashboard.newProspects ? (dashboard.warm / dashboard.newProspects) * 100 : 0}%` }} />
+                    <span className="cold" style={{ width: `${dashboard.newProspects ? (dashboard.cold / dashboard.newProspects) * 100 : 0}%` }} />
                   </div>
                   <div className="cr-rowMeta"><i className="cr-shareDot warm" />Warm {dashboard.warm} • <i className="cr-shareDot cold" />Cold {dashboard.cold}</div>
                   <div className="cr-rowLabel">Elite vs Ordinary Share</div>
                   <div className="cr-stackedTrack">
-                    <span className="elite" style={{ width: `${dashboard.totalProspects ? (dashboard.elite / dashboard.totalProspects) * 100 : 0}%` }} />
-                    <span className="ordinary" style={{ width: `${dashboard.totalProspects ? (dashboard.ordinary / dashboard.totalProspects) * 100 : 0}%` }} />
+                    <span className="elite" style={{ width: `${dashboard.newProspects ? (dashboard.elite / dashboard.newProspects) * 100 : 0}%` }} />
+                    <span className="ordinary" style={{ width: `${dashboard.newProspects ? (dashboard.ordinary / dashboard.newProspects) * 100 : 0}%` }} />
                   </div>
                   <div className="cr-rowMeta"><i className="cr-shareDot elite" />Elite {dashboard.elite} • <i className="cr-shareDot ordinary" />Ordinary {dashboard.ordinary}</div>
                 </div>
@@ -950,7 +979,7 @@ function AgentClientsRelationship() {
               <section className="cr-panel cr-panel-wide">
                 <div className="cr-panelHeader">
                   <h3 className="cr-panelTitle">Relationship Pipeline Progress</h3>
-                  <span className="cr-panelMeta">Active engagement mix by stage</span>
+                  <span className="cr-panelMeta">Cumulative active engagement mix through the selected period</span>
                 </div>
                 <div className="cr-stageGrid">
                   {dashboard.stageProgress.map((stage) => (
@@ -969,7 +998,7 @@ function AgentClientsRelationship() {
               <section className="cr-panel cr-panel-wide">
                 <div className="cr-panelHeader">
                   <h3 className="cr-panelTitle">Source Conversion Quality</h3>
-                  <span className="cr-panelMeta">Active policyholders only by acquisition source</span>
+                  <span className="cr-panelMeta">Selected-period prospects; active policyholders only</span>
                 </div>
                 <div className="cr-sourceGrid">
                   {dashboard.sourceConversion.map((row) => (
@@ -1002,8 +1031,8 @@ function AgentClientsRelationship() {
 
               <section className="cr-panel cr-panel-wide">
                 <div className="cr-panelHeader">
-                  <h3 className="cr-panelTitle">Newly Created Prospects in Scope</h3>
-                  <span className="cr-panelMeta">All prospects created in the selected date range, earliest to latest</span>
+                  <h3 className="cr-panelTitle">Prospects in Scope</h3>
+                  <span className="cr-panelMeta">Cumulative through the selected period, earliest to latest</span>
                 </div>
                 <div className="cr-tableWrap">
                   <table className="cr-table">
