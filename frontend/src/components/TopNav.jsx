@@ -4,6 +4,9 @@ import { FiActivity, FiCalendar, FiShield } from "react-icons/fi";
 import logo from "../assets/prutracker-navbar-logo.png";
 import "./TopNav.css";
 
+const unreadCountCache = new Map();
+const UNREAD_COUNT_CACHE_MS = 30_000;
+
 function TopNav({
   user,
   onLogoClick,
@@ -16,15 +19,21 @@ function TopNav({
 }) {
   const API_BASE = "http://localhost:5000";
 
-  const [unreadCount, setUnreadCount] = useState(0);
+  const [unreadCount, setUnreadCount] = useState(() => Number(unreadCountCache.get(String(user?.id))?.count || 0));
 
-  const fetchUnreadCount = useCallback(async (signal) => {
+  const fetchUnreadCount = useCallback(async (signal, forceRefresh = false) => {
     if (!user?.id) {
       setUnreadCount(0);
       return;
     }
 
     try {
+      const cacheKey = String(user.id);
+      const cached = unreadCountCache.get(cacheKey);
+      if (!forceRefresh && cached && Date.now() - cached.loadedAt < UNREAD_COUNT_CACHE_MS) {
+        setUnreadCount(cached.count);
+        return;
+      }
       const res = await fetch(
         `${API_BASE}/api/notifications/unread-count?userId=${user.id}`,
         signal ? { signal } : undefined
@@ -33,7 +42,9 @@ function TopNav({
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Failed to fetch unread count.");
 
-      setUnreadCount(Number(data?.unreadCount || 0));
+      const nextCount = Number(data?.unreadCount || 0);
+      unreadCountCache.set(cacheKey, { count: nextCount, loadedAt: Date.now() });
+      setUnreadCount(nextCount);
     } catch (err) {
       setUnreadCount(0);
     }
@@ -52,6 +63,20 @@ function TopNav({
     const id = window.setInterval(tick, 30_000);
 
     return () => window.clearInterval(id);
+  }, [user?.id, fetchUnreadCount]);
+
+  useEffect(() => {
+    if (!user?.id) return undefined;
+    const refreshAfterNotificationChange = (event) => {
+      const immediateCount = Number(event?.detail?.unreadCount);
+      if (Number.isFinite(immediateCount)) {
+        unreadCountCache.set(String(user.id), { count: immediateCount, loadedAt: Date.now() });
+        setUnreadCount(immediateCount);
+      }
+      fetchUnreadCount(undefined, true);
+    };
+    window.addEventListener("notifications:changed", refreshAfterNotificationChange);
+    return () => window.removeEventListener("notifications:changed", refreshAfterNotificationChange);
   }, [user?.id, fetchUnreadCount]);
 
   const handleNotifications = (e) => {
