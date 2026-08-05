@@ -7,15 +7,23 @@ import { logout } from "./utils/logout";
 import "./AgentTasksProgress.css";
 
 const TASK_TYPES = ["APPROACH", "FOLLOW_UP", "UPDATE_CONTACT_INFO", "APPOINTMENT", "PRESENTATION"];
-const DATE_PRESETS = [
-  { value: "ALL", label: "All Time" },
-  { value: "1d", label: "This Day" },
-  { value: "7d", label: "Last 7 Days" },
-  { value: "30d", label: "Last 30 Days" },
-  { value: "90d", label: "Last 90 Days" },
-  { value: "6m", label: "Last 6 Months" },
-  { value: "12m", label: "Last 12 Months" },
-];
+const MANILA_PARTS = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Manila", year: "numeric", month: "2-digit" }).formatToParts(new Date());
+const CURRENT_YEAR = Number(MANILA_PARTS.find((part) => part.type === "year")?.value);
+const CURRENT_MONTH = Number(MANILA_PARTS.find((part) => part.type === "month")?.value);
+const CURRENT_MONTH_KEY = `${CURRENT_YEAR}-${String(CURRENT_MONTH).padStart(2, "0")}`;
+const buildDatePresets = (dataStartDate) => {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Manila", year: "numeric", month: "2-digit" })
+    .formatToParts(new Date(dataStartDate || Date.UTC(CURRENT_YEAR, 0, 1)));
+  const dataYear = Number(parts.find((part) => part.type === "year")?.value);
+  const startMonth = dataYear === CURRENT_YEAR ? Number(parts.find((part) => part.type === "month")?.value) : 1;
+  const label = (month) => new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric", timeZone: "UTC" })
+    .format(new Date(Date.UTC(CURRENT_YEAR, month - 1, 1)));
+  return [{ value: "YTD", label: `${label(startMonth)} - ${label(CURRENT_MONTH)}` }, ...Array.from({ length: CURRENT_MONTH - startMonth + 1 }, (_, index) => {
+    const month = startMonth + index;
+    return { value: `${CURRENT_YEAR}-${String(month).padStart(2, "0")}`, label: label(month) };
+  })];
+};
+const DATE_PRESETS = buildDatePresets();
 const getOptionLabel = (options, value) => options.find((option) => option.value === value)?.label || value || "All";
 const formatDateTime = (value) => {
   const dt = new Date(value);
@@ -59,10 +67,11 @@ function AgentTasksProgress() {
     statusChart: [],
     drillTasks: [],
     reportTasks: [],
-    reportContext: { datePreset: "ALL", type: "ALL" },
+    reportContext: { datePreset: CURRENT_MONTH_KEY, type: "ALL" },
   });
 
-  const [datePreset, setDatePreset] = useState("ALL");
+  const [datePreset, setDatePreset] = useState(CURRENT_MONTH_KEY);
+  const [datePresets, setDatePresets] = useState(DATE_PRESETS);
   const [typeFilter, setTypeFilter] = useState("ALL");
   const [selectedTypeDrill, setSelectedTypeDrill] = useState("");
 
@@ -108,6 +117,7 @@ function AgentTasksProgress() {
         reportTasks: Array.isArray(payload?.reportTasks) ? payload.reportTasks : [],
         reportContext: payload?.reportContext || { datePreset, type: typeFilter },
       });
+      setDatePresets(buildDatePresets(payload?.dataStartDate));
       setLastUpdated(new Date());
     },
     [API_BASE, user?.id, datePreset, typeFilter, selectedTypeDrill]
@@ -255,7 +265,7 @@ function AgentTasksProgress() {
 
         <section class="section">
           <div class="meta-row">
-            <div class="meta-chip"><div class="label">Date Range Filter</div><div class="value">${escapeHtml(getOptionLabel(DATE_PRESETS, data.reportContext?.datePreset || datePreset))}</div></div>
+            <div class="meta-chip"><div class="label">Date Range Filter</div><div class="value">${escapeHtml(getOptionLabel(datePresets, data.reportContext?.datePreset || datePreset))}</div></div>
             <div class="meta-chip"><div class="label">Task Type Filter</div><div class="value">${escapeHtml(data.reportContext?.type || typeFilter)}</div></div>
             <div class="meta-chip"><div class="label">Rows Included</div><div class="value">${Number(detailItems.length)}</div></div>
           </div>
@@ -525,7 +535,7 @@ function AgentTasksProgress() {
             <div className="tp-filterGroup">
               <label>Date Range</label>
               <select value={datePreset} onChange={(e) => setDatePreset(e.target.value)}>
-                {DATE_PRESETS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                {datePresets.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
             </div>
 
@@ -538,7 +548,7 @@ function AgentTasksProgress() {
             </div>
 
             <div className="tp-filterActions">
-              <button className="tp-resetBtn" onClick={() => { setDatePreset("ALL"); setTypeFilter("ALL"); setSelectedTypeDrill(""); }} disabled={loading}>Reset Filters</button>
+              <button className="tp-resetBtn" onClick={() => { setDatePreset(CURRENT_MONTH_KEY); setTypeFilter("ALL"); setSelectedTypeDrill(""); }} disabled={loading}>Reset Filters</button>
             </div>
           </section>
 
