@@ -68,7 +68,7 @@ const RESOLUTION_REQUIRED_TYPES = [
  * Allowed entity types this notification can reference.
  * This lets the UI know what kind of item to open when clicking a notification.
  */
-const ENTITY_TYPES = ["Task", "Policyholder", "Prospect", "LongLeave", "Retirement", "KpiAssignment"];
+const ENTITY_TYPES = ["Task", "Policyholder", "Prospect", "LongLeave", "Resignation", "KpiAssignment"];
 
 /**
  * notificationSchema
@@ -295,6 +295,7 @@ const notificationSchema = new mongoose.Schema(
  * createdAt: -1 means descending order index.
  */
 notificationSchema.index({ assignedToUserId: 1, status: 1, createdAt: -1 });
+notificationSchema.index({ assignedToUserId: 1, softDeletedAt: 1, updatedAt: -1, createdAt: -1 });
 
 /**
  * Partial Unique Index: { assignedToUserId, dedupeKey }

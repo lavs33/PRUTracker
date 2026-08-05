@@ -72,7 +72,7 @@ const agentSchema = new mongoose.Schema(
      */
     status: {
       type: String,
-      enum: ["Active", "On Long Leave", "Retired"],
+      enum: ["Active", "On Long Leave", "Resigned"],
       default: "Active",
     },
 

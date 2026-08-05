@@ -1814,7 +1814,7 @@
   border: 1px solid rgba(29, 78, 216, 0.18);
 }
 
-.manager-agent-status-pill--retired {
+.manager-agent-status-pill--resigned {
   background: #e5e7eb;
   color: #374151;
   border: 1px solid rgba(55, 65, 81, 0.18);
@@ -2195,26 +2195,26 @@
 .manager-endorse-detail-grid--compact {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
-.manager-promotion-table-wrap--retirement {
+.manager-promotion-table-wrap--resignation {
   overflow-x: auto;
   max-width: 100%;
 }
 
-.manager-table--retirement-orphans {
+.manager-table--resignation-orphans {
   width: max-content;
   min-width: 1200px;
   table-layout: auto;
 }
 
-.manager-table--retirement-orphans th,
-.manager-table--retirement-orphans td {
+.manager-table--resignation-orphans th,
+.manager-table--resignation-orphans td {
   white-space: nowrap;
 }
 
-.manager-table--retirement-orphans th:nth-child(5),
-.manager-table--retirement-orphans td:nth-child(5),
-.manager-table--retirement-orphans th:nth-child(6),
-.manager-table--retirement-orphans td:nth-child(6) {
+.manager-table--resignation-orphans th:nth-child(5),
+.manager-table--resignation-orphans td:nth-child(5),
+.manager-table--resignation-orphans th:nth-child(6),
+.manager-table--resignation-orphans td:nth-child(6) {
   min-width: 360px;
   max-width: 480px;
   white-space: normal;
@@ -2222,14 +2222,14 @@
 }
 
 
-.manager-retirement-client-cards {
+.manager-resignation-client-cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 16px;
   margin: 16px 0 24px;
 }
 
-.manager-retirement-client-cards article {
+.manager-resignation-client-cards article {
   border: 1px solid rgba(218, 41, 28, 0.14);
   border-radius: 18px;
   background: #fffafa;
@@ -2238,13 +2238,13 @@
   gap: 10px;
 }
 
-.manager-retirement-client-cards h4 {
+.manager-resignation-client-cards h4 {
   margin: 0;
   color: #991b1b;
   font-size: 0.95rem;
 }
 
-.manager-retirement-client-cards p {
+.manager-resignation-client-cards p {
   margin: 0;
   display: flex;
   flex-wrap: wrap;
@@ -2294,4 +2294,87 @@
   display: grid;
   justify-items: center;
   gap: 4px;
+}
+.manager-reassignment-metric-cell {
+  min-width: 118px;
+  vertical-align: top;
+}
+
+.manager-reassignment-metric-value {
+  display: block;
+  font-size: 0.95rem;
+  font-weight: 900;
+  color: #111827;
+}
+
+.manager-reassignment-status-indicator {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 3px 8px;
+  margin-top: 5px;
+  font-size: 0.68rem;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.manager-reassignment-metric-cell--progress {
+  background: #f8fafc;
+  border-left: 3px solid #94a3b8;
+}
+
+.manager-reassignment-metric-cell--target {
+  background: #fff7ed;
+  border-left: 3px solid #fb923c;
+}
+
+.manager-reassignment-metric-cell--target .manager-reassignment-status-indicator {
+  background: #ffedd5;
+  color: #9a3412;
+}
+
+.manager-reassignment-metric-cell--open {
+  background: #eff6ff;
+  border-left: 3px solid #60a5fa;
+}
+
+.manager-reassignment-metric-cell--open .manager-reassignment-status-indicator {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.manager-reassignment-metric-cell--below {
+  background: #fef2f2;
+  border-left-color: #ef4444;
+}
+
+.manager-reassignment-metric-cell--below .manager-reassignment-status-indicator {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.manager-reassignment-metric-cell--on-target {
+  background: #ecfdf5;
+  border-left-color: #10b981;
+}
+
+.manager-reassignment-metric-cell--on-target .manager-reassignment-status-indicator {
+  background: #d1fae5;
+  color: #047857;
+}
+
+.manager-reassignment-metric-cell--exceeded {
+  background: #eef2ff;
+  border-left-color: #6366f1;
+}
+
+.manager-reassignment-metric-cell--exceeded .manager-reassignment-status-indicator {
+  background: #e0e7ff;
+  color: #3730a3;
+}
+
+.manager-reassignment-metric-cell--neutral .manager-reassignment-status-indicator {
+  background: #e5e7eb;
+  color: #374151;
 }
