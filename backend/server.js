@@ -39,7 +39,7 @@ const Policy = require("./models/Policy");
 const Payment = require("./models/Payment");
 const AnnualPayment = require("./models/AnnualPayment");
 const LongLeave = require("./models/LongLeave");
-const Retirement = require("./models/Retirement");
+const Resignation = require("./models/Resignation");
 const Product = require("./models/Product");
 const Task = require("./models/Task");
 const Notification = require("./models/Notification");
@@ -828,7 +828,7 @@ async function createUnitKpiNotifications({ branchId, branchName, assignmentId, 
     BM.find({ branchId, isBlocked: { $ne: true } }).select("userId").lean(),
     UM.find({ unitId: { $in: unitIds }, isBlocked: { $ne: true } }).select("unitId userId").lean(),
     AUM.find({ unitId: { $in: unitIds }, isBlocked: { $ne: true } }).select("unitId userId").lean(),
-    Agent.find({ unitId: { $in: unitIds }, status: { $ne: "Retired" } }).select("unitId userId").lean(),
+    Agent.find({ unitId: { $in: unitIds }, status: { $ne: "Resigned" } }).select("unitId userId").lean(),
   ]);
   const recipientsByUnit = new Map(units.map((unit) => [String(unit._id), new Set()]));
   [...unitManagers, ...assistantUnitManagers, ...agents].forEach((recipient) => {
@@ -873,7 +873,7 @@ async function createAgentKpiNotifications({ branchId, branchName, assignmentId,
 
   const unitIds = (await Unit.find({ branchId }).select("_id").lean()).map((unit) => unit._id);
   const agentProfiles = unitIds.length
-    ? await Agent.find({ unitId: { $in: unitIds }, status: { $ne: "Retired" } }).select("userId").lean()
+    ? await Agent.find({ unitId: { $in: unitIds }, status: { $ne: "Resigned" } }).select("userId").lean()
     : [];
   const agentUserIds = [...new Set(agentProfiles.map((agent) => String(agent.userId || "")).filter(Boolean))];
   const recipients = agentUserIds.length
@@ -1112,8 +1112,8 @@ function buildLongLeaveEndorsementNotificationMessage(longLeave = {}) {
   return `${prospectText} ${policyholderText}`;
 }
 
-function buildRetirementEndorsementNotificationMessage(retirement = {}) {
-  const prospects = Array.isArray(retirement.affectedProspects) ? retirement.affectedProspects : [];
+function buildResignationEndorsementNotificationMessage(resignation = {}) {
+  const prospects = Array.isArray(resignation.affectedProspects) ? resignation.affectedProspects : [];
   if (!prospects.length) return "Prospects endorsed: None.";
   return `Prospects endorsed: ${prospects.map((prospect) => {
     const leadCodes = (Array.isArray(prospect.leads) ? prospect.leads : []).map((lead) => lead.leadCode || "—").join(", ") || "—";
@@ -1202,6 +1202,16 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
   const taskContext = buildPresetContext(taskDatePreset);
   const salesContext = buildPresetContext(salesDatePreset);
   const unitPerformanceContext = buildPresetContext(unitPerformanceDatePreset);
+  const currentMonthKey = monthKeyForDate();
+  const [currentMonthYear, currentMonthNumber] = currentMonthKey.split("-").map(Number);
+  const currentMonthStart = new Date(Date.UTC(currentMonthYear, currentMonthNumber - 1, 1) - (8 * 60 * 60 * 1000));
+  const currentMonthEnd = new Date(Date.UTC(currentMonthYear, currentMonthNumber, 1) - (8 * 60 * 60 * 1000) - 1);
+  const currentMonthContext = {
+    key: currentMonthKey,
+    startDate: currentMonthStart,
+    endDate: currentMonthEnd,
+    periodLabel: formatKpiMonthLabel(currentMonthKey),
+  };
 
   const isWithinPreset = (value, presetContext, fallbackValue = null) => {
     if (!presetContext?.startDate) return true;
@@ -1209,7 +1219,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
     for (const candidate of candidates) {
       const candidateDate = new Date(candidate);
       if (!Number.isNaN(candidateDate.getTime())) {
-        return candidateDate >= presetContext.startDate;
+        return candidateDate >= presetContext.startDate && (!presetContext.endDate || candidateDate <= presetContext.endDate);
       }
     }
     return false;
@@ -1250,7 +1260,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
             completedAppointments: 0,
             completedPresentations: 0,
             openTasks: 0,
-            openApproachTasksDueThisWeek: 0,
+            openApproachTasksDueThisMonth: 0,
             overdueTasks: 0,
             closedTasks: 0,
             delayedDoneTasks: 0,
@@ -1318,7 +1328,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
         completedAppointments: metrics.completedAppointments,
         completedPresentations: metrics.completedPresentations,
         openTasks: metrics.openTasks,
-        openApproachTasksDueThisWeek: metrics.openApproachTasksDueThisWeek,
+        openApproachTasksDueThisMonth: metrics.openApproachTasksDueThisMonth,
         overdueTasks: metrics.overdueTasks,
         closedTasks: metrics.closedTasks,
         delayedDoneTasks: metrics.delayedDoneTasks,
@@ -1482,7 +1492,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
   const taskMetricsByUserId = createMetricsMap(scopedAgents);
   const salesMetricsByUserId = createMetricsMap(scopedAgents);
 
-  const [tasks, prospects, longLeaves, retirements] = await Promise.all([
+  const [tasks, prospects, longLeaves, resignations] = await Promise.all([
     scopedUserIds.length
       ? Task.find({ assignedToUserId: { $in: scopedUserIds }, softDeletedAt: null })
           .select("assignedToUserId type title dueAt status completedAt wasDelayed createdAt")
@@ -1511,13 +1521,13 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
           .lean()
       : [],
     scopedAgentIds.length || scopedUserIds.length
-      ? Retirement.find({
+      ? Resignation.find({
           $or: [
             ...(scopedAgentIds.length ? [{ agentId: { $in: scopedAgentIds } }] : []),
             ...(scopedUserIds.length ? [{ userId: { $in: scopedUserIds } }] : []),
           ],
         })
-          .select("agentId userId retirementDate retirementLetter approvedRetirementProof status affectedProspects affectedPolicyholders createdAt updatedAt")
+          .select("agentId userId resignationDate resignationLetter approvedResignationProof status affectedProspects affectedPolicyholders createdAt updatedAt")
           .sort({ createdAt: -1, _id: -1 })
           .lean()
       : [],
@@ -1544,33 +1554,26 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
     longLeaveRecordsByAgentId.set(agentId, records);
   }
 
-  const retirementRecordsByAgentId = new Map();
-  for (const retirement of retirements) {
-    const agentId = String(retirement?.agentId || agentIdByUserId.get(String(retirement?.userId || "")) || "");
+  const resignationRecordsByAgentId = new Map();
+  for (const resignation of resignations) {
+    const agentId = String(resignation?.agentId || agentIdByUserId.get(String(resignation?.userId || "")) || "");
     if (!agentId) continue;
-    const records = retirementRecordsByAgentId.get(agentId) || [];
+    const records = resignationRecordsByAgentId.get(agentId) || [];
     records.push({
-      id: String(retirement._id),
-      retirementDate: retirement.retirementDate || null,
-      status: retirement.status || "Recorded",
-      affectedProspects: Array.isArray(retirement.affectedProspects) ? retirement.affectedProspects : [],
-      affectedPolicyholders: Array.isArray(retirement.affectedPolicyholders) ? retirement.affectedPolicyholders : [],
-      retirementLetter: retirement.retirementLetter || null,
-      approvedRetirementProof: retirement.approvedRetirementProof || null,
-      createdAt: retirement.createdAt || null,
-      updatedAt: retirement.updatedAt || null,
+      id: String(resignation._id),
+      resignationDate: resignation.resignationDate || null,
+      status: resignation.status || "Recorded",
+      affectedProspects: Array.isArray(resignation.affectedProspects) ? resignation.affectedProspects : [],
+      affectedPolicyholders: Array.isArray(resignation.affectedPolicyholders) ? resignation.affectedPolicyholders : [],
+      resignationLetter: resignation.resignationLetter || null,
+      approvedResignationProof: resignation.approvedResignationProof || null,
+      createdAt: resignation.createdAt || null,
+      updatedAt: resignation.updatedAt || null,
     });
-    retirementRecordsByAgentId.set(agentId, records);
+    resignationRecordsByAgentId.set(agentId, records);
   }
 
   const nowMs = Date.now();
-  const currentWeekStart = new Date(nowMs);
-  currentWeekStart.setHours(0, 0, 0, 0);
-  currentWeekStart.setDate(currentWeekStart.getDate() - currentWeekStart.getDay());
-  const currentWeekEnd = new Date(currentWeekStart);
-  currentWeekEnd.setDate(currentWeekEnd.getDate() + 7);
-  const currentWeekStartMs = currentWeekStart.getTime();
-  const currentWeekEndMs = currentWeekEnd.getTime();
   const applyTaskMetrics = (taskList, metricsByUserId) => {
     for (const task of taskList) {
       const assignedUserId = String(task?.assignedToUserId || "");
@@ -1597,8 +1600,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
         continue;
       }
 
-      const isDueThisWeek = Number.isFinite(dueAtMs) && dueAtMs >= currentWeekStartMs && dueAtMs < currentWeekEndMs;
-      if (taskType === "APPROACH" && isDueThisWeek) metrics.openApproachTasksDueThisWeek += 1;
+      if (taskType === "APPROACH") metrics.openApproachTasksDueThisMonth += 1;
 
       const isOverdue = Number.isFinite(dueAtMs) && dueAtMs < nowMs;
       if (isOverdue) metrics.overdueTasks += 1;
@@ -1743,6 +1745,10 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
   const policyByEngagementId = new Map(
     policies.map((policy) => [String(policy?.leadEngagementId || ""), policy])
   );
+  const policyIssuanceDateForPolicyholder = (policyholder) => {
+    const engagementId = String(policyholder?.leadEngagementId || "");
+    return policyByEngagementId.get(engagementId)?.recordPolicyApplicationStatus?.issuanceDate || policyholder?.createdAt;
+  };
 
   const ongoingPolicyholderStatuses = new Set(["Active", "At Risk", "Lapsed", "Paid-Up"]);
   const activeLeadOngoingPoliciesByProspectId = new Map();
@@ -1785,38 +1791,38 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
     });
   }
 
-  const retirementLeadsByProspectId = new Map();
+  const resignationLeadsByProspectId = new Map();
   for (const lead of leads) {
     const prospectId = String(lead?.prospectId || "");
     if (!prospectId) continue;
-    const leadRows = retirementLeadsByProspectId.get(prospectId) || [];
+    const leadRows = resignationLeadsByProspectId.get(prospectId) || [];
     const source = String(lead?.source || "").trim();
     leadRows.push({
       leadCode: lead.leadCode || "—",
       source: source === "Other" ? (lead.otherSource ? `Other - ${lead.otherSource}` : "Other") : (source || "—"),
       status: lead.status || "—",
     });
-    retirementLeadsByProspectId.set(prospectId, leadRows);
+    resignationLeadsByProspectId.set(prospectId, leadRows);
   }
-  const retirementPoliciesByProspectId = new Map();
+  const resignationPoliciesByProspectId = new Map();
   for (const policyholder of policyholders) {
     const leadId = engagementIdToLeadId.get(String(policyholder?.leadEngagementId || "")) || "";
     const prospectId = leadIdToProspectId.get(leadId) || "";
     if (!prospectId) continue;
-    const policyRows = retirementPoliciesByProspectId.get(prospectId) || [];
+    const policyRows = resignationPoliciesByProspectId.get(prospectId) || [];
     policyRows.push({
       policyholderCode: policyholder.policyholderCode || "—",
       policyNumber: policyholder.policyNumber || policyByEngagementId.get(String(policyholder?.leadEngagementId || ""))?.uploadPolicySummary?.policyNumber || "—",
       status: policyholder.status || "—",
     });
-    retirementPoliciesByProspectId.set(prospectId, policyRows);
+    resignationPoliciesByProspectId.set(prospectId, policyRows);
   }
-  const retirementTransferProspectsByUserId = new Map();
+  const resignationTransferProspectsByUserId = new Map();
   for (const prospect of prospects) {
     const assignedUserId = effectiveProspectOwnerId(prospect);
     if (!assignedUserId) continue;
     const prospectId = String(prospect._id || "");
-    const rows = retirementTransferProspectsByUserId.get(assignedUserId) || [];
+    const rows = resignationTransferProspectsByUserId.get(assignedUserId) || [];
     rows.push({
       id: prospectId,
       prospectId,
@@ -1825,10 +1831,10 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       marketType: prospect.marketType || "—",
       prospectType: prospect.prospectType || "—",
       status: prospect.status || "—",
-      leads: retirementLeadsByProspectId.get(prospectId) || [],
-      policies: retirementPoliciesByProspectId.get(prospectId) || [],
+      leads: resignationLeadsByProspectId.get(prospectId) || [],
+      policies: resignationPoliciesByProspectId.get(prospectId) || [],
     });
-    retirementTransferProspectsByUserId.set(assignedUserId, rows);
+    resignationTransferProspectsByUserId.set(assignedUserId, rows);
   }
 
   const engagementIdToFrequency = new Map(
@@ -1941,9 +1947,10 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       const leadId = engagementIdToLeadId.get(String(policyholder?.leadEngagementId || ""));
       if (leadId) metrics.convertedLeadIds.add(leadId);
 
-      const policyCreatedAtMs = new Date(policyholder?.createdAt).getTime();
-      if (Number.isFinite(policyCreatedAtMs) && (!metrics.latestPolicyIssuedAt || policyCreatedAtMs > new Date(metrics.latestPolicyIssuedAt).getTime())) {
-        metrics.latestPolicyIssuedAt = policyholder.createdAt;
+      const policyIssuedAt = policyIssuanceDateForPolicyholder(policyholder);
+      const policyIssuedAtMs = new Date(policyIssuedAt).getTime();
+      if (Number.isFinite(policyIssuedAtMs) && (!metrics.latestPolicyIssuedAt || policyIssuedAtMs > new Date(metrics.latestPolicyIssuedAt).getTime())) {
+        metrics.latestPolicyIssuedAt = policyIssuedAt;
         metrics.latestPolicyStatus = policyStatus || "—";
       }
     }
@@ -1975,7 +1982,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
         .map((lead) => String(lead._id))
     );
     const filteredLeads = leads.filter((lead) => filteredLeadIds.has(String(lead._id)));
-    const filteredPolicyholders = policyholders.filter((policyholder) => isWithinPreset(policyholder?.createdAt, presetContext));
+    const filteredPolicyholders = policyholders.filter((policyholder) => isWithinPreset(policyIssuanceDateForPolicyholder(policyholder), presetContext));
     const filteredApplications = applications.filter((application) => {
       const engagementId = String(application?.leadEngagementId || "");
       if (!engagementIdToAssignedUserId.get(engagementId)) return false;
@@ -2021,6 +2028,18 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
     return buildRows(metricsByUserId);
   };
 
+  const buildRowsForReassignmentCurrentMonth = () => {
+    const metricsByUserId = createMetricsMap(scopedAgents);
+    applyTaskMetrics(
+      tasks.filter((task) => {
+        const isDone = String(task?.status || "").toLowerCase() === "done";
+        return isDone ? isWithinPreset(task?.completedAt, currentMonthContext, task?.updatedAt) : true;
+      }),
+      metricsByUserId
+    );
+    return buildRows(metricsByUserId);
+  };
+
   applySalesMetrics({
     ...buildSalesMetricInput(salesContext),
     metricsByUserId: salesMetricsByUserId,
@@ -2031,10 +2050,29 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
   const taskRows = buildRows(taskMetricsByUserId);
   const salesRows = buildRows(salesMetricsByUserId);
   const unitPerformanceRows = buildRowsForUnitPerformanceContext(unitPerformanceContext);
-  const reassignmentWeeklyRows = buildRowsForUnitPerformanceContext(buildPresetContext("7d"));
-  const reassignmentMonthlySalesRows = buildRowsForSalesContext(buildPresetContext("30d"));
-  const reassignmentWeeklyRowByUserId = new Map(reassignmentWeeklyRows.map((row) => [String(row.userId || ""), row]));
+  const reassignmentMonthlyRows = buildRowsForReassignmentCurrentMonth();
+  const reassignmentMonthlySalesRows = buildRowsForSalesContext(currentMonthContext);
+  const reassignmentMonthlyRowByUserId = new Map(reassignmentMonthlyRows.map((row) => [String(row.userId || ""), row]));
   const reassignmentMonthlySalesRowByUserId = new Map(reassignmentMonthlySalesRows.map((row) => [String(row.userId || ""), row]));
+  const agentKpiAssignment = context.branchId
+    ? await KpiAssignment.findOne({ scopeType: "AGENT", scopeId: context.branchId }).select("kpis").lean()
+    : null;
+  const currentMonthAgentKpis = normalizeKpiList("AGENT", agentKpiAssignment?.kpis || []);
+  const currentMonthKpiTarget = (kpiKey, fallback) => {
+    const kpi = currentMonthAgentKpis.find((item) => item.key === kpiKey);
+    const assignment = kpi?.monthlyAssignments?.find((row) => row.monthKey === currentMonthKey) || {};
+    return Number([
+      assignment.targetValue,
+      assignment.targetMin,
+      assignment.targetMax,
+      kpi?.targetValue,
+      kpi?.targetMin,
+      kpi?.targetMax,
+    ].find((value) => Number.isFinite(Number(value)) && Number(value) > 0) || 0) || fallback;
+  };
+  const currentMonthApproachTarget = currentMonthKpiTarget("weekly_approaches", 50);
+  const currentMonthClosingRatioTarget = currentMonthKpiTarget("monthly_closing_ratio", 20);
+  const currentMonthActivePoliciesTarget = currentMonthKpiTarget("monthly_policies", 2);
   const calculateKpiClosingRatio = (row = {}) => {
     const activePolicies = Number(row.activePolicies || 0);
     const submittedApplications = Number(row.submittedApplications || 0);
@@ -2124,7 +2162,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       completedAppointments: row.completedAppointments,
       completedPresentations: row.completedPresentations,
       openTasks: row.openTasks,
-      openApproachTasksDueThisWeek: row.openApproachTasksDueThisWeek,
+      openApproachTasksDueThisMonth: row.openApproachTasksDueThisMonth,
       overdueTasks: row.overdueTasks,
       closedTasks: row.closedTasks,
       delayedDoneTasks: row.delayedDoneTasks,
@@ -2153,15 +2191,18 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       latestLeadCreatedAt: row.latestLeadCreatedAt,
       latestPolicyIssuedAt: row.latestPolicyIssuedAt,
       latestPolicyStatus: row.latestPolicyStatus,
-      reassignmentWeeklyDoneApproaches: Number(reassignmentWeeklyRowByUserId.get(String(row.userId))?.completedApproaches || 0),
-      reassignmentOpenApproachTasksDueThisWeek: Number(row.openApproachTasksDueThisWeek || 0),
+      reassignmentMonthlyDoneApproaches: Number(reassignmentMonthlyRowByUserId.get(String(row.userId))?.completedApproaches || 0),
+      reassignmentOpenApproachTasksDueThisMonth: Number(reassignmentMonthlyRowByUserId.get(String(row.userId))?.openApproachTasksDueThisMonth || 0),
+      reassignmentMonthlyApproachTarget: currentMonthApproachTarget,
       reassignmentMonthlyClosingRatio: calculateKpiClosingRatio(reassignmentMonthlySalesRowByUserId.get(String(row.userId))),
+      reassignmentMonthlyClosingRatioTarget: currentMonthClosingRatioTarget,
       reassignmentMonthlyActivePolicies: Number(reassignmentMonthlySalesRowByUserId.get(String(row.userId))?.activePolicies || 0),
+      reassignmentMonthlyActivePoliciesTarget: currentMonthActivePoliciesTarget,
       leaveRecords: longLeaveRecordsByAgentId.get(String(row.id)) || [],
-      retirementRecords: retirementRecordsByAgentId.get(String(row.id)) || [],
+      resignationRecords: resignationRecordsByAgentId.get(String(row.id)) || [],
       orphanTransferProspects: orphanTransferProspectsByUserId.get(String(row.userId)) || [],
       orphanTransferPolicyholders: orphanTransferPolicyholdersByUserId.get(String(row.userId)) || [],
-      retirementTransferProspects: retirementTransferProspectsByUserId.get(String(row.userId)) || [],
+      resignationTransferProspects: resignationTransferProspectsByUserId.get(String(row.userId)) || [],
     }))
     .sort(byName);
 
@@ -2214,6 +2255,8 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
         unitPerformancePeriodLabel: unitPerformanceContext.periodLabel,
         unitPerformanceStartDate: unitPerformanceContext.startDate || null,
         unitPerformanceEndDate: new Date(),
+        reassignmentMonthKey: currentMonthKey,
+        reassignmentMonthLabel: currentMonthContext.periodLabel,
       },
       summary: summarizeRows(allRows),
       taskSummary: summarizeRows(taskRows),
@@ -2296,7 +2339,7 @@ app.use(
 ========================================================= */
 
 
-app.post("/api/manager/agents/:agentId/retirement", async (req, res) => {
+app.post("/api/manager/agents/:agentId/resignation", async (req, res) => {
   try {
     const { agentId } = req.params;
     if (!mongoose.Types.ObjectId.isValid(agentId)) return res.status(400).json({ message: "Invalid agent ID." });
@@ -2304,70 +2347,70 @@ app.post("/api/manager/agents/:agentId/retirement", async (req, res) => {
     const agent = await Agent.findById(agentId).populate({ path: "userId", select: "dateEmployed" }).select("_id userId");
     if (!agent) return res.status(404).json({ message: "Agent not found." });
 
-    const retirementDate = new Date(req.body?.retirementDate);
-    if (Number.isNaN(retirementDate.getTime())) {
-      return res.status(400).json({ field: "retirementDate", message: "Retirement date is required." });
+    const resignationDate = new Date(req.body?.resignationDate);
+    if (Number.isNaN(resignationDate.getTime())) {
+      return res.status(400).json({ field: "resignationDate", message: "Resignation date is required." });
     }
     const dateEmployed = new Date(agent.userId?.dateEmployed || 0);
-    if (!Number.isNaN(dateEmployed.getTime()) && retirementDate <= dateEmployed) {
-      return res.status(400).json({ field: "retirementDate", message: "Retirement date must be after the agent's employment date." });
+    if (!Number.isNaN(dateEmployed.getTime()) && resignationDate <= dateEmployed) {
+      return res.status(400).json({ field: "resignationDate", message: "Resignation date must be after the agent's employment date." });
     }
 
-    const retirementLetter = req.body?.retirementLetter || {};
-    const approvedRetirementProof = req.body?.approvedRetirementProof || {};
-    if (!retirementLetter?.fileName || !retirementLetter?.dataUrl || !/^data:application\/pdf;base64,/i.test(String(retirementLetter.dataUrl))) {
-      return res.status(400).json({ field: "retirementLetter", message: "Accomplished retirement letter PDF is required." });
+    const resignationLetter = req.body?.resignationLetter || {};
+    const approvedResignationProof = req.body?.approvedResignationProof || {};
+    if (!resignationLetter?.fileName || !resignationLetter?.dataUrl || !/^data:application\/pdf;base64,/i.test(String(resignationLetter.dataUrl))) {
+      return res.status(400).json({ field: "resignationLetter", message: "Accomplished resignation letter PDF is required." });
     }
-    if (!approvedRetirementProof?.fileName || !approvedRetirementProof?.dataUrl || !/^data:image\/(?:jpeg|png);base64,/i.test(String(approvedRetirementProof.dataUrl))) {
-      return res.status(400).json({ field: "approvedRetirementProof", message: "Proof of approved retirement image is required." });
+    if (!approvedResignationProof?.fileName || !approvedResignationProof?.dataUrl || !/^data:image\/(?:jpeg|png);base64,/i.test(String(approvedResignationProof.dataUrl))) {
+      return res.status(400).json({ field: "approvedResignationProof", message: "Proof of approved resignation image is required." });
     }
 
-    const existingId = req.body?.retirementId;
+    const existingId = req.body?.resignationId;
     if (!existingId) {
-      const existingOpenRetirement = await Retirement.findOne({ agentId: agent._id, status: { $in: ["Recorded", "Confirmed Orphans"] } }).select("_id status").lean();
-      if (existingOpenRetirement) return res.status(409).json({ message: `This agent already has a ${existingOpenRetirement.status} retirement record.` });
+      const existingOpenResignation = await Resignation.findOne({ agentId: agent._id, status: { $in: ["Recorded", "Confirmed Orphans"] } }).select("_id status").lean();
+      if (existingOpenResignation) return res.status(409).json({ message: `This agent already has a ${existingOpenResignation.status} resignation record.` });
     }
 
     const payload = {
       agentId: agent._id,
       userId: agent.userId?._id || agent.userId,
-      retirementDate,
-      retirementLetter: {
-        fileName: String(retirementLetter.fileName || "").trim(),
-        mimeType: String(retirementLetter.mimeType || "application/pdf").trim(),
-        dataUrl: String(retirementLetter.dataUrl || ""),
+      resignationDate,
+      resignationLetter: {
+        fileName: String(resignationLetter.fileName || "").trim(),
+        mimeType: String(resignationLetter.mimeType || "application/pdf").trim(),
+        dataUrl: String(resignationLetter.dataUrl || ""),
       },
-      approvedRetirementProof: {
-        fileName: String(approvedRetirementProof.fileName || "").trim(),
-        mimeType: String(approvedRetirementProof.mimeType || "image/jpeg").trim(),
-        dataUrl: String(approvedRetirementProof.dataUrl || ""),
+      approvedResignationProof: {
+        fileName: String(approvedResignationProof.fileName || "").trim(),
+        mimeType: String(approvedResignationProof.mimeType || "image/jpeg").trim(),
+        dataUrl: String(approvedResignationProof.dataUrl || ""),
       },
       status: "Recorded",
       affectedProspects: [],
       affectedPolicyholders: [],
     };
 
-    const retirement = existingId && mongoose.Types.ObjectId.isValid(existingId)
-      ? await Retirement.findOneAndUpdate({ _id: existingId, agentId: agent._id }, { $set: payload }, { new: true, runValidators: true })
-      : await Retirement.create(payload);
+    const resignation = existingId && mongoose.Types.ObjectId.isValid(existingId)
+      ? await Resignation.findOneAndUpdate({ _id: existingId, agentId: agent._id }, { $set: payload }, { new: true, runValidators: true })
+      : await Resignation.create(payload);
 
-    if (!retirement) return res.status(404).json({ message: "Retirement record not found for this agent." });
-    return res.json({ message: "Retirement details recorded.", retirement });
+    if (!resignation) return res.status(404).json({ message: "Resignation record not found for this agent." });
+    return res.json({ message: "Resignation details recorded.", resignation });
   } catch (err) {
-    console.error("Save retirement failed:", err);
-    return res.status(500).json({ message: err.message || "Failed to save retirement details." });
+    console.error("Save resignation failed:", err);
+    return res.status(500).json({ message: err.message || "Failed to save resignation details." });
   }
 });
 
-app.patch("/api/manager/retirement/:retirementId/status", async (req, res) => {
+app.patch("/api/manager/resignation/:resignationId/status", async (req, res) => {
   try {
-    const { retirementId } = req.params;
-    if (!mongoose.Types.ObjectId.isValid(retirementId)) return res.status(400).json({ message: "Invalid retirement record ID." });
+    const { resignationId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(resignationId)) return res.status(400).json({ message: "Invalid resignation record ID." });
     const nextStatus = String(req.body?.status || "").trim();
-    if (!["Confirmed Orphans", "Endorsed"].includes(nextStatus)) return res.status(400).json({ message: "Invalid retirement status." });
+    if (!["Confirmed Orphans", "Endorsed"].includes(nextStatus)) return res.status(400).json({ message: "Invalid resignation status." });
 
-    const retirement = await Retirement.findByIdAndUpdate(
-      retirementId,
+    const resignation = await Resignation.findByIdAndUpdate(
+      resignationId,
       {
         $set: {
           status: nextStatus,
@@ -2377,11 +2420,11 @@ app.patch("/api/manager/retirement/:retirementId/status", async (req, res) => {
       },
       { new: true, runValidators: true }
     );
-    if (!retirement) return res.status(404).json({ message: "Retirement record not found." });
+    if (!resignation) return res.status(404).json({ message: "Resignation record not found." });
     if (nextStatus === "Endorsed") {
       const agent = await Agent.findByIdAndUpdate(
-        retirement.agentId,
-        { $set: { status: "Retired" } },
+        resignation.agentId,
+        { $set: { status: "Resigned" } },
         { new: true },
       )
         .populate({ path: "userId", select: "username firstName middleName lastName" })
@@ -2394,27 +2437,27 @@ app.patch("/api/manager/retirement/:retirementId/status", async (req, res) => {
       const agentName = formatPersonName(agentUser);
       if (unitManager?.userId) {
         await Notification.updateOne(
-          { dedupeKey: `retirement-orphan-endorsement:${retirement._id}:um:${unitManager.userId}` },
+          { dedupeKey: `resignation-orphan-endorsement:${resignation._id}:um:${unitManager.userId}` },
           {
             $set: {
               assignedToUserId: unitManager.userId,
               type: "ORPHANS_ENDORSEMENTS",
-              title: `${agentUser.username || "—"} - ${agentName} marked as retired (${formatLongLeaveNotificationDate(retirement.retirementDate)})`,
-              message: buildRetirementEndorsementNotificationMessage(retirement),
+              title: `${agentUser.username || "—"} - ${agentName} marked as resigned (${formatLongLeaveNotificationDate(resignation.resignationDate)})`,
+              message: buildResignationEndorsementNotificationMessage(resignation),
               status: "Unread",
               readAt: null,
-              entityType: "Retirement",
-              entityId: retirement._id,
+              entityType: "Resignation",
+              entityId: resignation._id,
               metadata: {
-                endorsementType: "retirement",
-                retirementId: String(retirement._id),
+                endorsementType: "resignation",
+                resignationId: String(resignation._id),
                 agentId: String(agent?._id || ""),
                 agentCode: agentUser.username || "",
                 agentName,
                 unitName: agent?.unitId?.unitName || "",
-                retirementDate: retirement.retirementDate || null,
+                resignationDate: resignation.resignationDate || null,
                 targetView: "orphan_endorsements",
-                targetTab: "retirements",
+                targetTab: "resignations",
               },
               softDeletedAt: null,
               softDeleteReason: "",
@@ -2426,10 +2469,10 @@ app.patch("/api/manager/retirement/:retirementId/status", async (req, res) => {
         );
       }
     }
-    return res.json({ message: nextStatus === "Endorsed" ? "Retirement orphan clients endorsed." : "Retirement orphan clients confirmed.", retirement });
+    return res.json({ message: nextStatus === "Endorsed" ? "Resignation orphan clients endorsed." : "Resignation orphan clients confirmed.", resignation });
   } catch (err) {
-    console.error("Update retirement status failed:", err);
-    return res.status(500).json({ message: err.message || "Failed to update retirement status." });
+    console.error("Update resignation status failed:", err);
+    return res.status(500).json({ message: err.message || "Failed to update resignation status." });
   }
 });
 
@@ -2596,20 +2639,20 @@ app.patch("/api/manager/long-leave/:longLeaveId/status", async (req, res) => {
 
 
 
-app.post("/api/manager/retirement/:retirementId/reassign-prospect", async (req, res) => {
+app.post("/api/manager/resignation/:resignationId/reassign-prospect", async (req, res) => {
   try {
-    const { retirementId } = req.params;
+    const { resignationId } = req.params;
     const { prospectId, reassignmentAgentId } = req.body || {};
-    if (!mongoose.Types.ObjectId.isValid(retirementId)) return res.status(400).json({ message: "Invalid retirement ID." });
+    if (!mongoose.Types.ObjectId.isValid(resignationId)) return res.status(400).json({ message: "Invalid resignation ID." });
     if (!mongoose.Types.ObjectId.isValid(prospectId)) return res.status(400).json({ message: "Invalid prospect ID." });
     if (!mongoose.Types.ObjectId.isValid(reassignmentAgentId)) return res.status(400).json({ message: "Invalid reassignment agent ID." });
 
-    const [retirement, prospect, reassigneeAgent] = await Promise.all([
-      Retirement.findById(retirementId),
+    const [resignation, prospect, reassigneeAgent] = await Promise.all([
+      Resignation.findById(resignationId),
       Prospect.findById(prospectId),
       Agent.findById(reassignmentAgentId).populate({ path: "userId", select: "username firstName middleName lastName" }).lean(),
     ]);
-    if (!retirement) return res.status(404).json({ message: "Retirement record not found." });
+    if (!resignation) return res.status(404).json({ message: "Resignation record not found." });
     if (!prospect) return res.status(404).json({ message: "Prospect not found." });
     if (!reassigneeAgent?.userId?._id) return res.status(404).json({ message: "Selected reassignment agent not found." });
 
@@ -2686,7 +2729,7 @@ app.post("/api/manager/retirement/:retirementId/reassign-prospect", async (req, 
     await Notification.deleteMany({ ...relatedNotificationFilter, status: "Unread" });
     await Notification.updateMany(
       { ...relatedNotificationFilter, status: "Read" },
-      { $set: { "metadata.transferredAway": true, "metadata.reassignedToUserId": String(reassignedToUserId), "metadata.transferReason": "Retirement reassignment" } },
+      { $set: { "metadata.transferredAway": true, "metadata.reassignedToUserId": String(reassignedToUserId), "metadata.transferReason": "Resignation reassignment" } },
     );
 
     const activeLeadIds = new Set(leads.filter((lead) => ["New", "In Progress"].includes(String(lead.status || ""))).map((lead) => String(lead._id)));
@@ -2713,7 +2756,7 @@ app.post("/api/manager/retirement/:retirementId/reassign-prospect", async (req, 
               stage: "Contacting",
               startedAt: reassignedAt,
               completedAt: null,
-              reason: `Retirement orphan client reassigned from ${originalAgentName} to ${reassigneeAgent.userId.username || reassigneeName}.`,
+              reason: `Resignation orphan client reassigned from ${originalAgentName} to ${reassigneeAgent.userId.username || reassigneeName}.`,
             },
           },
         },
@@ -2728,12 +2771,12 @@ app.post("/api/manager/retirement/:retirementId/reassign-prospect", async (req, 
         description: `Contact ${prospectName} regarding this reassigned lead.`,
         dueAt,
         status: "Open",
-        dedupeKey: `RETIREMENT_ORPHAN_CONTACT:${activeEngagement._id}:${Date.now()}`,
+        dedupeKey: `RESIGNATION_ORPHAN_CONTACT:${activeEngagement._id}:${Date.now()}`,
       });
       taskNotificationPayload = { task, dueAt, lead: leads.find((lead) => String(lead._id) === String(activeEngagement.leadId)) };
     }
 
-    retirement.affectedProspects = ensureLongLeaveReassignedFlags(retirement.affectedProspects).map((item) => {
+    resignation.affectedProspects = ensureLongLeaveReassignedFlags(resignation.affectedProspects).map((item) => {
       const matchesProspect = String(item.prospectId || item.id || "") === String(prospect._id);
       if (!matchesProspect) return item;
       return {
@@ -2746,7 +2789,7 @@ app.post("/api/manager/retirement/:retirementId/reassign-prospect", async (req, 
         reassignedToAgentName: reassigneeName,
       };
     });
-    await retirement.save();
+    await resignation.save();
 
     const leadDescription = formatLeadListForNotification(notificationLeads);
     const policyholderDescription = formatPolicyholderListForNotification(notificationPolicyholders);
@@ -2759,7 +2802,7 @@ app.post("/api/manager/retirement/:retirementId/reassign-prospect", async (req, 
         message: `Prospect Name: ${prospectName}. ${leadDescription} ${policyholderDescription}`,
         entityType: "Prospect",
         entityId: prospect._id,
-        metadata: { prospectId: String(prospect._id), transferredAway: true, reassignedToUserId: String(reassignedToUserId), retirementId: String(retirement._id) },
+        metadata: { prospectId: String(prospect._id), transferredAway: true, reassignedToUserId: String(reassignedToUserId), resignationId: String(resignation._id) },
         createdAt: orphanNotificationCreatedAt,
         updatedAt: orphanNotificationCreatedAt,
       },
@@ -2770,7 +2813,7 @@ app.post("/api/manager/retirement/:retirementId/reassign-prospect", async (req, 
         message: `${leadDescription} ${policyholderDescription}`,
         entityType: "Prospect",
         entityId: prospect._id,
-        metadata: { prospectId: String(prospect._id), originalUserId: String(originalUserId || ""), retirementId: String(retirement._id) },
+        metadata: { prospectId: String(prospect._id), originalUserId: String(originalUserId || ""), resignationId: String(resignation._id) },
         createdAt: orphanNotificationCreatedAt,
         updatedAt: orphanNotificationCreatedAt,
       },
@@ -2826,8 +2869,8 @@ app.post("/api/manager/retirement/:retirementId/reassign-prospect", async (req, 
     }
 
     return res.json({
-      message: `${prospectName} has been reassigned to ${reassigneeName} from ${originalAgentName || "the retired agent"}.`,
-      retirement,
+      message: `${prospectName} has been reassigned to ${reassigneeName} from ${originalAgentName || "the resigned agent"}.`,
+      resignation,
       reassignment: {
         reassignedAt,
         reassignedToUserId,
@@ -2837,8 +2880,8 @@ app.post("/api/manager/retirement/:retirementId/reassign-prospect", async (req, 
       },
     });
   } catch (err) {
-    console.error("Retirement prospect reassignment error:", err);
-    return res.status(500).json({ message: "Failed to reassign retirement orphan prospect." });
+    console.error("Resignation prospect reassignment error:", err);
+    return res.status(500).json({ message: "Failed to reassign resignation orphan prospect." });
   }
 });
 
@@ -3510,13 +3553,14 @@ app.get("/api/agent/kpi-progress", async (req, res) => {
     const now = new Date();
     const selectedMonth = String(month || "");
     const currentMonth = monthKeyForDate(now);
-    if (!/^2026-(0[1-9]|1[0-2])$/.test(selectedMonth) || selectedMonth > currentMonth) {
-      return res.status(400).json({ message: "KPI month must be between January 2026 and the current month." });
+    const currentYear = currentMonth.split("-")[0];
+    if (!new RegExp(`^${currentYear}-(0[1-9]|1[0-2])$`).test(selectedMonth) || selectedMonth > currentMonth) {
+      return res.status(400).json({ message: `KPI month must be between January ${currentYear} and the current month.` });
     }
     const [selectedYear, selectedMonthNumber] = selectedMonth.split("-").map(Number);
     const startDate = new Date(Date.UTC(selectedYear, selectedMonthNumber - 1, 1) - (8 * 60 * 60 * 1000));
     const nextMonthStart = new Date(Date.UTC(selectedYear, selectedMonthNumber, 1) - (8 * 60 * 60 * 1000));
-    const endDate = selectedMonth === currentMonth ? now : new Date(nextMonthStart.getTime() - 1);
+    const endDate = new Date(nextMonthStart.getTime() - 1);
     const periodLabel = new Intl.DateTimeFormat("en-US", {
       month: "long", year: "numeric", timeZone: "Asia/Manila",
     }).format(new Date(startDate.getTime() + (8 * 60 * 60 * 1000)));
@@ -3715,6 +3759,16 @@ app.get("/api/agent/kpi-progress", async (req, res) => {
       monthly_new_prospects: newProspects,
       monthly_closing_ratio: closingRatio,
     };
+    const dataStartDate = [
+      ...tasks.map((task) => task?.createdAt),
+      ...prospects.map((prospect) => prospect?.createdAt),
+      ...policyholders.map((policyholder) => (
+        issuanceDateByEngagementId.get(String(policyholder?.leadEngagementId || "")) || policyholder?.createdAt
+      )),
+    ]
+      .map((value) => new Date(value || 0))
+      .filter((value) => !Number.isNaN(value.getTime()) && value.getTime() > 0)
+      .sort((left, right) => left - right)[0] || now;
 
     return res.json({
       agent: {
@@ -3730,7 +3784,8 @@ app.get("/api/agent/kpi-progress", async (req, res) => {
         areaName: agent.unitId?.branchId?.areaId?.areaName || "",
       },
       filters: { month: selectedMonth, frequency: "Monthly" },
-      reportContext: { periodLabel, startDate, endDate, generatedAt: now },
+      dataStartDate,
+      reportContext: { periodLabel, startDate, endDate, generatedAt: now, assignmentUpdatedAt: assignment?.updatedAt || null },
       kpis: assignedKpis.map((kpi) => ({ ...kpi, actual: Number(actualsByKey[kpi.key] || 0) })),
       unitSalesContribution: unitSalesProductionKpiForPeriod ? {
         kpi: unitSalesProductionKpiForPeriod,
@@ -3807,7 +3862,7 @@ app.use(
     Payment,
     ScheduledMeeting,
     LongLeave,
-    Retirement,
+    Resignation,
     KpiAssignment,
     BM,
     Product,
