@@ -4,6 +4,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import TopNav from "./components/TopNav";
 import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
+import { currentManilaMonth, getTaskKpiImpact } from "./utils/taskKpiImpact";
 import "./AgentTasks.css";
 
 function AgentTasks() {
@@ -24,6 +25,7 @@ function AgentTasks() {
   const [apiError, setApiError] = useState("");
   const [dueTodayTop5, setDueTodayTop5] = useState([]);
   const [recentlyAddedTop5, setRecentlyAddedTop5] = useState([]);
+  const [assignedKpis, setAssignedKpis] = useState([]);
 
   useEffect(() => {
     document.title = `${username} | Tasks`;
@@ -133,17 +135,16 @@ function AgentTasks() {
     async (signal) => {
       if (!user?.id) return;
 
-      const res = await fetch(
-        `${API_BASE}/api/tasks/summary?userId=${user.id}&includeRefs=1`,
-        signal ? { signal } : undefined
-      );
-
-      const data = await res.json();
-
+      const [res, kpiRes] = await Promise.all([
+        fetch(`${API_BASE}/api/tasks/summary?userId=${user.id}&includeRefs=1`, signal ? { signal } : undefined),
+        fetch(`${API_BASE}/api/agent/kpi-progress?${new URLSearchParams({ userId: user.id, month: currentManilaMonth() })}`, signal ? { signal } : undefined),
+      ]);
+      const [data, kpiData] = await Promise.all([res.json(), kpiRes.json()]);
       if (!res.ok) throw new Error(data?.message || "Failed to fetch task summary.");
 
       setDueTodayTop5(normalizeTasks(data?.dueTodayTop5));
       setRecentlyAddedTop5(normalizeTasks(data?.recentlyAddedTop5));
+      setAssignedKpis(kpiRes.ok && Array.isArray(kpiData?.kpis) ? kpiData.kpis : []);
     },
     [API_BASE, user?.id]
   );
@@ -163,6 +164,7 @@ function AgentTasks() {
           setApiError(err?.message || "Cannot connect to server. Is backend running?");
           setDueTodayTop5([]);
           setRecentlyAddedTop5([]);
+          setAssignedKpis([]);
         }
       } finally {
         setLoading(false);
@@ -211,8 +213,9 @@ function AgentTasks() {
 
   if (!user || user.username !== username) return null;
 
-  const TaskCard = ({ t }) => (
-    <div className="task-card">
+  const TaskCard = ({ t }) => {
+    const kpiImpact = t.uiStatus !== "Done" ? getTaskKpiImpact(t.type, assignedKpis) : null;
+    return <div className="task-card">
       <div className="task-top">
         <div>
           <div className={typePillClass(t.type)}>{t.type}</div>
@@ -251,13 +254,20 @@ function AgentTasks() {
 
       {String(t.description || "").trim() ? <div className="task-note">{t.description}</div> : null}
 
+      {kpiImpact ? <div className="task-kpiImpact">
+        <div><span>KPI impact this month</span><strong>{kpiImpact.label}</strong></div>
+        <p>Completing this task can move progress from <b>{kpiImpact.actual}</b> to <b>{kpiImpact.projected}</b> of {kpiImpact.target}.</p>
+        <div className="task-kpiTrack"><span style={{ width: `${kpiImpact.projectedPct}%` }} /></div>
+        <small>{kpiImpact.currentPct}% now • {kpiImpact.projectedPct}% after completion</small>
+      </div> : null}
+
       <div className="task-actions">
         <button type="button" className="tasks-btn secondary" onClick={() => openTask(t)}>
           Open
         </button>
       </div>
-    </div>
-  );
+    </div>;
+  };
 
   return (
     <div className="tasks-shell">

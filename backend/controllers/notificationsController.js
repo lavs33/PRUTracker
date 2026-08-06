@@ -7,7 +7,7 @@ const BRANCH_KPI_NOTIFICATION_TYPES = ["BRANCH_KPI_ASSIGNED", "BRANCH_KPI_TARGET
 const UNIT_KPI_NOTIFICATION_TYPES = ["UNIT_KPI_ASSIGNED", "UNIT_KPI_TARGET_UPDATED", "UNIT_KPI_UNASSIGNED"];
 const AGENT_KPI_NOTIFICATION_TYPES = ["AGENT_KPI_ASSIGNED", "AGENT_KPI_TARGET_UPDATED", "AGENT_KPI_UNASSIGNED"];
 const NOTIFICATION_TYPES = [...TASK_NOTIFICATION_TYPES, ...PAYMENT_NOTIFICATION_TYPES, ...POLICY_LIFECYCLE_NOTIFICATION_TYPES, ...MANAGER_NOTIFICATION_TYPES, ...AGENT_ORPHAN_NOTIFICATION_TYPES, ...BRANCH_KPI_NOTIFICATION_TYPES, ...UNIT_KPI_NOTIFICATION_TYPES, ...AGENT_KPI_NOTIFICATION_TYPES];
-const NOTIFICATION_ENTITY_TYPES = ["Task", "Policyholder", "Prospect", "LongLeave", "Retirement", "KpiAssignment"];
+const NOTIFICATION_ENTITY_TYPES = ["Task", "Policyholder", "Prospect", "LongLeave", "Resignation", "KpiAssignment"];
 const KPI_UNASSIGNED_NOTIFICATION_TYPES = ["BRANCH_KPI_UNASSIGNED", "UNIT_KPI_UNASSIGNED", "AGENT_KPI_UNASSIGNED"];
 const RESOLUTION_REQUIRED_NOTIFICATION_TYPES = [...TASK_NOTIFICATION_TYPES, ...PAYMENT_NOTIFICATION_TYPES, ...MANAGER_NOTIFICATION_TYPES, ...KPI_UNASSIGNED_NOTIFICATION_TYPES];
 
@@ -214,7 +214,7 @@ function sortNotificationsForDisplay(notifications) {
 }
 
 function orphanEndorsementAffectedRecords(kind, record) {
-  return kind === "retirement"
+  return kind === "resignation"
     ? [...(record?.affectedProspects || [])]
     : [...(record?.affectedProspects || []), ...(record?.affectedPolicyholders || [])];
 }
@@ -230,6 +230,26 @@ function orphanEndorsementIsResolved(kind, record) {
   ));
 }
 
+function formattedOrphanEndorsementMessage(kind, record) {
+  const prospects = Array.isArray(record?.affectedProspects) ? record.affectedProspects : [];
+  if (kind === "resignation") {
+    if (!prospects.length) return "Prospects endorsed: None.";
+    return `Prospects endorsed: ${prospects.map((prospect) => {
+      const leads = (Array.isArray(prospect?.leads) ? prospect.leads : []).map((lead) => lead?.leadCode || "—").join(", ") || "—";
+      const policies = (Array.isArray(prospect?.policies) ? prospect.policies : []).map((policy) => policy?.policyholderCode || "—").join(", ") || "—";
+      return `${prospect?.prospectCode || "—"} / Leads: ${leads} / Policies: ${policies} / ${prospect?.name || "—"}`;
+    }).join("; ")}.`;
+  }
+  const policyholders = Array.isArray(record?.affectedPolicyholders) ? record.affectedPolicyholders : [];
+  const prospectText = prospects.length
+    ? `Prospects with active leads endorsed: ${prospects.map((prospect) => `${prospect?.prospectCode || "—"} / ${prospect?.leadCode || "—"} / ${prospect?.name || "—"}`).join("; ")}.`
+    : "Prospects with active leads endorsed: None.";
+  const policyholderText = policyholders.length
+    ? `Policyholders with ongoing policies endorsed: ${policyholders.map((policyholder) => `${policyholder?.policyholderCode || "—"} / ${policyholder?.policyholderName || "—"} / ${policyholder?.productName || "—"} / ${policyholder?.policyNumber || "—"} / ${policyholder?.status || "—"}`).join("; ")}.`
+    : "Policyholders with ongoing policies endorsed: None.";
+  return `${prospectText} ${policyholderText}`;
+}
+
 function createNotificationsController({
   Notification,
   Task,
@@ -241,7 +261,7 @@ function createNotificationsController({
   Payment,
   ScheduledMeeting,
   LongLeave,
-  Retirement,
+  Resignation,
   KpiAssignment,
   BM,
   Product,
@@ -271,7 +291,7 @@ function createNotificationsController({
 
   const syncOrphanEndorsementResolutions = async (uid) => {
     const resolutionsByNotificationId = new Map();
-    if (!LongLeave || !Retirement) return resolutionsByNotificationId;
+    if (!LongLeave || !Resignation) return resolutionsByNotificationId;
     const notifications = await Notification.find({
       assignedToUserId: uid,
       type: "ORPHANS_ENDORSEMENTS",
@@ -283,19 +303,19 @@ function createNotificationsController({
       notification.entityType === "LongLeave" ? notification.entityId : null,
       notification?.metadata?.longLeaveId,
     ]));
-    const retirementIds = uniqueValidIds(notifications.flatMap((notification) => [
-      notification.entityType === "Retirement" ? notification.entityId : null,
-      notification?.metadata?.retirementId,
+    const resignationIds = uniqueValidIds(notifications.flatMap((notification) => [
+      notification.entityType === "Resignation" ? notification.entityId : null,
+      notification?.metadata?.resignationId,
     ]));
     // Load all endorsement records so legacy notifications remain resolvable.
     // Older rows may contain a User id (rather than an Agent id) in metadata,
     // or may not contain a related-record id at all.
-    const [longLeaves, retirements] = await Promise.all([
+    const [longLeaves, resignations] = await Promise.all([
       LongLeave.find({}).select("agentId userId affectedProspects affectedPolicyholders createdAt updatedAt").lean(),
-      Retirement.find({}).select("agentId userId affectedProspects affectedPolicyholders createdAt updatedAt").lean(),
+      Resignation.find({}).select("agentId userId affectedProspects affectedPolicyholders createdAt updatedAt").lean(),
     ]);
     const longLeaveMap = new Map(longLeaves.map((record) => [String(record._id), record]));
-    const retirementMap = new Map(retirements.map((record) => [String(record._id), record]));
+    const resignationMap = new Map(resignations.map((record) => [String(record._id), record]));
     const closestRecordForNotification = (records, notification) => {
       const agentId = String(notification?.metadata?.agentId || "");
       const candidates = records.filter((record) => agentId && (
@@ -310,15 +330,15 @@ function createNotificationsController({
       ))[0] || null;
     };
     const writes = notifications.map((notification) => {
-      const retirementId = toValidId(notification?.metadata?.retirementId)
-        || (notification.entityType === "Retirement" ? toValidId(notification.entityId) : null);
+      const resignationId = toValidId(notification?.metadata?.resignationId)
+        || (notification.entityType === "Resignation" ? toValidId(notification.entityId) : null);
       const longLeaveId = toValidId(notification?.metadata?.longLeaveId)
         || (notification.entityType === "LongLeave" ? toValidId(notification.entityId) : null);
-      const kind = retirementId || notification?.metadata?.endorsementType === "retirement" ? "retirement" : "longLeave";
-      const record = retirementId
-        ? retirementMap.get(retirementId)
-        : kind === "retirement"
-          ? closestRecordForNotification(retirements, notification)
+      const kind = resignationId || notification?.metadata?.endorsementType === "resignation" ? "resignation" : "longLeave";
+      const record = resignationId
+        ? resignationMap.get(resignationId)
+        : kind === "resignation"
+          ? closestRecordForNotification(resignations, notification)
           : (longLeaveId ? longLeaveMap.get(longLeaveId) : closestRecordForNotification(longLeaves, notification));
       const resolved = orphanEndorsementIsResolved(kind, record);
       if (!record) return null;
@@ -326,6 +346,7 @@ function createNotificationsController({
       resolutionsByNotificationId.set(String(notification._id), {
         resolutionStatus: resolved ? "Resolved" : "Unresolved",
         resolvedAt,
+        message: formattedOrphanEndorsementMessage(kind, record),
       });
       return {
         updateOne: {
@@ -405,11 +426,12 @@ function createNotificationsController({
           ) === paymentDateKey;
         });
       const concernedPayments = directPayment ? [directPayment] : periodPayments;
-      const resolved = notification.type === "PAYMENT_EOR_REMINDER"
+      const transferredAway = notification?.metadata?.transferredAway === true;
+      const resolved = transferredAway || (notification.type === "PAYMENT_EOR_REMINDER"
         ? concernedPayments.some(paymentHasEor)
-        : concernedPayments.some(paymentHasTransfer);
+        : concernedPayments.some(paymentHasTransfer));
       const resolvedAt = resolved
-        ? (concernedPayments.find((payment) => (
+        ? (notification.resolvedAt || concernedPayments.find((payment) => (
             notification.type === "PAYMENT_EOR_REMINDER" ? paymentHasEor(payment) : paymentHasTransfer(payment)
           ))?.updatedAt || new Date())
         : null;
@@ -976,6 +998,42 @@ function createNotificationsController({
     ]);
   };
 
+  // Notification reconciliation touches policy, payment, KPI, and endorsement
+  // collections. Keep it off the critical path when it runs long, and share a
+  // recent/in-flight result across repeated notification requests for a user.
+  const notificationMaintenanceByUser = new Map();
+  const NOTIFICATION_MAINTENANCE_TTL_MS = 60 * 1000;
+  const NOTIFICATION_MAINTENANCE_WAIT_MS = 1200;
+  const emptyMaintenanceResult = () => ({
+    orphanResolutions: new Map(),
+    paymentResolutions: new Map(),
+    kpiResolutions: new Map(),
+  });
+  const notificationMaintenance = (uid) => {
+    const key = String(uid);
+    const cached = notificationMaintenanceByUser.get(key);
+    if (cached && (cached.promise || Date.now() - cached.completedAt < NOTIFICATION_MAINTENANCE_TTL_MS)) {
+      return cached.promise || Promise.resolve(cached.result);
+    }
+    const promise = (async () => {
+      await Promise.all([ensureTaskMissed(uid), ensurePaymentReminders(uid)]);
+      const [orphanResolutions, paymentResolutions, kpiResolutions] = await Promise.all([
+        syncOrphanEndorsementResolutions(uid),
+        syncPaymentNotificationResolutions(uid),
+        syncKpiUnassignedNotificationResolutions(uid),
+      ]);
+      return { orphanResolutions, paymentResolutions, kpiResolutions };
+    })();
+    notificationMaintenanceByUser.set(key, { promise, completedAt: 0, result: null });
+    promise.then((result) => {
+      notificationMaintenanceByUser.set(key, { promise: null, completedAt: Date.now(), result });
+    }).catch((error) => {
+      notificationMaintenanceByUser.delete(key);
+      console.error("Notification maintenance error:", error);
+    });
+    return promise;
+  };
+
   const listNotifications = async (req, res) => {
     try {
       const { userId, status, type, entityType, includeRefs } = req.query;
@@ -984,16 +1042,11 @@ function createNotificationsController({
       if (!mongoose.isValidObjectId(userId)) return res.status(400).json({ message: "Invalid userId." });
 
       const uid = new mongoose.Types.ObjectId(userId);
-      await Promise.all([ensureTaskMissed(uid), ensurePaymentReminders(uid)]);
-      // Keep orphan resolution independent from display priority. Returning the
-      // freshly calculated values also guarantees legacy notifications use the
-      // current reassignment progress in this response, even before persistence
-      // is observed by a subsequent database read.
-      const [orphanResolutions, paymentResolutions, kpiResolutions] = await Promise.all([
-        syncOrphanEndorsementResolutions(uid),
-        syncPaymentNotificationResolutions(uid),
-        syncKpiUnassignedNotificationResolutions(uid),
+      const maintenanceResult = await Promise.race([
+        notificationMaintenance(uid),
+        new Promise((resolve) => setTimeout(() => resolve(null), NOTIFICATION_MAINTENANCE_WAIT_MS)),
       ]);
+      const { orphanResolutions, paymentResolutions, kpiResolutions } = maintenanceResult || emptyMaintenanceResult();
 
       const query = { assignedToUserId: uid, softDeletedAt: null };
 
@@ -1115,19 +1168,27 @@ function createNotificationsController({
           const reassignedToViewer = prospectRef?.reassignedToUserId && prospectRef.reassignedToUserId === String(uid);
           const transferredAwayForViewer = Boolean(prospectRef?.reassignedToUserId && !reassignedToViewer);
 
-          const taskResolved = n.entityType === "Task" && (t?.status === "Done" || taskHasCompletedMeeting(t));
+          const taskResolved = n.entityType === "Task" && (
+            n?.metadata?.transferredAway === true
+            || n?.resolutionStatus === "Resolved"
+            || t?.status === "Done"
+            || taskHasCompletedMeeting(t)
+          );
           return {
             ...n,
             resolutionStatus: n.entityType === "Task"
               ? (taskResolved ? "Resolved" : "Unresolved")
               : defaultResolutionStatus(n),
             resolvedAt: taskResolved
-              ? (t.completedAt || n.resolvedAt || null)
+              ? (t?.completedAt || n.resolvedAt || null)
               : (n.resolvedAt || null),
             prospectId,
             leadId,
             prospectName: prospectRef?.fullName || (prospectId ? "—" : "—"),
             leadCode: leadId ? leadIdToCode.get(String(leadId)) || "—" : "—",
+            taskType: t?.type || n?.metadata?.taskType || "",
+            taskTitle: t?.title || n?.metadata?.taskTitle || "",
+            taskDueAt: t?.dueAt || n?.metadata?.dueAt || null,
             transferredAwayForViewer,
           };
         });
@@ -1191,6 +1252,27 @@ function createNotificationsController({
     }
   };
 
+  const markNotificationsRead = async (req, res) => {
+    try {
+      const { userId } = req.query;
+      const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+      if (!userId) return res.status(400).json({ message: "Missing userId." });
+      if (!mongoose.isValidObjectId(userId)) return res.status(400).json({ message: "Invalid userId." });
+      const validIds = uniqueValidIds(ids);
+      if (!validIds.length) return res.json({ ok: true, modifiedCount: 0 });
+      const result = await Notification.updateMany({
+        _id: { $in: validIds },
+        assignedToUserId: new mongoose.Types.ObjectId(userId),
+        status: "Unread",
+        softDeletedAt: null,
+      }, { $set: { status: "Read", readAt: new Date() } });
+      return res.json({ ok: true, modifiedCount: Number(result?.modifiedCount || 0) });
+    } catch (err) {
+      console.error("Mark notifications read error:", err);
+      return res.status(500).json({ message: "Server error." });
+    }
+  };
+
   const markAllNotificationsRead = async (req, res) => {
     try {
       const { userId, entityType, type } = req.query;
@@ -1199,7 +1281,6 @@ function createNotificationsController({
       if (!mongoose.isValidObjectId(userId)) return res.status(400).json({ message: "Invalid userId." });
 
       const uid = new mongoose.Types.ObjectId(userId);
-      await Promise.all([ensureTaskMissed(uid), ensurePaymentReminders(uid)]);
 
       const query = {
         assignedToUserId: uid,
@@ -1240,7 +1321,6 @@ function createNotificationsController({
       if (!mongoose.isValidObjectId(userId)) return res.status(400).json({ message: "Invalid userId." });
 
       const uid = new mongoose.Types.ObjectId(userId);
-      await Promise.all([ensureTaskMissed(uid), ensurePaymentReminders(uid)]);
 
       const q = { assignedToUserId: uid, status: "Unread", softDeletedAt: null };
 
@@ -1307,6 +1387,7 @@ function createNotificationsController({
   return {
     listNotifications,
     markNotificationRead,
+    markNotificationsRead,
     markAllNotificationsRead,
     getUnreadCount,
     getCounts,

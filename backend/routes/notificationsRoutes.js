@@ -7,6 +7,7 @@ function createNotificationsRouter(deps) {
 
   router.get("/", controller.listNotifications);
   router.patch("/read-all", controller.markAllNotificationsRead);
+  router.patch("/read-many", controller.markNotificationsRead);
   router.patch("/:id/read", controller.markNotificationRead);
   router.get("/unread-count", controller.getUnreadCount);
   router.get("/counts", controller.getCounts);

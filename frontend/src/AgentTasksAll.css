@@ -168,6 +168,15 @@
   padding: 10px 12px; 
 }
 
+.task-kpiImpact { margin-top: 12px; padding: 11px 12px; border: 1px solid #bfdbfe; border-radius: 12px; background: #eff6ff; }
+.task-kpiImpact > div:first-child { display: flex; justify-content: space-between; gap: 10px; }
+.task-kpiImpact span { color: #1d4ed8; font-size: 11px; font-weight: 800; text-transform: uppercase; }
+.task-kpiImpact strong { color: #1e3a8a; font-size: 12px; text-align: right; }
+.task-kpiImpact p { margin: 7px 0; color: #334155; font-size: 12px; line-height: 1.4; }
+.task-kpiImpact small { display: block; margin-top: 5px; color: #64748b; font-weight: 700; }
+.task-kpiTrack { height: 7px; overflow: hidden; border-radius: 999px; background: #dbeafe; }
+.task-kpiTrack span { display: block; height: 100%; border-radius: inherit; background: #2563eb; }
+
 .task-top {
   display: flex;
   align-items: flex-start;
