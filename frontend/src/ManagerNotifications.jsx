@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import TopNav from "./components/TopNav";
 import ManagerSideNav from "./components/ManagerSideNav";
@@ -12,10 +12,11 @@ const AGENT_KPI_NOTIF_TYPES = ["AGENT_KPI_ASSIGNED", "AGENT_KPI_TARGET_UPDATED",
 const KPI_NOTIF_TYPES = [...BRANCH_KPI_NOTIF_TYPES, ...UNIT_KPI_NOTIF_TYPES, ...AGENT_KPI_NOTIF_TYPES];
 const KPI_UNASSIGNED_NOTIF_TYPES = ["BRANCH_KPI_UNASSIGNED", "UNIT_KPI_UNASSIGNED", "AGENT_KPI_UNASSIGNED"];
 const PRIORITY_LEVELS = ["urgent", "high", "normal"];
-const notificationPriority = (type) => {
+const NOTIFICATIONS_PER_PAGE = 15;
+const notificationPriority = (type, role) => {
   const normalizedType = String(type || "").trim().toUpperCase();
   if (normalizedType === "ORPHANS_ENDORSEMENTS") return "urgent";
-  if (KPI_UNASSIGNED_NOTIF_TYPES.includes(normalizedType)) return "urgent";
+  if (role === "bm" && KPI_UNASSIGNED_NOTIF_TYPES.includes(normalizedType)) return "urgent";
   return "normal";
 };
 const notificationCreatedTime = (notification) => {
@@ -37,14 +38,89 @@ const notificationWithinDateRange = (notification, dateRange) => {
   return timestamp >= start && timestamp <= now;
 };
 const notificationResolution = (notification) => String(notification?.resolutionStatus || "Not Applicable").trim();
-const filterNotifications = (notifications, { typeFilter, priorityFilter, resolutionFilter, dateRange, ignorePriority = false, ignoreResolution = false }) => {
+const normalizeResolutionForRole = (notification, role) => (
+  role !== "bm" && KPI_UNASSIGNED_NOTIF_TYPES.includes(String(notification?.type || "").trim().toUpperCase())
+    ? { ...notification, resolutionStatus: "Not Applicable" }
+    : notification
+);
+const filterNotifications = (notifications, { typeFilter, priorityFilter, resolutionFilter, dateRange, role, ignorePriority = false, ignoreResolution = false }) => {
   const normalizedType = String(typeFilter || "").trim().toUpperCase();
   return notifications.filter((notification) => (
     (!normalizedType || String(notification?.type || "").trim().toUpperCase() === normalizedType)
-    && (ignorePriority || priorityFilter === "all" || notificationPriority(notification?.type) === priorityFilter)
+    && (ignorePriority || priorityFilter === "all" || notificationPriority(notification?.type, role) === priorityFilter)
     && (ignoreResolution || resolutionFilter === "all" || notificationResolution(notification) === resolutionFilter)
     && notificationWithinDateRange(notification, dateRange)
   ));
+};
+
+const orphanEndorsementSections = (message = "") => {
+  const text = String(message || "").trim();
+  const definitions = [
+    {
+      prefix: "Prospects with active leads endorsed:",
+      nextPrefix: "Policyholders with ongoing policies endorsed:",
+      title: "Prospects with active leads",
+      labels: ["Prospect code", "Lead code", "Prospect name"],
+    },
+    {
+      prefix: "Policyholders with ongoing policies endorsed:",
+      title: "Policyholders with ongoing policies",
+      labels: ["Policyholder code", "Product", "Policy number", "Status"],
+    },
+    {
+      prefix: "Prospects endorsed:",
+      title: "Endorsed prospects",
+      labels: ["Prospect code", "Leads", "Policyholders", "Prospect name"],
+    },
+  ];
+
+  return definitions.flatMap((definition) => {
+    const start = text.indexOf(definition.prefix);
+    if (start < 0) return [];
+    const contentStart = start + definition.prefix.length;
+    const nextStart = definition.nextPrefix ? text.indexOf(definition.nextPrefix, contentStart) : -1;
+    const content = text.slice(contentStart, nextStart >= 0 ? nextStart : undefined).trim().replace(/[.\s]+$/, "");
+    if (!content || /^none$/i.test(content)) return [{ ...definition, items: [] }];
+    const items = content.split(/;\s*/).filter(Boolean).map((entry) => {
+      const values = entry.split(/\s+\/\s+/).map((value) => value.trim());
+      return definition.labels.map((label, index) => ({
+        label,
+        value: String(values[index] || "—").replace(new RegExp(`^${label}:\\s*`, "i"), ""),
+      }));
+    });
+    return [{ ...definition, items }];
+  });
+};
+
+const OrphanEndorsementMessage = ({ message }) => {
+  const sections = orphanEndorsementSections(message);
+  if (!sections.length) return <div className="notif-msg">{message}</div>;
+  return (
+    <div className="notif-msg notif-msg--endorsement">
+      {sections.map((section) => (
+        <section className="notif-endorsement-section" key={section.prefix}>
+          <div className="notif-endorsement-heading">
+            <strong>{section.title}</strong>
+            <span>{section.items.length}</span>
+          </div>
+          {section.items.length ? (
+            <ul className="notif-endorsement-list">
+              {section.items.map((item, itemIndex) => (
+                <li key={`${section.prefix}-${itemIndex}`}>
+                  {item.map((field) => (
+                    <span key={field.label}>
+                      <b>{field.label}</b>
+                      <em>{field.value}</em>
+                    </span>
+                  ))}
+                </li>
+              ))}
+            </ul>
+          ) : <p className="notif-endorsement-empty">None endorsed.</p>}
+        </section>
+      ))}
+    </div>
+  );
 };
 
 function ManagerNotifications({ roleType }) {
@@ -64,6 +140,9 @@ function ManagerNotifications({ roleType }) {
   const [markingAllRead, setMarkingAllRead] = useState(false);
   const [markingNotifId, setMarkingNotifId] = useState("");
   const [sideNavCollapsed, setSideNavCollapsed] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const tabsRef = useRef(null);
+  const notificationsCacheRef = useRef(null);
 
   const user = useMemo(() => {
     try { return JSON.parse(localStorage.getItem("managerPortalUser") || "null"); } catch { return null; }
@@ -98,28 +177,30 @@ function ManagerNotifications({ roleType }) {
 
   useEffect(() => { document.title = `${username} | Notifications`; }, [username]);
 
-  const fetchCounts = useCallback(async (signal) => {
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [tab, typeFilter, priorityFilter, resolutionFilter, dateRange]);
+
+  const fetchNotifs = useCallback(async (signal, forceRefresh = false) => {
     if (!user?.id) return;
-    const loadStatusCount = async (status) => {
-      const qs = new URLSearchParams({ userId: user.id, status, includeRefs: "1" });
+    let allNotifications = !forceRefresh ? notificationsCacheRef.current : null;
+    if (!allNotifications) {
+      const qs = new URLSearchParams({ userId: user.id, includeRefs: "1" });
       const res = await fetch(`${API_BASE}/api/notifications?${qs.toString()}`, { ...(signal ? { signal } : {}), cache: "no-store" });
       const data = await res.json();
-      if (!res.ok) throw new Error(data?.message || "Failed to fetch notification counts.");
-      const notifications = Array.isArray(data?.notifications) ? data.notifications : [];
-      return filterNotifications(notifications, { typeFilter, priorityFilter, resolutionFilter, dateRange }).length;
-    };
-    const [unread, read] = await Promise.all([loadStatusCount("Unread"), loadStatusCount("Read")]);
-    setCounts({ unread, read });
-  }, [user?.id, typeFilter, priorityFilter, resolutionFilter, dateRange]);
-
-  const fetchNotifs = useCallback(async (signal) => {
-    if (!user?.id) return;
-    const qs = new URLSearchParams({ userId: user.id, status: tab === "read" ? "Read" : "Unread", includeRefs: "1" });
-    const res = await fetch(`${API_BASE}/api/notifications?${qs.toString()}`, { ...(signal ? { signal } : {}), cache: "no-store" });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data?.message || "Failed to fetch notifications.");
-    const notifications = Array.isArray(data?.notifications) ? data.notifications : [];
-    const resolutionCountBase = filterNotifications(notifications, { typeFilter, priorityFilter, resolutionFilter, dateRange, ignoreResolution: true });
+      if (!res.ok) throw new Error(data?.message || "Failed to fetch notifications.");
+      allNotifications = (Array.isArray(data?.notifications) ? data.notifications : [])
+        .map((notification) => normalizeResolutionForRole(notification, normalizedRole));
+      notificationsCacheRef.current = allNotifications;
+    }
+    const filterOptions = { typeFilter, priorityFilter, resolutionFilter, dateRange, role: normalizedRole };
+    const countForStatus = (status) => filterNotifications(
+      allNotifications.filter((notification) => notification.status === status),
+      filterOptions
+    ).length;
+    setCounts({ unread: countForStatus("Unread"), read: countForStatus("Read") });
+    const notifications = allNotifications.filter((notification) => notification.status === (tab === "read" ? "Read" : "Unread"));
+    const resolutionCountBase = filterNotifications(notifications, { ...filterOptions, ignoreResolution: true });
     const resolutionNotifications = normalizedRole === "bm"
       ? resolutionCountBase.filter((notification) => KPI_UNASSIGNED_NOTIF_TYPES.includes(notification.type))
       : resolutionCountBase.filter((notification) => notification.type === "ORPHANS_ENDORSEMENTS");
@@ -128,16 +209,29 @@ function ManagerNotifications({ roleType }) {
       unresolved: resolutionNotifications.filter((notification) => notificationResolution(notification) === "Unresolved").length,
       resolved: resolutionNotifications.filter((notification) => notificationResolution(notification) === "Resolved").length,
     });
-    const typeAndDateFiltered = filterNotifications(notifications, { typeFilter, priorityFilter, resolutionFilter, dateRange, ignorePriority: true });
+    const typeAndDateFiltered = filterNotifications(notifications, { ...filterOptions, ignorePriority: true });
     setPriorityCounts(PRIORITY_LEVELS.reduce((result, priority) => ({
       ...result,
-      [priority]: typeAndDateFiltered.filter((notification) => notificationPriority(notification?.type) === priority).length,
+      [priority]: typeAndDateFiltered.filter((notification) => notificationPriority(notification?.type, normalizedRole) === priority).length,
     }), {}));
     const visibleNotifications = priorityFilter === "all"
       ? typeAndDateFiltered
-      : typeAndDateFiltered.filter((notification) => notificationPriority(notification?.type) === priorityFilter);
+      : typeAndDateFiltered.filter((notification) => notificationPriority(notification?.type, normalizedRole) === priorityFilter);
     setNotifs([...visibleNotifications].sort((a, b) => notificationCreatedTime(b) - notificationCreatedTime(a)));
   }, [user?.id, tab, typeFilter, priorityFilter, resolutionFilter, dateRange, normalizedRole]);
+
+  const applyReadToCache = (ids = null) => {
+    const idSet = ids ? new Set(ids.map(String)) : null;
+    const readAt = new Date().toISOString();
+    notificationsCacheRef.current = (notificationsCacheRef.current || []).map((notification) => (
+      notification.status === "Unread" && (!idSet || idSet.has(String(notification._id)))
+        ? { ...notification, status: "Read", readAt }
+        : notification
+    ));
+  };
+  const notifyUnreadChanged = () => window.dispatchEvent(new CustomEvent("notifications:changed", {
+    detail: { unreadCount: (notificationsCacheRef.current || []).filter((notification) => notification.status === "Unread").length },
+  }));
 
   useEffect(() => {
     if (!user?.id) return;
@@ -146,7 +240,7 @@ function ManagerNotifications({ roleType }) {
       try {
         setLoading(true);
         setApiError("");
-        await Promise.all([fetchCounts(controller.signal), fetchNotifs(controller.signal)]);
+        await fetchNotifs(controller.signal);
       } catch (err) {
         if (err?.name !== "AbortError") {
           setApiError(err?.message || "Cannot connect to server. Is backend running?");
@@ -160,7 +254,7 @@ function ManagerNotifications({ roleType }) {
       }
     })();
     return () => controller.abort();
-  }, [user?.id, fetchCounts, fetchNotifs]);
+  }, [user?.id, fetchNotifs]);
 
   const formatWhen = (d) => {
     const date = d ? new Date(d) : null;
@@ -175,7 +269,9 @@ function ManagerNotifications({ roleType }) {
       const res = await fetch(`${API_BASE}/api/notifications/${notifId}/read?userId=${user.id}`, { method: "PATCH" });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.message || "Failed to mark notification as read.");
-      await Promise.all([fetchCounts(), fetchNotifs()]);
+      applyReadToCache([notifId]);
+      await fetchNotifs();
+      notifyUnreadChanged();
     } catch (err) {
       setApiError(err?.message || "Failed to mark notification as read.");
     } finally {
@@ -188,12 +284,16 @@ function ManagerNotifications({ roleType }) {
     setMarkingAllRead(true);
     try {
       if (priorityFilter !== "all" || resolutionFilter !== "all" || dateRange !== "all") {
-        const responses = await Promise.all(notifs.map((notification) => fetch(
-          `${API_BASE}/api/notifications/${notification._id}/read?userId=${user.id}`,
-          { method: "PATCH" }
-        )));
-        if (responses.some((response) => !response.ok)) throw new Error("Failed to mark all filtered notifications as read.");
-        await Promise.all([fetchCounts(), fetchNotifs()]);
+        const ids = notifs.map((notification) => notification._id);
+        const res = await fetch(`${API_BASE}/api/notifications/read-many?userId=${user.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids }),
+        });
+        if (!res.ok) throw new Error("Failed to mark all filtered notifications as read.");
+        applyReadToCache(ids);
+        await fetchNotifs();
+        notifyUnreadChanged();
         return;
       }
       const qs = new URLSearchParams({ userId: user.id });
@@ -201,7 +301,12 @@ function ManagerNotifications({ roleType }) {
       const res = await fetch(`${API_BASE}/api/notifications/read-all?${qs.toString()}`, { method: "PATCH" });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.message || "Failed to mark all notifications as read.");
-      await Promise.all([fetchCounts(), fetchNotifs()]);
+      const matchingIds = (notificationsCacheRef.current || [])
+        .filter((notification) => notification.status === "Unread" && (!typeFilter || notification.type === typeFilter))
+        .map((notification) => notification._id);
+      applyReadToCache(matchingIds);
+      await fetchNotifs();
+      notifyUnreadChanged();
     } catch (err) {
       setApiError(err?.message || "Failed to mark all notifications as read.");
     } finally {
@@ -210,9 +315,10 @@ function ManagerNotifications({ roleType }) {
   };
 
   const typePillClass = (type) => {
-    if (type === "BRANCH_KPI_ASSIGNED" || type === "UNIT_KPI_ASSIGNED") return "notif-pill kpi-assigned";
-    if (type === "BRANCH_KPI_TARGET_UPDATED" || type === "UNIT_KPI_TARGET_UPDATED") return "notif-pill kpi-updated";
-    if (KPI_UNASSIGNED_NOTIF_TYPES.includes(type)) return "notif-pill kpi-unassigned";
+    const normalizedType = String(type || "").trim().toUpperCase();
+    if (["BRANCH_KPI_ASSIGNED", "UNIT_KPI_ASSIGNED", "AGENT_KPI_ASSIGNED"].includes(normalizedType)) return "notif-pill kpi-assigned";
+    if (["BRANCH_KPI_TARGET_UPDATED", "UNIT_KPI_TARGET_UPDATED", "AGENT_KPI_TARGET_UPDATED"].includes(normalizedType)) return "notif-pill kpi-updated";
+    if (KPI_UNASSIGNED_NOTIF_TYPES.includes(normalizedType)) return "notif-pill kpi-unassigned";
     return "notif-pill added";
   };
 
@@ -222,8 +328,23 @@ function ManagerNotifications({ roleType }) {
 
   const openNotif = async (notification) => {
     if (notification?.status === "Unread") await markNotifAsRead(notification._id);
+    const endorsementType = String(
+      notification?.metadata?.endorsementType
+      || (notification?.entityType === "Resignation" ? "resignation" : "longLeave")
+    );
+    const endorsementRecordId = String(
+      notification?.metadata?.resignationId
+      || notification?.metadata?.longLeaveId
+      || notification?.entityId
+      || ""
+    );
     navigate(`/${normalizedRole}/${username}`, {
-      state: { activeView: normalizedRole === "bm" && KPI_UNASSIGNED_NOTIF_TYPES.includes(notification?.type) ? "kpi_assignment" : "orphan_endorsements" },
+      state: {
+        activeView: normalizedRole === "bm" && KPI_UNASSIGNED_NOTIF_TYPES.includes(notification?.type) ? "kpi_assignment" : "orphan_endorsements",
+        ...(normalizedRole === "um" && notification?.type === "ORPHANS_ENDORSEMENTS"
+          ? { endorsementType, endorsementRecordId }
+          : {}),
+      },
     });
   };
 
@@ -238,13 +359,17 @@ function ManagerNotifications({ roleType }) {
         <div className="notif-topline">
           {n.status === "Unread" ? <span className="notif-dot" aria-label="Unread" /> : null}
           <span className={typePillClass(n.type)}>{n.type}</span>
-          <span className={`notif-priority notif-priority--${notificationPriority(n.type)}`}>{notificationPriority(n.type)}</span>
+          <span className={`notif-priority notif-priority--${notificationPriority(n.type, normalizedRole)}`}>{notificationPriority(n.type, normalizedRole)}</span>
           {normalizedRole === "um" && n.type === "ORPHANS_ENDORSEMENTS" ? <span className={`notif-resolution notif-resolution--${notificationResolution(n).toLowerCase()}`}>{notificationResolution(n)}</span> : null}
           {normalizedRole === "bm" && KPI_UNASSIGNED_NOTIF_TYPES.includes(n.type) ? <span className={`notif-resolution notif-resolution--${notificationResolution(n).toLowerCase()}`}>{notificationResolution(n)}</span> : null}
           <span className="notif-time">{formatWhen(n.createdAt)}</span>
         </div>
         <div className="notif-title">{n.title}</div>
-        {String(n.message || "").trim() ? <div className="notif-msg">{n.message}</div> : null}
+        {String(n.message || "").trim()
+          ? (normalizedRole === "um" && n.type === "ORPHANS_ENDORSEMENTS"
+            ? <OrphanEndorsementMessage message={n.message} />
+            : <div className="notif-msg">{n.message}</div>)
+          : null}
       </div>
 
       <div className="notif-right">
@@ -265,6 +390,17 @@ function ManagerNotifications({ roleType }) {
       </div>
     </div>
   );
+
+  const totalPages = Math.max(1, Math.ceil(notifs.length / NOTIFICATIONS_PER_PAGE));
+  const safeCurrentPage = Math.min(currentPage, totalPages);
+  const paginatedNotifs = notifs.slice(
+    (safeCurrentPage - 1) * NOTIFICATIONS_PER_PAGE,
+    safeCurrentPage * NOTIFICATIONS_PER_PAGE
+  );
+  const changePage = (nextPage) => {
+    setCurrentPage(Math.max(1, Math.min(totalPages, nextPage)));
+    window.requestAnimationFrame(() => tabsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  };
 
   if (!user || user.username !== username) return null;
 
@@ -294,7 +430,7 @@ function ManagerNotifications({ roleType }) {
             </div>
           </div>
 
-          <div className="notifs-toolbar">
+          <div ref={tabsRef} className="notifs-toolbar">
             <div className="notifs-tabs" role="tablist" aria-label="Notification status tabs">
               <button type="button" className={`notifs-tab is-unread ${tab === "unread" ? "active" : ""}`} onClick={() => setTab("unread")}>Unread <span className="notifs-badge unread">{counts.unread}</span></button>
               <button type="button" className={`notifs-tab is-read ${tab === "read" ? "active" : ""}`} onClick={() => setTab("read")}>Read <span className="notifs-badge read">{counts.read}</span></button>
@@ -337,9 +473,25 @@ function ManagerNotifications({ roleType }) {
               {notifs.length === 0 ? (
                 <div className="notifs-empty">{tab === "unread" ? "No unread notifications." : "No read notifications."}</div>
               ) : (
-                notifs.map((n) => <NotifRow key={n._id} n={n} />)
+                paginatedNotifs.map((n) => <NotifRow key={n._id} n={n} />)
               )}
             </div>
+          ) : null}
+          {!loading && !apiError && notifs.length > 0 ? (
+            <nav className="notifs-pagination" aria-label="Notifications pagination">
+              <span>
+                Showing {(safeCurrentPage - 1) * NOTIFICATIONS_PER_PAGE + 1}–{Math.min(safeCurrentPage * NOTIFICATIONS_PER_PAGE, notifs.length)} of {notifs.length}
+              </span>
+              <div>
+                <span title={safeCurrentPage === 1 ? "🚫 You are already on the first page." : "Go to the previous page"}>
+                  <button type="button" className="notif-btn ghost" onClick={() => changePage(safeCurrentPage - 1)} disabled={safeCurrentPage === 1} aria-disabled={safeCurrentPage === 1}>Previous</button>
+                </span>
+                <strong>Page {safeCurrentPage} of {totalPages}</strong>
+                <span title={safeCurrentPage === totalPages ? "🚫 You are already on the last page." : "Go to the next page"}>
+                  <button type="button" className="notif-btn ghost" onClick={() => changePage(safeCurrentPage + 1)} disabled={safeCurrentPage === totalPages} aria-disabled={safeCurrentPage === totalPages}>Next</button>
+                </span>
+              </div>
+            </nav>
           ) : null}
         </main>
       </div>
