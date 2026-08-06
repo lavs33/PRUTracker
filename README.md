@@ -10,7 +10,7 @@ PRUTracker is organized around four major workflows:
 
 1. **Sales pipeline management** — prospects, leads, contact attempts, meetings, needs assessment, proposal, application, and policy issuance.
 2. **Client and policyholder servicing** — policyholder records, annual payment records, payment/EOR handling, cancellation, and relationship dashboards.
-3. **Manager operations** — branch/unit/agent oversight, orphan client handling for retired or long-leave agents, endorsements, and KPI assignment/progress monitoring.
+3. **Manager operations** — branch/unit/agent oversight, orphan client handling for resigned or long-leave agents, endorsements, and KPI assignment/progress monitoring.
 4. **Admin organization management** — areas, branches, units, agents, manager assignments, blocking, and profile updates.
 
 ---
@@ -35,7 +35,7 @@ Admins use a dedicated admin login and organization management page to:
 Branch Managers use the manager portal for branch-level oversight. Current BM capabilities include:
 
 - Viewing branch dashboard and branch agents.
-- Recording an agent as **Retired**.
+- Recording an agent as **Resigned**.
 - Recording an agent as **On Long Leave** with supporting proof files.
 - Reviewing and confirming affected orphan prospects and policyholders.
 - Endorsing orphan clients to the appropriate unit manager.
@@ -49,7 +49,7 @@ Unit Managers use the manager portal for unit-level oversight. Current UM capabi
 
 - Viewing unit dashboard and unit agents.
 - Receiving orphan client endorsement notifications from branch workflows.
-- Reviewing orphan endorsements from **long leave** and **retirement** records.
+- Reviewing orphan endorsements from **long leave** and **resignation** records.
 - Viewing KPI progress for their unit scope.
 
 ### Assistant Unit Managers (AUM)
@@ -125,7 +125,7 @@ The workflow supports:
 
 ### Orphan Client Management
 
-The codebase now includes a manager-facing orphan client module for agents who retire or go on long leave.
+The codebase now includes a manager-facing orphan client module for agents who resign or go on long leave.
 
 #### Long Leave Flow
 
@@ -142,18 +142,18 @@ Branch managers can:
 - Mark the agent as **On Long Leave** after endorsement.
 - Automatically reactivate long-leave agents when their leave period ends.
 
-#### Retirement Flow
+#### Resignation Flow
 
 Branch managers can:
 
-- Record retirement details for an agent.
-- Validate retirement date against employment date.
+- Record resignation details for an agent.
+- Validate resignation date against employment date.
 - Upload required supporting documents:
-  - Accomplished retirement letter PDF.
-  - Proof of approved retirement image.
+  - Accomplished resignation letter PDF.
+  - Proof of approved resignation image.
 - Confirm affected orphan prospects and policyholders.
 - Endorse confirmed orphan clients to the relevant unit manager.
-- Mark the agent as **Retired** after endorsement.
+- Mark the agent as **Resigned** after endorsement.
 
 #### Reassignment Behavior
 
@@ -299,7 +299,7 @@ The backend is an Express API with route groups for:
 - Policyholder details, cancellation, annual payments, payment records, transfers, EOR reminders, and duplicate EOR validation.
 - Tasks and task progress.
 - Notifications.
-- Manager retirement records.
+- Manager resignation records.
 - Manager long-leave records.
 - Orphan prospect and policyholder reassignment.
 - Manager KPI assignments.
@@ -332,7 +332,7 @@ The backend uses Mongoose models for:
 - `Task`
 - `Notification`
 - `LongLeave`
-- `Retirement`
+- `Resignation`
 - `KpiAssignment`
 
 ---
@@ -472,6 +472,6 @@ The backend package currently has a placeholder `npm test` script. For backend v
 
 - Most legacy business endpoints are registered through `backend/routes/legacyRoutes.js`.
 - Manager orphan client and KPI routes currently live in `backend/server.js`.
-- The orphan module depends on `LongLeave`, `Retirement`, `Prospect`, `Policyholder`, `Task`, and `Notification` data staying in sync during reassignment.
+- The orphan module depends on `LongLeave`, `Resignation`, `Prospect`, `Policyholder`, `Task`, and `Notification` data staying in sync during reassignment.
 - KPI assignments are stored in `KpiAssignment` documents keyed by `scopeType` and `scopeId`.
 - Agent-facing prospect and policyholder queries account for reassignment using `reassignedToUserId` where applicable.
