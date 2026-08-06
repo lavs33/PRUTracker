@@ -1,7 +1,7 @@
 /**
- * Retirement Model
+ * Resignation Model
  * ----------------
- * Stores retirement details recorded for an Agent, including retirement date,
+ * Stores resignation details recorded for an Agent, including resignation date,
  * required supporting documents, orphan-client endorsement status, and affected
  * client snapshots used by manager workflows.
  */
@@ -14,7 +14,7 @@ const affectedClientSchema = new mongoose.Schema(
   { _id: false, strict: false }
 );
 
-const retirementSchema = new mongoose.Schema(
+const resignationSchema = new mongoose.Schema(
   {
     agentId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -28,16 +28,16 @@ const retirementSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
-    retirementDate: {
+    resignationDate: {
       type: Date,
       required: true,
     },
-    retirementLetter: {
+    resignationLetter: {
       fileName: { type: String, required: true, trim: true },
       mimeType: { type: String, required: true, trim: true },
       dataUrl: { type: String, required: true },
     },
-    approvedRetirementProof: {
+    approvedResignationProof: {
       fileName: { type: String, required: true, trim: true },
       mimeType: { type: String, required: true, trim: true },
       dataUrl: { type: String, required: true },
@@ -60,4 +60,4 @@ const retirementSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-module.exports = mongoose.model("Retirement", retirementSchema);
+module.exports = mongoose.model("Resignation", resignationSchema);
