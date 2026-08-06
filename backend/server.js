@@ -1170,7 +1170,7 @@ function computeContactNewLeadDueAt(baseDate = new Date()) {
   return due;
 }
 
-async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDatePreset = "ALL", unitPerformanceDatePreset = "ALL", reassignmentMonth = "" } = {}) {
+async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDatePreset = "ALL", unitPerformanceDatePreset = monthKeyForDate(), reassignmentMonth = "" } = {}) {
   await reactivateEndedLongLeaveAgents();
   const context = await getManagerScopeContext(user);
   if (context.error) return context;
@@ -1178,6 +1178,29 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
   const buildPresetContext = (presetRaw = "ALL") => {
     const preset = String(presetRaw || "ALL").trim().toUpperCase();
     const now = new Date();
+    const toManilaMonthRange = (monthValue) => {
+      const [year, month] = monthValue.split("-").map(Number);
+      return {
+        startDate: new Date(Date.UTC(year, month - 1, 1) - (8 * 60 * 60 * 1000)),
+        endDate: new Date(Date.UTC(year, month, 1) - (8 * 60 * 60 * 1000) - 1),
+      };
+    };
+    if (/^\d{4}-(0[1-9]|1[0-2])$/.test(preset)) {
+      const range = toManilaMonthRange(preset);
+      return { key: preset, ...range, periodLabel: formatKpiMonthLabel(preset) };
+    }
+    if (preset === "YTD") {
+      const currentMonth = monthKeyForDate(now);
+      const year = currentMonth.slice(0, 4);
+      const { startDate } = toManilaMonthRange(`${year}-01`);
+      const { endDate } = toManilaMonthRange(currentMonth);
+      return {
+        key: "YTD",
+        startDate,
+        endDate,
+        periodLabel: `January ${year} - ${formatKpiMonthLabel(currentMonth)}`,
+      };
+    }
     if (preset === "TODAY") {
       const startDate = new Date(now);
       startDate.setHours(0, 0, 0, 0);
@@ -2269,7 +2292,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
         salesPeriodLabel: salesContext.periodLabel,
         unitPerformancePeriodLabel: unitPerformanceContext.periodLabel,
         unitPerformanceStartDate: unitPerformanceContext.startDate || null,
-        unitPerformanceEndDate: new Date(),
+        unitPerformanceEndDate: unitPerformanceContext.endDate || new Date(),
         reassignmentMonthKey: selectedReassignmentMonth,
         reassignmentMonthLabel: reassignmentMonthContext.periodLabel,
         reassignmentMonth: selectedReassignmentMonth,

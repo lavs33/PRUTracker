@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
-import { FaFilePdf, FaSearch } from "react-icons/fa";
+import { FaArrowRight, FaExclamation, FaFilePdf, FaSearch } from "react-icons/fa";
+import { FiCheckCircle, FiClock, FiTarget } from "react-icons/fi";
 import TopNav from "./components/TopNav";
 import ManagerSideNav from "./components/ManagerSideNav";
 import "./ManagerPortal.css";
@@ -11,6 +12,13 @@ const BM_URGENT_KPI_NOTIFICATION_TYPES = new Set([
   "UNIT_KPI_UNASSIGNED",
   "AGENT_KPI_UNASSIGNED",
 ]);
+const concernKey = (notification = {}) => [
+  notification.entityId,
+  notification?.metadata?.scopeType,
+  notification?.metadata?.scopeId || notification?.metadata?.branchAssignmentScopeId,
+  notification?.metadata?.kpiKey,
+  notification?.metadata?.monthKey,
+].map((part) => String(part || "")).join(":");
 const DATE_PRESETS = [
   { value: "ALL", label: "All Time" },
   { value: "TODAY", label: "This Day" },
@@ -32,6 +40,30 @@ const followingMonthKey = (value) => {
 };
 const currentKpiMonth = monthKey();
 const nextKpiMonth = followingMonthKey(currentKpiMonth);
+const buildManagerReportDateOptions = () => {
+  const options = [];
+  let cursor = KPI_MONTH_START;
+  while (cursor <= currentKpiMonth) {
+    const [year, month] = cursor.split("-").map(Number);
+    options.push({
+      value: cursor,
+      label: new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString("en-US", {
+        timeZone: "UTC",
+        month: "long",
+        year: "numeric",
+      }),
+    });
+    cursor = followingMonthKey(cursor);
+  }
+  const currentYear = currentKpiMonth.slice(0, 4);
+  const currentMonthLabel = options.at(-1)?.label || currentYear;
+  options.push({
+    value: "YTD",
+    label: `Overall: January ${currentYear} – ${currentMonthLabel}`,
+  });
+  return options;
+};
+const MANAGER_REPORT_DATE_OPTIONS = buildManagerReportDateOptions();
 const buildKpiMonthOptions = (throughMonth = nextKpiMonth) => {
   const rows = [];
   let cursor = KPI_MONTH_START;
@@ -882,7 +914,7 @@ function ManagerPortal({ roleType }) {
   const [taskDatePreset, setTaskDatePreset] = useState("ALL");
   // eslint-disable-next-line no-unused-vars
   const [salesDatePreset, setSalesDatePreset] = useState("ALL");
-  const [unitPerformanceDatePreset, setUnitPerformanceDatePreset] = useState("ALL");
+  const [unitPerformanceDatePreset, setUnitPerformanceDatePreset] = useState(currentKpiMonth);
   const [unitKpiDatePreset, setUnitKpiDatePreset] = useState("TODAY");
   const [branchKpiDatePreset, setBranchKpiDatePreset] = useState("TODAY");
   const [portalData, setPortalData] = useState(null);
@@ -913,6 +945,7 @@ function ManagerPortal({ roleType }) {
   const [urgentNotifications, setUrgentNotifications] = useState([]);
   const [urgentNotificationsLoading, setUrgentNotificationsLoading] = useState(false);
   const [urgentNotificationsError, setUrgentNotificationsError] = useState("");
+  const [pendingKpiConcern, setPendingKpiConcern] = useState(null);
 
   useLayoutEffect(() => {
     if (!longLeaveStepperScrollSignal) return;
@@ -1093,17 +1126,23 @@ function ManagerPortal({ roleType }) {
           signal: controller.signal,
         });
         const payload = await response.json();
-        if (!response.ok) throw new Error(payload?.message || "Failed to load urgent notifications.");
+        if (!response.ok) throw new Error(payload?.message || "Failed to load urgent concerns.");
         const notifications = Array.isArray(payload?.notifications) ? payload.notifications : [];
-        setUrgentNotifications(notifications
+        const uniqueConcerns = new Map();
+        notifications
           .filter((notification) => (
             notification?.resolutionStatus === "Unresolved"
             && BM_URGENT_KPI_NOTIFICATION_TYPES.has(String(notification?.type || "").toUpperCase())
           ))
-          .sort((left, right) => new Date(right?.createdAt || 0) - new Date(left?.createdAt || 0)));
+          .sort((left, right) => new Date(right?.createdAt || 0) - new Date(left?.createdAt || 0))
+          .forEach((notification) => {
+            const key = concernKey(notification) || String(notification?._id || "");
+            if (!uniqueConcerns.has(key)) uniqueConcerns.set(key, notification);
+          });
+        setUrgentNotifications([...uniqueConcerns.values()]);
       } catch (error) {
         if (error.name !== "AbortError") {
-          setUrgentNotificationsError(error.message || "Failed to load urgent notifications.");
+          setUrgentNotificationsError(error.message || "Failed to load urgent concerns.");
         }
       } finally {
         if (!controller.signal.aborted) setUrgentNotificationsLoading(false);
@@ -1113,6 +1152,35 @@ function ManagerPortal({ roleType }) {
     fetchUrgentNotifications();
     return () => controller.abort();
   }, [activeView, normalizedRole, refreshCount, user?.id]);
+
+  useLayoutEffect(() => {
+    if (activeView !== "kpi_assignment" || kpiLoading || !pendingKpiConcern) return;
+    const scopeType = String(pendingKpiConcern?.metadata?.scopeType || "");
+    const scopeId = String(pendingKpiConcern?.metadata?.branchAssignmentScopeId || pendingKpiConcern?.metadata?.scopeId || "");
+    const assignment = (kpiData?.assignments || []).find((item) => (
+      String(item.scopeType) === scopeType && (!scopeId || String(item.scopeId) === scopeId)
+    ));
+    const kpiKey = String(pendingKpiConcern?.metadata?.kpiKey || "");
+    const rowKey = assignment ? `${assignment.scopeType}:${assignment.scopeId}:${kpiKey}` : "";
+    const target = rowKey ? document.querySelector(`[data-kpi-row-key="${rowKey}"]`) : null;
+    if (!target) return;
+    const month = String(pendingKpiConcern?.metadata?.monthKey || "");
+    if (month) setKpiSelectedMonths((current) => ({ ...current, [rowKey]: month }));
+    setExpandedKpiKey(rowKey);
+    const scrollToConcern = () => {
+      const currentTarget = document.querySelector(`[data-kpi-row-key="${rowKey}"]`);
+      currentTarget?.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+    };
+    const frameId = window.requestAnimationFrame(() => window.requestAnimationFrame(scrollToConcern));
+    const settleId = window.setTimeout(() => {
+      scrollToConcern();
+      setPendingKpiConcern(null);
+    }, 350);
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      window.clearTimeout(settleId);
+    };
+  }, [activeView, kpiData?.assignments, kpiLoading, pendingKpiConcern]);
 
   useEffect(() => {
     if (!user?.id || user.role !== normalizedRole) return;
@@ -1440,7 +1508,7 @@ function ManagerPortal({ roleType }) {
         window.dispatchEvent(new CustomEvent("notifications:changed", { detail: { userId: user.id } }));
       }
       setActiveView("kpi_assignment");
-      window.scrollTo({ top: 0, behavior: "smooth" });
+      setPendingKpiConcern(notification);
     } catch (error) {
       setUrgentNotificationsError(error.message || "Failed to open KPI assignment.");
     }
@@ -3031,6 +3099,7 @@ function ManagerPortal({ roleType }) {
     .map((part) => String(part || "").trim())
     .filter(Boolean)
     .join(" ") || user?.username || "Branch Manager";
+  const managerFirstName = String(user?.firstName || "").trim() || managerDisplayName;
   const scopeLabel = getScopeLabel(scope);
   const generatedAtLabel = portalData?.reportContext?.generatedAt
     ? formatDateTime(portalData.reportContext.generatedAt)
@@ -3060,7 +3129,7 @@ function ManagerPortal({ roleType }) {
           { label: "Total Prospects", value: summary.totalProspects },
           { label: "Total Active Policies", value: summary.activePolicies },
           {
-            label: "Annual Premium",
+            label: "Total Annual Premium",
             value: formatMoney(summary.totalAnnualPremium),
           },
         ]
@@ -3899,10 +3968,10 @@ function ManagerPortal({ roleType }) {
           {activeView === "dashboard" && <section className="manager-hero">
             <div>
               <p className="manager-hero__eyebrow">{normalizedRole} Portal</p>
-              <h1>{normalizedRole === "BM" ? `Welcome, ${managerDisplayName}.` : (scope.unitName || "Unit")}</h1>
+              <h1>{normalizedRole === "BM" ? `Welcome back, ${managerFirstName}.` : (scope.unitName || "Unit")}</h1>
               <p>
                 {normalizedRole === "BM"
-                  ? `Review the priorities requiring your attention across ${scope.branchName || "your branch"}${scope.areaName ? ` • ${scope.areaName}` : ""}.`
+                  ? `Manage branch performance, assign KPI targets, monitor units and agents, review sales and client activity, and resolve priorities across ${scope.branchName || "your branch"}${scope.areaName ? ` • ${scope.areaName}` : ""}.`
                   : `Monitor ${scopeLabel} with live backend metrics, unit-wide agent coverage, auto-updating date-filtered tables, printable reports, and in-page unit KPI progress.`}
               </p>
               <div className="manager-hero__meta-row">
@@ -4005,10 +4074,9 @@ function ManagerPortal({ roleType }) {
               <div className="manager-urgent-actions__head">
                 <div>
                   <span>Action required</span>
-                  <h2 id="bm-urgent-actions-title">Urgent unresolved notifications</h2>
-                  <p>Open a KPI concern to review and complete its assignment.</p>
+                  <h2 id="bm-urgent-actions-title">Urgent unresolved concerns</h2>
                 </div>
-                <b aria-label={`${urgentNotifications.length} urgent unresolved notifications`}>
+                <b aria-label={`${urgentNotifications.length} urgent unresolved concerns`}>
                   {urgentNotifications.length}
                 </b>
               </div>
@@ -4018,29 +4086,31 @@ function ManagerPortal({ roleType }) {
                   {urgentNotificationsError}
                 </div>
               ) : urgentNotificationsLoading ? (
-                <div className="manager-urgent-actions__feedback">Loading urgent notifications...</div>
+                <div className="manager-urgent-actions__feedback">Loading urgent concerns...</div>
               ) : urgentNotifications.length ? (
                 <div className="manager-urgent-actions__grid">
                   {urgentNotifications.map((notification) => (
-                    <article className="manager-urgent-card" key={notification._id}>
+                    <article className="manager-urgent-card" key={concernKey(notification) || notification._id}>
+                      <div className="manager-urgent-card__icon" aria-hidden="true"><FaExclamation /></div>
                       <div className="manager-urgent-card__body">
                         <div className="manager-urgent-card__meta">
-                          <span>Urgent</span>
-                          <i>{String(notification.type || "KPI notification").replaceAll("_", " ")}</i>
-                          <time>{formatDateTime(notification.createdAt)}</time>
+                          <span>Needs action</span>
+                          <i><FiTarget aria-hidden="true" /> {String(notification?.metadata?.scopeType || "KPI")} KPI</i>
+                          <time><FiClock aria-hidden="true" /> {formatDateTime(notification.createdAt)}</time>
                         </div>
                         <h3>{notification.title || "KPI assignment requires attention"}</h3>
                         {String(notification.message || "").trim() && <p>{notification.message}</p>}
+                        <div className="manager-urgent-card__guidance"><FiCheckCircle aria-hidden="true" /> Review the highlighted KPI, set its target, then save the assignment.</div>
                       </div>
                       <button type="button" onClick={() => openUrgentKpiNotification(notification)}>
-                        Open KPI assignment
+                        Open KPI assignment <FaArrowRight aria-hidden="true" />
                       </button>
                     </article>
                   ))}
                 </div>
               ) : (
                 <div className="manager-urgent-actions__feedback manager-urgent-actions__feedback--clear">
-                  No urgent unresolved notifications require action.
+                  No urgent unresolved concerns require action.
                 </div>
               )}
             </section>
@@ -4099,7 +4169,7 @@ function ManagerPortal({ roleType }) {
                       value={unitPerformanceDatePreset}
                       onChange={(e) => setUnitPerformanceDatePreset(e.target.value)}
                     >
-                      {DATE_PRESETS.map((option) => (
+                      {MANAGER_REPORT_DATE_OPTIONS.map((option) => (
                         <option key={option.value} value={option.value}>{option.label}</option>
                       ))}
                     </select>
@@ -4254,7 +4324,7 @@ function ManagerPortal({ roleType }) {
                       value={unitPerformanceDatePreset}
                       onChange={(e) => setUnitPerformanceDatePreset(e.target.value)}
                     >
-                      {DATE_PRESETS.map((option) => (
+                      {MANAGER_REPORT_DATE_OPTIONS.map((option) => (
                         <option key={option.value} value={option.value}>{option.label}</option>
                       ))}
                     </select>
@@ -5582,7 +5652,7 @@ function ManagerPortal({ roleType }) {
                           const monthAssignment = getMonthlyKpiAssignment(kpi, selectedMonth);
                           const canEditMonth = [activeCurrentKpiMonth, activeNextKpiMonth].includes(selectedMonth);
                           return (
-                            <div className={`manager-kpi-edit-row manager-kpi-edit-row--agent ${isEditing ? "editing" : ""} ${isExpanded ? "expanded" : ""}`} key={kpi.key}>
+                            <div data-kpi-row-key={rowKey} className={`manager-kpi-edit-row manager-kpi-edit-row--agent ${isEditing ? "editing" : ""} ${isExpanded ? "expanded" : ""}`} key={kpi.key}>
                               <div className="manager-kpi-edit-row__head">
                                 <button type="button" className="manager-kpi-collapse-btn" aria-expanded={isExpanded} onClick={() => setExpandedKpiKey(isExpanded ? "" : rowKey)}>
                                   <span className="manager-kpi-caret">{isExpanded ? "−" : "+"}</span>
