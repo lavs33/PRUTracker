@@ -1693,6 +1693,7 @@ function ManagerPortal({ roleType }) {
     if (type === "BM_RECOMMENDATION") {
       setUnitPerformanceTab("sales");
       setActiveView("agents");
+      requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "auto" }));
       return;
     }
 
@@ -6184,54 +6185,57 @@ function ManagerPortal({ roleType }) {
                       <span style={{ width: `${Math.max(0, Math.min(comparison.percent, 140))}%` }} />
                     </div>
                     <small className="manager-kpi-gap-note">{comparison.deltaLabel}</small>
+                    {kpi.key === "monthly_sales_production" ? (
+                      <div className="manager-kpi-card-insights">
+                        <section className="manager-kpi-card-insight manager-kpi-card-insight--agents">
+                          <div className="manager-kpi-card-insight__head">
+                            <strong>Agent Breakdown</strong>
+                            <span>{unitKpiSalesAgents.length} producing agent{unitKpiSalesAgents.length === 1 ? "" : "s"}</span>
+                          </div>
+                          {unitKpiSalesAgents.length ? (
+                            <ul className="manager-kpi-card-agent-list">
+                              {unitKpiSalesAgents.slice(0, 5).map((agent) => (
+                                <li key={`dashboard-unit-card-agent:${agent.id}`}>
+                                  <button type="button" onClick={() => openAgentDetails(agent.id)}>
+                                    <span>
+                                      <strong>{agent.name || agent.username}</strong>
+                                      <small>{agent.username}</small>
+                                    </span>
+                                    <b>{formatMoney(agent.annualPremium)}</b>
+                                  </button>
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <p>No agents have sales production for this period yet.</p>
+                          )}
+                        </section>
+                        {unitBranchSalesContribution ? (
+                          <section className="manager-kpi-card-insight manager-kpi-card-insight--contribution">
+                            <div className="manager-kpi-card-insight__head">
+                              <strong>Contribution in Branch Sales Production</strong>
+                              <span>{unitBranchSalesContribution.dateRangeLabel}</span>
+                            </div>
+                            <div className="manager-kpi-card-contribution-grid">
+                              <div><small>Unit Production</small><b>{formatMoney(unitBranchSalesContribution.actual)}</b></div>
+                              <div><small>Branch Production</small><b>{formatMoney(unitBranchSalesContribution.branchActual)}</b></div>
+                              <div><small>Branch KPI Target</small><b>{formatKpiTarget(unitBranchSalesContribution.kpi)}</b></div>
+                              <div><small>Unit Share</small><b>{unitBranchSalesContribution.contributionShare}%</b></div>
+                            </div>
+                            <div className="manager-kpi-progress-bar" aria-label={`Branch sales production progress ${unitBranchSalesContribution.comparison.percent}%`}>
+                              <span style={{ width: `${Math.max(0, Math.min(unitBranchSalesContribution.comparison.percent, 140))}%` }} />
+                            </div>
+                            <small className="manager-kpi-gap-note">{unitBranchSalesContribution.comparison.deltaLabel}</small>
+                          </section>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </article>
                 ))}
               </div>
               {!dashboardUnitKpiCards.length ? (
                 <div className="manager-empty-state">No KPIs assigned for unit.</div>
-              ) : (
-                <>
-                <div className="manager-kpi-unit-drilldown">
-                  <h3>Agent Drilldown</h3>
-                  {unitKpiSalesAgents.length ? (
-                    <ul className="manager-kpi-agent-list">
-                      {unitKpiSalesAgents.map((agent) => (
-                        <li key={`dashboard-unit-top-agent:${agent.id}`}>
-                          <button type="button" className="manager-kpi-agent-link" onClick={() => openAgentDetails(agent.id)}>
-                            <strong>{agent.username}</strong>
-                            <span>{agent.name || agent.username}</span>
-                          </button>
-                          <b>{formatMoney(agent.annualPremium)}</b>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <div className="manager-empty-state">No agents have sales production for this period yet.</div>
-                  )}
-                </div>
-                {unitBranchSalesContribution ? (
-                  <div className="manager-kpi-unit-drilldown">
-                    <h3>Contribution in Branch Sales Production</h3>
-                    <div className="manager-kpi-progress-grid">
-                      <article className={`manager-kpi-progress-card ${unitBranchSalesContribution.comparison.className}`}>
-                        <span>{unitBranchSalesContribution.dateRangeLabel} • {unitBranchSalesContribution.kpi.period}</span>
-                        <strong>{selectedUnit?.name || scope.unitName || "Unit"}</strong>
-                        <div className="manager-kpi-progress-values">
-                          <div><small>Unit Sales Production</small><b>{formatMoney(unitBranchSalesContribution.actual)}</b></div>
-                          <div><small>Branch KPI Target</small><b>{formatKpiTarget(unitBranchSalesContribution.kpi)}</b></div>
-                        </div>
-                        <small className="manager-kpi-gap-note">Branch sales production achieved: {formatMoney(unitBranchSalesContribution.branchActual)} • Unit contribution share: {unitBranchSalesContribution.contributionShare}%</small>
-                        <div className="manager-kpi-progress-bar" aria-label={`Branch sales production progress ${unitBranchSalesContribution.comparison.percent}%`}>
-                          <span style={{ width: `${Math.max(0, Math.min(unitBranchSalesContribution.comparison.percent, 140))}%` }} />
-                        </div>
-                        <em>{unitBranchSalesContribution.comparison.status}</em>
-                        <small className="manager-kpi-gap-note">{unitBranchSalesContribution.comparison.deltaLabel}</small>
-                      </article>
-                    </div>
-                  </div>
-                ) : null}
-                </>
-              )}
+              ) : null}
             </section>
           )}
 

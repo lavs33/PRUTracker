@@ -2981,3 +2981,140 @@
 .manager-kpi-progress-card--unit-focus {
   min-height: 0;
 }
+.manager-urgent-recommendation__action small,
+.manager-urgent-recommendation__action strong {
+  display: block;
+}
+
+.manager-urgent-recommendation__action strong {
+  margin-top: 6px;
+}
+
+.manager-urgent-recommendation__action p {
+  margin: 10px 0 0;
+}
+
+.manager-kpi-card-insights {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.manager-kpi-card-insight {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, .86);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .8);
+}
+
+.manager-kpi-card-insight--contribution {
+  border-color: #fed7aa;
+  background: linear-gradient(135deg, #fff7ed 0%, #ffffff 100%);
+}
+
+.manager-kpi-card-insight__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.manager-kpi-card-insight__head strong {
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.manager-kpi-card-insight__head span {
+  flex: 0 0 auto;
+  color: #9a3412;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.manager-kpi-card-agent-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.manager-kpi-card-agent-list button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: #f8fafc;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.manager-kpi-card-agent-list button:hover {
+  border-color: #fed7aa;
+  background: #fff7ed;
+}
+
+.manager-kpi-card-agent-list button > span {
+  min-width: 0;
+}
+
+.manager-kpi-card-agent-list strong,
+.manager-kpi-card-agent-list small,
+.manager-kpi-card-agent-list b {
+  display: block;
+}
+
+.manager-kpi-card-agent-list strong {
+  overflow: hidden;
+  color: #0f172a;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.manager-kpi-card-agent-list b {
+  flex: 0 0 auto;
+  color: #9a3412;
+  font-size: 13px;
+}
+
+.manager-kpi-card-contribution-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  gap: 10px;
+}
+
+.manager-kpi-card-contribution-grid > div {
+  padding: 12px;
+  border: 1px solid #fed7aa;
+  border-radius: 13px;
+  background: #fff;
+}
+
+.manager-kpi-card-contribution-grid small {
+  display: block;
+  color: #92400e;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.manager-kpi-card-contribution-grid b {
+  display: block;
+  margin-top: 4px;
+  color: #0f172a;
+  font-size: 15px;
+}
