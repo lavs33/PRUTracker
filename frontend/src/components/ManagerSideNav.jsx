@@ -7,10 +7,10 @@ const NAV_ITEMS = [
   { key: "orphan_endorsements", label: "Orphan Clients Endorsements", icon: <FaUserFriends size={18} />, umOnly: true },
   { key: "kpi_assignment", label: "KPI Assignment", icon: <FaBullseye size={18} /> },
   { key: "orphan_clients", label: "Orphan Client Management", icon: <FaUserFriends size={18} />, bmOnly: true },
-  { key: "kpi_progress", label: "Branch KPI Progress", icon: <FaChartLine size={18} />, bmOnly: true },
+  { key: "kpi_progress", label: "Branch KPI Progress", icon: <FaChartLine size={18} /> },
 ];
 
-function ManagerSideNav({ roleLabel, active, onNavigate, collapsed, onToggle }) {
+function ManagerSideNav({ roleLabel, active, onNavigate, collapsed, onToggle, showUnitKpiProgress = true }) {
   return (
     <aside className={`manager-side-nav ${collapsed ? "collapsed" : ""}`}>
       <div className="manager-side-nav__head">
@@ -41,8 +41,12 @@ function ManagerSideNav({ roleLabel, active, onNavigate, collapsed, onToggle }) 
       </div>
 
       <div className="manager-side-nav__list">
-        {NAV_ITEMS.filter((item) => (roleLabel === "BM" || item.key !== "kpi_assignment") && (!item.bmOnly || roleLabel === "BM") && (!item.umOnly || roleLabel === "UM")).map((item) => {
-          const itemLabel = roleLabel === "BM" || item.key !== "agents" ? item.label : "Unit Details";
+        {NAV_ITEMS.filter((item) => (roleLabel === "BM" || item.key !== "kpi_assignment") && (roleLabel === "BM" || item.key !== "kpi_progress" || showUnitKpiProgress) && (!item.bmOnly || roleLabel === "BM") && (!item.umOnly || roleLabel === "UM")).map((item) => {
+          const itemLabel = item.key === "agents" && roleLabel !== "BM"
+            ? "Unit Details"
+            : item.key === "kpi_progress" && roleLabel !== "BM"
+              ? "Unit KPI Progress"
+              : item.label;
           return (
             <button
               key={item.key}
