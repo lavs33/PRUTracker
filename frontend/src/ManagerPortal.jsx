@@ -19,6 +19,125 @@ const concernKey = (notification = {}) => [
   notification?.metadata?.kpiKey,
   notification?.metadata?.monthKey,
 ].map((part) => String(part || "")).join(":");
+
+const orphanEndorsementSections = (message = "") => {
+  const text = String(message || "").trim();
+  const definitions = [
+    {
+      prefix: "Prospects with active leads endorsed:",
+      nextPrefix: "Policyholders with ongoing policies endorsed:",
+      title: "Prospects with active leads",
+      labels: ["Prospect code", "Prospect name", "Lead code"],
+      valueOrder: [0, 2, 1],
+    },
+    {
+      prefix: "Policyholders with ongoing policies endorsed:",
+      title: "Policyholders with ongoing policies",
+      labels: ["Policyholder code", "Policyholder name", "Product", "Policy number", "Status"],
+    },
+    {
+      prefix: "Prospects endorsed:",
+      title: "Endorsed prospects",
+      labels: ["Prospect code", "Prospect name", "Leads", "Policies"],
+      valueOrder: [0, 3, 1, 2],
+    },
+  ];
+
+  return definitions.flatMap((definition) => {
+    const start = text.indexOf(definition.prefix);
+    if (start < 0) return [];
+    const contentStart = start + definition.prefix.length;
+    const nextStart = definition.nextPrefix ? text.indexOf(definition.nextPrefix, contentStart) : -1;
+    const content = text.slice(contentStart, nextStart >= 0 ? nextStart : undefined).trim().replace(/[.\s]+$/, "");
+    if (!content || /^none$/i.test(content)) return [{ ...definition, items: [] }];
+    const items = content.split(/;\s*/).filter(Boolean).map((entry) => {
+      const values = entry.split(/\s+\/\s+/).map((value) => value.trim());
+      const valueOrder = definition.valueOrder
+        || (definition.prefix === "Policyholders with ongoing policies endorsed:" && values.length < 5
+          ? [0, null, 1, 2, 3]
+          : definition.labels.map((_, index) => index));
+      return definition.labels.map((label, index) => ({
+        label,
+        value: String(valueOrder[index] === null ? "—" : (values[valueOrder[index]] || "—"))
+          .replace(/^(?:Leads?|Policyholders?|Policies):\s*/i, ""),
+      }));
+    });
+    return [{ ...definition, items }];
+  });
+};
+
+const OrphanEndorsementConcernMessage = ({ message }) => {
+  const sections = orphanEndorsementSections(message);
+  if (!sections.length) return String(message || "").trim() ? <p>{message}</p> : null;
+  return (
+    <div className="manager-urgent-endorsement">
+      {sections.map((section) => (
+        <section className="manager-urgent-endorsement__section" key={section.prefix}>
+          <div className="manager-urgent-endorsement__heading">
+            <strong>{section.title}</strong>
+            <span>{section.items.length}</span>
+          </div>
+          {section.items.length ? (
+            <ul>
+              {section.items.map((item, itemIndex) => (
+                <li key={`${section.prefix}-${itemIndex}`}>
+                  {item.map((field) => (
+                    <span key={field.label}>
+                      <b>{field.label}</b>
+                      <em>{field.value}</em>
+                    </span>
+                  ))}
+                </li>
+              ))}
+            </ul>
+          ) : <p>None endorsed.</p>}
+        </section>
+      ))}
+    </div>
+  );
+};
+
+const BmRecommendationConcernMessage = ({ notification }) => {
+  const metadata = notification?.metadata || {};
+  const isSalesProduction = metadata.kpiKey === "monthly_sales_production";
+  const recommendationText = String(metadata.recommendation || notification?.message || "");
+  const capitalizedRecommendation = recommendationText
+    ? `${recommendationText.charAt(0).toUpperCase()}${recommendationText.slice(1)}`
+    : "";
+  return (
+    <div className="manager-urgent-recommendation">
+      <div className="manager-urgent-recommendation__heading">
+        <span>Branch Manager guidance</span>
+        <strong>{metadata.unitName || "Your unit"}</strong>
+      </div>
+      <h4>{metadata.kpiLabel || "Branch KPI"} Progress</h4>
+      <div className="manager-urgent-recommendation__context">
+        {isSalesProduction ? (
+          <>
+            <div><small>Unit Sales Production</small><b>{metadata.progressLabel || "—"}</b></div>
+            <div><small>Unit target to achieve</small><b>{metadata.targetLabel || "—"}</b></div>
+            <div><small>Branch Sales Production target</small><b>{metadata.branchTargetLabel || "—"}</b></div>
+            <div><small>Unit contribution to branch target</small><b>{metadata.branchContributionLabel || "—"}</b></div>
+          </>
+        ) : (
+          <>
+            <div><small>Branch KPI progress</small><b>{metadata.progressLabel || "—"}</b></div>
+            <div><small>Unit contribution to branch</small><b>{metadata.unitContributionLabel || "—"}</b></div>
+            <div><small>Branch target to achieve</small><b>{metadata.branchTargetLabel || metadata.targetLabel || "—"}</b></div>
+          </>
+        )}
+        <div><small>Reporting period</small><b>{metadata.periodLabel || "Current month"}</b></div>
+      </div>
+      <p>{metadata.contributionReminder || notification?.message}</p>
+      <div className="manager-urgent-recommendation__action">
+        <small>Recommended action</small>
+        <strong>{metadata.recommendationTitle || "Strengthen KPI performance"}</strong>
+        <p>{capitalizedRecommendation}</p>
+      </div>
+    </div>
+  );
+};
+
 const DATE_PRESETS = [
   { value: "ALL", label: "All Time" },
   { value: "TODAY", label: "This Day" },
@@ -957,6 +1076,12 @@ function ManagerPortal({ roleType }) {
   const [branchKpiDatePreset, setBranchKpiDatePreset] = useState(currentKpiMonth);
   const [portalData, setPortalData] = useState(null);
   const [kpiData, setKpiData] = useState(null);
+
+  const hasAssignedUnitKpi = useMemo(() => {
+    if (normalizedRole === "BM") return true;
+    const unitAssignment = (kpiData?.assignments || []).find((assignment) => assignment.scopeType === "UNIT");
+    return (unitAssignment?.kpis || []).some((kpi) => kpi.assigned !== false && kpi.key === "monthly_sales_production");
+  }, [kpiData?.assignments, normalizedRole]);
   const [kpiDrafts, setKpiDrafts] = useState({});
   const [lastAssignedKpiDrafts, setLastAssignedKpiDrafts] = useState({});
   const [kpiLoading, setKpiLoading] = useState(false);
@@ -1060,6 +1185,7 @@ function ManagerPortal({ roleType }) {
 
   useEffect(() => {
     if (location.state?.activeView) setActiveView(location.state.activeView);
+    if (location.state?.unitPerformanceTab) setUnitPerformanceTab(location.state.unitPerformanceTab);
   }, [location.state]);
 
   useEffect(() => {
@@ -1083,9 +1209,9 @@ function ManagerPortal({ roleType }) {
       orphan_clients: "Orphan Client Management",
     };
     const unitPageLabels = {
-      dashboard: "Unit Overview",
+      dashboard: `${normalizedRole} Portal Home`,
       agents: "Unit Details",
-      kpi_progress: "Branch KPI Progress Dashboard",
+      kpi_progress: "Unit KPI Progress",
       orphan_endorsements: "Orphan Clients Endorsements",
     };
     const pageLabels = normalizedRole === "BM" ? branchPageLabels : unitPageLabels;
@@ -1099,7 +1225,8 @@ function ManagerPortal({ roleType }) {
   useEffect(() => {
     if (normalizedRole !== "BM" && (activeView === "kpi_assignment" || activeView === "orphan_clients")) setActiveView("dashboard");
     if (normalizedRole !== "UM" && activeView === "orphan_endorsements") setActiveView("dashboard");
-  }, [activeView, normalizedRole]);
+    if (normalizedRole !== "BM" && activeView === "kpi_progress" && !hasAssignedUnitKpi) setActiveView("dashboard");
+  }, [activeView, hasAssignedUnitKpi, normalizedRole]);
 
   useEffect(() => {
     if (!user?.id || user.role !== normalizedRole) return;
@@ -1155,7 +1282,7 @@ function ManagerPortal({ roleType }) {
   ]);
 
   useEffect(() => {
-    if (normalizedRole !== "BM" || activeView !== "dashboard" || !user?.id) return;
+    if (!["BM", "UM"].includes(normalizedRole) || activeView !== "dashboard" || !user?.id) return;
     const controller = new AbortController();
 
     const fetchUrgentNotifications = async () => {
@@ -1173,7 +1300,9 @@ function ManagerPortal({ roleType }) {
         notifications
           .filter((notification) => (
             notification?.resolutionStatus === "Unresolved"
-            && BM_URGENT_KPI_NOTIFICATION_TYPES.has(String(notification?.type || "").toUpperCase())
+            && (normalizedRole === "BM"
+              ? BM_URGENT_KPI_NOTIFICATION_TYPES.has(String(notification?.type || "").toUpperCase())
+              : ["ORPHANS_ENDORSEMENTS", "BM_RECOMMENDATION"].includes(String(notification?.type || "").toUpperCase()))
           ))
           .sort((left, right) => new Date(right?.createdAt || 0) - new Date(left?.createdAt || 0))
           .forEach((notification) => {
@@ -1559,6 +1688,29 @@ function ManagerPortal({ roleType }) {
     }
   };
 
+  const openUmUrgentConcern = (notification) => {
+    const type = String(notification?.type || "").toUpperCase();
+    if (type === "BM_RECOMMENDATION") {
+      setUnitPerformanceTab("sales");
+      setActiveView("agents");
+      return;
+    }
+
+    const endorsementType = String(notification?.metadata?.endorsementType || notification?.metadata?.targetTab || "").toLowerCase();
+    const endorsementRecordId = String(
+      notification?.metadata?.resignationId
+      || notification?.metadata?.longLeaveId
+      || notification?.entityId
+      || ""
+    );
+    setSelectedUmAffectedClient(null);
+    setSelectedReassignmentAgentId("");
+    setOrphanEndorsementTab(endorsementType === "resignation" || endorsementType === "resignations" ? "resignations" : "long_leaves");
+    setSelectedUmLongLeaveRecordId(endorsementRecordId);
+    setActiveView("orphan_endorsements");
+    window.scrollTo({ top: 0, behavior: "auto" });
+  };
+
   const notifyUnitManagerRecommendation = async (recommendation) => {
     setRecommendationNotifyingKey(recommendation.key);
     try {
@@ -1619,17 +1771,6 @@ function ManagerPortal({ roleType }) {
   };
   const taskSummary = portalData?.taskSummary || summary;
   const salesSummary = portalData?.salesSummary || summary;
-  const summaryFrequencyPremiumCards = [
-    { key: "monthlyPremium", label: "Monthly Premium Breakdown" },
-    { key: "quarterlyPremium", label: "Quarterly Premium Breakdown" },
-    { key: "halfYearlyPremium", label: "Half-Yearly Premium Breakdown" },
-    { key: "yearlyPremium", label: "Yearly Premium Breakdown" },
-  ]
-    .map((item) => ({
-      ...item,
-      value: Number(summary.frequencyPremiumBreakdown?.[item.key] || 0),
-    }));
-
   const unitOptions = useMemo(() => {
     const backendUnits = (portalData?.units || []).map((unit) => ({
       ...unit,
@@ -3318,11 +3459,10 @@ function ManagerPortal({ roleType }) {
         ]
       : [
           { label: "Agents in Scope", value: summary.totalAgents },
-          { label: "Open Tasks", value: summary.totalOpenTasks },
           { label: "Total Prospects", value: summary.totalProspects },
           { label: "Total Active Policies", value: summary.activePolicies },
           {
-            label: "Annual Premium",
+            label: "Total Annual Premium",
             value: formatMoney(summary.totalAnnualPremium),
           },
         ];
@@ -4149,17 +4289,18 @@ function ManagerPortal({ roleType }) {
           onNavigate={setActiveView}
           collapsed={sideNavCollapsed}
           onToggle={() => setSideNavCollapsed((current) => !current)}
+          showUnitKpiProgress={hasAssignedUnitKpi}
         />
 
         <main className="manager-portal__content">
           {activeView === "dashboard" && <section className="manager-hero">
             <div>
               <p className="manager-hero__eyebrow">{normalizedRole} Portal</p>
-              <h1>{normalizedRole === "BM" ? `Welcome back, ${managerFirstName}.` : (scope.unitName || "Unit")}</h1>
+              <h1>Welcome back, {managerFirstName}.</h1>
               <p>
                 {normalizedRole === "BM"
                   ? `Manage branch performance, assign KPI targets, monitor units and agents, review sales and client activity, and resolve priorities across ${scope.branchName || "your branch"}${scope.areaName ? ` • ${scope.areaName}` : ""}.`
-                  : `Monitor ${scopeLabel} with live backend metrics, unit-wide agent coverage, auto-updating date-filtered tables, printable reports, and in-page unit KPI progress.`}
+                  : `Monitor ${scopeLabel}, review agent activity and production, track unit performance insights, and coordinate focused follow-ups across your unit.`}
               </p>
               <div className="manager-hero__meta-row">
                 {generatedAtLabel && (
@@ -4198,70 +4339,12 @@ function ManagerPortal({ roleType }) {
             </section>
           )}
 
-          {!isLoading && !loadError && activeView === "dashboard" && normalizedRole !== "BM" && (
-            <section className="manager-panel">
-              <div className="manager-panel__head">
-                <h2>
-                  Unit Overview
-                </h2>
-                <p>
-                  High-level pulse of workload, conversion output, and premium
-                  momentum across the current manager scope.
-                </p>
-              </div>
-              <div className="manager-kpi-grid">
-                <div>
-                  <span>Completed Tasks</span>
-                  <strong>{summary.totalClosedTasks}</strong>
-                </div>
-                <div>
-                  <span>Open Tasks</span>
-                  <strong>{summary.totalOpenTasks}</strong>
-                </div>
-                <div>
-                  <span>Overdue Tasks</span>
-                  <strong>{summary.totalOverdueTasks}</strong>
-                </div>
-                <div>
-                  <span>Leads Managed</span>
-                  <strong>{summary.totalLeads}</strong>
-                </div>
-                <div>
-                  <span>Active Leads</span>
-                  <strong>{summary.totalActiveLeads}</strong>
-                </div>
-                <div>
-                  <span>Converted Leads</span>
-                  <strong>{summary.totalConverted}</strong>
-                </div>
-                <div>
-                  <span>Total Active Policies</span>
-                  <strong>{summary.activePolicies}</strong>
-                </div>
-                <div>
-                  <span>Active Policy Rate</span>
-                  <strong>{summary.activePolicyRate}%</strong>
-                </div>
-                <div>
-                  <span>Annual Premium</span>
-                  <strong>{formatMoney(summary.totalAnnualPremium)}</strong>
-                </div>
-                {summaryFrequencyPremiumCards.map((card) => (
-                  <div key={card.key}>
-                    <span>{card.label}</span>
-                    <strong>{formatMoney(card.value)}</strong>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
-
-          {!isLoading && !loadError && activeView === "dashboard" && normalizedRole === "BM" && (
-            <section className="manager-urgent-actions" aria-labelledby="bm-urgent-actions-title">
+          {!isLoading && !loadError && activeView === "dashboard" && ["BM", "UM"].includes(normalizedRole) && (
+            <section className="manager-urgent-actions" aria-labelledby="manager-urgent-actions-title">
               <div className="manager-urgent-actions__head">
                 <div>
                   <span>Action required</span>
-                  <h2 id="bm-urgent-actions-title">Urgent unresolved concerns</h2>
+                  <h2 id="manager-urgent-actions-title">Urgent unresolved concerns</h2>
                 </div>
                 <b aria-label={`${urgentNotifications.length} urgent unresolved concerns`}>
                   {urgentNotifications.length}
@@ -4282,15 +4365,21 @@ function ManagerPortal({ roleType }) {
                       <div className="manager-urgent-card__body">
                         <div className="manager-urgent-card__meta">
                           <span>Needs action</span>
-                          <i><FiTarget aria-hidden="true" /> {String(notification?.metadata?.scopeType || "KPI")} KPI</i>
+                          <i><FiTarget aria-hidden="true" /> {normalizedRole === "BM" ? `${String(notification?.metadata?.scopeType || "KPI")} KPI` : String(notification?.type || "Concern").replaceAll("_", " ")}</i>
                           <time><FiClock aria-hidden="true" /> {formatDateTime(notification.createdAt)}</time>
                         </div>
-                        <h3>{notification.title || "KPI assignment requires attention"}</h3>
-                        {String(notification.message || "").trim() && <p>{notification.message}</p>}
-                        <div className="manager-urgent-card__guidance"><FiCheckCircle aria-hidden="true" /> Review the highlighted KPI, set its target, then save the assignment.</div>
+                        <h3>{notification.title || (normalizedRole === "BM" ? "KPI assignment requires attention" : "Manager concern requires attention")}</h3>
+                        {String(notification.message || "").trim() ? (
+                          normalizedRole === "UM" && String(notification?.type || "").toUpperCase() === "ORPHANS_ENDORSEMENTS"
+                            ? <OrphanEndorsementConcernMessage message={notification.message} />
+                            : normalizedRole === "UM" && String(notification?.type || "").toUpperCase() === "BM_RECOMMENDATION"
+                              ? <BmRecommendationConcernMessage notification={notification} />
+                              : <p>{notification.message}</p>
+                        ) : null}
+                        <div className="manager-urgent-card__guidance"><FiCheckCircle aria-hidden="true" /> {normalizedRole === "BM" ? "Review the highlighted KPI, set its target, then save the assignment." : String(notification?.type || "").toUpperCase() === "BM_RECOMMENDATION" ? "Review the unit sales performance tab to compare progress and prioritize the Branch Manager's recommendation." : "Review the endorsed orphan clients and reassign the affected records for the referenced agent."}</div>
                       </div>
-                      <button type="button" onClick={() => openUrgentKpiNotification(notification)}>
-                        Open KPI assignment <FaArrowRight aria-hidden="true" />
+                      <button type="button" onClick={() => normalizedRole === "BM" ? openUrgentKpiNotification(notification) : openUmUrgentConcern(notification)}>
+                        {normalizedRole === "BM" ? "Open KPI assignment" : String(notification?.type || "").toUpperCase() === "BM_RECOMMENDATION" ? "View Unit Sales Performance" : "View Clients Endorsements"} <FaArrowRight aria-hidden="true" />
                       </button>
                     </article>
                   ))}
@@ -4570,7 +4659,7 @@ function ManagerPortal({ roleType }) {
                   )}
                 </div>
 
-                {normalizedRole === "BM" && unitPerformanceTab === "sales" && !isAllUnitsSelected && isUnitPerformanceMonthSelected && (
+                {unitPerformanceTab === "sales" && !isAllUnitsSelected && isUnitPerformanceMonthSelected && selectedUnitKpiCards.length > 0 && (
                   <div className="manager-agent-kpi-section">
                     <h3>Unit KPI Progress</h3>
                     {selectedUnitKpiCards.length ? (
@@ -6048,8 +6137,8 @@ function ManagerPortal({ roleType }) {
             </section>
           )}
 
-          {!isLoading && !loadError && activeView === "dashboard" && normalizedRole !== "BM" && (
-            <section className="manager-panel">
+          {!isLoading && !loadError && activeView === "kpi_progress" && normalizedRole !== "BM" && hasAssignedUnitKpi && (
+            <section className="manager-panel manager-panel--unit-kpi-progress">
               <div className="manager-panel__head">
                 <div>
                   <h2>Unit KPI Progress</h2>
@@ -6076,12 +6165,17 @@ function ManagerPortal({ roleType }) {
                   </button>
                 </div>
               ) : null}
-              <div className="manager-kpi-progress-grid">
+              <div className="manager-kpi-progress-grid manager-kpi-progress-grid--branch manager-kpi-progress-grid--unit-focus">
                 {dashboardUnitKpiCards.map(({ kpi, actual, comparison, dateRangeLabel }) => (
-                  <article className={`manager-kpi-progress-card ${comparison.className}`} key={`dashboard-unit:${kpi.key}`}>
-                    <span>{selectedUnit?.name || scope.unitName || "Unit"}</span>
-                    <strong>{formatKpiLabel(kpi, "UNIT")}</strong>
-                    <p>{kpi.period} • {dateRangeLabel}</p>
+                  <article className={`manager-kpi-progress-card manager-kpi-progress-card--branch manager-kpi-progress-card--unit-focus ${comparison.className}`} key={`dashboard-unit:${kpi.key}`}>
+                    <div className="manager-kpi-progress-card__head">
+                      <div>
+                        <span>{selectedUnit?.name || scope.unitName || "Unit"}</span>
+                        <strong>{formatKpiLabel(kpi, "UNIT")}</strong>
+                        <p>{kpi.period} • {dateRangeLabel}</p>
+                      </div>
+                      <em className="manager-kpi-status-pill">{comparison.status}</em>
+                    </div>
                     <div className="manager-kpi-progress-values">
                       <div><small>Actual Progress</small><b>{formatActualKpiValue(actual, kpi.valueType)}</b></div>
                       <div><small>Assigned Target</small><b>{formatKpiTarget(kpi)}</b></div>
@@ -6089,7 +6183,6 @@ function ManagerPortal({ roleType }) {
                     <div className="manager-kpi-progress-bar" aria-label={`${formatKpiLabel(kpi, "UNIT")} progress ${comparison.percent}%`}>
                       <span style={{ width: `${Math.max(0, Math.min(comparison.percent, 140))}%` }} />
                     </div>
-                    <em>{comparison.status}</em>
                     <small className="manager-kpi-gap-note">{comparison.deltaLabel}</small>
                   </article>
                 ))}
