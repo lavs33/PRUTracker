@@ -469,7 +469,7 @@ function AgentNotifications() {
       </div>
 
       <div className="notif-right">
-        {!KPI_NOTIF_TYPES.includes(String(n?.type || "").toUpperCase()) ? (
+        {n.status === "Read" && !KPI_NOTIF_TYPES.includes(String(n?.type || "").toUpperCase()) ? (
           <button
             type="button"
             className="notif-btn ghost"
@@ -480,7 +480,7 @@ function AgentNotifications() {
             Open
           </button>
         ) : null}
-        {tab === "unread" ? (
+        {n.status === "Unread" ? (
           <button
             type="button"
             className="notif-btn secondary"
