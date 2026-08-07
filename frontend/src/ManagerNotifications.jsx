@@ -16,6 +16,7 @@ const NOTIFICATIONS_PER_PAGE = 15;
 const notificationPriority = (type, role) => {
   const normalizedType = String(type || "").trim().toUpperCase();
   if (normalizedType === "ORPHANS_ENDORSEMENTS") return "urgent";
+  if (normalizedType === "BM_RECOMMENDATION") return "urgent";
   if (role === "bm" && KPI_UNASSIGNED_NOTIF_TYPES.includes(normalizedType)) return "urgent";
   return "normal";
 };
