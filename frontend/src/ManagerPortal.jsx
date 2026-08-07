@@ -1083,9 +1083,9 @@ function ManagerPortal({ roleType }) {
       orphan_clients: "Orphan Client Management",
     };
     const unitPageLabels = {
-      dashboard: "Unit Overview",
+      dashboard: `${normalizedRole} Portal Home`,
       agents: "Unit Details",
-      kpi_progress: "Branch KPI Progress Dashboard",
+      kpi_progress: "Unit KPI Progress",
       orphan_endorsements: "Orphan Clients Endorsements",
     };
     const pageLabels = normalizedRole === "BM" ? branchPageLabels : unitPageLabels;
@@ -1155,7 +1155,7 @@ function ManagerPortal({ roleType }) {
   ]);
 
   useEffect(() => {
-    if (normalizedRole !== "BM" || activeView !== "dashboard" || !user?.id) return;
+    if (!["BM", "UM"].includes(normalizedRole) || activeView !== "dashboard" || !user?.id) return;
     const controller = new AbortController();
 
     const fetchUrgentNotifications = async () => {
@@ -1173,7 +1173,9 @@ function ManagerPortal({ roleType }) {
         notifications
           .filter((notification) => (
             notification?.resolutionStatus === "Unresolved"
-            && BM_URGENT_KPI_NOTIFICATION_TYPES.has(String(notification?.type || "").toUpperCase())
+            && (normalizedRole === "BM"
+              ? BM_URGENT_KPI_NOTIFICATION_TYPES.has(String(notification?.type || "").toUpperCase())
+              : ["ORPHANS_ENDORSEMENTS", "BM_RECOMMENDATION"].includes(String(notification?.type || "").toUpperCase()))
           ))
           .sort((left, right) => new Date(right?.createdAt || 0) - new Date(left?.createdAt || 0))
           .forEach((notification) => {
@@ -1619,17 +1621,6 @@ function ManagerPortal({ roleType }) {
   };
   const taskSummary = portalData?.taskSummary || summary;
   const salesSummary = portalData?.salesSummary || summary;
-  const summaryFrequencyPremiumCards = [
-    { key: "monthlyPremium", label: "Monthly Premium Breakdown" },
-    { key: "quarterlyPremium", label: "Quarterly Premium Breakdown" },
-    { key: "halfYearlyPremium", label: "Half-Yearly Premium Breakdown" },
-    { key: "yearlyPremium", label: "Yearly Premium Breakdown" },
-  ]
-    .map((item) => ({
-      ...item,
-      value: Number(summary.frequencyPremiumBreakdown?.[item.key] || 0),
-    }));
-
   const unitOptions = useMemo(() => {
     const backendUnits = (portalData?.units || []).map((unit) => ({
       ...unit,
@@ -3318,7 +3309,6 @@ function ManagerPortal({ roleType }) {
         ]
       : [
           { label: "Agents in Scope", value: summary.totalAgents },
-          { label: "Open Tasks", value: summary.totalOpenTasks },
           { label: "Total Prospects", value: summary.totalProspects },
           { label: "Total Active Policies", value: summary.activePolicies },
           {
@@ -4155,11 +4145,11 @@ function ManagerPortal({ roleType }) {
           {activeView === "dashboard" && <section className="manager-hero">
             <div>
               <p className="manager-hero__eyebrow">{normalizedRole} Portal</p>
-              <h1>{normalizedRole === "BM" ? `Welcome back, ${managerFirstName}.` : (scope.unitName || "Unit")}</h1>
+              <h1>Welcome back, {managerFirstName}.</h1>
               <p>
                 {normalizedRole === "BM"
                   ? `Manage branch performance, assign KPI targets, monitor units and agents, review sales and client activity, and resolve priorities across ${scope.branchName || "your branch"}${scope.areaName ? ` • ${scope.areaName}` : ""}.`
-                  : `Monitor ${scopeLabel} with live backend metrics, unit-wide agent coverage, auto-updating date-filtered tables, printable reports, and in-page unit KPI progress.`}
+                  : `Use the ${normalizedRole} portal to monitor ${scopeLabel}, review agent activity and production, track unit performance, handle manager notifications, and coordinate follow-ups across your unit.`}
               </p>
               <div className="manager-hero__meta-row">
                 {generatedAtLabel && (
@@ -4198,70 +4188,12 @@ function ManagerPortal({ roleType }) {
             </section>
           )}
 
-          {!isLoading && !loadError && activeView === "dashboard" && normalizedRole !== "BM" && (
-            <section className="manager-panel">
-              <div className="manager-panel__head">
-                <h2>
-                  Unit Overview
-                </h2>
-                <p>
-                  High-level pulse of workload, conversion output, and premium
-                  momentum across the current manager scope.
-                </p>
-              </div>
-              <div className="manager-kpi-grid">
-                <div>
-                  <span>Completed Tasks</span>
-                  <strong>{summary.totalClosedTasks}</strong>
-                </div>
-                <div>
-                  <span>Open Tasks</span>
-                  <strong>{summary.totalOpenTasks}</strong>
-                </div>
-                <div>
-                  <span>Overdue Tasks</span>
-                  <strong>{summary.totalOverdueTasks}</strong>
-                </div>
-                <div>
-                  <span>Leads Managed</span>
-                  <strong>{summary.totalLeads}</strong>
-                </div>
-                <div>
-                  <span>Active Leads</span>
-                  <strong>{summary.totalActiveLeads}</strong>
-                </div>
-                <div>
-                  <span>Converted Leads</span>
-                  <strong>{summary.totalConverted}</strong>
-                </div>
-                <div>
-                  <span>Total Active Policies</span>
-                  <strong>{summary.activePolicies}</strong>
-                </div>
-                <div>
-                  <span>Active Policy Rate</span>
-                  <strong>{summary.activePolicyRate}%</strong>
-                </div>
-                <div>
-                  <span>Annual Premium</span>
-                  <strong>{formatMoney(summary.totalAnnualPremium)}</strong>
-                </div>
-                {summaryFrequencyPremiumCards.map((card) => (
-                  <div key={card.key}>
-                    <span>{card.label}</span>
-                    <strong>{formatMoney(card.value)}</strong>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
-
-          {!isLoading && !loadError && activeView === "dashboard" && normalizedRole === "BM" && (
-            <section className="manager-urgent-actions" aria-labelledby="bm-urgent-actions-title">
+          {!isLoading && !loadError && activeView === "dashboard" && ["BM", "UM"].includes(normalizedRole) && (
+            <section className="manager-urgent-actions" aria-labelledby="manager-urgent-actions-title">
               <div className="manager-urgent-actions__head">
                 <div>
                   <span>Action required</span>
-                  <h2 id="bm-urgent-actions-title">Urgent unresolved concerns</h2>
+                  <h2 id="manager-urgent-actions-title">Urgent unresolved concerns</h2>
                 </div>
                 <b aria-label={`${urgentNotifications.length} urgent unresolved concerns`}>
                   {urgentNotifications.length}
@@ -4282,15 +4214,15 @@ function ManagerPortal({ roleType }) {
                       <div className="manager-urgent-card__body">
                         <div className="manager-urgent-card__meta">
                           <span>Needs action</span>
-                          <i><FiTarget aria-hidden="true" /> {String(notification?.metadata?.scopeType || "KPI")} KPI</i>
+                          <i><FiTarget aria-hidden="true" /> {normalizedRole === "BM" ? `${String(notification?.metadata?.scopeType || "KPI")} KPI` : String(notification?.type || "Concern").replaceAll("_", " ")}</i>
                           <time><FiClock aria-hidden="true" /> {formatDateTime(notification.createdAt)}</time>
                         </div>
                         <h3>{notification.title || "KPI assignment requires attention"}</h3>
                         {String(notification.message || "").trim() && <p>{notification.message}</p>}
-                        <div className="manager-urgent-card__guidance"><FiCheckCircle aria-hidden="true" /> Review the highlighted KPI, set its target, then save the assignment.</div>
+                        <div className="manager-urgent-card__guidance"><FiCheckCircle aria-hidden="true" /> {normalizedRole === "BM" ? "Review the highlighted KPI, set its target, then save the assignment." : "Open notifications to review the concern details and complete the required follow-up."}</div>
                       </div>
-                      <button type="button" onClick={() => openUrgentKpiNotification(notification)}>
-                        Open KPI assignment <FaArrowRight aria-hidden="true" />
+                      <button type="button" onClick={() => normalizedRole === "BM" ? openUrgentKpiNotification(notification) : navigate(`/${normalizedRole.toLowerCase()}/${user?.username || username}/notifications`)}>
+                        {normalizedRole === "BM" ? "Open KPI assignment" : "Open notifications"} <FaArrowRight aria-hidden="true" />
                       </button>
                     </article>
                   ))}
@@ -6048,7 +5980,7 @@ function ManagerPortal({ roleType }) {
             </section>
           )}
 
-          {!isLoading && !loadError && activeView === "dashboard" && normalizedRole !== "BM" && (
+          {!isLoading && !loadError && activeView === "kpi_progress" && normalizedRole !== "BM" && (
             <section className="manager-panel">
               <div className="manager-panel__head">
                 <div>
