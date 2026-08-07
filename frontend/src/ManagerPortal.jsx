@@ -585,7 +585,8 @@ function createPrintableReport({
   const tablePages = [];
   reportTableSections.forEach((section) => {
     const pageSize = getReportPageSize(section);
-    const rowChunks = chunkRows(section.rows || [], pageSize, section.firstPageRows || pageSize);
+    const firstPageRows = section.allowFirstPage === false ? pageSize : (section.firstPageRows || pageSize);
+    const rowChunks = chunkRows(section.rows || [], pageSize, firstPageRows);
     rowChunks.forEach((rows, chunkIndex) => {
       tablePages.push({
         title: chunkIndex === 0 ? section.title : `${section.title} (cont.)`,
@@ -2063,6 +2064,7 @@ function ManagerPortal({ roleType }) {
   }, [selectedUnitRows]);
 
   const selectedKpiPeriod = getKpiPeriodForDatePreset(unitPerformanceDatePreset);
+  const isUnitPerformanceMonthSelected = /^\d{4}-(0[1-9]|1[0-2])$/.test(String(unitPerformanceDatePreset || ""));
   const unitKpiPeriod = "Monthly";
   const unitKpiRangeKey = unitKpiDatePreset;
   const branchKpiRangeKey = branchKpiDatePreset;
@@ -2073,22 +2075,23 @@ function ManagerPortal({ roleType }) {
   const unitKpiReportPeriodLabel = useMemo(() => getManagerReportPeriodLabel(unitKpiDatePreset), [unitKpiDatePreset]);
 
   const selectedUnitKpiCards = useMemo(() => {
-    if (isAllUnitsSelected || !selectedKpiPeriod) return [];
+    if (isAllUnitsSelected || !isUnitPerformanceMonthSelected) return [];
     const unitAssignment = (kpiData?.assignments || []).find((assignment) => assignment.scopeType === "UNIT");
     if (!unitAssignment) return [];
-    const rowsForSelectedPeriod = (portalData?.kpiSalesRowsByFrequency?.[selectedKpiPeriod] || [])
+    const rowsForSelectedPeriod = (portalData?.kpiSalesRowsByFrequency?.[unitPerformanceDatePreset] || [])
       .filter((row) => String(row?.unit || "") === String(selectedUnit?.name || ""));
     const periodSummary = summarizeKpiRows(rowsForSelectedPeriod);
 
     return (unitAssignment.kpis || []).filter((kpi) => kpi.assigned !== false && kpi.key === "monthly_sales_production").map((kpi) => {
-      const kpiForPeriod = selectKpiTargetForPeriod(kpi, selectedKpiPeriod);
+      const kpiForPeriod = selectKpiTargetForManagerRange(kpi, unitPerformanceDatePreset);
       const actualByKey = {
         monthly_sales_production: Number(periodSummary.totalAnnualPremium || 0),
       };
+      if (kpiForPeriod.assigned !== true) return null;
       const actual = actualByKey[kpi.key] || 0;
-      return { kpi: kpiForPeriod, actual, comparison: getKpiComparison(actual, kpiForPeriod), dateRangeLabel: getKpiFrequencyRangeLabel(selectedKpiPeriod) };
-    });
-  }, [isAllUnitsSelected, kpiData?.assignments, portalData?.kpiSalesRowsByFrequency, selectedKpiPeriod, selectedUnit?.name]);
+      return { kpi: kpiForPeriod, actual, comparison: getKpiComparison(actual, kpiForPeriod), dateRangeLabel: getPresetLabel(unitPerformanceDatePreset) };
+    }).filter(Boolean);
+  }, [isAllUnitsSelected, isUnitPerformanceMonthSelected, kpiData?.assignments, portalData?.kpiSalesRowsByFrequency, selectedUnit?.name, unitPerformanceDatePreset]);
 
   const dashboardUnitKpiCards = useMemo(() => {
     if (isAllUnitsSelected || !unitKpiPeriod) return [];
@@ -2903,7 +2906,7 @@ function ManagerPortal({ roleType }) {
             weekly_appointments: Number(agentRow.completedAppointments || selectedAgent.completedAppointments || 0),
             weekly_presentations: Number(agentRow.completedPresentations || selectedAgent.completedPresentations || 0),
             monthly_policies: activePolicies,
-            monthly_new_prospects: Number(agentRow.totalProspects || selectedAgent.totalProspects || 0),
+            monthly_new_prospects: Number(agentRow.newProspects ?? agentRow.totalProspects ?? selectedAgent.newProspects ?? selectedAgent.totalProspects ?? 0),
             monthly_closing_ratio: submittedApplications ? Math.round((activePolicies / submittedApplications) * 100) : 0,
           };
           const actual = actualByKey[kpi.key] || 0;
@@ -3839,7 +3842,7 @@ function ManagerPortal({ roleType }) {
               title: "Agent KPI Progress",
               rows: selectedAgentKpiCards.map(({ kpi, actual }) => ({
                 label: formatKpiLabel(kpi, "AGENT"),
-                value: `Actual ${formatActualKpiValue(actual, kpi.valueType)} • Target ${formatKpiTarget(kpi)}`,
+                value: `Actual Progress: ${formatActualKpiValue(actual, kpi.valueType)} • Assigned Target: ${formatKpiTarget(kpi)} • Status: ${getKpiComparison(actual, kpi).status}`,
               })),
             },
           ]
@@ -4073,14 +4076,14 @@ function ManagerPortal({ roleType }) {
               { label: "Half-Yearly Premium Breakdown", value: formatMoney(selectedUnitSummary.halfYearlyPremium), tone: "gold" },
               { label: "Yearly Premium Breakdown", value: formatMoney(selectedUnitSummary.yearlyPremium), tone: "red" },
             ],
-      analyticsSections: unitPerformanceTab === "sales" && selectedKpiPeriod
+      analyticsSections: unitPerformanceTab === "sales" && isUnitPerformanceMonthSelected
         ? (isAllUnitsSelected && branchSalesKpiProgressRows.length
             ? [
                 {
                   title: "Branch KPI Progress",
                   rows: branchSalesKpiProgressRows.map(({ kpi, actual }) => ({
                     label: formatKpiLabel(kpi, "BRANCH"),
-                    value: `Actual ${formatActualKpiValue(actual, kpi.valueType)} • Target ${formatKpiTarget(kpi)}`,
+                    value: `Actual Progress: ${formatActualKpiValue(actual, kpi.valueType)} • Assigned Target: ${formatKpiTarget(kpi)} • Status: ${getKpiComparison(actual, kpi).status}`,
                   })),
                 },
                 {
@@ -4097,7 +4100,7 @@ function ManagerPortal({ roleType }) {
                       title: "Unit KPI Progress",
                       rows: selectedUnitKpiCards.map(({ kpi, actual }) => ({
                         label: formatKpiLabel(kpi, "UNIT"),
-                        value: `Actual ${formatActualKpiValue(actual, kpi.valueType)} • Target ${formatKpiTarget(kpi)}`,
+                        value: `Actual Progress: ${formatActualKpiValue(actual, kpi.valueType)} • Assigned Target: ${formatKpiTarget(kpi)} • Status: ${getKpiComparison(actual, kpi).status}`,
                       })),
                     },
                     {
@@ -4119,7 +4122,7 @@ function ManagerPortal({ roleType }) {
           widePageSizeCap: unitPerformanceTab === "sales" ? 15 : 20,
           firstPageRows: unitPerformanceTab === "sales" ? 5 : 10,
           firstPageLimit: unitPerformanceTab === "sales" ? 5 : 10,
-          allowFirstPage: true,
+          allowFirstPage: !(normalizedRole === "BM" && unitPerformanceTab === "sales" && !isAllUnitsSelected && isUnitPerformanceMonthSelected),
           emptyMessage: "No agents available for this unit report.",
         },
       ],
@@ -4420,9 +4423,10 @@ function ManagerPortal({ roleType }) {
                           <strong>{formatKpiLabel(kpi, assignment.scopeType)}</strong>
                           <small>{dateRangeLabel} • {kpi.period}</small>
                           <div className="manager-kpi-progress-values">
-                            <b>{formatActualKpiValue(actual, kpi.valueType)}</b>
-                            <em>{comparison.status}</em>
+                            <div><small>Actual Progress</small><b>{formatActualKpiValue(actual, kpi.valueType)}</b></div>
+                            <div><small>Assigned Target</small><b>{formatKpiTarget(kpi)}</b></div>
                           </div>
+                          <em>{comparison.status}</em>
                           <div className="manager-kpi-progress-bar" aria-label={`${formatKpiLabel(kpi, assignment.scopeType)} progress ${comparison.percent}%`}>
                             <span style={{ width: `${comparison.percent}%` }} />
                           </div>
@@ -4566,7 +4570,7 @@ function ManagerPortal({ roleType }) {
                   )}
                 </div>
 
-                {unitPerformanceTab === "sales" && !isAllUnitsSelected && selectedKpiPeriod && (
+                {normalizedRole === "BM" && unitPerformanceTab === "sales" && !isAllUnitsSelected && isUnitPerformanceMonthSelected && (
                   <div className="manager-agent-kpi-section">
                     <h3>Unit KPI Progress</h3>
                     {selectedUnitKpiCards.length ? (
