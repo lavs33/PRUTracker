@@ -2163,6 +2163,13 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       metricsByUserId: clientMetricsByUserId,
     });
     const clientRowsByUserId = new Map(buildRows(clientMetricsByUserId).map((row) => [String(row.userId), row]));
+    const newProspectsByUserId = new Map();
+    prospects
+      .filter((prospect) => isWithinPreset(prospect?.createdAt, presetContext))
+      .forEach((prospect) => {
+        const assignedUserId = effectiveProspectOwnerId(prospect);
+        newProspectsByUserId.set(assignedUserId, Number(newProspectsByUserId.get(assignedUserId) || 0) + 1);
+      });
     return buildRows(metricsByUserId).map((row) => {
       const clients = clientRowsByUserId.get(String(row.userId)) || {};
       const totalHandledLeads = Number(row.leads || 0);
@@ -2172,6 +2179,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
         leads: totalHandledLeads,
         totalLeads: totalHandledLeads,
         conversionRate: totalHandledLeads ? Math.round((converted / totalHandledLeads) * 100) : 0,
+        newProspects: Number(newProspectsByUserId.get(String(row.userId)) || 0),
         clientTotalProspects: Number(clients.totalProspects || 0),
         clientActiveProspects: Number(clients.activeProspects || 0),
         clientTotalLeads: Number(clients.leads || 0),
@@ -2353,6 +2361,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       lastCompletedAt: row.lastCompletedAt,
       topTaskType: row.topTaskType,
       totalProspects: row.totalProspects,
+      newProspects: row.newProspects,
       activeProspects: row.activeProspects,
       leads: row.leads,
       activeLeads: row.activeLeads,
