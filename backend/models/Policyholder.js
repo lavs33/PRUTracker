@@ -173,6 +173,18 @@ const policyholderSchema = new mongoose.Schema(
       index: true,
     },
 
+    /** Immutable lifecycle snapshots used for historical month-end reporting. */
+    statusHistory: [
+      {
+        status: {
+          type: String,
+          enum: ["Active", "At Risk", "Lapsed", "Paid-Up", "Matured", "Cancelled"],
+          required: true,
+        },
+        effectiveAt: { type: Date, required: true, index: true },
+      },
+    ],
+
 
     /** Policy cancellation details captured when an existing policy is cancelled. */
     cancellationDetails: {
@@ -247,5 +259,13 @@ const policyholderSchema = new mongoose.Schema(
      */
   { timestamps: true }
 );
+
+policyholderSchema.pre("save", function recordStatusHistory() {
+  if (!this.isNew && !this.isModified("status")) return;
+  const latest = this.statusHistory?.[this.statusHistory.length - 1];
+  if (!latest || String(latest.status) !== String(this.status)) {
+    this.statusHistory.push({ status: this.status, effectiveAt: new Date() });
+  }
+});
 
 module.exports = mongoose.model("Policyholder", policyholderSchema);

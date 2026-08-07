@@ -2015,6 +2015,91 @@ app.patch("/api/agent/profile/password", async (req, res) => {
   }
 });
 
+app.post("/api/manager/kpi-recommendations/notify", async (req, res) => {
+  try {
+    const {
+      userId, unitId, recommendationKey, recommendationTitle, recommendation,
+      kpiKey, kpiLabel, periodLabel, progressLabel, targetLabel, targetQualifier, requiredTargetLabel,
+      unitContributionLabel, branchTargetLabel, branchContributionLabel,
+    } = req.body || {};
+    if (![userId, unitId, recommendationKey, recommendationTitle, recommendation].every(Boolean)) {
+      return res.status(400).json({ message: "Missing recommendation notification details." });
+    }
+    if (![userId, unitId].every((value) => mongoose.isValidObjectId(value))) {
+      return res.status(400).json({ message: "Invalid manager or unit identifier." });
+    }
+    const [bmUser, bmProfile, unit] = await Promise.all([
+      User.findOne({ _id: userId, role: "BM" }).select("username firstName middleName lastName").lean(),
+      BM.findOne({ userId }).select("branchId").lean(),
+      Unit.findById(unitId).select("unitName branchId").lean(),
+    ]);
+    if (!bmUser || !bmProfile) return res.status(403).json({ message: "Only Branch Managers can send these recommendations." });
+    if (!unit || String(unit.branchId || "") !== String(bmProfile.branchId || "")) {
+      return res.status(403).json({ message: "The selected unit is outside this branch." });
+    }
+    const unitManager = await UM.findOne({ unitId, isBlocked: { $ne: true } })
+      .populate({ path: "userId", select: "username firstName middleName lastName" })
+      .lean();
+    if (!unitManager?.userId?._id) return res.status(404).json({ message: "No active Unit Manager is assigned to this unit." });
+    const bmName = [bmUser.firstName, bmUser.middleName, bmUser.lastName].filter(Boolean).join(" ").trim() || bmUser.username;
+    const umName = [unitManager.userId.firstName, unitManager.userId.middleName, unitManager.userId.lastName].filter(Boolean).join(" ").trim() || unitManager.userId.username;
+    const isSalesProduction = String(kpiKey) === "monthly_sales_production";
+    const progressScope = isSalesProduction ? "Unit Sales Production KPI" : `Branch ${String(kpiLabel || "KPI")}`;
+    const contextReminder = isSalesProduction
+      ? `Your unit is currently at ${progressLabel || "—"} against its required${targetQualifier === "minimum" ? " MINIMUM" : ""} Unit Sales Production target of ${requiredTargetLabel || targetLabel || "—"}. Its production currently contributes ${branchContributionLabel || "—"} toward the Branch Sales Production target.`
+      : `Branch progress is currently ${progressLabel || "—"} against the${targetQualifier === "minimum" ? " MINIMUM" : ""} target of ${requiredTargetLabel || targetLabel || "—"}. Your unit's current contribution is ${unitContributionLabel || "—"}; completing the recommended action can help close the remaining branch KPI gap.`;
+    const supersededAt = new Date();
+    await Notification.updateMany(
+      {
+        assignedToUserId: unitManager.userId._id,
+        type: "BM_RECOMMENDATION",
+        resolutionStatus: { $ne: "Resolved" },
+        "metadata.sentByUserId": String(bmUser._id),
+        "metadata.unitId": String(unit._id),
+        "metadata.kpiKey": String(kpiKey || ""),
+        $or: [
+          { "metadata.monthKey": String(recommendationKey).split(":")[0] },
+          { "metadata.recommendationKey": String(recommendationKey) },
+        ],
+        softDeletedAt: null,
+      },
+      { $set: { resolutionStatus: "Resolved", resolvedAt: supersededAt, "metadata.resolutionReason": "Superseded by a newer BM recommendation." } },
+    );
+    const notification = await Notification.create({
+      assignedToUserId: unitManager.userId._id,
+      type: "BM_RECOMMENDATION",
+      title: `Branch Manager ${bmUser.username} - ${bmName} has instructed you to ${String(recommendationTitle).toLowerCase()}.`,
+      message: `${contextReminder}\n\nRecommended action: ${String(recommendation)}`,
+      status: "Unread",
+      resolutionStatus: "Unresolved",
+      entityType: "Unit",
+      entityId: unit._id,
+      metadata: {
+        sentByUserId: String(bmUser._id), recommendationKey, recommendationTitle,
+        recommendation: String(recommendation), unitId: String(unit._id), unitName: unit.unitName,
+        unitManagerCode: unitManager.userId.username, unitManagerName: umName,
+        kpiKey: String(kpiKey || ""), kpiLabel: String(kpiLabel || "Branch KPI"),
+        periodLabel: String(periodLabel || "Current month"), progressScope,
+        progressLabel: String(progressLabel || "—"), targetLabel: String(targetLabel || "—"),
+        targetQualifier: targetQualifier === "minimum" ? "minimum" : "",
+        unitContributionLabel: String(unitContributionLabel || "—"),
+        branchTargetLabel: String(branchTargetLabel || "—"),
+        branchContributionLabel: String(branchContributionLabel || unitContributionLabel || "—"),
+        monthKey: String(recommendationKey).split(":")[0],
+        contributionReminder: contextReminder,
+      },
+    });
+    return res.status(201).json({
+      message: `UM - ${umName} of ${unit.unitName || "the unit"} has been notified to ${recommendationTitle.toLowerCase()}.`,
+      notifiedAt: notification.createdAt,
+      unitManager: { code: unitManager.userId.username, name: umName },
+    });
+  } catch (err) {
+    console.error("BM recommendation notification error:", err);
+    return res.status(500).json({ message: "Failed to notify the Unit Manager." });
+  }
+});
+
 app.post("/api/manager/profile/password/verify", async (req, res) => {
   try {
     const userId = String(req.body?.userId || "").trim();
@@ -7999,7 +8084,7 @@ app.get("/api/policyholders/:policyholderId/annual-payments/:annualPaymentId/pay
             { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
           ],
         },
-        { $set: { status: "Active", nextPaymentDate: null } }
+        { $set: { status: "Active", nextPaymentDate: null }, $push: { statusHistory: { status: "Active", effectiveAt: new Date() } } }
       );
       policyholder.status = "Active";
       policyholder.nextPaymentDate = null;
@@ -8498,7 +8583,7 @@ app.post("/api/policyholders/:policyholderId/annual-payments/:annualPaymentId/pa
             { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
           ],
         },
-        { $set: { status: "Active", nextPaymentDate: null } }
+        { $set: { status: "Active", nextPaymentDate: null }, $push: { statusHistory: { status: "Active", effectiveAt: new Date() } } }
       );
       policyholder.status = "Active";
       policyholder.nextPaymentDate = null;

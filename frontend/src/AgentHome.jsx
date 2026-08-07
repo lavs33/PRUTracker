@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { FaBullseye, FaChartLine, FaTasks, FaUsers } from "react-icons/fa";
-import { FiAlertCircle, FiArrowRight, FiCheckCircle } from "react-icons/fi";
+import { FiAlertCircle, FiArrowRight, FiCheckCircle, FiClock } from "react-icons/fi";
 import "./AgentHome.css";
 import TopNav from "./components/TopNav";
 import { logout } from "./utils/logout";
 import { getTaskKpiImpact } from "./utils/taskKpiImpact";
 
 const API_BASE = "http://localhost:5000";
+const formatConcernDate = (value) => value
+  ? new Date(value).toLocaleString("en-PH", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+  : "Recently added";
 
 const DEFAULT_HOME_DATA = {
   clients: {
@@ -311,7 +314,12 @@ function AgentHome() {
       ? getTaskKpiImpact(notification?.taskType, assignedKpis)
       : null;
     return <article key={notification._id} className={`home-actionItem ${notification.priority}`}>
-      <div>
+      <div className="home-actionIcon" aria-hidden="true"><FiAlertCircle /></div>
+      <div className="home-actionBody">
+        <div className="home-actionMeta">
+          <span>{notification.priority === "urgent" ? "Needs action" : "High priority"}</span>
+          <time><FiClock aria-hidden="true" /> {formatConcernDate(notification.createdAt)}</time>
+        </div>
         <strong>{concern.heading}</strong>
         <p>{concern.guidance}</p>
         <p className="home-actionContext">{concern.context}</p>
@@ -325,7 +333,7 @@ function AgentHome() {
           <div className="home-kpiImpactBar"><i style={{ width: `${kpiImpact.projectedPct}%` }} /></div>
         </div> : null}
       </div>
-      <button type="button" onClick={() => openActionItem(notification)}>Open</button>
+      <button type="button" onClick={() => openActionItem(notification)}>Open concern <FiArrowRight aria-hidden="true" /></button>
     </article>;
   };
 

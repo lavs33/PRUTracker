@@ -1170,7 +1170,7 @@ function computeContactNewLeadDueAt(baseDate = new Date()) {
   return due;
 }
 
-async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDatePreset = "ALL", unitPerformanceDatePreset = "ALL", reassignmentMonth = "" } = {}) {
+async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDatePreset = "ALL", unitPerformanceDatePreset = monthKeyForDate(), reassignmentMonth = "" } = {}) {
   await reactivateEndedLongLeaveAgents();
   const context = await getManagerScopeContext(user);
   if (context.error) return context;
@@ -1178,6 +1178,29 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
   const buildPresetContext = (presetRaw = "ALL") => {
     const preset = String(presetRaw || "ALL").trim().toUpperCase();
     const now = new Date();
+    const toManilaMonthRange = (monthValue) => {
+      const [year, month] = monthValue.split("-").map(Number);
+      return {
+        startDate: new Date(Date.UTC(year, month - 1, 1) - (8 * 60 * 60 * 1000)),
+        endDate: new Date(Date.UTC(year, month, 1) - (8 * 60 * 60 * 1000) - 1),
+      };
+    };
+    if (/^\d{4}-(0[1-9]|1[0-2])$/.test(preset)) {
+      const range = toManilaMonthRange(preset);
+      return { key: preset, ...range, periodLabel: formatKpiMonthLabel(preset) };
+    }
+    if (preset === "YTD") {
+      const currentMonth = monthKeyForDate(now);
+      const year = currentMonth.slice(0, 4);
+      const { startDate } = toManilaMonthRange(`${year}-01`);
+      const { endDate } = toManilaMonthRange(currentMonth);
+      return {
+        key: "YTD",
+        startDate,
+        endDate,
+        periodLabel: `January ${year} - ${formatKpiMonthLabel(currentMonth)}`,
+      };
+    }
     if (preset === "TODAY") {
       const startDate = new Date(now);
       startDate.setHours(0, 0, 0, 0);
@@ -1281,6 +1304,8 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
             atRiskPolicies: 0,
             lapsedPolicies: 0,
             cancelledPolicies: 0,
+            persistencyTotalPolicies: 0,
+            persistedPolicies: 0,
             annualPremium: 0,
             frequencyPremium: 0,
             monthlyPremium: 0,
@@ -1349,6 +1374,8 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
         atRiskPolicies: metrics.atRiskPolicies,
         lapsedPolicies: metrics.lapsedPolicies,
         cancelledPolicies: metrics.cancelledPolicies,
+        persistencyTotalPolicies: metrics.persistencyTotalPolicies,
+        persistedPolicies: metrics.persistedPolicies,
         annualPremium: metrics.annualPremium,
         frequencyPremium: metrics.frequencyPremium,
         monthlyPremium: metrics.monthlyPremium,
@@ -1575,7 +1602,8 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
   }
 
   const nowMs = Date.now();
-  const applyTaskMetrics = (taskList, metricsByUserId) => {
+  const applyTaskMetrics = (taskList, metricsByUserId, asOfDate = new Date()) => {
+    const asOfMs = new Date(asOfDate).getTime();
     for (const task of taskList) {
       const assignedUserId = String(task?.assignedToUserId || "");
       const metrics = metricsByUserId.get(assignedUserId);
@@ -1603,7 +1631,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
 
       if (taskType === "APPROACH") metrics.openApproachTasksDueThisMonth += 1;
 
-      const isOverdue = Number.isFinite(dueAtMs) && dueAtMs < nowMs;
+      const isOverdue = Number.isFinite(dueAtMs) && dueAtMs < (Number.isFinite(asOfMs) ? asOfMs : nowMs);
       if (isOverdue) metrics.overdueTasks += 1;
       else metrics.openTasks += 1;
       if (Number.isFinite(dueAtMs) && (!metrics.nextDueAt || dueAtMs < new Date(metrics.nextDueAt).getTime())) {
@@ -1625,13 +1653,15 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
 
   const effectiveProspectOwnerId = (prospect) => String(prospect?.reassignedToUserId || prospect?.assignedToUserId || "");
 
-  const applyProspectMetrics = (prospectList, metricsByUserId) => {
+  const applyProspectMetrics = (prospectList, metricsByUserId, convertedProspectIds = new Set()) => {
     for (const prospect of prospectList) {
       const assignedUserId = effectiveProspectOwnerId(prospect);
       const metrics = metricsByUserId.get(assignedUserId);
       if (!metrics) continue;
       metrics.totalProspects += 1;
-      if (String(prospect?.status || "").trim() === "Active") metrics.activeProspects += 1;
+      if (String(prospect?.status || "").trim() === "Active" || convertedProspectIds.has(String(prospect?._id || ""))) {
+        metrics.activeProspects += 1;
+      }
     }
   };
 
@@ -1644,7 +1674,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
 
   const leads = prospectIds.length
     ? await Lead.find({ prospectId: { $in: prospectIds } })
-        .select("_id leadCode prospectId source otherSource status createdAt")
+        .select("_id leadCode prospectId source otherSource status statusBeforeDrop droppedAt createdAt")
         .lean()
     : [];
   const leadIds = leads.map((lead) => lead._id);
@@ -1695,6 +1725,14 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
   const engagementIdToLeadId = new Map(
     engagements.map((engagement) => [String(engagement._id), String(engagement.leadId || "")])
   );
+  const engagementIdsByLeadId = engagements.reduce((map, engagement) => {
+    const leadId = String(engagement?.leadId || "");
+    if (!leadId) return map;
+    const ids = map.get(leadId) || [];
+    ids.push(String(engagement._id));
+    map.set(leadId, ids);
+    return map;
+  }, new Map());
 
   const [policyholders, policies, applications, needsAssessments, payments, annualPayments] = await Promise.all([
     scopedUserIds.length || engagementIds.length
@@ -1706,13 +1744,13 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
             ...(engagementIds.length ? [{ leadEngagementId: { $in: engagementIds } }] : []),
           ],
         })
-          .select("assignedToUserId reassignedToUserId leadEngagementId productId policyholderCode policyNumber status createdAt annualPaymentRecords")
+          .select("assignedToUserId reassignedToUserId leadEngagementId productId policyholderCode policyNumber status statusHistory cancellationDetails.cancelledAt cancellationDetails.approvedCancellationDate createdAt updatedAt annualPaymentRecords")
           .populate({ path: "productId", select: "productName" })
           .lean()
       : [],
     engagementIds.length
       ? Policy.find({ leadEngagementId: { $in: engagementIds } })
-          .select("leadEngagementId recordPolicyApplicationStatus.issuanceDate uploadPolicySummary.policyNumber")
+          .select("leadEngagementId recordPolicyApplicationStatus.issuanceDate recordPolicyApplicationStatus.declinedDate uploadPolicySummary.policyNumber")
           .lean()
       : [],
     engagementIds.length
@@ -1969,6 +2007,35 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
     }
   };
 
+  const policyholderStatusAsOf = (policyholder, asOfDate) => {
+    const asOfMs = new Date(asOfDate).getTime();
+    const history = [...(policyholder?.statusHistory || [])]
+      .filter((entry) => new Date(entry?.effectiveAt).getTime() <= asOfMs)
+      .sort((left, right) => new Date(right.effectiveAt).getTime() - new Date(left.effectiveAt).getTime());
+    if (history[0]?.status) return String(history[0].status);
+    const cancellationAt = policyholder?.cancellationDetails?.approvedCancellationDate
+      || policyholder?.cancellationDetails?.cancelledAt;
+    if (cancellationAt && new Date(cancellationAt).getTime() <= asOfMs) return "Cancelled";
+    const updatedAtMs = new Date(policyholder?.updatedAt).getTime();
+    if (Number.isFinite(updatedAtMs) && updatedAtMs <= asOfMs) return String(policyholder?.status || "Active");
+    return "Active";
+  };
+
+  const applyPersistencyMetrics = (presetContext, metricsByUserId) => {
+    const configuredEndMs = new Date(presetContext?.endDate || new Date()).getTime();
+    const asOfDate = new Date(Math.min(Number.isFinite(configuredEndMs) ? configuredEndMs : Date.now(), Date.now()));
+    for (const policyholder of policyholders) {
+      const issuanceDate = policyIssuanceDateForPolicyholder(policyholder);
+      if (new Date(issuanceDate).getTime() > asOfDate.getTime()) continue;
+      const statusAsOf = policyholderStatusAsOf(policyholder, asOfDate);
+      if (statusAsOf === "Cancelled") continue;
+      const metrics = metricsByUserId.get(String(policyholder?.assignedToUserId || ""));
+      if (!metrics) continue;
+      metrics.persistencyTotalPolicies += 1;
+      if (["Active", "Paid-Up"].includes(statusAsOf)) metrics.persistedPolicies += 1;
+    }
+  };
+
   applySalesMetrics({
     leadList: leads,
     metricsByUserId: allMetricsByUserId,
@@ -1977,13 +2044,38 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
   });
 
   const buildSalesMetricInput = (presetContext) => {
-    const filteredLeadIds = new Set(
-      leads
-        .filter((lead) => isWithinPreset(lead?.createdAt, presetContext))
-        .map((lead) => String(lead._id))
-    );
-    const filteredLeads = leads.filter((lead) => filteredLeadIds.has(String(lead._id)));
-    const filteredPolicyholders = policyholders.filter((policyholder) => isWithinPreset(policyIssuanceDateForPolicyholder(policyholder), presetContext));
+    const presetStartMs = new Date(presetContext?.startDate || 0).getTime();
+    const presetEndMs = new Date(presetContext?.endDate || new Date()).getTime();
+    const existedByPresetEnd = (value) => {
+      const timestamp = new Date(value).getTime();
+      return !Number.isFinite(timestamp) || timestamp <= presetEndMs;
+    };
+    const rangeAsOfDate = new Date(Math.min(Number.isFinite(presetEndMs) ? presetEndMs : Date.now(), Date.now()));
+    const convertedPolicyholders = policyholders.filter((policyholder) => (
+      isWithinPreset(policyIssuanceDateForPolicyholder(policyholder), presetContext)
+    )).map((policyholder) => ({ ...policyholder, status: policyholderStatusAsOf(policyholder, rangeAsOfDate) }));
+    const convertedLeadIdsInRange = new Set(convertedPolicyholders.map((policyholder) => (
+      engagementIdToLeadId.get(String(policyholder?.leadEngagementId || "")) || ""
+    )).filter(Boolean));
+    const leadTerminalTime = (lead) => {
+      const lifecycleTimes = [lead?.droppedAt];
+      const leadEngagementIds = engagementIdsByLeadId.get(String(lead?._id || "")) || [];
+      leadEngagementIds.forEach((engagementId) => {
+        const policy = policyByEngagementId.get(engagementId);
+        lifecycleTimes.push(
+          policy?.recordPolicyApplicationStatus?.issuanceDate,
+          policy?.recordPolicyApplicationStatus?.declinedDate
+        );
+      });
+      const timestamps = lifecycleTimes.map((value) => new Date(value || 0).getTime()).filter((value) => Number.isFinite(value) && value > 0);
+      return timestamps.length ? Math.min(...timestamps) : null;
+    };
+    const filteredLeads = leads.filter((lead) => {
+      if (!existedByPresetEnd(lead?.createdAt)) return false;
+      const terminalTime = leadTerminalTime(lead);
+      if (terminalTime !== null) return terminalTime >= presetStartMs;
+      return ["New", "In Progress"].includes(String(lead?.status || "").trim());
+    });
     const filteredApplications = applications.filter((application) => {
       const engagementId = String(application?.leadEngagementId || "");
       if (!engagementIdToAssignedUserId.get(engagementId)) return false;
@@ -1994,39 +2086,102 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
 
     return {
       leadList: filteredLeads,
-      policyholderList: filteredPolicyholders,
+      policyholderList: convertedPolicyholders,
       applicationList: filteredApplications,
+      convertedLeadIdsInRange,
     };
+  };
+
+  const buildTasksForPerformanceContext = (presetContext) => {
+    if (!presetContext?.startDate) return tasks;
+    const rangeStartMs = new Date(presetContext.startDate).getTime();
+    const rangeEndMs = new Date(presetContext.endDate || new Date()).getTime();
+    return tasks.flatMap((task) => {
+      const completedAtMs = new Date(task?.completedAt).getTime();
+      const completedInRange = Number.isFinite(completedAtMs)
+        && completedAtMs >= rangeStartMs
+        && completedAtMs <= rangeEndMs;
+      if (completedInRange) return [{ ...task, status: "Done" }];
+      if (String(task?.status || "").toLowerCase() !== "done") {
+        return [{ ...task, status: "Open", completedAt: null, wasDelayed: false }];
+      }
+      return [];
+    });
   };
 
   const buildRowsForSalesContext = (presetContext) => {
     const metricsByUserId = createMetricsMap(scopedAgents);
+    applyTaskMetrics(buildTasksForPerformanceContext(presetContext), metricsByUserId, presetContext?.endDate || new Date());
+    applyProspectMetrics(
+      prospects.filter((prospect) => isWithinPreset(prospect?.createdAt, presetContext)),
+      metricsByUserId,
+    );
     applySalesMetrics({
       ...buildSalesMetricInput(presetContext),
       metricsByUserId,
     });
+    applyPersistencyMetrics(presetContext, metricsByUserId);
     return buildRows(metricsByUserId);
   };
 
   const buildRowsForUnitPerformanceContext = (presetContext) => {
     const metricsByUserId = createMetricsMap(scopedAgents);
-    applyTaskMetrics(
-      tasks.filter((task) => isWithinPreset(
-        String(task?.status || "").toLowerCase() === "done" ? task?.completedAt : task?.dueAt,
-        presetContext,
-        task?.createdAt
-      )),
-      metricsByUserId
-    );
+    const rangeEnd = new Date(presetContext?.endDate || new Date());
+    applyTaskMetrics(buildTasksForPerformanceContext(presetContext), metricsByUserId, new Date());
+    const salesInput = buildSalesMetricInput(presetContext);
+    const convertedProspectIdsInRange = new Set([...salesInput.convertedLeadIdsInRange].map((leadId) => (
+      leadIdToProspectId.get(String(leadId)) || ""
+    )).filter(Boolean));
+    const includedProspectIds = new Set(prospects.filter((prospect) => (
+      isWithinPreset(prospect?.createdAt, presetContext)
+      || convertedProspectIdsInRange.has(String(prospect?._id || ""))
+    )).map((prospect) => String(prospect._id)));
     applyProspectMetrics(
-      prospects.filter((prospect) => isWithinPreset(prospect?.createdAt, presetContext)),
-      metricsByUserId
+      prospects.filter((prospect) => includedProspectIds.has(String(prospect._id))),
+      metricsByUserId,
+      convertedProspectIdsInRange
     );
     applySalesMetrics({
-      ...buildSalesMetricInput(presetContext),
+      ...salesInput,
       metricsByUserId,
     });
-    return buildRows(metricsByUserId);
+    const clientMetricsByUserId = createMetricsMap(scopedAgents);
+    const existedByRangeEnd = (value) => {
+      const timestamp = new Date(value).getTime();
+      return Number.isFinite(timestamp) && timestamp <= rangeEnd.getTime();
+    };
+    const cumulativeProspects = prospects.filter((prospect) => existedByRangeEnd(prospect?.createdAt));
+    const cumulativeLeads = leads.filter((lead) => existedByRangeEnd(lead?.createdAt));
+    const cumulativePolicyholders = policyholders.filter((policyholder) => (
+      existedByRangeEnd(policyIssuanceDateForPolicyholder(policyholder))
+    ));
+    applyProspectMetrics(cumulativeProspects, clientMetricsByUserId);
+    applySalesMetrics({
+      leadList: cumulativeLeads,
+      policyholderList: cumulativePolicyholders,
+      applicationList: [],
+      metricsByUserId: clientMetricsByUserId,
+    });
+    const clientRowsByUserId = new Map(buildRows(clientMetricsByUserId).map((row) => [String(row.userId), row]));
+    return buildRows(metricsByUserId).map((row) => {
+      const clients = clientRowsByUserId.get(String(row.userId)) || {};
+      const totalHandledLeads = Number(row.leads || 0);
+      const converted = Number(row.converted || 0);
+      return {
+        ...row,
+        leads: totalHandledLeads,
+        totalLeads: totalHandledLeads,
+        conversionRate: totalHandledLeads ? Math.round((converted / totalHandledLeads) * 100) : 0,
+        clientTotalProspects: Number(clients.totalProspects || 0),
+        clientActiveProspects: Number(clients.activeProspects || 0),
+        clientTotalLeads: Number(clients.leads || 0),
+        clientActiveLeads: Number(clients.activeLeads || 0),
+        clientTotalPolicies: Number(clients.totalPolicies || 0),
+        clientActivePolicies: Number(clients.activePolicies || 0),
+        clientAtRiskPolicies: Number(clients.atRiskPolicies || 0),
+        clientLapsedPolicies: Number(clients.lapsedPolicies || 0),
+      };
+    });
   };
 
   const buildRowsForReassignmentMonth = () => {
@@ -2101,6 +2256,12 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
     "Semi-Annually": buildRowsForSalesContext(buildPresetContext("6m")),
     Annually: buildRowsForSalesContext(buildPresetContext("12m")),
   };
+  for (let month = "2026-01"; month <= currentMonthKey;) {
+    kpiSalesRowsByFrequency[month] = buildRowsForSalesContext(buildPresetContext(month));
+    const [year, monthNumber] = month.split("-").map(Number);
+    month = monthNumber === 12 ? `${year + 1}-01` : `${year}-${String(monthNumber + 1).padStart(2, "0")}`;
+  }
+  kpiSalesRowsByFrequency.YTD = buildRowsForSalesContext(buildPresetContext("YTD"));
 
   let branchKpiSalesTotalsByFrequency = null;
   if (context.role !== "BM" && context.branchId) {
@@ -2149,6 +2310,12 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       "Semi-Annually": { totalAnnualPremium: totalForBranchKpiContext(buildPresetContext("6m")) },
       Annually: { totalAnnualPremium: totalForBranchKpiContext(buildPresetContext("12m")) },
     };
+    for (let month = "2026-01"; month <= currentMonthKey;) {
+      branchKpiSalesTotalsByFrequency[month] = { totalAnnualPremium: totalForBranchKpiContext(buildPresetContext(month)) };
+      const [year, monthNumber] = month.split("-").map(Number);
+      month = monthNumber === 12 ? `${year + 1}-01` : `${year}-${String(monthNumber + 1).padStart(2, "0")}`;
+    }
+    branchKpiSalesTotalsByFrequency.YTD = { totalAnnualPremium: totalForBranchKpiContext(buildPresetContext("YTD")) };
   }
 
   const byName = (left, right) => String(left.name).localeCompare(String(right.name)) || String(left.username).localeCompare(String(right.username));
@@ -2234,6 +2401,17 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
     if (right.leads !== left.leads) return right.leads - left.leads;
     return byName(left, right);
   });
+  const branchRecommendationNotifications = context.role === "BM"
+    ? await Notification.find({ type: "BM_RECOMMENDATION", "metadata.sentByUserId": String(user._id), softDeletedAt: null })
+        .select("metadata.recommendationKey createdAt")
+        .sort({ createdAt: -1 })
+        .lean()
+    : [];
+  const branchRecommendationHistory = branchRecommendationNotifications.reduce((history, notification) => {
+    const key = String(notification?.metadata?.recommendationKey || "");
+    if (key && !history[key]) history[key] = notification.createdAt;
+    return history;
+  }, {});
 
   return {
     payload: {
@@ -2269,7 +2447,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
         salesPeriodLabel: salesContext.periodLabel,
         unitPerformancePeriodLabel: unitPerformanceContext.periodLabel,
         unitPerformanceStartDate: unitPerformanceContext.startDate || null,
-        unitPerformanceEndDate: new Date(),
+        unitPerformanceEndDate: unitPerformanceContext.endDate || new Date(),
         reassignmentMonthKey: selectedReassignmentMonth,
         reassignmentMonthLabel: reassignmentMonthContext.periodLabel,
         reassignmentMonth: selectedReassignmentMonth,
@@ -2279,12 +2457,83 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       salesSummary: summarizeRows(salesRows),
       kpiSalesRowsByFrequency,
       branchKpiSalesTotalsByFrequency,
+      branchRecommendationHistory,
       agents,
       taskRows: sortedTaskRows,
       salesRows: sortedSalesRows,
       unitPerformanceRows,
     },
   };
+}
+
+async function syncBmRecommendationResolutionsForUser(userId) {
+  const notifications = await Notification.find({
+    assignedToUserId: userId,
+    type: "BM_RECOMMENDATION",
+    resolutionStatus: { $ne: "Resolved" },
+    softDeletedAt: null,
+  }).select("_id metadata").lean();
+  if (!notifications.length) return new Map();
+
+  const user = await User.findOne({ _id: userId, role: "UM" }).lean();
+  if (!user) return new Map();
+  const currentMonth = monthKeyForDate();
+  const relevant = notifications.filter((notification) => String(notification?.metadata?.monthKey || "") === currentMonth);
+  if (!relevant.length) return new Map();
+
+  const [portalResult, assignmentResult] = await Promise.all([
+    buildManagerPortalPayload(user, { unitPerformanceDatePreset: currentMonth }),
+    buildKpiAssignmentPayload(user),
+  ]);
+  const portal = portalResult?.payload;
+  const assignments = assignmentResult?.payload?.assignments || [];
+  if (!portal) return new Map();
+  const allRows = portal.kpiSalesRowsByFrequency?.[currentMonth] || [];
+  const unitRows = allRows.filter((row) => String(row?.unit || "") === String(portal.scope?.unitName || ""));
+  const summarize = (rows) => rows.reduce((summary, row) => ({
+    annualPremium: summary.annualPremium + Number(row?.annualPremium || 0),
+    totalPolicies: summary.totalPolicies + Number(row?.totalPolicies || 0),
+    activePolicies: summary.activePolicies + Number(row?.activePolicies || 0),
+    persistencyTotalPolicies: summary.persistencyTotalPolicies + Number(row?.persistencyTotalPolicies || 0),
+    persistedPolicies: summary.persistedPolicies + Number(row?.persistedPolicies || 0),
+  }), { annualPremium: 0, totalPolicies: 0, activePolicies: 0, persistencyTotalPolicies: 0, persistedPolicies: 0 });
+  const branchSummary = summarize(allRows);
+  const unitSummary = summarize(unitRows);
+  const branchAssignment = assignments.find((assignment) => assignment.scopeType === "BRANCH");
+  const unitAssignment = assignments.find((assignment) => assignment.scopeType === "UNIT");
+  const monthlyKpi = (assignment, key) => {
+    const kpi = (assignment?.kpis || []).find((item) => item.key === key) || {};
+    const month = (kpi.monthlyAssignments || []).find((item) => item.monthKey === currentMonth) || {};
+    return { ...kpi, ...month };
+  };
+  const targetIsMet = (actual, kpi) => {
+    const hasMin = String(kpi?.targetMin ?? "").trim() !== "";
+    const hasValue = String(kpi?.targetValue ?? "").trim() !== "";
+    const hasMax = String(kpi?.targetMax ?? "").trim() !== "";
+    if (hasMin) return actual >= Number(kpi.targetMin);
+    if (hasValue) return actual >= Number(kpi.targetValue);
+    if (hasMax) return actual <= Number(kpi.targetMax);
+    return false;
+  };
+  const branchSalesKpi = monthlyKpi(branchAssignment, "monthly_sales_production");
+  const branchSalesTarget = Number([branchSalesKpi.targetValue, branchSalesKpi.targetMin, branchSalesKpi.targetMax].find((value) => String(value ?? "").trim() !== "") || 0);
+  const actualByKey = {
+    monthly_sales_production: unitSummary.annualPremium,
+    monthly_target_achievement_index: branchSalesTarget ? Math.round((branchSummary.annualPremium / branchSalesTarget) * 100) : 0,
+    monthly_active_agents: allRows.filter((row) => Number(row?.annualPremium || 0) > 0).length,
+    monthly_persistency_rate: branchSummary.persistencyTotalPolicies ? Math.round((branchSummary.persistedPolicies / branchSummary.persistencyTotalPolicies) * 100) : 0,
+  };
+  const resolutions = new Map();
+  const writes = relevant.flatMap((notification) => {
+    const key = String(notification?.metadata?.kpiKey || "");
+    const kpi = monthlyKpi(key === "monthly_sales_production" ? unitAssignment : branchAssignment, key);
+    if (!targetIsMet(Number(actualByKey[key] || 0), kpi)) return [];
+    const resolvedAt = new Date();
+    resolutions.set(String(notification._id), { resolutionStatus: "Resolved", resolvedAt });
+    return [{ updateOne: { filter: { _id: notification._id, resolutionStatus: { $ne: "Resolved" } }, update: { $set: { resolutionStatus: "Resolved", resolvedAt } } } }];
+  });
+  if (writes.length) await Notification.bulkWrite(writes, { ordered: false });
+  return resolutions;
 }
 
 
@@ -3897,6 +4146,7 @@ app.use(
     Product,
     Policy,
     mongoose,
+    syncBmRecommendationResolutionsForUser,
   })
 );
 
