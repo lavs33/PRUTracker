@@ -5,7 +5,7 @@ import logo from "../assets/prutracker-navbar-logo.png";
 import "./TopNav.css";
 
 const unreadCountCache = new Map();
-const UNREAD_COUNT_CACHE_MS = 30_000;
+const UNREAD_COUNT_REFRESH_MS = 5_000;
 
 function TopNav({
   user,
@@ -30,13 +30,13 @@ function TopNav({
     try {
       const cacheKey = String(user.id);
       const cached = unreadCountCache.get(cacheKey);
-      if (!forceRefresh && cached && Date.now() - cached.loadedAt < UNREAD_COUNT_CACHE_MS) {
+      if (!forceRefresh && cached) {
         setUnreadCount(cached.count);
         return;
       }
       const res = await fetch(
         `${API_BASE}/api/notifications/unread-count?userId=${user.id}`,
-        signal ? { signal } : undefined
+        { ...(signal ? { signal } : {}), cache: "no-store" }
       );
 
       const data = await res.json();
@@ -46,23 +46,32 @@ function TopNav({
       unreadCountCache.set(cacheKey, { count: nextCount, loadedAt: Date.now() });
       setUnreadCount(nextCount);
     } catch (err) {
-      setUnreadCount(0);
+      if (err.name !== "AbortError" && !unreadCountCache.has(String(user?.id))) setUnreadCount(0);
     }
   }, [API_BASE, user?.id]);
 
   useEffect(() => {
     const controller = new AbortController();
-    fetchUnreadCount(controller.signal);
+    fetchUnreadCount(controller.signal, true);
     return () => controller.abort();
   }, [fetchUnreadCount]);
 
   useEffect(() => {
     if (!user?.id) return;
 
-    const tick = () => fetchUnreadCount();
-    const id = window.setInterval(tick, 30_000);
+    const refresh = () => fetchUnreadCount(undefined, true);
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    const id = window.setInterval(refreshWhenVisible, UNREAD_COUNT_REFRESH_MS);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
 
-    return () => window.clearInterval(id);
+    return () => {
+      window.clearInterval(id);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
   }, [user?.id, fetchUnreadCount]);
 
   useEffect(() => {
