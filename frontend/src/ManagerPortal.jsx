@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
-import { FaFilePdf, FaSearch } from "react-icons/fa";
+import { FaArrowRight, FaExclamation, FaFilePdf, FaSearch } from "react-icons/fa";
+import { FiCheckCircle, FiClock, FiTarget } from "react-icons/fi";
 import TopNav from "./components/TopNav";
 import ManagerSideNav from "./components/ManagerSideNav";
 import "./ManagerPortal.css";
@@ -11,6 +12,13 @@ const BM_URGENT_KPI_NOTIFICATION_TYPES = new Set([
   "UNIT_KPI_UNASSIGNED",
   "AGENT_KPI_UNASSIGNED",
 ]);
+const concernKey = (notification = {}) => [
+  notification.entityId,
+  notification?.metadata?.scopeType,
+  notification?.metadata?.scopeId || notification?.metadata?.branchAssignmentScopeId,
+  notification?.metadata?.kpiKey,
+  notification?.metadata?.monthKey,
+].map((part) => String(part || "")).join(":");
 const DATE_PRESETS = [
   { value: "ALL", label: "All Time" },
   { value: "TODAY", label: "This Day" },
@@ -32,6 +40,29 @@ const followingMonthKey = (value) => {
 };
 const currentKpiMonth = monthKey();
 const nextKpiMonth = followingMonthKey(currentKpiMonth);
+const buildManagerReportDateOptions = () => {
+  const monthOptions = [];
+  let cursor = KPI_MONTH_START;
+  while (cursor <= currentKpiMonth) {
+    const [year, month] = cursor.split("-").map(Number);
+    monthOptions.push({
+      value: cursor,
+      label: new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString("en-US", {
+        timeZone: "UTC",
+        month: "long",
+        year: "numeric",
+      }),
+    });
+    cursor = followingMonthKey(cursor);
+  }
+  const currentYear = currentKpiMonth.slice(0, 4);
+  const currentMonthLabel = monthOptions.at(-1)?.label || currentYear;
+  return [{
+    value: "YTD",
+    label: `January ${currentYear} – ${currentMonthLabel}`,
+  }, ...monthOptions];
+};
+const MANAGER_REPORT_DATE_OPTIONS = buildManagerReportDateOptions();
 const buildKpiMonthOptions = (throughMonth = nextKpiMonth) => {
   const rows = [];
   let cursor = KPI_MONTH_START;
@@ -364,9 +395,23 @@ function getScopeLabel(scope = {}) {
 }
 
 function getPresetLabel(value) {
-  return (
-    DATE_PRESETS.find((option) => option.value === value)?.label || "All Time"
-  );
+  return DATE_PRESETS.find((option) => option.value === value)?.label
+    || MANAGER_REPORT_DATE_OPTIONS.find((option) => option.value === value)?.label
+    || "All Time";
+}
+
+function getManagerReportPeriodLabel(value) {
+  if (value === "YTD") {
+    const year = currentKpiMonth.slice(0, 4);
+    const [currentYear, currentMonth] = currentKpiMonth.split("-").map(Number);
+    const endLabel = new Date(Date.UTC(currentYear, currentMonth - 1, 1)).toLocaleDateString("en-US", { timeZone: "UTC", month: "short", year: "numeric" });
+    return `Jan ${year} – ${endLabel}`;
+  }
+  if (/^\d{4}-\d{2}$/.test(String(value || ""))) {
+    const [year, month] = value.split("-").map(Number);
+    return new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString("en-US", { timeZone: "UTC", month: "short", year: "numeric" });
+  }
+  return getPresetLabel(value);
 }
 
 function getKpiPeriodForDatePreset(value) {
@@ -882,7 +927,7 @@ function ManagerPortal({ roleType }) {
   const [taskDatePreset, setTaskDatePreset] = useState("ALL");
   // eslint-disable-next-line no-unused-vars
   const [salesDatePreset, setSalesDatePreset] = useState("ALL");
-  const [unitPerformanceDatePreset, setUnitPerformanceDatePreset] = useState("ALL");
+  const [unitPerformanceDatePreset, setUnitPerformanceDatePreset] = useState(currentKpiMonth);
   const [unitKpiDatePreset, setUnitKpiDatePreset] = useState("TODAY");
   const [branchKpiDatePreset, setBranchKpiDatePreset] = useState("TODAY");
   const [portalData, setPortalData] = useState(null);
@@ -913,6 +958,7 @@ function ManagerPortal({ roleType }) {
   const [urgentNotifications, setUrgentNotifications] = useState([]);
   const [urgentNotificationsLoading, setUrgentNotificationsLoading] = useState(false);
   const [urgentNotificationsError, setUrgentNotificationsError] = useState("");
+  const [pendingKpiConcern, setPendingKpiConcern] = useState(null);
 
   useLayoutEffect(() => {
     if (!longLeaveStepperScrollSignal) return;
@@ -1093,17 +1139,23 @@ function ManagerPortal({ roleType }) {
           signal: controller.signal,
         });
         const payload = await response.json();
-        if (!response.ok) throw new Error(payload?.message || "Failed to load urgent notifications.");
+        if (!response.ok) throw new Error(payload?.message || "Failed to load urgent concerns.");
         const notifications = Array.isArray(payload?.notifications) ? payload.notifications : [];
-        setUrgentNotifications(notifications
+        const uniqueConcerns = new Map();
+        notifications
           .filter((notification) => (
             notification?.resolutionStatus === "Unresolved"
             && BM_URGENT_KPI_NOTIFICATION_TYPES.has(String(notification?.type || "").toUpperCase())
           ))
-          .sort((left, right) => new Date(right?.createdAt || 0) - new Date(left?.createdAt || 0)));
+          .sort((left, right) => new Date(right?.createdAt || 0) - new Date(left?.createdAt || 0))
+          .forEach((notification) => {
+            const key = concernKey(notification) || String(notification?._id || "");
+            if (!uniqueConcerns.has(key)) uniqueConcerns.set(key, notification);
+          });
+        setUrgentNotifications([...uniqueConcerns.values()]);
       } catch (error) {
         if (error.name !== "AbortError") {
-          setUrgentNotificationsError(error.message || "Failed to load urgent notifications.");
+          setUrgentNotificationsError(error.message || "Failed to load urgent concerns.");
         }
       } finally {
         if (!controller.signal.aborted) setUrgentNotificationsLoading(false);
@@ -1113,6 +1165,35 @@ function ManagerPortal({ roleType }) {
     fetchUrgentNotifications();
     return () => controller.abort();
   }, [activeView, normalizedRole, refreshCount, user?.id]);
+
+  useLayoutEffect(() => {
+    if (activeView !== "kpi_assignment" || kpiLoading || !pendingKpiConcern) return;
+    const scopeType = String(pendingKpiConcern?.metadata?.scopeType || "");
+    const scopeId = String(pendingKpiConcern?.metadata?.branchAssignmentScopeId || pendingKpiConcern?.metadata?.scopeId || "");
+    const assignment = (kpiData?.assignments || []).find((item) => (
+      String(item.scopeType) === scopeType && (!scopeId || String(item.scopeId) === scopeId)
+    ));
+    const kpiKey = String(pendingKpiConcern?.metadata?.kpiKey || "");
+    const rowKey = assignment ? `${assignment.scopeType}:${assignment.scopeId}:${kpiKey}` : "";
+    const target = rowKey ? document.querySelector(`[data-kpi-row-key="${rowKey}"]`) : null;
+    if (!target) return;
+    const month = String(pendingKpiConcern?.metadata?.monthKey || "");
+    if (month) setKpiSelectedMonths((current) => ({ ...current, [rowKey]: month }));
+    setExpandedKpiKey(rowKey);
+    const scrollToConcern = () => {
+      const currentTarget = document.querySelector(`[data-kpi-row-key="${rowKey}"]`);
+      currentTarget?.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+    };
+    const frameId = window.requestAnimationFrame(() => window.requestAnimationFrame(scrollToConcern));
+    const settleId = window.setTimeout(() => {
+      scrollToConcern();
+      setPendingKpiConcern(null);
+    }, 350);
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      window.clearTimeout(settleId);
+    };
+  }, [activeView, kpiData?.assignments, kpiLoading, pendingKpiConcern]);
 
   useEffect(() => {
     if (!user?.id || user.role !== normalizedRole) return;
@@ -1440,7 +1521,7 @@ function ManagerPortal({ roleType }) {
         window.dispatchEvent(new CustomEvent("notifications:changed", { detail: { userId: user.id } }));
       }
       setActiveView("kpi_assignment");
-      window.scrollTo({ top: 0, behavior: "smooth" });
+      setPendingKpiConcern(notification);
     } catch (error) {
       setUrgentNotificationsError(error.message || "Failed to open KPI assignment.");
     }
@@ -1509,8 +1590,20 @@ function ManagerPortal({ roleType }) {
   const isAllUnitsSelected = selectedUnit?.isAllUnits === true;
 
   const selectedUnitRows = useMemo(
-    () => (portalData?.unitPerformanceRows || portalData?.agents || []).filter((agent) => (selectedUnit?.name && !isAllUnitsSelected ? String(agent?.unit || "") === selectedUnit.name : true)),
-    [isAllUnitsSelected, portalData?.agents, portalData?.unitPerformanceRows, selectedUnit?.name],
+    () => (portalData?.unitPerformanceRows || portalData?.agents || [])
+      .filter((agent) => (selectedUnit?.name && !isAllUnitsSelected ? String(agent?.unit || "") === selectedUnit.name : true))
+      .map((agent) => unitPerformanceTab === "clients" ? {
+        ...agent,
+        totalProspects: agent.clientTotalProspects,
+        activeProspects: agent.clientActiveProspects,
+        leads: agent.clientTotalLeads,
+        activeLeads: agent.clientActiveLeads,
+        totalPolicies: agent.clientTotalPolicies,
+        activePolicies: agent.clientActivePolicies,
+        atRiskPolicies: agent.clientAtRiskPolicies,
+        lapsedPolicies: agent.clientLapsedPolicies,
+      } : agent),
+    [isAllUnitsSelected, portalData?.agents, portalData?.unitPerformanceRows, selectedUnit?.name, unitPerformanceTab],
   );
 
   const unitLongLeaveEndorsementRows = useMemo(() =>
@@ -1784,6 +1877,10 @@ function ManagerPortal({ roleType }) {
           return compareNumber("overdueTasks") * -1 || compareUsername();
         case "overdueTasksAsc":
           return compareNumber("overdueTasks") || compareUsername();
+        case "doneTasksDesc":
+          return compareNumber("closedTasks") * -1 || compareUsername();
+        case "doneTasksAsc":
+          return compareNumber("closedTasks") || compareUsername();
         case "onTimeDoneTasksDesc":
           return (compareNumber("closedTasks") - compareNumber("delayedDoneTasks")) * -1 || compareUsername();
         case "onTimeDoneTasksAsc":
@@ -1958,14 +2055,10 @@ function ManagerPortal({ roleType }) {
     });
   }, [isAllUnitsSelected, kpiData?.assignments, portalData?.kpiSalesRowsByFrequency, selectedUnit?.name, unitKpiPeriod]);
 
-  const unitPerformancePeriodLabel = useMemo(() => {
-    const reportContext = portalData?.reportContext || {};
-    const endDate = reportContext.unitPerformanceEndDate ? new Date(reportContext.unitPerformanceEndDate) : new Date();
-    const startDate = reportContext.unitPerformanceStartDate ? new Date(reportContext.unitPerformanceStartDate) : null;
-    if (!startDate || Number.isNaN(startDate.getTime())) return `All Time to ${formatDate(endDate)}`;
-    if (unitPerformanceDatePreset === "TODAY") return formatDate(endDate);
-    return `${formatDate(startDate)} to ${formatDate(endDate)}`;
-  }, [portalData?.reportContext, unitPerformanceDatePreset]);
+  const unitPerformancePeriodLabel = useMemo(
+    () => getManagerReportPeriodLabel(unitPerformanceDatePreset),
+    [unitPerformanceDatePreset],
+  );
 
   const unitSortLabel = useMemo(() => {
     const selectLabels = {
@@ -1974,8 +2067,8 @@ function ManagerPortal({ roleType }) {
       totalProspectsAsc: "Total Prospects (Low → High)",
       activeProspectsDesc: "Active Prospects (High → Low)",
       activeProspectsAsc: "Active Prospects (Low → High)",
-      leadsDesc: "Total Leads (High → Low)",
-      leadsAsc: "Total Leads (Low → High)",
+      leadsDesc: `${unitPerformanceTab === "sales" ? "Active" : "Total"} Leads (High → Low)`,
+      leadsAsc: `${unitPerformanceTab === "sales" ? "Active" : "Total"} Leads (Low → High)`,
       activeLeadsDesc: "Active Leads (High → Low)",
       activeLeadsAsc: "Active Leads (Low → High)",
       totalPoliciesDesc: "Total Policyholders (High → Low)",
@@ -1992,6 +2085,8 @@ function ManagerPortal({ roleType }) {
       openTasksAsc: "Open Tasks (Low → High)",
       overdueTasksDesc: "Overdue Tasks (High → Low)",
       overdueTasksAsc: "Overdue Tasks (Low → High)",
+      doneTasksDesc: "Done Tasks (High → Low)",
+      doneTasksAsc: "Done Tasks (Low → High)",
       onTimeDoneTasksDesc: "On-Time Done Tasks (High → Low)",
       onTimeDoneTasksAsc: "On-Time Done Tasks (Low → High)",
       overallCompletionRateDesc: "Overall Completion Rate (High → Low)",
@@ -2020,13 +2115,13 @@ function ManagerPortal({ roleType }) {
       yearlyPremiumAsc: "Yearly Premium (Low → High)",
     };
     return selectLabels[agentSort] || selectLabels.usernameAsc;
-  }, [agentSort]);
+  }, [agentSort, unitPerformanceTab]);
 
   const selectedAgent = useMemo(
     () => {
       const unitRow = selectedUnitRows.find((agent) => String(agent?.id || "") === selectedAgentId) || null;
       const fullAgent = (portalData?.agents || []).find((agent) => String(agent?.id || "") === selectedAgentId) || null;
-      if (fullAgent) return { ...(unitRow || {}), ...fullAgent };
+      if (fullAgent) return { ...fullAgent, ...(unitRow || {}) };
       return unitRow;
     },
     [portalData?.agents, selectedAgentId, selectedUnitRows],
@@ -3031,6 +3126,7 @@ function ManagerPortal({ roleType }) {
     .map((part) => String(part || "").trim())
     .filter(Boolean)
     .join(" ") || user?.username || "Branch Manager";
+  const managerFirstName = String(user?.firstName || "").trim() || managerDisplayName;
   const scopeLabel = getScopeLabel(scope);
   const generatedAtLabel = portalData?.reportContext?.generatedAt
     ? formatDateTime(portalData.reportContext.generatedAt)
@@ -3060,7 +3156,7 @@ function ManagerPortal({ roleType }) {
           { label: "Total Prospects", value: summary.totalProspects },
           { label: "Total Active Policies", value: summary.activePolicies },
           {
-            label: "Annual Premium",
+            label: "Total Annual Premium",
             value: formatMoney(summary.totalAnnualPremium),
           },
         ]
@@ -3538,13 +3634,14 @@ function ManagerPortal({ roleType }) {
         ["Total Tasks", selectedAgentSummary.totalTasks],
         ["Open Tasks", selectedAgentSummary.openTasks],
         ["Overdue Tasks", selectedAgentSummary.overdueTasks],
+        ["Done Tasks", selectedAgentSummary.closedTasks],
         ["On-Time Done Tasks", selectedAgentSummary.onTimeDoneTasks],
         ["Overall Completion Rate", `${selectedAgentSummary.overallCompletionRate}%`],
         ["On-Time Completion Rate", `${selectedAgentSummary.onTimeCompletionRate}%`],
         ["Late Completion Rate", `${selectedAgentSummary.lateCompletionRate}%`],
       ],
       sales: [
-        ["Total Leads", selectedAgentSummary.leads],
+        ["Active Leads", selectedAgentSummary.leads],
         ["Converted Leads", selectedAgentSummary.converted],
         ["Unconverted Leads", selectedAgentSummary.unconverted],
         ["Conversion Rate", `${selectedAgentSummary.conversionRate}%`],
@@ -3576,7 +3673,7 @@ function ManagerPortal({ roleType }) {
       ],
       filters: [
         { label: "Performance Tab", value: tabLabel },
-        { label: "Date Range", value: getPresetLabel(unitPerformanceDatePreset) },
+        { label: "Date Range", value: getManagerReportPeriodLabel(unitPerformanceDatePreset) },
       ],
       statCards: (detailRowsByTab[unitPerformanceTab] || []).map(([label, value], index) => ({
         label,
@@ -3713,6 +3810,7 @@ function ManagerPortal({ roleType }) {
         { key: "totalTasks", label: "Total Tasks" },
         { key: "openTasks", label: "Open Tasks" },
         { key: "overdueTasks", label: "Overdue Tasks" },
+        { key: "closedTasks", label: "Done Tasks" },
         { key: "onTimeDoneTasks", label: "On-Time Done Tasks" },
         { key: "overallCompletionRate", label: "Overall Completion Rate" },
         { key: "onTimeRate", label: "On-Time Completion Rate" },
@@ -3721,7 +3819,7 @@ function ManagerPortal({ roleType }) {
       sales: [
         { key: "username", label: "Agent Code" },
         { key: "name", label: "Agent Name" },
-        { key: "leads", label: "Total Leads" },
+        { key: "leads", label: "Active Leads" },
         { key: "converted", label: "Converted Leads" },
         { key: "unconverted", label: "Unconverted Leads" },
         { key: "conversionRate", label: "Conversion Rate" },
@@ -3782,7 +3880,7 @@ function ManagerPortal({ roleType }) {
           ],
       filters: [
         { label: "Performance Tab", value: tabLabel },
-        { label: "Date Range", value: getPresetLabel(unitPerformanceDatePreset) },
+        { label: "Date Range", value: getManagerReportPeriodLabel(unitPerformanceDatePreset) },
         { label: "Search Filter", value: agentSearch.trim() || "All" },
         { label: "Sort Filter", value: unitSortLabel },
       ],
@@ -3802,13 +3900,14 @@ function ManagerPortal({ roleType }) {
               { label: "Total Tasks", value: selectedUnitSummary.totalTasks, tone: "red" },
               { label: "Open Tasks", value: selectedUnitSummary.openTasks, tone: "blue" },
               { label: "Overdue Tasks", value: selectedUnitSummary.overdueTasks, tone: "gold" },
+              { label: "Done Tasks", value: selectedUnitSummary.closedTasks, tone: "green" },
               { label: "On-Time Done Tasks", value: selectedUnitSummary.onTimeDoneTasks, tone: "green" },
               { label: "Overall Completion Rate", value: `${selectedUnitSummary.overallCompletionRate}%`, tone: "red" },
               { label: "On-Time Completion Rate", value: `${selectedUnitSummary.onTimeCompletionRate}%`, tone: "blue" },
               { label: "Late Completion Rate", value: `${selectedUnitSummary.lateCompletionRate}%`, tone: "gold" },
             ]
           : [
-              { label: "Total Leads", value: selectedUnitSummary.leads, tone: "red" },
+              { label: "Active Leads", value: selectedUnitSummary.leads, tone: "red" },
               { label: "Converted Leads", value: selectedUnitSummary.converted, tone: "green" },
               { label: "Unconverted Leads", value: selectedUnitSummary.unconverted, tone: "gold" },
               { label: "Conversion Rate", value: `${selectedUnitSummary.conversionRate}%`, tone: "blue" },
@@ -3899,10 +3998,10 @@ function ManagerPortal({ roleType }) {
           {activeView === "dashboard" && <section className="manager-hero">
             <div>
               <p className="manager-hero__eyebrow">{normalizedRole} Portal</p>
-              <h1>{normalizedRole === "BM" ? `Welcome, ${managerDisplayName}.` : (scope.unitName || "Unit")}</h1>
+              <h1>{normalizedRole === "BM" ? `Welcome back, ${managerFirstName}.` : (scope.unitName || "Unit")}</h1>
               <p>
                 {normalizedRole === "BM"
-                  ? `Review the priorities requiring your attention across ${scope.branchName || "your branch"}${scope.areaName ? ` • ${scope.areaName}` : ""}.`
+                  ? `Manage branch performance, assign KPI targets, monitor units and agents, review sales and client activity, and resolve priorities across ${scope.branchName || "your branch"}${scope.areaName ? ` • ${scope.areaName}` : ""}.`
                   : `Monitor ${scopeLabel} with live backend metrics, unit-wide agent coverage, auto-updating date-filtered tables, printable reports, and in-page unit KPI progress.`}
               </p>
               <div className="manager-hero__meta-row">
@@ -4005,10 +4104,9 @@ function ManagerPortal({ roleType }) {
               <div className="manager-urgent-actions__head">
                 <div>
                   <span>Action required</span>
-                  <h2 id="bm-urgent-actions-title">Urgent unresolved notifications</h2>
-                  <p>Open a KPI concern to review and complete its assignment.</p>
+                  <h2 id="bm-urgent-actions-title">Urgent unresolved concerns</h2>
                 </div>
-                <b aria-label={`${urgentNotifications.length} urgent unresolved notifications`}>
+                <b aria-label={`${urgentNotifications.length} urgent unresolved concerns`}>
                   {urgentNotifications.length}
                 </b>
               </div>
@@ -4018,29 +4116,31 @@ function ManagerPortal({ roleType }) {
                   {urgentNotificationsError}
                 </div>
               ) : urgentNotificationsLoading ? (
-                <div className="manager-urgent-actions__feedback">Loading urgent notifications...</div>
+                <div className="manager-urgent-actions__feedback">Loading urgent concerns...</div>
               ) : urgentNotifications.length ? (
                 <div className="manager-urgent-actions__grid">
                   {urgentNotifications.map((notification) => (
-                    <article className="manager-urgent-card" key={notification._id}>
+                    <article className="manager-urgent-card" key={concernKey(notification) || notification._id}>
+                      <div className="manager-urgent-card__icon" aria-hidden="true"><FaExclamation /></div>
                       <div className="manager-urgent-card__body">
                         <div className="manager-urgent-card__meta">
-                          <span>Urgent</span>
-                          <i>{String(notification.type || "KPI notification").replaceAll("_", " ")}</i>
-                          <time>{formatDateTime(notification.createdAt)}</time>
+                          <span>Needs action</span>
+                          <i><FiTarget aria-hidden="true" /> {String(notification?.metadata?.scopeType || "KPI")} KPI</i>
+                          <time><FiClock aria-hidden="true" /> {formatDateTime(notification.createdAt)}</time>
                         </div>
                         <h3>{notification.title || "KPI assignment requires attention"}</h3>
                         {String(notification.message || "").trim() && <p>{notification.message}</p>}
+                        <div className="manager-urgent-card__guidance"><FiCheckCircle aria-hidden="true" /> Review the highlighted KPI, set its target, then save the assignment.</div>
                       </div>
                       <button type="button" onClick={() => openUrgentKpiNotification(notification)}>
-                        Open KPI assignment
+                        Open KPI assignment <FaArrowRight aria-hidden="true" />
                       </button>
                     </article>
                   ))}
                 </div>
               ) : (
                 <div className="manager-urgent-actions__feedback manager-urgent-actions__feedback--clear">
-                  No urgent unresolved notifications require action.
+                  No urgent unresolved concerns require action.
                 </div>
               )}
             </section>
@@ -4099,7 +4199,7 @@ function ManagerPortal({ roleType }) {
                       value={unitPerformanceDatePreset}
                       onChange={(e) => setUnitPerformanceDatePreset(e.target.value)}
                     >
-                      {DATE_PRESETS.map((option) => (
+                      {MANAGER_REPORT_DATE_OPTIONS.map((option) => (
                         <option key={option.value} value={option.value}>{option.label}</option>
                       ))}
                     </select>
@@ -4130,6 +4230,7 @@ function ManagerPortal({ roleType }) {
                       <div className="manager-metric-pair"><span>Total Tasks</span><strong>{selectedAgentSummary.totalTasks}</strong></div>
                       <div className="manager-metric-pair"><span>Open Tasks</span><strong>{selectedAgentSummary.openTasks}</strong></div>
                       <div className="manager-metric-pair"><span>Overdue Tasks</span><strong>{selectedAgentSummary.overdueTasks}</strong></div>
+                      <div className="manager-metric-pair"><span>Done Tasks</span><strong>{selectedAgentSummary.closedTasks}</strong></div>
                       <div className="manager-metric-pair"><span>On-Time Done Tasks</span><strong>{selectedAgentSummary.onTimeDoneTasks}</strong></div>
                       <div className="manager-metric-pair"><span>Overall Completion Rate</span><strong>{selectedAgentSummary.overallCompletionRate}%</strong></div>
                       <div className="manager-metric-pair"><span>On-Time Completion Rate</span><strong>{selectedAgentSummary.onTimeCompletionRate}%</strong></div>
@@ -4139,7 +4240,7 @@ function ManagerPortal({ roleType }) {
                   {unitPerformanceTab === "sales" && selectedAgentSummary && (
                     <article>
                       <h3>Sales Performance</h3>
-                      <div className="manager-metric-pair"><span>Total Leads</span><strong>{selectedAgentSummary.leads}</strong></div>
+                      <div className="manager-metric-pair"><span>Active Leads</span><strong>{selectedAgentSummary.leads}</strong></div>
                       <div className="manager-metric-pair"><span>Converted Leads</span><strong>{selectedAgentSummary.converted}</strong></div>
                       <div className="manager-metric-pair"><span>Unconverted Leads</span><strong>{selectedAgentSummary.unconverted}</strong></div>
                       <div className="manager-metric-pair"><span>Conversion Rate</span><strong>{selectedAgentSummary.conversionRate}%</strong></div>
@@ -4254,7 +4355,7 @@ function ManagerPortal({ roleType }) {
                       value={unitPerformanceDatePreset}
                       onChange={(e) => setUnitPerformanceDatePreset(e.target.value)}
                     >
-                      {DATE_PRESETS.map((option) => (
+                      {MANAGER_REPORT_DATE_OPTIONS.map((option) => (
                         <option key={option.value} value={option.value}>{option.label}</option>
                       ))}
                     </select>
@@ -4285,6 +4386,7 @@ function ManagerPortal({ roleType }) {
                       <div className="manager-metric-pair"><span>Total Tasks</span><strong>{selectedUnitSummary.totalTasks}</strong></div>
                       <div className="manager-metric-pair"><span>Open Tasks</span><strong>{selectedUnitSummary.openTasks}</strong></div>
                       <div className="manager-metric-pair"><span>Overdue Tasks</span><strong>{selectedUnitSummary.overdueTasks}</strong></div>
+                      <div className="manager-metric-pair"><span>Done Tasks</span><strong>{selectedUnitSummary.closedTasks}</strong></div>
                       <div className="manager-metric-pair"><span>On-Time Done Tasks</span><strong>{selectedUnitSummary.onTimeDoneTasks}</strong></div>
                       <div className="manager-metric-pair"><span>Overall Completion Rate</span><strong>{selectedUnitSummary.overallCompletionRate}%</strong></div>
                       <div className="manager-metric-pair"><span>On-Time Completion Rate</span><strong>{selectedUnitSummary.onTimeCompletionRate}%</strong></div>
@@ -4294,7 +4396,7 @@ function ManagerPortal({ roleType }) {
                   {unitPerformanceTab === "sales" && (
                     <article>
                       <h3>Sales Performance</h3>
-                      <div className="manager-metric-pair"><span>Total Leads</span><strong>{selectedUnitSummary.leads}</strong></div>
+                      <div className="manager-metric-pair"><span>Active Leads</span><strong>{selectedUnitSummary.leads}</strong></div>
                       <div className="manager-metric-pair"><span>Converted Leads</span><strong>{selectedUnitSummary.converted}</strong></div>
                       <div className="manager-metric-pair"><span>Unconverted Leads</span><strong>{selectedUnitSummary.unconverted}</strong></div>
                       <div className="manager-metric-pair"><span>Conversion Rate</span><strong>{selectedUnitSummary.conversionRate}%</strong></div>
@@ -4477,6 +4579,8 @@ function ManagerPortal({ roleType }) {
                             <option value="openTasksAsc">Open Tasks (Low → High)</option>
                             <option value="overdueTasksDesc">Overdue Tasks (High → Low)</option>
                             <option value="overdueTasksAsc">Overdue Tasks (Low → High)</option>
+                            <option value="doneTasksDesc">Done Tasks (High → Low)</option>
+                            <option value="doneTasksAsc">Done Tasks (Low → High)</option>
                             <option value="onTimeDoneTasksDesc">On-Time Done Tasks (High → Low)</option>
                             <option value="onTimeDoneTasksAsc">On-Time Done Tasks (Low → High)</option>
                             <option value="overallCompletionRateDesc">Overall Completion Rate (High → Low)</option>
@@ -4489,8 +4593,8 @@ function ManagerPortal({ roleType }) {
                         )}
                         {unitPerformanceTab === "sales" && (
                           <>
-                            <option value="leadsDesc">Total Leads (High → Low)</option>
-                            <option value="leadsAsc">Total Leads (Low → High)</option>
+                            <option value="leadsDesc">Active Leads (High → Low)</option>
+                            <option value="leadsAsc">Active Leads (Low → High)</option>
                             <option value="convertedDesc">Converted Leads (High → Low)</option>
                             <option value="convertedAsc">Converted Leads (Low → High)</option>
                             <option value="unconvertedDesc">Unconverted Leads (High → Low)</option>
@@ -4548,6 +4652,7 @@ function ManagerPortal({ roleType }) {
                             <th>Total Tasks</th>
                             <th>Open Tasks</th>
                             <th>Overdue Tasks</th>
+                            <th>Done Tasks</th>
                             <th>On-Time Done Tasks</th>
                             <th>Overall Completion Rate</th>
                             <th>On-Time Completion Rate</th>
@@ -4556,7 +4661,7 @@ function ManagerPortal({ roleType }) {
                         )}
                         {unitPerformanceTab === "sales" && (
                           <>
-                            <th>Total Leads</th>
+                            <th>Active Leads</th>
                             <th>Converted Leads</th>
                             <th>Unconverted Leads</th>
                             <th>Conversion Rate</th>
@@ -4603,6 +4708,7 @@ function ManagerPortal({ roleType }) {
                               <td>{Number(agent.totalTasks || 0)}</td>
                               <td>{Number(agent.openTasks || 0)}</td>
                               <td>{Number(agent.overdueTasks || 0)}</td>
+                              <td>{Number(agent.closedTasks || 0)}</td>
                               <td>{Math.max(0, Number(agent.closedTasks || 0) - Number(agent.delayedDoneTasks || 0))}</td>
                               <td>{Number(agent.totalTasks || 0) ? Math.round((Number(agent.closedTasks || 0) / Number(agent.totalTasks || 0)) * 100) : 0}%</td>
                               <td>{Number(agent.closedTasks || 0) ? Math.round(((Number(agent.closedTasks || 0) - Number(agent.delayedDoneTasks || 0)) / Number(agent.closedTasks || 0)) * 100) : 0}%</td>
@@ -5582,7 +5688,7 @@ function ManagerPortal({ roleType }) {
                           const monthAssignment = getMonthlyKpiAssignment(kpi, selectedMonth);
                           const canEditMonth = [activeCurrentKpiMonth, activeNextKpiMonth].includes(selectedMonth);
                           return (
-                            <div className={`manager-kpi-edit-row manager-kpi-edit-row--agent ${isEditing ? "editing" : ""} ${isExpanded ? "expanded" : ""}`} key={kpi.key}>
+                            <div data-kpi-row-key={rowKey} className={`manager-kpi-edit-row manager-kpi-edit-row--agent ${isEditing ? "editing" : ""} ${isExpanded ? "expanded" : ""}`} key={kpi.key}>
                               <div className="manager-kpi-edit-row__head">
                                 <button type="button" className="manager-kpi-collapse-btn" aria-expanded={isExpanded} onClick={() => setExpandedKpiKey(isExpanded ? "" : rowKey)}>
                                   <span className="manager-kpi-caret">{isExpanded ? "−" : "+"}</span>
