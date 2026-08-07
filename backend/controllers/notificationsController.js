@@ -1,13 +1,13 @@
 const PAYMENT_NOTIFICATION_TYPES = ["PAYMENT_TRANSFER_REMINDER", "PAYMENT_EOR_REMINDER", "PAYMENT_MISSED_TRANSFER", "POLICY_LAPSED"];
 const POLICY_LIFECYCLE_NOTIFICATION_TYPES = ["POLICY_PAID_UP", "POLICY_MATURED", "POLICY_PAID_UP_MATURED", "POLICY_CANCELLED"];
 const TASK_NOTIFICATION_TYPES = ["TASK_ADDED", "TASK_DUE_TODAY", "TASK_MISSED"];
-const MANAGER_NOTIFICATION_TYPES = ["ORPHANS_ENDORSEMENTS"];
+const MANAGER_NOTIFICATION_TYPES = ["ORPHANS_ENDORSEMENTS", "BM_RECOMMENDATION"];
 const AGENT_ORPHAN_NOTIFICATION_TYPES = ["ORPHAN_CLIENT_ASSIGNED", "ORPHAN_CLIENT_TRANSFERRED"];
 const BRANCH_KPI_NOTIFICATION_TYPES = ["BRANCH_KPI_ASSIGNED", "BRANCH_KPI_TARGET_UPDATED", "BRANCH_KPI_UNASSIGNED"];
 const UNIT_KPI_NOTIFICATION_TYPES = ["UNIT_KPI_ASSIGNED", "UNIT_KPI_TARGET_UPDATED", "UNIT_KPI_UNASSIGNED"];
 const AGENT_KPI_NOTIFICATION_TYPES = ["AGENT_KPI_ASSIGNED", "AGENT_KPI_TARGET_UPDATED", "AGENT_KPI_UNASSIGNED"];
 const NOTIFICATION_TYPES = [...TASK_NOTIFICATION_TYPES, ...PAYMENT_NOTIFICATION_TYPES, ...POLICY_LIFECYCLE_NOTIFICATION_TYPES, ...MANAGER_NOTIFICATION_TYPES, ...AGENT_ORPHAN_NOTIFICATION_TYPES, ...BRANCH_KPI_NOTIFICATION_TYPES, ...UNIT_KPI_NOTIFICATION_TYPES, ...AGENT_KPI_NOTIFICATION_TYPES];
-const NOTIFICATION_ENTITY_TYPES = ["Task", "Policyholder", "Prospect", "LongLeave", "Resignation", "KpiAssignment"];
+const NOTIFICATION_ENTITY_TYPES = ["Task", "Policyholder", "Prospect", "LongLeave", "Resignation", "KpiAssignment", "Unit"];
 const KPI_UNASSIGNED_NOTIFICATION_TYPES = ["BRANCH_KPI_UNASSIGNED", "UNIT_KPI_UNASSIGNED", "AGENT_KPI_UNASSIGNED"];
 const RESOLUTION_REQUIRED_NOTIFICATION_TYPES = [...TASK_NOTIFICATION_TYPES, ...PAYMENT_NOTIFICATION_TYPES, ...MANAGER_NOTIFICATION_TYPES, ...KPI_UNASSIGNED_NOTIFICATION_TYPES];
 
@@ -270,11 +270,15 @@ function createNotificationsController({
   ensureTaskMissedNotificationsForUser,
   toValidObjectIdString,
   uniqueValidObjectIdStrings,
+  syncBmRecommendationResolutionsForUser,
 }) {
   const ensureTaskMissed =
     typeof ensureTaskMissedNotificationsForUser === "function"
       ? ensureTaskMissedNotificationsForUser
       : async () => {};
+  const syncBmRecommendations = typeof syncBmRecommendationResolutionsForUser === "function"
+    ? syncBmRecommendationResolutionsForUser
+    : async () => new Map();
   const toValidId =
     typeof toValidObjectIdString === "function"
       ? toValidObjectIdString
@@ -1008,6 +1012,7 @@ function createNotificationsController({
     orphanResolutions: new Map(),
     paymentResolutions: new Map(),
     kpiResolutions: new Map(),
+    bmRecommendationResolutions: new Map(),
   });
   const notificationMaintenance = (uid) => {
     const key = String(uid);
@@ -1017,12 +1022,13 @@ function createNotificationsController({
     }
     const promise = (async () => {
       await Promise.all([ensureTaskMissed(uid), ensurePaymentReminders(uid)]);
-      const [orphanResolutions, paymentResolutions, kpiResolutions] = await Promise.all([
+      const [orphanResolutions, paymentResolutions, kpiResolutions, bmRecommendationResolutions] = await Promise.all([
         syncOrphanEndorsementResolutions(uid),
         syncPaymentNotificationResolutions(uid),
         syncKpiUnassignedNotificationResolutions(uid),
+        syncBmRecommendations(uid),
       ]);
-      return { orphanResolutions, paymentResolutions, kpiResolutions };
+      return { orphanResolutions, paymentResolutions, kpiResolutions, bmRecommendationResolutions };
     })();
     notificationMaintenanceByUser.set(key, { promise, completedAt: 0, result: null });
     promise.then((result) => {
@@ -1046,7 +1052,7 @@ function createNotificationsController({
         notificationMaintenance(uid),
         new Promise((resolve) => setTimeout(() => resolve(null), NOTIFICATION_MAINTENANCE_WAIT_MS)),
       ]);
-      const { orphanResolutions, paymentResolutions, kpiResolutions } = maintenanceResult || emptyMaintenanceResult();
+      const { orphanResolutions, paymentResolutions, kpiResolutions, bmRecommendationResolutions = new Map() } = maintenanceResult || emptyMaintenanceResult();
 
       const query = { assignedToUserId: uid, softDeletedAt: null };
 
@@ -1204,7 +1210,10 @@ function createNotificationsController({
         const kpiResolution = KPI_UNASSIGNED_NOTIFICATION_TYPES.includes(notification.type)
           ? kpiResolutions.get(String(notification._id))
           : null;
-        const calculatedResolution = paymentResolution || orphanResolution || kpiResolution;
+        const bmRecommendationResolution = notification.type === "BM_RECOMMENDATION"
+          ? bmRecommendationResolutions.get(String(notification._id))
+          : null;
+        const calculatedResolution = paymentResolution || orphanResolution || kpiResolution || bmRecommendationResolution;
         const normalizedNotification = calculatedResolution
           ? { ...notification, ...calculatedResolution }
           : notification;
