@@ -1085,6 +1085,9 @@ function registerLegacyRoutes(app, deps) {
     }
   }
 
+  const policyholderPaymentDateSyncRuns = new Map();
+  const POLICYHOLDER_PAYMENT_DATE_SYNC_TTL_MS = 5 * 60 * 1000;
+
   async function syncPolicyholderPaymentDatesForUser(userObjectId) {
     const policyholderDocs = await Policyholder.find({
       $or: [
@@ -1098,6 +1101,21 @@ function registerLegacyRoutes(app, deps) {
     for (const policyholderDoc of policyholderDocs) {
       await syncPolicyholderPaymentDates(policyholderDoc);
     }
+  }
+
+  function schedulePolicyholderPaymentDateSyncForUser(userObjectId) {
+    const key = String(userObjectId || "");
+    if (!key) return;
+    const cached = policyholderPaymentDateSyncRuns.get(key);
+    if (cached?.promise) return;
+    if (cached?.completedAt && Date.now() - cached.completedAt < POLICYHOLDER_PAYMENT_DATE_SYNC_TTL_MS) return;
+    const promise = syncPolicyholderPaymentDatesForUser(userObjectId)
+      .then(() => policyholderPaymentDateSyncRuns.set(key, { promise: null, completedAt: Date.now() }))
+      .catch((error) => {
+        policyholderPaymentDateSyncRuns.delete(key);
+        console.error("Policyholder payment date background sync failed:", error);
+      });
+    policyholderPaymentDateSyncRuns.set(key, { promise, completedAt: 0 });
   }
 
   async function ensureScheduledMeetingAttemptCycleBackfill() {
@@ -2729,16 +2747,28 @@ function buildPolicyholderSearchMatch(qRaw) {
   const q = String(qRaw || "").trim();
   if (!q) return null;
 
+  const rawParts = q.split(/\s+/).filter(Boolean);
   const safeQ = escapeRegex(q);
-  const parts = safeQ.split(/\s+/).filter(Boolean);
+  const parts = rawParts.map(escapeRegex);
   const rxFull = new RegExp(safeQ, "i");
 
   const or = [
     { policyholderCode: { $regex: rxFull } },
     { policyNumber: { $regex: rxFull } },
     { "prospect.firstName": { $regex: rxFull } },
+    { "prospect.middleName": { $regex: rxFull } },
     { "prospect.lastName": { $regex: rxFull } },
     { "product.productName": { $regex: rxFull } },
+    { policyholderSearchName: { $regex: rxFull } },
+    {
+      $expr: {
+        $regexMatch: {
+          input: { $toString: "$policyholderNo" },
+          regex: safeQ,
+          options: "i",
+        },
+      },
+    },
   ];
 
   if (parts.length >= 2) {
@@ -2746,7 +2776,12 @@ function buildPolicyholderSearchMatch(qRaw) {
       $and: parts.map((term) => {
         const rx = new RegExp(term, "i");
         return {
-          $or: [{ "prospect.firstName": { $regex: rx } }, { "prospect.lastName": { $regex: rx } }],
+          $or: [
+            { "prospect.firstName": { $regex: rx } },
+            { "prospect.middleName": { $regex: rx } },
+            { "prospect.lastName": { $regex: rx } },
+            { policyholderSearchName: { $regex: rx } },
+          ],
         };
       }),
     });
@@ -5138,7 +5173,7 @@ app.get("/api/policyholders", async (req, res) => {
     }
 
     const userObjectId = new mongoose.Types.ObjectId(userId);
-    await syncPolicyholderPaymentDatesForUser(userObjectId);
+    schedulePolicyholderPaymentDateSyncForUser(userObjectId);
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
     const pageSize = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 50);
     const skip = (pageNum - 1) * pageSize;
@@ -5220,6 +5255,19 @@ app.get("/api/policyholders", async (req, res) => {
       {
         $addFields: {
           originalProspectAssignedToUserId: "$prospect.assignedToUserId",
+          policyholderSearchName: {
+            $trim: {
+              input: {
+                $concat: [
+                  { $ifNull: ["$prospect.firstName", ""] },
+                  " ",
+                  { $ifNull: ["$prospect.middleName", ""] },
+                  " ",
+                  { $ifNull: ["$prospect.lastName", ""] },
+                ],
+              },
+            },
+          },
           effectiveAssignedToUserId: { $ifNull: ["$reassignedToUserId", { $ifNull: ["$assignedToUserId", "$prospect.assignedToUserId"] }] },
           effectivePolicyholderSortDate: { $ifNull: ["$reassignedAt", "$createdAt"] },
         },
@@ -5319,6 +5367,7 @@ app.get("/api/policyholders", async (req, res) => {
           leadId: "$lead._id",
           prospectId: "$prospect._id",
           firstName: "$prospect.firstName",
+          middleName: "$prospect.middleName",
           lastName: "$prospect.lastName",
           age: "$prospect.age",
           productName: "$product.productName",
