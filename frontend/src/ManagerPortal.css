@@ -100,10 +100,10 @@
 
 .manager-urgent-actions {
   padding: 24px;
-  border: 2px solid #fca5a5;
+  border: 1px solid #fed7aa;
   border-radius: 26px;
-  background: linear-gradient(135deg, #fff 0%, #fff7ed 100%);
-  box-shadow: 0 24px 55px rgba(127, 29, 29, 0.24), 0 0 0 5px rgba(254, 226, 226, 0.72);
+  background: radial-gradient(circle at 100% 0, rgba(251, 146, 60, 0.14), transparent 34%), linear-gradient(135deg, #fff 0%, #fffbeb 100%);
+  box-shadow: 0 20px 45px rgba(120, 53, 15, 0.13);
 }
 
 .manager-urgent-actions__head {
@@ -128,12 +128,6 @@
   font: 900 24px/1.2 "FSAlbertArabic", sans-serif;
 }
 
-.manager-urgent-actions__head p {
-  margin: 7px 0 0;
-  color: #64748b;
-  font-size: 14px;
-}
-
 .manager-urgent-actions__head > b {
   display: grid;
   min-width: 36px;
@@ -151,18 +145,49 @@
 }
 
 .manager-urgent-card {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 18px;
-  padding: 17px;
-  border: 1px solid #fecaca;
-  border-left: 5px solid #ef4444;
+  overflow: hidden;
+  padding: 20px;
+  border: 1px solid #fde6c2;
   border-radius: 18px;
-  background: #fffafa;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 8px 24px rgba(120, 53, 15, 0.08);
+  transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+}
+
+.manager-urgent-card::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 5px;
+  background: linear-gradient(#ef4444, #f97316);
+  content: "";
+}
+
+.manager-urgent-card:hover {
+  transform: translateY(-2px);
+  border-color: #fdba74;
+  box-shadow: 0 14px 30px rgba(120, 53, 15, 0.13);
+}
+
+.manager-urgent-card__icon {
+  display: grid;
+  flex: 0 0 46px;
+  width: 46px;
+  height: 46px;
+  place-items: center;
+  border-radius: 15px;
+  background: linear-gradient(145deg, #fee2e2, #ffedd5);
+  color: #dc2626;
+  font-size: 17px;
+  box-shadow: inset 0 0 0 1px rgba(239, 68, 68, 0.12);
 }
 
 .manager-urgent-card__body {
+  flex: 1;
   min-width: 0;
 }
 
@@ -190,12 +215,18 @@
 }
 
 .manager-urgent-card__meta i {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   background: #fff;
   color: #475569;
   border: 1px solid #fecaca;
 }
 
 .manager-urgent-card__meta time {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   color: #64748b;
   font-size: 12px;
   font-weight: 700;
@@ -215,19 +246,38 @@
   white-space: pre-line;
 }
 
+.manager-urgent-card__guidance {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 11px;
+  color: #9a3412;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.manager-urgent-card__guidance svg {
+  flex: 0 0 auto;
+  color: #ea580c;
+}
+
 .manager-urgent-card button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
   flex: 0 0 auto;
   border: 0;
   border-radius: 12px;
   padding: 11px 15px;
-  background: #0f172a;
+  background: linear-gradient(135deg, #9a3412, #c2410c);
   color: #fff;
   font: 900 13px/1 "FSAlbertArabic", sans-serif;
   cursor: pointer;
 }
 
 .manager-urgent-card button:hover {
-  background: #991b1b;
+  background: linear-gradient(135deg, #7c2d12, #9a3412);
 }
 
 .manager-urgent-actions__feedback {
@@ -257,6 +307,11 @@
   .manager-urgent-card {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .manager-urgent-card__icon {
+    width: 42px;
+    height: 42px;
   }
 
   .manager-urgent-card button {
@@ -784,6 +839,15 @@
   .manager-toolbar__filters {
     width: 100%;
   }
+
+  .manager-tab-row .manager-select--unit-date {
+    max-width: none;
+    min-width: 0;
+  }
+
+  .manager-tab-row .manager-select--unit-date select {
+    min-width: 0;
+  }
 }
 .manager-kpi-assignment-card {
   border: 1px solid #e5e7eb;
@@ -839,6 +903,53 @@
   padding: 16px;
   background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
 }
+
+.manager-kpi-progress-card--branch {
+  position: relative;
+  overflow: hidden;
+  min-height: 250px;
+  padding: 20px;
+  border-color: #dbe4ef;
+  background: radial-gradient(circle at 100% 0, rgba(218, 41, 28, .09), transparent 38%), #fff;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, .08);
+}
+
+.manager-kpi-progress-card--branch::before {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 5px;
+  background: #64748b;
+  content: "";
+}
+
+.manager-kpi-progress-card--branch.good::before { background: linear-gradient(90deg, #15803d, #22c55e); }
+.manager-kpi-progress-card--branch.warning::before { background: linear-gradient(90deg, #c2410c, #f59e0b); }
+.manager-kpi-progress-card__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.manager-kpi-progress-card__head > div { min-width: 0; }
+.manager-kpi-progress-card__head strong { margin-top: 4px; font-size: 17px; line-height: 1.3; }
+.manager-kpi-progress-card__head p { margin: 5px 0 0; font-size: 12px; }
+.manager-kpi-status-pill { flex: 0 0 auto; margin: 0 !important; padding: 6px 9px; border-radius: 999px; background: #f1f5f9; color: #475569 !important; font-size: 10px !important; }
+.manager-kpi-progress-card.good .manager-kpi-status-pill { background: #dcfce7; color: #166534 !important; }
+.manager-kpi-progress-card.warning .manager-kpi-status-pill { background: #ffedd5; color: #9a3412 !important; }
+.manager-kpi-progress-card--branch .manager-kpi-progress-values > div { padding: 12px; border: 1px solid #e2e8f0; border-radius: 13px; background: rgba(248, 250, 252, .85); }
+.manager-kpi-progress-card--branch .manager-kpi-progress-values b { margin-top: 5px; font-size: 19px; }
+.manager-kpi-progress-card__foot { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-top: 10px; }
+.manager-kpi-progress-card__foot b { flex: 0 0 auto; color: #334155; font-size: 11px; }
+.manager-kpi-progress-grid--branch { grid-template-columns: repeat(auto-fit, minmax(430px, 1fr)); align-items: start; }
+.manager-branch-kpi-units { display: grid; gap: 9px; margin-top: 18px; padding-top: 15px; border-top: 1px solid #e2e8f0; }
+.manager-branch-kpi-units__head, .manager-branch-kpi-unit__metric { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.manager-branch-kpi-units__head > strong { color: #334155; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+.manager-branch-kpi-units__head > span { font-size: 11px; }
+.manager-branch-kpi-unit { padding: 12px; border: 1px solid #e2e8f0; border-radius: 13px; background: #f8fafc; }
+.manager-branch-kpi-unit__metric > strong { font-size: 13px; }
+.manager-branch-kpi-unit__metric > b { color: #9a3412; font-size: 14px; }
+.manager-branch-kpi-unit__recommendation { margin-top: 10px; padding: 12px; border-left: 4px solid #f59e0b; border-radius: 10px; background: #fff7ed; }
+.manager-branch-kpi-unit__recommendation > span { color: #c2410c; font-size: 9px; font-weight: 900; letter-spacing: .1em; text-transform: uppercase; }
+.manager-branch-kpi-unit__recommendation h4 { margin: 5px 0; color: #7c2d12; font-size: 14px; }
+.manager-branch-kpi-unit__recommendation p { margin: 0; color: #475569; font-size: 12px; line-height: 1.45; }
+.manager-branch-kpi-unit__recommendation small { display: block; margin-top: 6px; line-height: 1.4; }
+.manager-branch-kpi-unit__recommendation button { display: inline-flex; align-items: center; gap: 7px; margin-top: 10px; border: 0; border-radius: 9px; padding: 8px 10px; background: #9a3412; color: #fff; font-size: 11px; font-weight: 900; cursor: pointer; }
+.manager-branch-kpi-unit__recommendation button:hover { background: #7c2d12; }
 
 .manager-kpi-progress-card span,
 .manager-kpi-progress-card small {
@@ -1075,6 +1186,30 @@
   font-size: 13px;
 }
 
+.manager-branch-recommendations { margin-top: 24px; padding: 22px; border: 1px solid #fed7aa; border-radius: 22px; background: linear-gradient(135deg, #fff 0%, #fff7ed 100%); }
+.manager-branch-recommendations__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+.manager-branch-recommendations__head span { color: #c2410c; font-size: 10px; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; }
+.manager-branch-recommendations__head h3 { margin: 4px 0; color: #0f172a; font-size: 20px; }
+.manager-branch-recommendations__head p { margin: 0; color: #64748b; font-size: 13px; }
+.manager-branch-recommendations__head > b { display: grid; min-width: 34px; height: 34px; place-items: center; border-radius: 999px; background: #ffedd5; color: #9a3412; }
+.manager-branch-recommendations__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 12px; }
+.manager-branch-recommendations__grid > article { display: flex; flex-direction: column; padding: 17px; border: 1px solid #fed7aa; border-radius: 16px; background: #fff; box-shadow: 0 8px 20px rgba(124, 45, 18, .07); }
+.manager-branch-recommendations__meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.manager-branch-recommendations__meta span { color: #9a3412; font-size: 10px; font-weight: 900; text-transform: uppercase; }
+.manager-branch-recommendations__meta b { color: #c2410c; font-size: 12px; }
+.manager-branch-recommendations h4 { margin: 10px 0 5px; color: #0f172a; font-size: 15px; }
+.manager-branch-recommendations article p { margin: 0; color: #475569; font-size: 13px; line-height: 1.5; }
+.manager-branch-recommendations article small { margin: 8px 0 14px; color: #64748b; line-height: 1.45; }
+.manager-branch-recommendations article button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; margin-top: auto; border: 0; border-radius: 11px; padding: 10px 12px; background: #9a3412; color: #fff; font-weight: 900; cursor: pointer; }
+.manager-branch-recommendations article button:hover { background: #7c2d12; }
+
+@media (max-width: 640px) {
+  .manager-kpi-progress-card__head, .manager-kpi-progress-card__foot, .manager-branch-recommendations__head { flex-direction: column; }
+  .manager-kpi-progress-card__foot b { flex-basis: auto; }
+  .manager-branch-recommendations { padding: 16px; }
+  .manager-kpi-progress-grid--branch { grid-template-columns: 1fr; }
+}
+
 /* KPI assignment compact card layout overrides */
 .manager-kpi-assignment-card {
   overflow: hidden;
@@ -1178,8 +1313,13 @@
 
 .manager-tab-row .manager-select--unit-date {
   margin-left: auto;
-  max-width: 220px;
-  min-width: 190px;
+  width: min(100%, 390px);
+  max-width: 390px;
+  min-width: 330px;
+}
+
+.manager-tab-row .manager-select--unit-date select {
+  min-width: 230px;
 }
 
 .manager-unit-details-card > .manager-select {
