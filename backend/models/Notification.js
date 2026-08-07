@@ -46,6 +46,7 @@ const NOTIF_TYPES = [
   "AGENT_KPI_ASSIGNED",
   "AGENT_KPI_TARGET_UPDATED",
   "AGENT_KPI_UNASSIGNED",
+  "BM_RECOMMENDATION",
 ];
 
 /**
@@ -60,6 +61,7 @@ const RESOLUTION_REQUIRED_TYPES = [
   "PAYMENT_TRANSFER_REMINDER", "PAYMENT_EOR_REMINDER", "PAYMENT_MISSED_TRANSFER", "POLICY_LAPSED",
   "ORPHANS_ENDORSEMENTS",
   "BRANCH_KPI_UNASSIGNED", "UNIT_KPI_UNASSIGNED", "AGENT_KPI_UNASSIGNED",
+  "BM_RECOMMENDATION",
 ];
 
 /**
@@ -68,7 +70,7 @@ const RESOLUTION_REQUIRED_TYPES = [
  * Allowed entity types this notification can reference.
  * This lets the UI know what kind of item to open when clicking a notification.
  */
-const ENTITY_TYPES = ["Task", "Policyholder", "Prospect", "LongLeave", "Resignation", "KpiAssignment"];
+const ENTITY_TYPES = ["Task", "Policyholder", "Prospect", "LongLeave", "Resignation", "KpiAssignment", "Unit"];
 
 /**
  * notificationSchema
