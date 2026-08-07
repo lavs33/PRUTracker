@@ -16,6 +16,7 @@ const NOTIFICATIONS_PER_PAGE = 15;
 const notificationPriority = (type, role) => {
   const normalizedType = String(type || "").trim().toUpperCase();
   if (normalizedType === "ORPHANS_ENDORSEMENTS") return "urgent";
+  if (normalizedType === "BM_RECOMMENDATION") return "urgent";
   if (role === "bm" && KPI_UNASSIGNED_NOTIF_TYPES.includes(normalizedType)) return "urgent";
   return "normal";
 };
@@ -130,6 +131,41 @@ const OrphanEndorsementMessage = ({ message }) => {
   );
 };
 
+const BmRecommendationMessage = ({ notification }) => {
+  const metadata = notification?.metadata || {};
+  const isSalesProduction = metadata.kpiKey === "monthly_sales_production";
+  return (
+    <div className="notif-recommendation">
+      <div className="notif-recommendation__heading">
+        <span>Branch Manager guidance</span>
+        <strong>{metadata.unitName || "Your unit"}</strong>
+      </div>
+      <div className="notif-recommendation__context">
+        <div>
+          <small>{isSalesProduction ? "Unit KPI progress" : "Branch KPI progress"}</small>
+          <b>{metadata.progressLabel || "—"}</b>
+        </div>
+        <div>
+          <small>Target to achieve</small>
+          <b>{metadata.targetLabel || "—"}</b>
+        </div>
+        <div>
+          <small>Reporting period</small>
+          <b>{metadata.periodLabel || "Current month"}</b>
+        </div>
+      </div>
+      <p className="notif-recommendation__contribution">
+        {metadata.contributionReminder || notification.message}
+      </p>
+      <div className="notif-recommendation__action">
+        <small>Recommended action</small>
+        <strong>{metadata.recommendationTitle || "Strengthen KPI performance"}</strong>
+        <p>{metadata.recommendation || notification.message}</p>
+      </div>
+    </div>
+  );
+};
+
 function ManagerNotifications({ roleType }) {
   const navigate = useNavigate();
   const { username } = useParams();
@@ -157,7 +193,7 @@ function ManagerNotifications({ roleType }) {
   const normalizedRole = String(roleType || user?.role || "UM").trim().toLowerCase();
   const availablePriorityLevels = normalizedRole === "bm" ? ["urgent", "normal"] : normalizedRole === "aum" ? ["high", "normal"] : PRIORITY_LEVELS;
   const managerNotifTypes = normalizedRole === "um"
-    ? ["ORPHANS_ENDORSEMENTS", ...BRANCH_KPI_NOTIF_TYPES, ...UNIT_KPI_NOTIF_TYPES]
+    ? ["BM_RECOMMENDATION", "ORPHANS_ENDORSEMENTS", ...BRANCH_KPI_NOTIF_TYPES, ...UNIT_KPI_NOTIF_TYPES]
     : normalizedRole === "aum"
       ? [...BRANCH_KPI_NOTIF_TYPES, ...UNIT_KPI_NOTIF_TYPES]
       : [...BRANCH_KPI_NOTIF_TYPES, ...UNIT_KPI_NOTIF_TYPES, ...AGENT_KPI_NOTIF_TYPES];
@@ -210,7 +246,7 @@ function ManagerNotifications({ roleType }) {
     const resolutionCountBase = filterNotifications(notifications, { ...filterOptions, ignoreResolution: true });
     const resolutionNotifications = normalizedRole === "bm"
       ? resolutionCountBase.filter((notification) => KPI_UNASSIGNED_NOTIF_TYPES.includes(notification.type))
-      : resolutionCountBase.filter((notification) => notification.type === "ORPHANS_ENDORSEMENTS");
+      : resolutionCountBase.filter((notification) => ["ORPHANS_ENDORSEMENTS", "BM_RECOMMENDATION"].includes(notification.type));
     setResolutionCounts({
       all: resolutionNotifications.length,
       unresolved: resolutionNotifications.filter((notification) => notificationResolution(notification) === "Unresolved").length,
@@ -326,6 +362,7 @@ function ManagerNotifications({ roleType }) {
     if (["BRANCH_KPI_ASSIGNED", "UNIT_KPI_ASSIGNED", "AGENT_KPI_ASSIGNED"].includes(normalizedType)) return "notif-pill kpi-assigned";
     if (["BRANCH_KPI_TARGET_UPDATED", "UNIT_KPI_TARGET_UPDATED", "AGENT_KPI_TARGET_UPDATED"].includes(normalizedType)) return "notif-pill kpi-updated";
     if (KPI_UNASSIGNED_NOTIF_TYPES.includes(normalizedType)) return "notif-pill kpi-unassigned";
+    if (normalizedType === "BM_RECOMMENDATION") return "notif-pill bm-recommendation";
     return "notif-pill added";
   };
 
@@ -356,7 +393,7 @@ function ManagerNotifications({ roleType }) {
   };
 
   const canOpenReadNotification = (notification) => (
-    (normalizedRole === "um" && !KPI_NOTIF_TYPES.includes(notification?.type))
+    (normalizedRole === "um" && ![...KPI_NOTIF_TYPES, "BM_RECOMMENDATION"].includes(notification?.type))
     || (normalizedRole === "bm" && KPI_UNASSIGNED_NOTIF_TYPES.includes(notification?.type))
   );
 
@@ -367,13 +404,15 @@ function ManagerNotifications({ roleType }) {
           {n.status === "Unread" ? <span className="notif-dot" aria-label="Unread" /> : null}
           <span className={typePillClass(n.type)}>{n.type}</span>
           <span className={`notif-priority notif-priority--${notificationPriority(n.type, normalizedRole)}`}>{notificationPriority(n.type, normalizedRole)}</span>
-          {normalizedRole === "um" && n.type === "ORPHANS_ENDORSEMENTS" ? <span className={`notif-resolution notif-resolution--${notificationResolution(n).toLowerCase()}`}>{notificationResolution(n)}</span> : null}
+          {normalizedRole === "um" && ["ORPHANS_ENDORSEMENTS", "BM_RECOMMENDATION"].includes(n.type) ? <span className={`notif-resolution notif-resolution--${notificationResolution(n).toLowerCase()}`}>{notificationResolution(n)}</span> : null}
           {normalizedRole === "bm" && KPI_UNASSIGNED_NOTIF_TYPES.includes(n.type) ? <span className={`notif-resolution notif-resolution--${notificationResolution(n).toLowerCase()}`}>{notificationResolution(n)}</span> : null}
           <span className="notif-time">{formatWhen(n.createdAt)}</span>
         </div>
         <div className="notif-title">{n.title}</div>
         {String(n.message || "").trim()
-          ? (normalizedRole === "um" && n.type === "ORPHANS_ENDORSEMENTS"
+          ? (normalizedRole === "um" && n.type === "BM_RECOMMENDATION"
+            ? <BmRecommendationMessage notification={n} />
+            : normalizedRole === "um" && n.type === "ORPHANS_ENDORSEMENTS"
             ? <OrphanEndorsementMessage message={n.message} />
             : <div className="notif-msg">{n.message}</div>)
           : null}

@@ -269,6 +269,35 @@
   white-space: normal;
 }
 
+.notif-recommendation {
+  display: grid;
+  gap: 13px;
+  margin-top: 12px;
+  overflow: hidden;
+  border: 1px solid #fed7aa;
+  border-radius: 15px;
+  padding: 15px;
+  background: linear-gradient(145deg, #fffaf5 0%, #fff 58%, #fff7ed 100%);
+  box-shadow: 0 8px 22px rgba(154, 52, 18, 0.08);
+}
+
+.notif-recommendation__heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.notif-recommendation__heading span { color: #c2410c; font-size: 10px; font-weight: 900; letter-spacing: .09em; text-transform: uppercase; }
+.notif-recommendation__heading strong { color: #7c2d12; font-size: 13px; }
+.notif-recommendation__context { display: grid; grid-template-columns: repeat(3, minmax(130px, 1fr)); gap: 9px; }
+.notif-recommendation__context > div { display: grid; gap: 5px; border: 1px solid #ffedd5; border-radius: 11px; padding: 10px 12px; background: #fff; }
+.notif-recommendation__context small, .notif-recommendation__action small { color: #9a3412; font-size: 9px; font-weight: 900; letter-spacing: .06em; text-transform: uppercase; }
+.notif-recommendation__context b { color: #1e293b; font-size: 15px; }
+.notif-recommendation__contribution { margin: 0; border-left: 4px solid #f97316; padding: 9px 12px; background: #fff7ed; color: #475569; font-size: 12px; font-weight: 700; line-height: 1.55; }
+.notif-recommendation__action { display: grid; gap: 5px; border-radius: 11px; padding: 11px 12px; background: #7c2d12; color: #fff; }
+.notif-recommendation__action strong { font-size: 14px; }
+.notif-recommendation__action p { margin: 0; color: #ffedd5; font-size: 12px; line-height: 1.5; }
+
+@media (max-width: 700px) {
+  .notif-recommendation__context { grid-template-columns: 1fr; }
+  .notif-recommendation__heading { align-items: flex-start; flex-direction: column; }
+}
+
 .notif-endorsement-section {
   display: grid;
   gap: 9px;
@@ -430,6 +459,12 @@
   background: #fde9ec;
   border-color: #efa7b1;
   color: #982536;
+}
+
+.notif-pill.bm-recommendation {
+  border-color: #fdba74;
+  background: #fff7ed;
+  color: #9a3412;
 }
 
 .notif-right {
