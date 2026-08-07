@@ -21,6 +21,7 @@ function AgentPolicyholdersAll() {
   const [isReady, setIsReady] = useState(false);
 
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [productName, setProductName] = useState("");
   const [status, setStatus] = useState("");
   const [sortKey, setSortKey] = useState("policyholderNoAsc");
@@ -50,6 +51,11 @@ function AgentPolicyholdersAll() {
   }, [user]);
 
   useEffect(() => {
+    const timeout = window.setTimeout(() => setDebouncedQuery(query.trim()), 300);
+    return () => window.clearTimeout(timeout);
+  }, [query]);
+
+  useEffect(() => {
     if (!isReady) return;
 
     const controller = new AbortController();
@@ -70,7 +76,7 @@ function AgentPolicyholdersAll() {
 
         const res = await fetch(
           `http://localhost:5000/api/policyholders?userId=${user.id}&page=${page}&limit=${PAGE_SIZE}` +
-            `&q=${encodeURIComponent(query)}` +
+            `&q=${encodeURIComponent(debouncedQuery)}` +
             `&productName=${encodeURIComponent(productName)}` +
             `&status=${encodeURIComponent(status)}` +
             `&sort=${encodeURIComponent(sortKey)}`,
@@ -107,11 +113,11 @@ function AgentPolicyholdersAll() {
 
     fetchPage();
     return () => controller.abort();
-  }, [isReady, user?.id, page, query, productName, status, sortKey, PAGE_SIZE]);
+  }, [isReady, user?.id, page, debouncedQuery, productName, status, sortKey, PAGE_SIZE]);
 
   useEffect(() => {
     setPage(1);
-  }, [query, productName, status, sortKey]);
+  }, [debouncedQuery, productName, status, sortKey]);
 
   const formatDateOnly = (v) => {
     if (!v) return "—";
@@ -135,6 +141,7 @@ function AgentPolicyholdersAll() {
 
   const resetFilters = () => {
     setQuery("");
+    setDebouncedQuery("");
     setProductName("");
     setStatus("");
     setSortKey("policyholderNoAsc");
