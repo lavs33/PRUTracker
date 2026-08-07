@@ -202,7 +202,9 @@ function ManagerNotifications({ roleType }) {
     try { return JSON.parse(localStorage.getItem("managerPortalUser") || "null"); } catch { return null; }
   }, []);
   const normalizedRole = String(roleType || user?.role || "UM").trim().toLowerCase();
-  const availablePriorityLevels = normalizedRole === "bm" ? ["urgent", "normal"] : normalizedRole === "aum" ? ["high", "normal"] : PRIORITY_LEVELS;
+  const availablePriorityLevels = useMemo(() => (
+    normalizedRole === "bm" || normalizedRole === "um" ? ["urgent", "normal"] : ["normal"]
+  ), [normalizedRole]);
   const managerNotifTypes = normalizedRole === "um"
     ? ["BM_RECOMMENDATION", "ORPHANS_ENDORSEMENTS", ...BRANCH_KPI_NOTIF_TYPES, ...UNIT_KPI_NOTIF_TYPES]
     : normalizedRole === "aum"
@@ -225,9 +227,9 @@ function ManagerNotifications({ roleType }) {
   }, [user, username, normalizedRole, navigate]);
 
   useEffect(() => {
-    if (normalizedRole === "aum" && priorityFilter === "urgent") setPriorityFilter("all");
+    if (priorityFilter !== "all" && !availablePriorityLevels.includes(priorityFilter)) setPriorityFilter("all");
     if (!["um", "bm"].includes(normalizedRole) && resolutionFilter !== "all") setResolutionFilter("all");
-  }, [normalizedRole, priorityFilter, resolutionFilter]);
+  }, [availablePriorityLevels, normalizedRole, priorityFilter, resolutionFilter]);
 
   useEffect(() => { document.title = `${username} | Notifications`; }, [username]);
 

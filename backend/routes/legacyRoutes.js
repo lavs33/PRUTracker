@@ -2729,16 +2729,28 @@ function buildPolicyholderSearchMatch(qRaw) {
   const q = String(qRaw || "").trim();
   if (!q) return null;
 
+  const rawParts = q.split(/\s+/).filter(Boolean);
   const safeQ = escapeRegex(q);
-  const parts = safeQ.split(/\s+/).filter(Boolean);
+  const parts = rawParts.map(escapeRegex);
   const rxFull = new RegExp(safeQ, "i");
 
   const or = [
     { policyholderCode: { $regex: rxFull } },
     { policyNumber: { $regex: rxFull } },
     { "prospect.firstName": { $regex: rxFull } },
+    { "prospect.middleName": { $regex: rxFull } },
     { "prospect.lastName": { $regex: rxFull } },
     { "product.productName": { $regex: rxFull } },
+    { policyholderSearchName: { $regex: rxFull } },
+    {
+      $expr: {
+        $regexMatch: {
+          input: { $toString: "$policyholderNo" },
+          regex: safeQ,
+          options: "i",
+        },
+      },
+    },
   ];
 
   if (parts.length >= 2) {
@@ -2746,7 +2758,12 @@ function buildPolicyholderSearchMatch(qRaw) {
       $and: parts.map((term) => {
         const rx = new RegExp(term, "i");
         return {
-          $or: [{ "prospect.firstName": { $regex: rx } }, { "prospect.lastName": { $regex: rx } }],
+          $or: [
+            { "prospect.firstName": { $regex: rx } },
+            { "prospect.middleName": { $regex: rx } },
+            { "prospect.lastName": { $regex: rx } },
+            { policyholderSearchName: { $regex: rx } },
+          ],
         };
       }),
     });
@@ -5220,6 +5237,19 @@ app.get("/api/policyholders", async (req, res) => {
       {
         $addFields: {
           originalProspectAssignedToUserId: "$prospect.assignedToUserId",
+          policyholderSearchName: {
+            $trim: {
+              input: {
+                $concat: [
+                  { $ifNull: ["$prospect.firstName", ""] },
+                  " ",
+                  { $ifNull: ["$prospect.middleName", ""] },
+                  " ",
+                  { $ifNull: ["$prospect.lastName", ""] },
+                ],
+              },
+            },
+          },
           effectiveAssignedToUserId: { $ifNull: ["$reassignedToUserId", { $ifNull: ["$assignedToUserId", "$prospect.assignedToUserId"] }] },
           effectivePolicyholderSortDate: { $ifNull: ["$reassignedAt", "$createdAt"] },
         },
@@ -5319,6 +5349,7 @@ app.get("/api/policyholders", async (req, res) => {
           leadId: "$lead._id",
           prospectId: "$prospect._id",
           firstName: "$prospect.firstName",
+          middleName: "$prospect.middleName",
           lastName: "$prospect.lastName",
           age: "$prospect.age",
           productName: "$product.productName",

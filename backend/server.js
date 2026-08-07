@@ -783,6 +783,35 @@ async function resolvePriorKpiUnassignedNotifications({ recipientIds, scopeType,
   );
 }
 
+
+async function resolveBmRecommendationsForBranchKpiUnassigned({ branchId, kpiKey, monthKey }) {
+  if (!branchId || !kpiKey || !monthKey) return;
+  const units = await Unit.find({ branchId }).select("_id").lean();
+  const unitIds = units.map((unit) => String(unit._id || "")).filter(Boolean);
+  if (!unitIds.length) return;
+  const unitManagers = await UM.find({ unitId: { $in: unitIds }, isBlocked: { $ne: true } }).select("userId").lean();
+  const unitManagerUserIds = [...new Set(unitManagers.map((manager) => String(manager.userId || "")).filter(Boolean))];
+  if (!unitManagerUserIds.length) return;
+  await Notification.updateMany(
+    {
+      assignedToUserId: { $in: unitManagerUserIds },
+      type: "BM_RECOMMENDATION",
+      resolutionStatus: { $ne: "Resolved" },
+      "metadata.kpiKey": String(kpiKey),
+      "metadata.monthKey": String(monthKey),
+      "metadata.unitId": { $in: unitIds },
+      softDeletedAt: null,
+    },
+    {
+      $set: {
+        resolutionStatus: "Resolved",
+        resolvedAt: new Date(),
+        "metadata.resolutionReason": "Resolved because the related branch KPI was unassigned.",
+      },
+    },
+  );
+}
+
 async function createBranchKpiNotifications({ branchId, branchName, assignmentId, previousKpi, nextKpi }) {
   const { type, message, monthKey } = monthlyKpiNotificationDetails(previousKpi, nextKpi, "BRANCH");
   if (!type) return;
@@ -803,6 +832,9 @@ async function createBranchKpiNotifications({ branchId, branchName, assignmentId
   const titleAction = type === "BRANCH_KPI_UNASSIGNED" ? "unassigned" : type === "BRANCH_KPI_ASSIGNED" ? "assigned" : "target updated";
 
   await resolvePriorKpiUnassignedNotifications({ recipientIds, scopeType: "BRANCH", assignmentId, kpiKey, monthKey, type });
+  if (type === "BRANCH_KPI_UNASSIGNED") {
+    await resolveBmRecommendationsForBranchKpiUnassigned({ branchId, kpiKey, monthKey });
+  }
 
   await Notification.insertMany(recipientIds.map((assignedToUserId) => ({
     assignedToUserId,
