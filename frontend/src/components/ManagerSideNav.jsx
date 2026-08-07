@@ -1,4 +1,4 @@
-import { FaBars, FaBullseye, FaChevronLeft, FaChevronRight, FaHome, FaUserFriends, FaUsers } from "react-icons/fa";
+import { FaBars, FaBullseye, FaChartLine, FaChevronLeft, FaChevronRight, FaHome, FaUserFriends, FaUsers } from "react-icons/fa";
 import "./ManagerSideNav.css";
 
 const NAV_ITEMS = [
@@ -7,7 +7,7 @@ const NAV_ITEMS = [
   { key: "orphan_endorsements", label: "Orphan Clients Endorsements", icon: <FaUserFriends size={18} />, umOnly: true },
   { key: "kpi_assignment", label: "KPI Assignment", icon: <FaBullseye size={18} /> },
   { key: "orphan_clients", label: "Orphan Client Management", icon: <FaUserFriends size={18} />, bmOnly: true },
-  { key: "kpi_progress", label: "Branch KPI Progress", icon: <FaBullseye size={18} />, bmOnly: true },
+  { key: "kpi_progress", label: "Branch KPI Progress", icon: <FaChartLine size={18} />, bmOnly: true },
 ];
 
 function ManagerSideNav({ roleLabel, active, onNavigate, collapsed, onToggle }) {
