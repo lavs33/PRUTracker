@@ -125,3 +125,52 @@
 .sp-contextLink:focus-visible {
   text-decoration: underline;
 }
+.sp-conversionLists {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.sp-conversionList {
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.sp-conversionListHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  font: 800 12px "FSAlbertArabic", sans-serif;
+}
+
+.sp-conversionListHeader span {
+  min-width: 28px;
+  min-height: 24px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.85);
+}
+
+.sp-conversionList--converted {
+  border-color: #bbf7d0;
+}
+
+.sp-conversionList--converted .sp-conversionListHeader {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.sp-conversionList--unconverted {
+  border-color: #fed7aa;
+}
+
+.sp-conversionList--unconverted .sp-conversionListHeader {
+  background: #ffedd5;
+  color: #9a3412;
+}
