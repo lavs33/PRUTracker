@@ -241,7 +241,7 @@ function AgentSalesPerformance() {
   const unconvertedLeadDetails = Array.isArray(salesDetails.leadConversion?.unconverted) ? salesDetails.leadConversion.unconverted : [];
   const policyStatusPolicies = Array.isArray(salesDetails.policyStatusPolicies) ? salesDetails.policyStatusPolicies : [];
   const leadDetailRows = [...convertedLeadDetails, ...unconvertedLeadDetails];
-  const leadHref = (row) => row?.prospectId && row?.leadId ? `/agent/${username}/prospects/${row.prospectId}/leads/${row.leadId}/engage` : `/agent/${username}/prospects`;
+  const leadHref = (row) => row?.prospectId && row?.leadId ? `/agent/${username}/prospects/${row.prospectId}/leads/${row.leadId}` : `/agent/${username}/prospects`;
   const policyHref = (row) => row?.policyholderId ? `/agent/${username}/policyholders/${row.policyholderId}` : leadHref(row);
   const kpis = [
     { label: "Total Leads Handled", value: data.totalHandledLeads || 0 },
@@ -324,7 +324,7 @@ function AgentSalesPerformance() {
       <tr><td>${escapeHtml(row.frequency || "—")}</td><td>${escapeHtml(row.policyholderCode || "—")}</td><td>${escapeHtml(row.prospectName || "—")} / ${escapeHtml(row.leadCode || "—")}</td><td>${escapeHtml(row.productName || "—")}</td><td>₱ ${escapeHtml(money(row.frequencyPremiumPhp))}</td><td>${escapeHtml(formatDate(row.issuedAt))}</td></tr>
     `).join("");
     const leadDetailRowsHtml = leadDetailRows.map((row) => `
-      <tr><td>${escapeHtml(row.conversionStatus || "—")}</td><td>${escapeHtml(row.leadCode || "—")}</td><td>${escapeHtml(row.prospectName || "—")}</td><td>${escapeHtml(row.leadSource || "—")}</td><td>${escapeHtml(row.conversionStatus === "Converted" ? `${row.policyholderCode || "Policy —"} / ${row.policyStatus || "—"}` : row.leadStatus || "—")}</td><td>${escapeHtml(formatDate(row.convertedAt || row.createdAt))}</td></tr>
+      <tr><td>${escapeHtml(row.leadCode || "—")}</td><td>${escapeHtml(row.prospectName || "—")}</td><td>${escapeHtml(row.conversionStatus || "—")}</td><td>${escapeHtml(row.leadSource || "—")}</td><td>${escapeHtml(row.conversionStatus === "Converted" ? `${row.policyholderCode || "Policy —"} / ${row.policyStatus || "—"}` : row.leadStatus || "—")}</td></tr>
     `).join("");
     const policyDetailRowsHtml = policyStatusPolicies.map((row) => `
       <tr><td>${escapeHtml(row.status || "—")}</td><td>${escapeHtml(row.policyholderCode || "—")}</td><td>${escapeHtml(row.prospectName || "—")} / ${escapeHtml(row.leadCode || "—")}</td><td>${escapeHtml(row.productName || "—")}</td><td>₱ ${escapeHtml(money(row.frequencyPremiumPhp))} ${escapeHtml(row.frequency || "")}</td><td>${escapeHtml(formatDate(row.issuedAt))}</td></tr>
@@ -447,19 +447,19 @@ function AgentSalesPerformance() {
         <section class="section">
           <div class="panel">
             <h4>Total Frequency Premium Policy Details</h4>
-            <table><thead><tr><th>Frequency</th><th>Policy</th><th>Prospect / Lead</th><th>Product</th><th>Premium</th><th>Issued</th></tr></thead><tbody>${premiumPolicyRowsHtml || '<tr><td colspan="6">No active policy premium details.</td></tr>'}</tbody></table>
+            <table><thead><tr><th>Frequency</th><th>Policy</th><th>Policyholder / Lead</th><th>Product</th><th>Premium</th><th>Issued</th></tr></thead><tbody>${premiumPolicyRowsHtml || '<tr><td colspan="6">No active policy premium details.</td></tr>'}</tbody></table>
           </div>
         </section>
         <section class="section">
           <div class="panel">
             <h4>Lead Conversion Details</h4>
-            <table><thead><tr><th>Type</th><th>Lead</th><th>Prospect</th><th>Source</th><th>Status / Policy</th><th>Date</th></tr></thead><tbody>${leadDetailRowsHtml || '<tr><td colspan="6">No lead conversion details.</td></tr>'}</tbody></table>
+            <table><thead><tr><th>Lead Code</th><th>Prospect Name</th><th>Type</th><th>Source</th><th>Status / Policy</th></tr></thead><tbody>${leadDetailRowsHtml || '<tr><td colspan="5">No lead conversion details.</td></tr>'}</tbody></table>
           </div>
         </section>
         <section class="section">
           <div class="panel">
             <h4>Policy Status Details</h4>
-            <table><thead><tr><th>Status</th><th>Policy</th><th>Prospect / Lead</th><th>Product</th><th>Premium</th><th>Issued</th></tr></thead><tbody>${policyDetailRowsHtml || '<tr><td colspan="6">No policy status details.</td></tr>'}</tbody></table>
+            <table><thead><tr><th>Status</th><th>Policy</th><th>Policyholder / Lead</th><th>Product</th><th>Premium</th><th>Issued</th></tr></thead><tbody>${policyDetailRowsHtml || '<tr><td colspan="6">No policy status details.</td></tr>'}</tbody></table>
           </div>
         </section>
       `;
@@ -719,13 +719,13 @@ function AgentSalesPerformance() {
             </div>
             <div className="sp-sourceTableWrap" style={{ marginTop: 16 }}>
               <table className="sp-table">
-                <thead><tr><th>Frequency</th><th>Policy / Lead</th><th>Prospect</th><th>Product</th><th>Premium</th><th>Issued</th></tr></thead>
+                <thead><tr><th>Frequency</th><th>Policy / Lead</th><th>Policyholder</th><th>Product</th><th>Premium</th><th>Issued</th></tr></thead>
                 <tbody>
                   {frequencyPremiumPolicies.length ? frequencyPremiumPolicies.map((row) => (
                     <tr key={`${row.frequencyKey}:${row.policyholderId}`}>
                       <td>{row.frequency || "—"}</td>
                       <td><Link className="sp-contextLink" to={policyHref(row)}>{row.policyholderCode || "—"}</Link><br /><small>{row.leadCode || "Lead —"}</small></td>
-                      <td><Link className="sp-contextLink" to={leadHref(row)}>{row.prospectName || "—"}</Link><br /><small>{row.prospectCode || "—"}</small></td>
+                      <td><Link className="sp-contextLink" to={policyHref(row)}>{row.prospectName || "—"}</Link><br /><small>{row.prospectCode || "—"}</small></td>
                       <td>{row.productName || "—"}</td>
                       <td>₱ {money(row.frequencyPremiumPhp)}<br /><small>Annual ₱ {money(row.annualPremiumPhp)}</small></td>
                       <td>{formatDate(row.issuedAt)}</td>
@@ -751,18 +751,17 @@ function AgentSalesPerformance() {
               </div>
               <div className="sp-sourceTableWrap" style={{ marginTop: 14 }}>
                 <table className="sp-table">
-                  <thead><tr><th>Conversion</th><th>Lead</th><th>Prospect</th><th>Source</th><th>Status / Policy</th><th>Date</th></tr></thead>
+                  <thead><tr><th>Lead Code</th><th>Prospect Name</th><th>Conversion</th><th>Source</th><th>Status / Policy</th></tr></thead>
                   <tbody>
                     {leadDetailRows.length ? leadDetailRows.map((row) => (
                       <tr key={`${row.conversionStatus}:${row.leadId}`}>
-                        <td>{row.conversionStatus}</td>
                         <td><Link className="sp-contextLink" to={leadHref(row)}>{row.leadCode || "—"}</Link></td>
                         <td><Link className="sp-contextLink" to={leadHref(row)}>{row.prospectName || "—"}</Link><br /><small>{row.prospectCode || "—"}</small></td>
+                        <td>{row.conversionStatus}</td>
                         <td>{row.leadSource || "—"}</td>
                         <td>{row.conversionStatus === "Converted" ? <><Link className="sp-contextLink" to={policyHref(row)}>{row.policyholderCode || "Policy —"}</Link><br /><small>{row.productName || "—"} • {row.policyStatus || "—"}</small></> : row.leadStatus}</td>
-                        <td>{formatDate(row.convertedAt || row.createdAt)}</td>
                       </tr>
-                    )) : <tr><td colSpan="6">No lead conversion details for this period.</td></tr>}
+                    )) : <tr><td colSpan="5">No lead conversion details for this period.</td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -798,13 +797,13 @@ function AgentSalesPerformance() {
               </div>
               <div className="sp-sourceTableWrap" style={{ marginTop: 14 }}>
                 <table className="sp-table">
-                  <thead><tr><th>Status</th><th>Policy</th><th>Prospect / Lead</th><th>Product</th><th>Premium</th><th>Issued</th></tr></thead>
+                  <thead><tr><th>Status</th><th>Policy</th><th>Policyholder / Lead</th><th>Product</th><th>Premium</th><th>Issued</th></tr></thead>
                   <tbody>
                     {policyStatusPolicies.length ? policyStatusPolicies.map((row) => (
                       <tr key={`${row.status}:${row.policyholderId}`}>
                         <td>{row.status || "—"}</td>
                         <td><Link className="sp-contextLink" to={policyHref(row)}>{row.policyholderCode || "—"}</Link><br /><small>{row.policyNumber || "Policy # —"}</small></td>
-                        <td><Link className="sp-contextLink" to={leadHref(row)}>{row.prospectName || "—"}</Link><br /><small>{row.leadCode || "Lead —"}</small></td>
+                        <td><Link className="sp-contextLink" to={policyHref(row)}>{row.prospectName || "—"}</Link><br /><small>{row.leadCode || "Lead —"}</small></td>
                         <td>{row.productName || "—"}</td>
                         <td>₱ {money(row.frequencyPremiumPhp)}<br /><small>{row.frequency || "—"}</small></td>
                         <td>{formatDate(row.issuedAt)}</td>
