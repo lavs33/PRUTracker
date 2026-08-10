@@ -155,8 +155,8 @@ function AgentTasksProgress() {
     const formatDate = (value) => {
       const dt = new Date(value);
       if (Number.isNaN(dt.getTime())) return "—";
-      const month = dt.toLocaleString("en-US", { month: "short" }).toLowerCase();
-      return `${month}. ${dt.getDate()}, ${dt.getFullYear()}`;
+      const month = dt.toLocaleString("en-US", { month: "short" });
+      return `${month}. ${dt.getDate()}`;
     };
     const computePeriod = () => {
       const start = data.reportContext?.startDate ? new Date(data.reportContext.startDate) : null;
@@ -164,7 +164,7 @@ function AgentTasksProgress() {
       if (start && !Number.isNaN(start.getTime())) {
         const startLabel = formatDate(start);
         const endLabel = formatDate(end);
-        return { label: startLabel === endLabel ? startLabel : `${startLabel} to ${endLabel}`, start, end };
+        return { label: startLabel === endLabel ? startLabel : `${startLabel} - ${endLabel}`, start, end };
       }
       return { label: `Through ${formatDate(end)}`, start: null, end };
     };
