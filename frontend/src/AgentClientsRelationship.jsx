@@ -267,7 +267,7 @@ function AgentClientsRelationship() {
     const topSource = dashboard.insights?.topSource;
     const leadCoverage = dashboard.insights?.leadCoverage;
     const sourceMessage = topSource
-      ? `${topSource.label} converts to active policyholders at ${topSource.conversionRatePct}% (${topSource.policyholders}/${topSource.prospects}) within the selected period.`
+      ? `${topSource.label} has ${topSource.activePolicyholders ?? topSource.policyholders} active policyholders out of ${topSource.totalPolicyholders ?? topSource.prospects} policyholders created within the selected period (${topSource.conversionRatePct}% active rate).`
       : "No source conversion pattern available yet.";
     const coverageMessage = leadCoverage
       ? `${leadCoverage.prospectsWithActiveLeads || leadCoverage.prospectsWithLeads || 0} of ${dashboard.totalProspects} cumulative prospects have active leads (${leadCoverage.leadCoveragePct}% coverage). ${leadCoverage.prospectsWithClosedLeadsAndActivePolicies || 0} prospects have closed leads with active policies, and ${leadCoverage.activeLeads || 0} active leads are still going on.`
@@ -283,35 +283,48 @@ function AgentClientsRelationship() {
   const prospectDetails = dashboard.details?.prospects || [];
   const policyholderDetails = dashboard.details?.policyholders || [];
   const leadDetails = dashboard.details?.leads || [];
-  const prospectRowsFor = (predicate) => prospectDetails.filter(predicate);
-  const leadRowsFor = (predicate) => leadDetails.filter(predicate);
-  const DetailList = ({ type = "prospect", rows = [], empty = "No rows for this section." }) => (
+  const policyholderRowsFor = (predicate) => policyholderDetails.filter(predicate);
+  const pipelineStageOrder = ["Contacting", "Needs Assessment", "Proposal", "Application", "Policy Issuance"];
+  const ongoingLeadDetails = leadDetails
+    .filter((lead) => ["New", "In Progress"].includes(lead.leadStatus))
+    .slice()
+    .sort((a, b) => {
+      const stageA = pipelineStageOrder.indexOf(a.currentStage);
+      const stageB = pipelineStageOrder.indexOf(b.currentStage);
+      return (stageA === -1 ? pipelineStageOrder.length : stageA) - (stageB === -1 ? pipelineStageOrder.length : stageB)
+        || new Date(a.createdAt || 0) - new Date(b.createdAt || 0)
+        || String(a.leadCode || "").localeCompare(String(b.leadCode || ""), undefined, { numeric: true, sensitivity: "base" });
+    });
+  const detailLink = (to, children) => to ? <Link className="cr-prospectLink" to={to}>{children}</Link> : children;
+  const DetailList = ({ type = "prospect", rows = [], empty = "No rows for this section.", prospectNameMeta = "status" }) => (
     <div className="cr-detailList">
       {rows.length ? (
         <table>
           <thead>
-            <tr>{type === "policyholder" ? <><th>Policyholder</th><th>Name</th><th>Status</th></> : type === "lead" ? <><th>Lead</th><th>Prospect</th><th>Stage / Status</th></> : <><th>Prospect</th><th>Name</th><th>Status</th></>}</tr>
+            <tr>{type === "policyholder" ? <><th>Policyholder</th><th>Name</th><th>Status</th><th>Market Type</th><th>Prospect Type</th></> : type === "lead" ? <><th>Lead</th><th>Prospect</th><th>Stage / Status</th></> : <><th>Prospect</th><th>Name</th><th>{prospectNameMeta === "source" ? "Source" : "Status"}</th></>}</tr>
           </thead>
           <tbody>
             {rows.map((row) => (
               <tr key={`${type}:${row.policyholderId || row.leadId || row.prospectId}:${row.status || row.leadStatus || row.currentStage || ""}`}>
                 {type === "policyholder" ? (
                   <>
-                    <td>{row.policyholderCode || "—"}</td>
-                    <td>{row.fullName || "—"}<br /><small>{row.leadCode || "Lead —"}</small></td>
+                    <td>{detailLink(row.policyholderId ? `/agent/${username}/policyholders/${row.policyholderId}` : null, row.policyholderCode || "—")}</td>
+                    <td>{detailLink(row.policyholderId ? `/agent/${username}/policyholders/${row.policyholderId}` : null, row.fullName || "—")}</td>
                     <td>{row.status || "—"}</td>
+                    <td>{row.marketType || "—"}</td>
+                    <td>{row.prospectType || "—"}</td>
                   </>
                 ) : type === "lead" ? (
                   <>
-                    <td>{row.leadCode || "—"}</td>
-                    <td>{row.prospectName || "—"}</td>
+                    <td>{detailLink(row.prospectId && row.leadId ? `/agent/${username}/prospects/${row.prospectId}/leads/${row.leadId}` : null, row.leadCode || "—")}</td>
+                    <td>{detailLink(row.prospectId && row.leadId ? `/agent/${username}/prospects/${row.prospectId}/leads/${row.leadId}` : null, row.prospectName || "—")}</td>
                     <td>{row.currentStage || "—"}<br /><small>{row.leadStatus || "—"}</small></td>
                   </>
                 ) : (
                   <>
-                    <td>{row.prospectCode || "—"}</td>
-                    <td>{row.fullName || "—"}<br /><small>{row.source || "—"}</small></td>
-                    <td>{row.status || "—"}</td>
+                    <td>{detailLink(row.prospectId ? `/agent/${username}/prospects/${row.prospectId}` : null, row.prospectCode || "—")}</td>
+                    <td>{detailLink(row.prospectId ? `/agent/${username}/prospects/${row.prospectId}` : null, row.fullName || "—")}</td>
+                    <td>{prospectNameMeta === "source" ? (row.source || "—") : (row.status || "—")}</td>
                   </>
                 )}
               </tr>
@@ -369,19 +382,6 @@ function AgentClientsRelationship() {
       return out;
     };
 
-    const sourceRows = dashboard.sourceConversion
-      .map(
-        (row) => `
-          <tr>
-            <td>${escapeHtml(row.label)}</td>
-            <td>${Number(row.prospects || 0)}</td>
-            <td>${Number(row.policyholders || 0)}</td>
-            <td>${Number(row.conversionRatePct || 0)}%</td>
-          </tr>
-        `
-      )
-      .join("");
-
     const sourceMixRows = [
       { label: "Agent-Sourced", value: dashboard.agentSourced },
       { label: "System-Assigned", value: dashboard.systemAssigned },
@@ -428,32 +428,6 @@ function AgentClientsRelationship() {
       )
       .join("");
 
-    const segmentMixRows = dashboard.marketConversion
-      .map(
-        (row) => `
-          <tr>
-            <td>${escapeHtml(row.group || "Segment")}</td>
-            <td>${escapeHtml(row.label)}</td>
-            <td>${Number(row.prospects || 0)}</td>
-            <td>${Number(row.policyholders || 0)}</td>
-            <td>${Number(row.conversionRatePct || 0)}%</td>
-          </tr>
-        `
-      )
-      .join("");
-
-    const stageRows = dashboard.stageProgress
-      .map(
-        (row) => `
-          <tr>
-            <td>${escapeHtml(row.label)}</td>
-            <td>${Number(row.count || 0)}</td>
-            <td>${Number(row.value || 0)}%</td>
-          </tr>
-        `
-      )
-      .join("");
-
     const trendRows = dashboard.prospectTrend
       .map((point, index) => {
         const matchingPolicy = dashboard.policyholderTrend[index];
@@ -468,6 +442,32 @@ function AgentClientsRelationship() {
       .join("");
 
     const recentChunks = chunk(dashboard.recentProspects, 20);
+    const prospectDetailRows = prospectDetails.map((row) => `
+      <tr>
+        <td>${escapeHtml(row.prospectCode || "—")}</td>
+        <td>${escapeHtml(row.fullName || "—")}</td>
+        <td>${escapeHtml(row.status || "—")}</td>
+        <td>${escapeHtml(row.source || "—")}</td>
+      </tr>
+    `).join("");
+    const activePolicyholderReportRows = policyholderDetails.filter((row) => row.status === "Active").map((row) => `
+      <tr>
+        <td>${escapeHtml(row.policyholderCode || "—")}</td>
+        <td>${escapeHtml(row.fullName || "—")}</td>
+        <td>${escapeHtml(row.status || "—")}</td>
+        <td>${escapeHtml(row.marketType || "—")}</td>
+        <td>${escapeHtml(row.prospectType || "—")}</td>
+        <td>${escapeHtml(row.source || "—")}</td>
+      </tr>
+    `).join("");
+    const pipelineLeadRows = ongoingLeadDetails.map((row) => `
+      <tr>
+        <td>${escapeHtml(row.leadCode || "—")}</td>
+        <td>${escapeHtml(row.prospectName || "—")}</td>
+        <td>${escapeHtml(row.currentStage || "—")}</td>
+        <td>${escapeHtml(row.leadStatus || "—")}</td>
+      </tr>
+    `).join("");
     const pages = [];
 
     pages.push(`
@@ -534,7 +534,7 @@ function AgentClientsRelationship() {
               <table>
                 <thead><tr><th>Source</th><th>Count</th><th>Share</th></tr></thead>
                 <tbody>${sourceMixRows || '<tr><td colspan="3">No source mix data available.</td></tr>'}</tbody>
-              </table>
+              </table><h4>Prospects</h4><table><thead><tr><th>Prospect Code</th><th>Name</th><th>Status</th><th>Source</th></tr></thead><tbody>${prospectDetailRows || '<tr><td colspan="4">No prospects in source mix.</td></tr>'}</tbody></table>
             </div>
             <div class="panel">
               <h4>Policyholder Health</h4>
@@ -552,13 +552,13 @@ function AgentClientsRelationship() {
               <table>
                 <thead><tr><th>Status</th><th>Count</th><th>Share</th></tr></thead>
                 <tbody>${prospectStatusRows || '<tr><td colspan="3">No prospect status data available.</td></tr>'}</tbody>
-              </table>
+              </table><h4>Prospects</h4><table><thead><tr><th>Prospect Code</th><th>Name</th><th>Status</th><th>Source</th></tr></thead><tbody>${prospectDetailRows || '<tr><td colspan="4">No prospects for relationship status.</td></tr>'}</tbody></table>
             </div>
             <div class="panel">
               <h4>Segment Conversion Comparison</h4><p class="panel-note">Conversion counts include active policyholders only.</p>
               <table>
-                <thead><tr><th>Category</th><th>Segment</th><th>Prospects</th><th>Active Policyholders</th><th>Conversion</th></tr></thead>
-                <tbody>${segmentMixRows || '<tr><td colspan="5">No segment mix data available.</td></tr>'}</tbody>
+                <thead><tr><th>Policyholder Code</th><th>Name</th><th>Status</th><th>Market Type</th><th>Prospect Type</th><th>Source</th></tr></thead>
+                <tbody>${activePolicyholderReportRows || '<tr><td colspan="6">No policyholders for segment comparison.</td></tr>'}</tbody>
               </table>
             </div>
           </div>
@@ -571,16 +571,20 @@ function AgentClientsRelationship() {
         <section class="section compact-top">
           <h2 class="section-title">Relationship Pipeline Progress</h2>
           <table>
-            <thead><tr><th>Stage</th><th>Engagements</th><th>Share</th></tr></thead>
-            <tbody>${stageRows || '<tr><td colspan="3">No stage data available.</td></tr>'}</tbody>
+            <thead><tr><th>Stage</th><th>Leads</th><th>Share</th></tr></thead>
+            <tbody>${dashboard.stageProgress.map((row) => `<tr><td>${escapeHtml(row.label)}</td><td>${Number(row.count || 0)}</td><td>${Number(row.value || 0)}%</td></tr>`).join("") || '<tr><td colspan="3">No stage data available.</td></tr>'}</tbody>
+          </table>
+          <table>
+            <thead><tr><th>Lead Code</th><th>Name</th><th>Stage</th><th>Status</th></tr></thead>
+            <tbody>${pipelineLeadRows || '<tr><td colspan="4">No ongoing leads through this selected period.</td></tr>'}</tbody>
           </table>
         </section>
         <section class="section spacious-section">
           <h2 class="section-title">Source Conversion Quality</h2>
           <p class="panel-note">Policyholder counts include active policyholders only.</p>
           <table>
-            <thead><tr><th>Source</th><th>Prospects</th><th>Active Policyholders</th><th>Conversion</th></tr></thead>
-            <tbody>${sourceRows || '<tr><td colspan="4">No source conversion data available.</td></tr>'}</tbody>
+            <thead><tr><th>Policyholder Code</th><th>Name</th><th>Status</th><th>Market Type</th><th>Prospect Type</th><th>Source</th></tr></thead>
+            <tbody>${activePolicyholderReportRows || '<tr><td colspan="6">No policyholders for source conversion quality.</td></tr>'}</tbody>
           </table>
         </section>
         <section class="section spacious-section">
@@ -947,7 +951,7 @@ function AgentClientsRelationship() {
                     <span><i className="dot system" />System-Assigned ({dashboard.systemAssigned})</span>
                   </div>
                 </div>
-                <DetailList rows={prospectDetails} empty="No prospects in source mix for this selected date range." />
+                <DetailList rows={prospectDetails} prospectNameMeta="source" empty="No prospects in source mix for this selected date range." />
               </section>
 
               <section className="cr-panel">
@@ -992,7 +996,7 @@ function AgentClientsRelationship() {
               <section className="cr-panel">
                 <div className="cr-panelHeader">
                   <h3 className="cr-panelTitle">Segment Conversion Comparison</h3>
-                  <span className="cr-panelMeta">Selected-period prospects; active policyholders only</span>
+                  <span className="cr-panelMeta">Policyholders created within selected period; active policyholders only</span>
                 </div>
                 <div className="cr-compareList">
                   {dashboard.marketConversion.map((row) => (
@@ -1001,7 +1005,7 @@ function AgentClientsRelationship() {
                         <span>{row.label}</span>
                         <strong>{row.conversionRatePct}%</strong>
                       </div>
-                      <p>{row.policyholders}/{row.prospects} converted to active policyholders.</p>
+                      <p>{row.activePolicyholders ?? row.policyholders}/{row.totalPolicyholders ?? row.prospects} policyholders created in period are active.</p>
                     </div>
                   ))}
                 </div>
@@ -1019,7 +1023,7 @@ function AgentClientsRelationship() {
                   </div>
                   <div className="cr-rowMeta"><i className="cr-shareDot elite" />Elite {dashboard.elite} • <i className="cr-shareDot ordinary" />Ordinary {dashboard.ordinary}</div>
                 </div>
-                <DetailList rows={prospectDetails} empty="No prospects for segment comparison." />
+                <DetailList type="policyholder" rows={policyholderDetails} empty="No policyholders for segment comparison." />
               </section>
 
               <section className="cr-panel cr-panel-wide">
@@ -1027,7 +1031,7 @@ function AgentClientsRelationship() {
                   <h3 className="cr-panelTitle">Relationship Pipeline Progress</h3>
                   <span className="cr-panelMeta">Cumulative active engagement mix through the selected period</span>
                 </div>
-                <div className="cr-stageGrid">
+                <div className="cr-stageGrid cr-stageGrid-summary">
                   {dashboard.stageProgress.map((stage) => (
                     <div key={stage.label} className="cr-stageCard">
                       <div className="cr-stageTop">
@@ -1035,17 +1039,22 @@ function AgentClientsRelationship() {
                         <strong>{stage.value}%</strong>
                       </div>
                       <div className="cr-progressTrack stage"><span style={{ width: `${stage.value}%` }} /></div>
-                      <small>{stage.count} engagements</small>
-                      <DetailList type="lead" rows={leadRowsFor((lead) => lead.currentStage === stage.label)} empty={`No leads in ${stage.label}.`} />
+                      <small>{stage.count} leads</small>
                     </div>
                   ))}
                 </div>
+                <div className="cr-pipelineStages">
+                  {pipelineStageOrder.map((stage) => (
+                    <span key={stage}>{stage}</span>
+                  ))}
+                </div>
+                <DetailList type="lead" rows={ongoingLeadDetails} empty="No ongoing leads through this selected period." />
               </section>
 
               <section className="cr-panel cr-panel-wide">
                 <div className="cr-panelHeader">
                   <h3 className="cr-panelTitle">Source Conversion Quality</h3>
-                  <span className="cr-panelMeta">Selected-period prospects; active policyholders only</span>
+                  <span className="cr-panelMeta">Policyholders created within selected period; active policyholders only</span>
                 </div>
                 <div className="cr-sourceGrid">
                   {dashboard.sourceConversion.map((row) => (
@@ -1055,8 +1064,8 @@ function AgentClientsRelationship() {
                         <strong>{row.conversionRatePct}%</strong>
                       </div>
                       <div className="cr-progressTrack stage"><span style={{ width: `${row.conversionRatePct}%` }} /></div>
-                      <p>{row.policyholders} active policyholders from {row.prospects} prospects</p>
-                      <DetailList rows={prospectRowsFor((prospect) => prospect.source === row.label)} empty={`No ${row.label} prospects.`} />
+                      <p>{row.activePolicyholders ?? row.policyholders} active policyholders from {row.totalPolicyholders ?? row.prospects} policyholders created in period</p>
+                      <DetailList type="policyholder" rows={policyholderRowsFor((policyholder) => policyholder.source === row.label && policyholder.status === "Active")} empty={`No ${row.label} active policyholders.`} />
                     </div>
                   ))}
                 </div>
