@@ -15,6 +15,16 @@ const TASK_TYPES = [
 ];
 
 // Date helpers OUTSIDE component
+
+const formatMonthYear = (year, month) =>
+  new Date(Date.UTC(year, month - 1, 1)).toLocaleString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
+
+const taskMonthKey = (value) => {
+  const dt = new Date(value);
+  if (!Number.isFinite(dt.getTime())) return "";
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}`;
+};
+
 function startOfDay(dt) {
   const d = new Date(dt);
   d.setHours(0, 0, 0, 0);
@@ -42,7 +52,8 @@ function AgentTasksAll() {
   // Tabs: open | overdue | done
   const [tab, setTab] = useState("open");
 
-  // Type filter only
+  // Date range and type filters
+  const [dateRangeFilter, setDateRangeFilter] = useState("ALL");
   const [typeFilter, setTypeFilter] = useState("");
 
   // Backend tasks state
@@ -197,14 +208,36 @@ function AgentTasksAll() {
     });
   }, [tasksRaw]);
 
-  // Tab lists + Type filter
+  const dateRangeOptions = useMemo(() => {
+    const validMonths = tasks.map((t) => taskMonthKey(t.createdAt)).filter(Boolean).sort();
+    const now = new Date();
+    const currentKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const firstKey = validMonths[0] || currentKey;
+    const [firstYear, firstMonth] = firstKey.split("-").map(Number);
+    const [currentYear, currentMonth] = currentKey.split("-").map(Number);
+    const options = [{ value: "ALL", label: `${formatMonthYear(firstYear, firstMonth)} - ${formatMonthYear(currentYear, currentMonth)}` }];
+    for (let year = firstYear, month = firstMonth; year < currentYear || (year === currentYear && month <= currentMonth);) {
+      options.push({ value: `${year}-${String(month).padStart(2, "0")}`, label: formatMonthYear(year, month) });
+      month += 1;
+      if (month > 12) {
+        month = 1;
+        year += 1;
+      }
+    }
+    return options;
+  }, [tasks]);
+
+  // Tab lists + Date range + Type filter
   const tabbed = useMemo(() => {
     const now = Date.now();
     const selectedType = String(typeFilter || "").toUpperCase().trim();
+    const selectedDateRange = String(dateRangeFilter || "ALL");
 
-    const base = selectedType
-      ? tasks.filter((t) => String(t.type).toUpperCase().trim() === selectedType)
-      : tasks.slice();
+    const base = tasks.filter((t) => {
+      const matchesType = selectedType ? String(t.type).toUpperCase().trim() === selectedType : true;
+      const matchesDateRange = selectedDateRange === "ALL" ? true : taskMonthKey(t.createdAt) === selectedDateRange;
+      return matchesType && matchesDateRange;
+    });
 
     const open = base
       .filter((t) => t.status === "Open" && safeTime(t.dueAt) >= now)
@@ -222,7 +255,7 @@ function AgentTasksAll() {
       .sort((a, b) => safeTime(b.completedAt, 0) - safeTime(a.completedAt, 0));
 
     return { open, overdue, done };
-  }, [tasks, typeFilter]);
+  }, [tasks, typeFilter, dateRangeFilter]);
 
   // =========================
   // Open tab grouping:
@@ -446,6 +479,19 @@ function AgentTasksAll() {
                 <div className="alltasks-filtersInline">
                   <select
                     className="alltasks-select"
+                    value={dateRangeFilter}
+                    onChange={(e) => setDateRangeFilter(e.target.value)}
+                    aria-label="Task creation date range"
+                  >
+                    {dateRangeOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+
+                  <select
+                    className="alltasks-select"
                     value={typeFilter}
                     onChange={(e) => setTypeFilter(e.target.value)}
                   >
@@ -457,7 +503,14 @@ function AgentTasksAll() {
                     ))}
                   </select>
 
-                  <button type="button" className="tasks-btn tb-clear" onClick={() => setTypeFilter("")}>
+                  <button
+                    type="button"
+                    className="tasks-btn tb-clear"
+                    onClick={() => {
+                      setDateRangeFilter("ALL");
+                      setTypeFilter("");
+                    }}
+                  >
                     Clear
                   </button>
                 </div>

@@ -4193,7 +4193,7 @@ app.get("/api/clients/relationship/dashboard", async (req, res) => {
 
     const prospectIds = prospects.map((p) => p._id);
     const leads = prospectIds.length
-      ? await Lead.find({ prospectId: { $in: prospectIds }, createdAt: { $lte: endDate } }).select("_id prospectId status createdAt").lean()
+      ? await Lead.find({ prospectId: { $in: prospectIds }, createdAt: { $lte: endDate } }).select("_id prospectId leadCode status createdAt").lean()
       : [];
     const leadIds = leads.map((l) => l._id);
 
@@ -4349,6 +4349,61 @@ app.get("/api/clients/relationship/dashboard", async (req, res) => {
       if ((activePolicyholdersByProspectId.get(prospectId) || []).length > 0) closedLeadProspectsWithActivePolicies.add(prospectId);
     });
 
+
+    const prospectName = (prospect) => [prospect?.firstName, prospect?.middleName, prospect?.lastName].filter(Boolean).join(" ").trim() || prospect?.prospectCode || "—";
+    const prospectDetailRows = periodProspects
+      .slice()
+      .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0))
+      .map((prospect) => ({
+        prospectId: normalizeKey(prospect._id),
+        prospectCode: prospect.prospectCode || "—",
+        fullName: prospectName(prospect),
+        marketType: prospect.marketType || "—",
+        prospectType: prospect.prospectType || "—",
+        source: prospect.source || "—",
+        status: prospect.status || "—",
+        createdAt: prospect.createdAt || null,
+      }));
+    const policyholderDetailRows = periodPolicyholders
+      .slice()
+      .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0) || String(a.policyholderCode || "").localeCompare(String(b.policyholderCode || ""), undefined, { numeric: true, sensitivity: "base" }))
+      .map((policyholder) => {
+        const engagement = engagementById.get(normalizeKey(policyholder.leadEngagementId));
+        const lead = engagement ? leadById.get(normalizeKey(engagement.leadId)) : null;
+        const prospect = lead ? prospects.find((item) => normalizeKey(item._id) === normalizeKey(lead.prospectId)) : null;
+        return {
+          policyholderId: normalizeKey(policyholder._id),
+          policyholderCode: policyholder.policyholderCode || "—",
+          policyNumber: policyholder.policyNumber || "—",
+          status: policyholder.status || "—",
+          createdAt: policyholder.createdAt || null,
+          prospectId: normalizeKey(prospect?._id),
+          prospectCode: prospect?.prospectCode || "—",
+          fullName: prospectName(prospect),
+          leadId: normalizeKey(lead?._id),
+          leadCode: lead?.leadCode || "—",
+          source: prospect?.source || "—",
+        };
+      });
+    const leadDetailRows = leads
+      .filter((lead) => isInSelectedRange(lead.createdAt))
+      .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0) || String(a.leadCode || "").localeCompare(String(b.leadCode || ""), undefined, { numeric: true, sensitivity: "base" }))
+      .map((lead) => {
+        const prospect = prospects.find((item) => normalizeKey(item._id) === normalizeKey(lead.prospectId));
+        const engagement = engagements.find((item) => normalizeKey(item.leadId) === normalizeKey(lead._id));
+        return {
+          leadId: normalizeKey(lead._id),
+          leadCode: lead.leadCode || "—",
+          leadStatus: lead.status || "—",
+          currentStage: engagement?.currentStage || "—",
+          createdAt: lead.createdAt || null,
+          prospectId: normalizeKey(prospect?._id),
+          prospectCode: prospect?.prospectCode || "—",
+          prospectName: prospectName(prospect),
+          source: prospect?.source || "—",
+        };
+      });
+
     const conversionHotspot = [...sourceBuckets].sort((a, b) => b.conversionRatePct - a.conversionRatePct)[0] || null;
     const atRiskPolicies = countBy(policyholders, isRiskPolicyholder);
     const policyRiskPct = toPct(atRiskPolicies, totalPolicyholders);
@@ -4395,6 +4450,11 @@ app.get("/api/clients/relationship/dashboard", async (req, res) => {
         policyholders: policyholderTrend,
       },
       recentProspects,
+      details: {
+        prospects: prospectDetailRows,
+        policyholders: policyholderDetailRows,
+        leads: leadDetailRows,
+      },
       reportContext: {
         periodLabel,
         startDate,
@@ -5183,18 +5243,37 @@ app.get("/api/sales/performance", async (req, res) => {
         ),
       };
     };
+    const compareOldestIssuedAt = (a, b) => {
+      const left = new Date(a.issuedAt || 0).getTime();
+      const right = new Date(b.issuedAt || 0).getTime();
+      if (left !== right) return left - right;
+      return String(a.policyholderCode || "").localeCompare(String(b.policyholderCode || ""), undefined, { numeric: true, sensitivity: "base" });
+    };
     const frequencyPremiumPolicies = activePolicyholders
       .map(policyDetailRow)
       .map((row) => ({ ...row, frequencyKey: normalizeFrequencyKey(row.frequency) }))
       .filter((row) => row.frequencyKey)
-      .sort((a, b) => String(a.frequency || "").localeCompare(String(b.frequency || "")) || String(a.policyholderCode || "").localeCompare(String(b.policyholderCode || ""), undefined, { numeric: true, sensitivity: "base" }));
+      .sort(compareOldestIssuedAt);
     const convertedLeadDetails = reportingLeads
       .filter((lead) => convertedLeadIds.has(String(lead._id)))
-      .map((lead) => leadDetailRow(lead, "Converted"));
-    const unconvertedLeadDetails = unconvertedLeadRows.map((lead) => leadDetailRow(lead, "Unconverted"));
+      .map((lead) => leadDetailRow(lead, "Converted"))
+      .sort((a, b) => {
+        const left = new Date(a.convertedAt || 0).getTime();
+        const right = new Date(b.convertedAt || 0).getTime();
+        if (left !== right) return left - right;
+        return String(a.policyholderCode || "").localeCompare(String(b.policyholderCode || ""), undefined, { numeric: true, sensitivity: "base" });
+      });
+    const unconvertedLeadDetails = unconvertedLeadRows
+      .map((lead) => leadDetailRow(lead, "Unconverted"))
+      .sort((a, b) => {
+        const left = new Date(a.createdAt || 0).getTime();
+        const right = new Date(b.createdAt || 0).getTime();
+        if (left !== right) return left - right;
+        return String(a.leadCode || "").localeCompare(String(b.leadCode || ""), undefined, { numeric: true, sensitivity: "base" });
+      });
     const policyStatusPolicies = scopedPolicyholders
       .map(policyDetailRow)
-      .sort((a, b) => String(a.status || "").localeCompare(String(b.status || "")) || String(a.policyholderCode || "").localeCompare(String(b.policyholderCode || ""), undefined, { numeric: true, sensitivity: "base" }));
+      .sort((a, b) => String(a.status || "").localeCompare(String(b.status || "")) || compareOldestIssuedAt(a, b));
 
     return res.json({
       ...defaultResponse,

@@ -248,6 +248,11 @@ function AgentClientsRelationship() {
       prospectTrend: Array.isArray(dashboardData?.trendSeries?.prospects) ? dashboardData.trendSeries.prospects : [],
       policyholderTrend: Array.isArray(dashboardData?.trendSeries?.policyholders) ? dashboardData.trendSeries.policyholders : [],
       recentProspects: Array.isArray(dashboardData?.recentProspects) ? dashboardData.recentProspects : [],
+      details: {
+        prospects: Array.isArray(dashboardData?.details?.prospects) ? dashboardData.details.prospects : [],
+        policyholders: Array.isArray(dashboardData?.details?.policyholders) ? dashboardData.details.policyholders : [],
+        leads: Array.isArray(dashboardData?.details?.leads) ? dashboardData.details.leads : [],
+      },
       reportContext: dashboardData?.reportContext || DEFAULT_DASHBOARD.reportContext,
       insights: dashboardData?.insights || DEFAULT_DASHBOARD.insights,
       maxTrendValue: Math.max(
@@ -274,6 +279,48 @@ function AgentClientsRelationship() {
       { title: "Policy Relationship Risk", body: riskMessage },
     ];
   }, [dashboard]);
+
+  const prospectDetails = dashboard.details?.prospects || [];
+  const policyholderDetails = dashboard.details?.policyholders || [];
+  const leadDetails = dashboard.details?.leads || [];
+  const prospectRowsFor = (predicate) => prospectDetails.filter(predicate);
+  const leadRowsFor = (predicate) => leadDetails.filter(predicate);
+  const DetailList = ({ type = "prospect", rows = [], empty = "No rows for this section." }) => (
+    <div className="cr-detailList">
+      {rows.length ? (
+        <table>
+          <thead>
+            <tr>{type === "policyholder" ? <><th>Policyholder</th><th>Name</th><th>Status</th></> : type === "lead" ? <><th>Lead</th><th>Prospect</th><th>Stage / Status</th></> : <><th>Prospect</th><th>Name</th><th>Status</th></>}</tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={`${type}:${row.policyholderId || row.leadId || row.prospectId}:${row.status || row.leadStatus || row.currentStage || ""}`}>
+                {type === "policyholder" ? (
+                  <>
+                    <td>{row.policyholderCode || "—"}</td>
+                    <td>{row.fullName || "—"}<br /><small>{row.leadCode || "Lead —"}</small></td>
+                    <td>{row.status || "—"}</td>
+                  </>
+                ) : type === "lead" ? (
+                  <>
+                    <td>{row.leadCode || "—"}</td>
+                    <td>{row.prospectName || "—"}</td>
+                    <td>{row.currentStage || "—"}<br /><small>{row.leadStatus || "—"}</small></td>
+                  </>
+                ) : (
+                  <>
+                    <td>{row.prospectCode || "—"}</td>
+                    <td>{row.fullName || "—"}<br /><small>{row.source || "—"}</small></td>
+                    <td>{row.status || "—"}</td>
+                  </>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : <p>{empty}</p>}
+    </div>
+  );
 
   const sourceChartStyle = useMemo(() => {
     const total = dashboard.agentSourced + dashboard.systemAssigned || 1;
@@ -863,6 +910,7 @@ function AgentClientsRelationship() {
                     </div>
                   ))}
                 </div>
+                <DetailList rows={prospectDetails} empty="No prospects created in this selected date range." />
               </section>
 
               <section className="cr-panel">
@@ -884,6 +932,7 @@ function AgentClientsRelationship() {
                     </div>
                   ))}
                 </div>
+                <DetailList type="policyholder" rows={policyholderDetails} empty="No policyholders converted in this selected date range." />
               </section>
 
               <section className="cr-panel">
@@ -898,6 +947,7 @@ function AgentClientsRelationship() {
                     <span><i className="dot system" />System-Assigned ({dashboard.systemAssigned})</span>
                   </div>
                 </div>
+                <DetailList rows={prospectDetails} empty="No prospects in source mix for this selected date range." />
               </section>
 
               <section className="cr-panel">
@@ -920,6 +970,7 @@ function AgentClientsRelationship() {
                     ))}
                   </div>
                 </div>
+                <DetailList type="policyholder" rows={policyholderDetails} empty="No policyholders in health mix for this selected date range." />
               </section>
 
               <section className="cr-panel">
@@ -935,6 +986,7 @@ function AgentClientsRelationship() {
                     </div>
                   ))}
                 </div>
+                <DetailList rows={prospectDetails} empty="No prospects for this relationship status range." />
               </section>
 
               <section className="cr-panel">
@@ -967,6 +1019,7 @@ function AgentClientsRelationship() {
                   </div>
                   <div className="cr-rowMeta"><i className="cr-shareDot elite" />Elite {dashboard.elite} • <i className="cr-shareDot ordinary" />Ordinary {dashboard.ordinary}</div>
                 </div>
+                <DetailList rows={prospectDetails} empty="No prospects for segment comparison." />
               </section>
 
               <section className="cr-panel cr-panel-wide">
@@ -983,6 +1036,7 @@ function AgentClientsRelationship() {
                       </div>
                       <div className="cr-progressTrack stage"><span style={{ width: `${stage.value}%` }} /></div>
                       <small>{stage.count} engagements</small>
+                      <DetailList type="lead" rows={leadRowsFor((lead) => lead.currentStage === stage.label)} empty={`No leads in ${stage.label}.`} />
                     </div>
                   ))}
                 </div>
@@ -1002,6 +1056,7 @@ function AgentClientsRelationship() {
                       </div>
                       <div className="cr-progressTrack stage"><span style={{ width: `${row.conversionRatePct}%` }} /></div>
                       <p>{row.policyholders} active policyholders from {row.prospects} prospects</p>
+                      <DetailList rows={prospectRowsFor((prospect) => prospect.source === row.label)} empty={`No ${row.label} prospects.`} />
                     </div>
                   ))}
                 </div>
