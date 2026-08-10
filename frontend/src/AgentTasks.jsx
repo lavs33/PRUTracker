@@ -214,7 +214,7 @@ function AgentTasks() {
   if (!user || user.username !== username) return null;
 
   const TaskCard = ({ t }) => {
-    const kpiImpact = t.uiStatus !== "Done" ? getTaskKpiImpact(t.type, assignedKpis) : null;
+    const kpiImpact = getTaskKpiImpact(t.type, assignedKpis, t);
     return <div className="task-card">
       <div className="task-top">
         <div>
@@ -256,7 +256,7 @@ function AgentTasks() {
 
       {kpiImpact ? <div className="task-kpiImpact">
         <div><span>KPI impact this month</span><strong>{kpiImpact.label}</strong></div>
-        <p>Completing this task can move progress from <b>{kpiImpact.actual}</b> to <b>{kpiImpact.projected}</b> of {kpiImpact.target}.</p>
+        <p>{kpiImpact.successMessage || <>Completing this task can move progress from <b>{kpiImpact.actual}</b> to <b>{kpiImpact.projected}</b> of {kpiImpact.target}.</>}</p>
         <div className="task-kpiTrack"><span style={{ width: `${kpiImpact.projectedPct}%` }} /></div>
         <small>{kpiImpact.currentPct}% now • {kpiImpact.projectedPct}% after completion</small>
       </div> : null}
