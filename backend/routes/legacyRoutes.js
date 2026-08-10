@@ -4540,6 +4540,11 @@ app.get("/api/sales/performance", async (req, res) => {
       leadSourceBreakdown: [],
       monthlyConvertedLeads: [],
       salesRows: [],
+      salesDetails: {
+        frequencyPremiumPolicies: [],
+        leadConversion: { converted: [], unconverted: [] },
+        policyStatusPolicies: [],
+      },
     };
 
     const prospects = await Prospect.find({
@@ -4585,7 +4590,7 @@ app.get("/api/sales/performance", async (req, res) => {
             { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
           ],
         })
-          .select("assignedToUserId reassignedToUserId leadEngagementId policyholderCode status createdAt productId annualPaymentRecords")
+          .select("assignedToUserId reassignedToUserId leadEngagementId policyholderCode policyNumber status createdAt productId annualPaymentRecords")
           .lean()
       : [];
 
@@ -5054,6 +5059,37 @@ app.get("/api/sales/performance", async (req, res) => {
       .map(([label, count]) => ({ label, count, sharePct: convertedLeads ? Math.round((count / convertedLeads) * 100) : 0 }))
       .sort((a, b) => (b.count - a.count) || a.label.localeCompare(b.label));
 
+    const prospectNameFor = (prospect) => [prospect?.firstName, prospect?.middleName, prospect?.lastName].filter(Boolean).join(" ").trim() || prospect?.prospectCode || "—";
+    const leadDetailRow = (lead, conversionStatus) => {
+      const leadKey = String(lead?._id || "");
+      const prospect = prospectById.get(String(lead?.prospectId || ""));
+      const relatedPolicies = [...(leadIdToPolicyholders.get(leadKey) || [])].sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+      const latestPolicy = relatedPolicies[0] || null;
+      const latestPolicyProduct = latestPolicy?.productId ? productById.get(String(latestPolicy.productId)) : null;
+      const engagementIdsForLead = engagementsByLeadId.get(leadKey) || [];
+      const convertedAt = engagementIdsForLead
+        .map((engagementId) => issuanceDateByEngagementId.get(String(engagementId)))
+        .filter(Boolean)
+        .sort((a, b) => new Date(a || 0) - new Date(b || 0))[0] || null;
+      return {
+        leadId: leadKey,
+        prospectId: String(prospect?._id || lead?.prospectId || ""),
+        prospectCode: prospect?.prospectCode || "—",
+        prospectName: prospectNameFor(prospect),
+        leadCode: lead?.leadCode || "—",
+        leadSource: normalizeLeadSourceLabel(lead),
+        leadStatus: conversionStatus === "Converted" ? "Converted" : leadStatusAtPeriodEnd(lead),
+        conversionStatus,
+        createdAt: lead?.createdAt || null,
+        convertedAt,
+        policyholderId: String(latestPolicy?._id || ""),
+        policyholderCode: latestPolicy?.policyholderCode || "—",
+        policyStatus: latestPolicy?.status || "—",
+        productName: latestPolicyProduct?.productName || "—",
+        policyCount: relatedPolicies.length,
+      };
+    };
+
     const salesRows = reportingLeads
       .filter((lead) => convertedLeadIds.has(String(lead._id)))
       .map((lead) => {
@@ -5111,6 +5147,55 @@ app.get("/api/sales/performance", async (req, res) => {
         );
       });
 
+    const policyDetailRow = (policyholder) => {
+      const engagementId = String(policyholder?.leadEngagementId || "");
+      const leadId = engagementToLead.get(engagementId) || "";
+      const lead = leadById.get(String(leadId)) || null;
+      const prospect = prospectById.get(String(lead?.prospectId || ""));
+      const application = applicationByEngagementId.get(engagementId) || null;
+      const payment = engagementToPayment.get(engagementId) || null;
+      const annualPayment = engagementToAnnualPayment.get(engagementId) || null;
+      const frequency = String(
+        payment?.recordPremiumPaymentTransfer?.frequencyOfPremiumPayment
+        || application?.recordPremiumPaymentTransfer?.frequencyOfPremiumPayment
+        || engagementToFrequency.get(engagementId)
+        || annualPayment?.frequencyOfPayment
+        || "—"
+      ).trim() || "—";
+      return {
+        policyholderId: String(policyholder?._id || ""),
+        policyholderCode: policyholder?.policyholderCode || "—",
+        policyNumber: policyholder?.policyNumber || "—",
+        status: policyholder?.status || "—",
+        prospectId: String(prospect?._id || lead?.prospectId || ""),
+        prospectCode: prospect?.prospectCode || "—",
+        prospectName: prospectNameFor(prospect),
+        leadId: String(leadId || ""),
+        leadCode: lead?.leadCode || "—",
+        productName: policyholder?.productId ? (productById.get(String(policyholder.productId))?.productName || "—") : "—",
+        issuedAt: issuanceDateByEngagementId.get(engagementId) || policyholder?.createdAt || null,
+        annualPremiumPhp: resolvePolicyholderAnnualPremium(policyholder),
+        frequency,
+        frequencyPremiumPhp: Number(
+          application?.recordPremiumPaymentTransfer?.totalFrequencyPremiumPhp
+          ?? payment?.recordPremiumPaymentTransfer?.totalPremiumPaidPhp
+          ?? 0
+        ),
+      };
+    };
+    const frequencyPremiumPolicies = activePolicyholders
+      .map(policyDetailRow)
+      .map((row) => ({ ...row, frequencyKey: normalizeFrequencyKey(row.frequency) }))
+      .filter((row) => row.frequencyKey)
+      .sort((a, b) => String(a.frequency || "").localeCompare(String(b.frequency || "")) || String(a.policyholderCode || "").localeCompare(String(b.policyholderCode || ""), undefined, { numeric: true, sensitivity: "base" }));
+    const convertedLeadDetails = reportingLeads
+      .filter((lead) => convertedLeadIds.has(String(lead._id)))
+      .map((lead) => leadDetailRow(lead, "Converted"));
+    const unconvertedLeadDetails = unconvertedLeadRows.map((lead) => leadDetailRow(lead, "Unconverted"));
+    const policyStatusPolicies = scopedPolicyholders
+      .map(policyDetailRow)
+      .sort((a, b) => String(a.status || "").localeCompare(String(b.status || "")) || String(a.policyholderCode || "").localeCompare(String(b.policyholderCode || ""), undefined, { numeric: true, sensitivity: "base" }));
+
     return res.json({
       ...defaultResponse,
       dataStartDate: salesDataStartDate || now,
@@ -5144,6 +5229,11 @@ app.get("/api/sales/performance", async (req, res) => {
       leadSourceBreakdown,
       monthlyConvertedLeads,
       salesRows,
+      salesDetails: {
+        frequencyPremiumPolicies,
+        leadConversion: { converted: convertedLeadDetails, unconverted: unconvertedLeadDetails },
+        policyStatusPolicies,
+      },
     });
   } catch (err) {
     console.error("Sales performance error:", err);
