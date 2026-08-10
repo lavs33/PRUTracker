@@ -4383,6 +4383,8 @@ app.get("/api/clients/relationship/dashboard", async (req, res) => {
           leadId: normalizeKey(lead?._id),
           leadCode: lead?.leadCode || "—",
           source: prospect?.source || "—",
+          marketType: prospect?.marketType || "—",
+          prospectType: prospect?.prospectType || "—",
         };
       });
     const leadDetailRows = leads
