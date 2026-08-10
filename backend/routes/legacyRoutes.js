@@ -5183,18 +5183,37 @@ app.get("/api/sales/performance", async (req, res) => {
         ),
       };
     };
+    const compareOldestIssuedAt = (a, b) => {
+      const left = new Date(a.issuedAt || 0).getTime();
+      const right = new Date(b.issuedAt || 0).getTime();
+      if (left !== right) return left - right;
+      return String(a.policyholderCode || "").localeCompare(String(b.policyholderCode || ""), undefined, { numeric: true, sensitivity: "base" });
+    };
     const frequencyPremiumPolicies = activePolicyholders
       .map(policyDetailRow)
       .map((row) => ({ ...row, frequencyKey: normalizeFrequencyKey(row.frequency) }))
       .filter((row) => row.frequencyKey)
-      .sort((a, b) => String(a.frequency || "").localeCompare(String(b.frequency || "")) || String(a.policyholderCode || "").localeCompare(String(b.policyholderCode || ""), undefined, { numeric: true, sensitivity: "base" }));
+      .sort(compareOldestIssuedAt);
     const convertedLeadDetails = reportingLeads
       .filter((lead) => convertedLeadIds.has(String(lead._id)))
-      .map((lead) => leadDetailRow(lead, "Converted"));
-    const unconvertedLeadDetails = unconvertedLeadRows.map((lead) => leadDetailRow(lead, "Unconverted"));
+      .map((lead) => leadDetailRow(lead, "Converted"))
+      .sort((a, b) => {
+        const left = new Date(a.convertedAt || 0).getTime();
+        const right = new Date(b.convertedAt || 0).getTime();
+        if (left !== right) return left - right;
+        return String(a.policyholderCode || "").localeCompare(String(b.policyholderCode || ""), undefined, { numeric: true, sensitivity: "base" });
+      });
+    const unconvertedLeadDetails = unconvertedLeadRows
+      .map((lead) => leadDetailRow(lead, "Unconverted"))
+      .sort((a, b) => {
+        const left = new Date(a.createdAt || 0).getTime();
+        const right = new Date(b.createdAt || 0).getTime();
+        if (left !== right) return left - right;
+        return String(a.leadCode || "").localeCompare(String(b.leadCode || ""), undefined, { numeric: true, sensitivity: "base" });
+      });
     const policyStatusPolicies = scopedPolicyholders
       .map(policyDetailRow)
-      .sort((a, b) => String(a.status || "").localeCompare(String(b.status || "")) || String(a.policyholderCode || "").localeCompare(String(b.policyholderCode || ""), undefined, { numeric: true, sensitivity: "base" }));
+      .sort((a, b) => String(a.status || "").localeCompare(String(b.status || "")) || compareOldestIssuedAt(a, b));
 
     return res.json({
       ...defaultResponse,
