@@ -311,7 +311,7 @@ function AgentHome() {
   const renderConcern = (notification) => {
     const concern = concernDetails(notification);
     const kpiImpact = ["TASK_MISSED", "TASK_DUE_TODAY"].includes(notification?.type)
-      ? getTaskKpiImpact(notification?.taskType, assignedKpis)
+      ? getTaskKpiImpact(notification?.taskType, assignedKpis, notification)
       : null;
     return <article key={notification._id} className={`home-actionItem ${notification.priority}`}>
       <div className="home-actionIcon" aria-hidden="true"><FiAlertCircle /></div>
@@ -329,8 +329,11 @@ function AgentHome() {
         {kpiImpact ? <div className="home-kpiImpact">
           <small>Related KPI progress</small>
           <strong>{kpiImpact.label}</strong>
-          <span>{kpiImpact.actual} / {kpiImpact.target} now • {kpiImpact.projected} / {kpiImpact.target} after completion</span>
-          <div className="home-kpiImpactBar"><i style={{ width: `${kpiImpact.projectedPct}%` }} /></div>
+          {kpiImpact.successMessage ? <span>{kpiImpact.successMessage}</span> : null}
+          <span>Progress: {kpiImpact.actual} now • {kpiImpact.projected} after completion</span>
+          <span>Assigned target: {kpiImpact.targetLabel}</span>
+          <div className="home-kpiImpactBar"><i style={{ width: `${Math.max(0, Math.min(kpiImpact.projectedPct, 140))}%` }} /></div>
+          <span>{kpiImpact.currentPct}% now • {kpiImpact.projectedPct}% after completion</span>
         </div> : null}
       </div>
       <button type="button" onClick={() => openActionItem(notification)}>Open concern <FiArrowRight aria-hidden="true" /></button>

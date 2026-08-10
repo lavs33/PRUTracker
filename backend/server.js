@@ -3936,12 +3936,29 @@ app.get("/api/agent/kpi-progress", async (req, res) => {
         { reassignedToUserId: { $exists: false }, assignedToUserId: userObjectId },
       ],
     })
-      .select("_id createdAt")
+      .select("_id firstName middleName lastName prospectCode createdAt")
       .lean();
     const prospectIds = prospects.map((prospect) => prospect._id);
     const leads = prospectIds.length
-      ? await Lead.find({ prospectId: { $in: prospectIds } }).select("_id").lean()
+      ? await Lead.find({ prospectId: { $in: prospectIds } }).select("_id leadCode prospectId source otherSource status createdAt").lean()
       : [];
+    const prospectById = new Map(prospects.map((prospect) => [String(prospect._id), prospect]));
+    const ongoingLeads = leads
+      .filter((lead) => ["new", "in progress"].includes(String(lead?.status || "").toLowerCase()))
+      .map((lead) => {
+        const prospect = prospectById.get(String(lead.prospectId || "")) || {};
+        const prospectName = [prospect.firstName, prospect.middleName, prospect.lastName].filter(Boolean).join(" ") || prospect.prospectCode || "Prospect";
+        return {
+          id: String(lead._id),
+          leadId: String(lead._id),
+          leadCode: lead.leadCode || "—",
+          status: lead.status || "—",
+          prospectId: String(lead.prospectId || ""),
+          prospectName,
+          prospectCode: prospect.prospectCode || "—",
+          source: String(lead.source || "") === "Other" && lead.otherSource ? `Other - ${lead.otherSource}` : (lead.source || "—"),
+        };
+      });
     const leadIds = leads.map((lead) => lead._id);
     const engagements = leadIds.length
       ? await LeadEngagement.find({ leadId: { $in: leadIds } }).select("_id").lean()
@@ -4106,6 +4123,7 @@ app.get("/api/agent/kpi-progress", async (req, res) => {
       dataStartDate,
       reportContext: { periodLabel, startDate, endDate, generatedAt: now, assignmentUpdatedAt: assignment?.updatedAt || null },
       kpis: assignedKpis.map((kpi) => ({ ...kpi, actual: Number(actualsByKey[kpi.key] || 0) })),
+      recommendations: { ongoingLeads },
       unitSalesContribution: unitSalesProductionKpiForPeriod ? {
         kpi: unitSalesProductionKpiForPeriod,
         actual: agentSalesProduction,

@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import TopNav from "./components/TopNav";
 import SideNav from "./components/SideNav";
 import { logout } from "./utils/logout";
+import { getKpiProgressPercent, getKpiTargetRules } from "./utils/taskKpiImpact";
 import "./AgentSalesPerformance.css";
 import "./AgentKpiProgress.css";
 
@@ -45,6 +46,7 @@ const DEFAULT_DATA = {
   reportContext: { periodLabel: MONTH_OPTIONS.at(-1)?.label || CURRENT_MONTH, startDate: null, endDate: null, generatedAt: null },
   kpis: [],
   unitSalesContribution: null,
+  recommendations: { ongoingLeads: [] },
 };
 
 const formatDate = (value) => {
@@ -98,19 +100,26 @@ const formatKpiTarget = (kpi = {}) => {
 };
 
 const getKpiComparison = (actual, kpi = {}) => {
-  const primaryTarget = [kpi.targetValue, kpi.targetMin, kpi.targetMax]
-    .map((value) => Number(value))
-    .find((value) => Number.isFinite(value) && value > 0);
-  if (!primaryTarget) return { percent: 0, status: "No target set", className: "neutral", deltaLabel: "Set a target to track progress" };
+  const targetRules = getKpiTargetRules(kpi);
+  if (!targetRules.basis) return { percent: 0, status: "No target set", className: "neutral", deltaLabel: "Set a target to track progress" };
   const numericActual = Number(actual || 0);
-  const percent = Math.round((numericActual / primaryTarget) * 100);
-  const delta = numericActual - primaryTarget;
-  if (delta > 0) {
-    return { percent, status: "Exceeded target", className: "good", deltaLabel: `Exceeded by ${formatKpiValue(delta, kpi.valueType)}` };
+  const percent = getKpiProgressPercent(numericActual, targetRules);
+  if (targetRules.kind === "range") {
+    if (numericActual > targetRules.max) {
+      return { percent, status: "Exceeded target", className: "good", deltaLabel: `Exceeded range maximum by ${formatKpiValue(numericActual - targetRules.max, kpi.valueType)}` };
+    }
+    if (numericActual >= targetRules.min) {
+      return { percent, status: "On target", className: "good", deltaLabel: "Within assigned target range" };
+    }
+    return { percent, status: "Below target", className: "warning", deltaLabel: `${formatKpiValue(targetRules.min - numericActual, kpi.valueType)} remaining to target range` };
   }
-  if (delta === 0) {
-    return { percent, status: "On target", className: "good", deltaLabel: "" };
+  if (targetRules.kind === "minimum") {
+    if (numericActual >= targetRules.min) return { percent, status: "On target", className: "good", deltaLabel: "At or above assigned minimum target" };
+    return { percent, status: "Below target", className: "warning", deltaLabel: `${formatKpiValue(targetRules.min - numericActual, kpi.valueType)} remaining to minimum target` };
   }
+  const delta = numericActual - targetRules.basis;
+  if (delta > 0) return { percent, status: "Exceeded target", className: "good", deltaLabel: `Exceeded by ${formatKpiValue(delta, kpi.valueType)}` };
+  if (delta === 0) return { percent, status: "On target", className: "good", deltaLabel: "" };
   return { percent, status: "Below target", className: "warning", deltaLabel: `${formatKpiValue(Math.abs(delta), kpi.valueType)} remaining to target` };
 };
 
@@ -195,37 +204,63 @@ function AgentKpiProgress() {
   };
 
   const getKpiRecommendations = (kpi, comparison) => {
-    if (selectedMonth !== CURRENT_MONTH || comparison.className !== "warning") return [];
+    if (selectedMonth !== CURRENT_MONTH) return [];
+    const targetReached = comparison.className === "good";
     const missingCount = Math.max(1, Math.ceil(Number(kpi.targetValue || kpi.targetMin || kpi.targetMax || 0) - Number(kpi.actual || 0)));
     const taskType = TASK_KPI_TYPE_BY_KEY[kpi.key];
     if (taskType) {
       const matchingTasks = recommendationTasks
         .filter((task) => String(task?.type || "").toUpperCase() === taskType && String(task?.status || "").toLowerCase() !== "done")
-        .slice(0, missingCount);
-      const recommendedCount = Math.min(missingCount, Math.max(matchingTasks.length, 1));
+        .slice(0, Math.max(missingCount, 10));
       return [{
-        title: `Complete ${recommendedCount} ${taskType.toLowerCase()} task${recommendedCount === 1 ? "" : "s"}`,
+        title: matchingTasks.length ? `Review ${matchingTasks.length} open/overdue ${taskType.toLowerCase()} task${matchingTasks.length === 1 ? "" : "s"}` : `No open/overdue ${taskType.toLowerCase()} tasks`,
         description: matchingTasks.length
-          ? `These open ${taskType.toLowerCase()} tasks can directly add to this month's KPI progress when completed.`
-          : `No open ${taskType.toLowerCase()} tasks are available yet; create or schedule the next client activity to close the KPI gap.`,
+          ? `These ${taskType.toLowerCase()} tasks are still open or overdue and should remain visible even when this KPI is on target or exceeded.`
+          : `There are no open/overdue ${taskType.toLowerCase()} tasks related to this KPI.`,
         tasks: matchingTasks,
       }];
     }
     if (kpi.key === "monthly_new_prospects") {
-      return [{ title: `Add ${missingCount} new prospect${missingCount === 1 ? "" : "s"}`, description: "Create new prospect records this month to increase this KPI.", path: `/agent/${username}/prospects` }];
+      return targetReached ? [] : [{ title: `Add ${missingCount} new prospect${missingCount === 1 ? "" : "s"}`, description: "Create new prospect records this month to increase this KPI.", path: `/agent/${username}/prospects` }];
     }
-    if (kpi.key === "monthly_policies") {
-      return [{ title: `Convert ${missingCount} additional active polic${missingCount === 1 ? "y" : "ies"}`, description: "Prioritize active lead engagement and issued-policy follow-through for this month.", path: `/agent/${username}/sales/performance` }];
+    if (["monthly_policies", "monthly_closing_ratio"].includes(kpi.key)) {
+      const leads = Array.isArray(data.recommendations?.ongoingLeads) ? data.recommendations.ongoingLeads : [];
+      return [{
+        title: leads.length ? `Review ${leads.length} ongoing lead${leads.length === 1 ? "" : "s"} that could still be converted` : "No ongoing leads to convert",
+        description: leads.length ? "These active leads could still become issued active policies and improve this KPI." : "There are no ongoing leads related to this KPI right now.",
+        leads,
+      }];
     }
-    if (kpi.key === "monthly_closing_ratio") {
-      return [{ title: "Improve current-month closing quality", description: "Review in-progress leads and application follow-ups so submitted cases are more likely to become issued policies.", path: `/agent/${username}/sales/performance` }];
-    }
-    return [{ title: "Focus on this KPI gap", description: "Review related client, task, and sales records for the current month and complete the next action that contributes to this KPI." }];
+    return comparison.className === "warning" ? [{ title: "Focus on this KPI gap", description: "Review related client, task, and sales records for the current month and complete the next action that contributes to this KPI." }] : [];
   };
 
   const navigateToPageTop = (path) => {
     navigate(path);
     window.setTimeout(() => window.scrollTo({ top: 0, left: 0, behavior: "auto" }), 0);
+  };
+
+  const openLead = (lead) => {
+    if (lead?.prospectId && lead?.leadId) return navigateToPageTop(`/agent/${username}/prospects/${lead.prospectId}/leads/${lead.leadId}/engage`);
+    if (lead?.prospectId) return navigateToPageTop(`/agent/${username}/prospects/${lead.prospectId}`);
+    return navigateToPageTop(`/agent/${username}/sales/performance`);
+  };
+
+  const formatTaskDueDateTime = (value) => {
+    const date = new Date(value);
+    if (!Number.isFinite(date.getTime())) return "No due date";
+    return date.toLocaleString("en-US", {
+      month: "short",
+      day: "2-digit",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  };
+
+  const taskTimingLabel = (task) => {
+    const dueTime = new Date(task?.dueAt).getTime();
+    const isOverdue = String(task?.status || "").toLowerCase() !== "done" && Number.isFinite(dueTime) && dueTime < Date.now();
+    return `${isOverdue ? "Overdue" : "Open"} • Due ${formatTaskDueDateTime(task?.dueAt)}`;
   };
 
   const openTask = (task) => {
@@ -481,7 +516,15 @@ function AgentKpiProgress() {
                             {recommendation.tasks.map((task) => (
                               <button type="button" key={task._id} onClick={() => openTask(task)}>
                                 <b>{task.title || `${task.type} task`}</b>
-                                <span>{task.prospectName || "Prospect"} • {task.leadCode || "Lead —"}</span>
+                                <span>{task.prospectName || "Prospect"} • {task.leadCode || "Lead —"} • {taskTimingLabel(task)}</span>
+                              </button>
+                            ))}
+                          </div> : null}
+                          {recommendation.leads?.length ? <div className="agent-kpi-recommendation__tasks">
+                            {recommendation.leads.map((lead) => (
+                              <button type="button" key={lead.id || lead.leadId} onClick={() => openLead(lead)}>
+                                <b>{lead.leadCode || "Lead —"} • {lead.status || "Ongoing"}</b>
+                                <span>{lead.prospectName || "Prospect"} • {lead.source || "Source —"}</span>
                               </button>
                             ))}
                           </div> : null}
@@ -522,6 +565,21 @@ function AgentKpiProgress() {
                   </div>
                   <em>{comparison.status}</em>
                   {comparison.deltaLabel ? <small>{comparison.deltaLabel}</small> : null}
+                  {selectedMonth === CURRENT_MONTH ? <div className="agent-kpi-recommendations">
+                    <span className="agent-kpi-recommendations__label">Recommended actions</span>
+                    <div className="agent-kpi-recommendation">
+                      <strong>{(data.recommendations?.ongoingLeads || []).length ? `Review ${(data.recommendations?.ongoingLeads || []).length} ongoing lead${(data.recommendations?.ongoingLeads || []).length === 1 ? "" : "s"} that could still be converted` : "No ongoing leads to convert"}</strong>
+                      <p>{(data.recommendations?.ongoingLeads || []).length ? "These active leads can still contribute to unit sales production if converted." : "There are no ongoing leads related to this KPI right now."}</p>
+                      {(data.recommendations?.ongoingLeads || []).length ? <div className="agent-kpi-recommendation__tasks">
+                        {(data.recommendations?.ongoingLeads || []).map((lead) => (
+                          <button type="button" key={lead.id || lead.leadId} onClick={() => openLead(lead)}>
+                            <b>{lead.leadCode || "Lead —"} • {lead.status || "Ongoing"}</b>
+                            <span>{lead.prospectName || "Prospect"} • {lead.source || "Source —"}</span>
+                          </button>
+                        ))}
+                      </div> : null}
+                    </div>
+                  </div> : null}
                 </article>
               </section>
             );
