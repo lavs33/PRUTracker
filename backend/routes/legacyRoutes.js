@@ -4283,40 +4283,44 @@ app.get("/api/clients/relationship/dashboard", async (req, res) => {
       return { label, count, value: toPct(count, totalActiveEngagements) };
     });
 
-    const countActivePoliciesForProspectSet = (prospectIdSet) => periodActivePolicyholders.filter((policyholder) => {
+    const prospectById = new Map(prospects.map((prospect) => [normalizeKey(prospect._id), prospect]));
+    const prospectForPolicyholder = (policyholder) => {
       const engagement = engagementById.get(normalizeKey(policyholder.leadEngagementId));
-      if (!engagement) return false;
+      if (!engagement) return null;
       const lead = leadById.get(normalizeKey(engagement.leadId));
-      if (!lead) return false;
-      return prospectIdSet.has(normalizeKey(lead.prospectId));
-    }).length;
+      if (!lead) return null;
+      return prospectById.get(normalizeKey(lead.prospectId)) || null;
+    };
 
     const sourceBuckets = ["Agent-Sourced", "System-Assigned"].map((label) => {
-      const sourceProspects = periodProspects.filter((prospect) => prospect.source === label);
-      const sourceProspectIds = new Set(sourceProspects.map((prospect) => normalizeKey(prospect._id)));
-      const converted = countActivePoliciesForProspectSet(sourceProspectIds);
+      const sourcePolicyholders = periodPolicyholders.filter((policyholder) => prospectForPolicyholder(policyholder)?.source === label);
+      const activeSourcePolicyholders = sourcePolicyholders.filter(isActivePolicyholder).length;
       return {
         label,
-        prospects: sourceProspects.length,
-        policyholders: converted,
-        conversionRatePct: toPct(converted, sourceProspects.length),
+        prospects: sourcePolicyholders.length,
+        policyholders: activeSourcePolicyholders,
+        totalPolicyholders: sourcePolicyholders.length,
+        activePolicyholders: activeSourcePolicyholders,
+        conversionRatePct: toPct(activeSourcePolicyholders, sourcePolicyholders.length),
       };
     });
 
     const marketBuckets = [
-      { group: "Market Type", label: "Warm", predicate: (prospect) => prospect.marketType === "Warm" },
-      { group: "Market Type", label: "Cold", predicate: (prospect) => prospect.marketType === "Cold" },
-      { group: "Prospect Type", label: "Elite", predicate: (prospect) => prospect.prospectType === "Elite" },
-      { group: "Prospect Type", label: "Ordinary", predicate: (prospect) => prospect.prospectType === "Ordinary" },
+      { group: "Market Type", label: "Warm", predicate: (prospect) => prospect?.marketType === "Warm" },
+      { group: "Market Type", label: "Cold", predicate: (prospect) => prospect?.marketType === "Cold" },
+      { group: "Prospect Type", label: "Elite", predicate: (prospect) => prospect?.prospectType === "Elite" },
+      { group: "Prospect Type", label: "Ordinary", predicate: (prospect) => prospect?.prospectType === "Ordinary" },
     ].map((bucket) => {
-      const bucketProspects = periodProspects.filter(bucket.predicate);
-      const converted = countActivePoliciesForProspectSet(new Set(bucketProspects.map((prospect) => normalizeKey(prospect._id))));
+      const bucketPolicyholders = periodPolicyholders.filter((policyholder) => bucket.predicate(prospectForPolicyholder(policyholder)));
+      const activeBucketPolicyholders = bucketPolicyholders.filter(isActivePolicyholder).length;
       return {
         group: bucket.group,
         label: bucket.label,
-        prospects: bucketProspects.length,
-        policyholders: converted,
-        conversionRatePct: toPct(converted, bucketProspects.length),
+        prospects: bucketPolicyholders.length,
+        policyholders: activeBucketPolicyholders,
+        totalPolicyholders: bucketPolicyholders.length,
+        activePolicyholders: activeBucketPolicyholders,
+        conversionRatePct: toPct(activeBucketPolicyholders, bucketPolicyholders.length),
       };
     });
 
@@ -4370,7 +4374,7 @@ app.get("/api/clients/relationship/dashboard", async (req, res) => {
       .map((policyholder) => {
         const engagement = engagementById.get(normalizeKey(policyholder.leadEngagementId));
         const lead = engagement ? leadById.get(normalizeKey(engagement.leadId)) : null;
-        const prospect = lead ? prospects.find((item) => normalizeKey(item._id) === normalizeKey(lead.prospectId)) : null;
+        const prospect = lead ? prospectById.get(normalizeKey(lead.prospectId)) : null;
         return {
           policyholderId: normalizeKey(policyholder._id),
           policyholderCode: policyholder.policyholderCode || "—",
@@ -4383,13 +4387,14 @@ app.get("/api/clients/relationship/dashboard", async (req, res) => {
           leadId: normalizeKey(lead?._id),
           leadCode: lead?.leadCode || "—",
           source: prospect?.source || "—",
+          marketType: prospect?.marketType || "—",
+          prospectType: prospect?.prospectType || "—",
         };
       });
-    const leadDetailRows = leads
-      .filter((lead) => isInSelectedRange(lead.createdAt))
+    const leadDetailRows = activeLeadsList
       .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0) || String(a.leadCode || "").localeCompare(String(b.leadCode || ""), undefined, { numeric: true, sensitivity: "base" }))
       .map((lead) => {
-        const prospect = prospects.find((item) => normalizeKey(item._id) === normalizeKey(lead.prospectId));
+        const prospect = prospectById.get(normalizeKey(lead.prospectId));
         const engagement = engagements.find((item) => normalizeKey(item.leadId) === normalizeKey(lead._id));
         return {
           leadId: normalizeKey(lead._id),
