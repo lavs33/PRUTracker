@@ -1412,6 +1412,38 @@
   min-width: 230px;
 }
 
+.manager-orphan-endorsement-tabs {
+  align-items: stretch;
+}
+
+.manager-endorsement-filters {
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.manager-endorsement-filters .manager-select {
+  min-width: 210px;
+}
+
+.manager-endorsement-filters .manager-clear-btn {
+  align-self: stretch;
+  min-width: 88px;
+}
+
+@media (max-width: 1100px) {
+  .manager-endorsement-filters {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .manager-endorsement-filters .manager-select {
+    flex: 1 1 220px;
+  }
+}
+
 .manager-unit-details-card > .manager-select {
   min-width: 220px;
   max-width: 320px;
