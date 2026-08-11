@@ -159,9 +159,13 @@ const followingMonthKey = (value) => {
 };
 const currentKpiMonth = monthKey();
 const nextKpiMonth = followingMonthKey(currentKpiMonth);
-const buildManagerReportDateOptions = () => {
+const buildManagerReportDateOptions = (dataStartDate = KPI_MONTH_START) => {
   const monthOptions = [];
-  let cursor = KPI_MONTH_START;
+  const startParts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Manila", year: "numeric", month: "2-digit" })
+    .formatToParts(new Date(dataStartDate));
+  const requestedStart = `${startParts.find((part) => part.type === "year")?.value}-${startParts.find((part) => part.type === "month")?.value}`;
+  let cursor = /^\d{4}-\d{2}$/.test(requestedStart) && requestedStart <= currentKpiMonth ? requestedStart : currentKpiMonth;
+  const firstMonth = cursor;
   while (cursor <= currentKpiMonth) {
     const [year, month] = cursor.split("-").map(Number);
     monthOptions.push({
@@ -175,10 +179,12 @@ const buildManagerReportDateOptions = () => {
     cursor = followingMonthKey(cursor);
   }
   const currentYear = currentKpiMonth.slice(0, 4);
+  const firstMonthLabel = monthOptions[0]?.label || currentYear;
   const currentMonthLabel = monthOptions.at(-1)?.label || currentYear;
   return [{
     value: "YTD",
-    label: `January ${currentYear} – ${currentMonthLabel}`,
+    label: `${firstMonthLabel} - ${currentMonthLabel}`,
+    startMonth: firstMonth,
   }, ...monthOptions];
 };
 const MANAGER_REPORT_DATE_OPTIONS = buildManagerReportDateOptions();
@@ -524,12 +530,13 @@ function getPresetLabel(value) {
     || "All Time";
 }
 
-function getManagerReportPeriodLabel(value) {
+function getManagerReportPeriodLabel(value, options = MANAGER_REPORT_DATE_OPTIONS) {
   const selectedMonth = value === "YTD" ? currentKpiMonth : String(value || "");
   if (/^\d{4}-\d{2}$/.test(selectedMonth)) {
     const [year, month] = selectedMonth.split("-").map(Number);
-    const startMonth = value === "YTD" ? 0 : month - 1;
-    const startDate = new Date(Date.UTC(year, startMonth, 1));
+    const ytdStartKey = options.find((option) => option.value === "YTD")?.startMonth || `${year}-01`;
+    const [startYear, startMonth] = (value === "YTD" ? ytdStartKey : selectedMonth).split("-").map(Number);
+    const startDate = new Date(Date.UTC(startYear, startMonth - 1, 1));
     const endDate = new Date(Date.UTC(year, month, 0));
     const formatReportDate = (date) => date.toLocaleDateString("en-US", {
       timeZone: "UTC",
@@ -537,7 +544,7 @@ function getManagerReportPeriodLabel(value) {
       day: "numeric",
       year: "numeric",
     });
-    return `${formatReportDate(startDate)} to ${formatReportDate(endDate)}`;
+    return `${formatReportDate(startDate)} - ${formatReportDate(endDate)}`;
   }
   return getPresetLabel(value);
 }
@@ -2253,11 +2260,6 @@ function ManagerPortal({ roleType }) {
     });
   }, [isAllUnitsSelected, kpiData?.assignments, portalData?.kpiSalesRowsByFrequency, selectedUnit?.name, unitKpiDatePreset, unitKpiPeriod, unitKpiRangeKey]);
 
-  const unitPerformancePeriodLabel = useMemo(
-    () => getManagerReportPeriodLabel(unitPerformanceDatePreset),
-    [unitPerformanceDatePreset],
-  );
-
   const unitSortLabel = useMemo(() => {
     const selectLabels = {
       usernameAsc: "Username (A → Z)",
@@ -2324,6 +2326,25 @@ function ManagerPortal({ roleType }) {
     },
     [portalData?.agents, selectedAgentId, selectedUnitRows],
   );
+  const performanceDateOptions = useMemo(() => {
+    const starts = portalData?.reportContext?.performanceDataStartDates || {};
+    const startDate = selectedAgent
+      ? starts.agents?.[String(selectedAgent.userId || "")]?.[unitPerformanceTab]
+      : (isAllUnitsSelected
+        ? starts.scope?.[unitPerformanceTab]
+        : starts.units?.[selectedUnit?.name || ""]?.[unitPerformanceTab]);
+    return buildManagerReportDateOptions(startDate || currentKpiMonth);
+  }, [isAllUnitsSelected, portalData?.reportContext?.performanceDataStartDates, selectedAgent, selectedUnit?.name, unitPerformanceTab]);
+  const unitPerformancePeriodLabel = useMemo(
+    () => getManagerReportPeriodLabel(unitPerformanceDatePreset, performanceDateOptions),
+    [performanceDateOptions, unitPerformanceDatePreset],
+  );
+
+  useEffect(() => {
+    if (!performanceDateOptions.some((option) => option.value === unitPerformanceDatePreset)) {
+      setUnitPerformanceDatePreset(currentKpiMonth);
+    }
+  }, [performanceDateOptions, unitPerformanceDatePreset]);
 
   const orphanAgentTypeOptions = useMemo(() =>
     [...new Set((portalData?.agents || []).map((agent) => String(agent?.agentType || "").trim()).filter(Boolean))]
@@ -3970,7 +3991,7 @@ function ManagerPortal({ roleType }) {
       ],
       filters: [
         { label: "Performance Tab", value: tabLabel },
-        { label: "Date Range", value: getManagerReportPeriodLabel(unitPerformanceDatePreset) },
+        { label: "Date Range", value: getManagerReportPeriodLabel(unitPerformanceDatePreset, performanceDateOptions) },
       ],
       statCards: (detailRowsByTab[unitPerformanceTab] || []).map(([label, value], index) => ({
         label,
@@ -4177,7 +4198,7 @@ function ManagerPortal({ roleType }) {
           ],
       filters: [
         { label: "Performance Tab", value: tabLabel },
-        { label: "Date Range", value: getManagerReportPeriodLabel(unitPerformanceDatePreset) },
+        { label: "Date Range", value: getManagerReportPeriodLabel(unitPerformanceDatePreset, performanceDateOptions) },
         { label: "Search Filter", value: agentSearch.trim() || "All" },
         { label: "Sort Filter", value: unitSortLabel },
       ],
@@ -4446,7 +4467,7 @@ function ManagerPortal({ roleType }) {
                       value={unitPerformanceDatePreset}
                       onChange={(e) => setUnitPerformanceDatePreset(e.target.value)}
                     >
-                      {MANAGER_REPORT_DATE_OPTIONS.map((option) => (
+                      {performanceDateOptions.map((option) => (
                         <option key={option.value} value={option.value}>{option.label}</option>
                       ))}
                     </select>
@@ -4603,7 +4624,7 @@ function ManagerPortal({ roleType }) {
                       value={unitPerformanceDatePreset}
                       onChange={(e) => setUnitPerformanceDatePreset(e.target.value)}
                     >
-                      {MANAGER_REPORT_DATE_OPTIONS.map((option) => (
+                      {performanceDateOptions.map((option) => (
                         <option key={option.value} value={option.value}>{option.label}</option>
                       ))}
                     </select>

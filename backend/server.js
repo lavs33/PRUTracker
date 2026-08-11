@@ -2442,6 +2442,43 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
     if (right.leads !== left.leads) return right.leads - left.leads;
     return byName(left, right);
   });
+  const performanceDataStartDates = { scope: {}, units: {}, agents: {} };
+  const unitNameByUserId = new Map(scopedAgents.map((agent) => [
+    String(agent?.userId?._id || ""),
+    String(agent?.unitId?.unitName || "Unassigned Unit"),
+  ]));
+  const recordPerformanceStart = (tab, userId, value) => {
+    const timestamp = new Date(value).getTime();
+    if (!userId || !Number.isFinite(timestamp)) return;
+    const date = new Date(timestamp).toISOString();
+    const unitName = unitNameByUserId.get(String(userId)) || "Unassigned Unit";
+    const keepEarliest = (target) => {
+      if (!target[tab] || timestamp < new Date(target[tab]).getTime()) target[tab] = date;
+    };
+    keepEarliest(performanceDataStartDates.scope);
+    performanceDataStartDates.units[unitName] ||= {};
+    keepEarliest(performanceDataStartDates.units[unitName]);
+    performanceDataStartDates.agents[String(userId)] ||= {};
+    keepEarliest(performanceDataStartDates.agents[String(userId)]);
+  };
+  tasks.forEach((task) => recordPerformanceStart("tasks", String(task?.assignedToUserId || ""), task?.createdAt || task?.dueAt));
+  prospects.forEach((prospect) => recordPerformanceStart("clients", effectiveProspectOwnerId(prospect), prospect?.createdAt));
+  leads.forEach((lead) => {
+    const userId = leadIdToAssignedUserId.get(String(lead?._id || "")) || "";
+    recordPerformanceStart("clients", userId, lead?.createdAt);
+    recordPerformanceStart("sales", userId, lead?.createdAt);
+  });
+  policyholders.forEach((policyholder) => {
+    const userId = effectivePolicyholderOwnerId(policyholder);
+    const appearedAt = policyIssuanceDateForPolicyholder(policyholder);
+    recordPerformanceStart("clients", userId, appearedAt);
+    recordPerformanceStart("sales", userId, appearedAt);
+  });
+  applications.forEach((application) => recordPerformanceStart(
+    "sales",
+    engagementIdToAssignedUserId.get(String(application?.leadEngagementId || "")) || "",
+    application?.recordApplicationSubmission?.savedAt
+  ));
   const branchRecommendationNotifications = context.role === "BM"
     ? await Notification.find({ type: "BM_RECOMMENDATION", "metadata.sentByUserId": String(user._id), softDeletedAt: null })
         .select("metadata.recommendationKey createdAt")
@@ -2492,6 +2529,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
         reassignmentMonthKey: selectedReassignmentMonth,
         reassignmentMonthLabel: reassignmentMonthContext.periodLabel,
         reassignmentMonth: selectedReassignmentMonth,
+        performanceDataStartDates,
       },
       summary: summarizeRows(allRows),
       taskSummary: summarizeRows(taskRows),
