@@ -159,9 +159,13 @@ const followingMonthKey = (value) => {
 };
 const currentKpiMonth = monthKey();
 const nextKpiMonth = followingMonthKey(currentKpiMonth);
-const buildManagerReportDateOptions = () => {
+const buildManagerReportDateOptions = (dataStartDate = KPI_MONTH_START) => {
   const monthOptions = [];
-  let cursor = KPI_MONTH_START;
+  const startParts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Manila", year: "numeric", month: "2-digit" })
+    .formatToParts(new Date(dataStartDate));
+  const requestedStart = `${startParts.find((part) => part.type === "year")?.value}-${startParts.find((part) => part.type === "month")?.value}`;
+  let cursor = /^\d{4}-\d{2}$/.test(requestedStart) && requestedStart <= currentKpiMonth ? requestedStart : currentKpiMonth;
+  const firstMonth = cursor;
   while (cursor <= currentKpiMonth) {
     const [year, month] = cursor.split("-").map(Number);
     monthOptions.push({
@@ -175,11 +179,14 @@ const buildManagerReportDateOptions = () => {
     cursor = followingMonthKey(cursor);
   }
   const currentYear = currentKpiMonth.slice(0, 4);
+  const firstMonthLabel = monthOptions[0]?.label || currentYear;
   const currentMonthLabel = monthOptions.at(-1)?.label || currentYear;
-  return [{
+  const overallOption = {
     value: "YTD",
-    label: `January ${currentYear} – ${currentMonthLabel}`,
-  }, ...monthOptions];
+    label: `${firstMonthLabel} - ${currentMonthLabel}`,
+    startMonth: firstMonth,
+  };
+  return firstMonth === currentKpiMonth ? monthOptions : [overallOption, ...monthOptions];
 };
 const MANAGER_REPORT_DATE_OPTIONS = buildManagerReportDateOptions();
 const KPI_PROGRESS_DATE_OPTIONS = MANAGER_REPORT_DATE_OPTIONS.filter((option) => option.value !== "YTD");
@@ -366,21 +373,35 @@ function buildKpiTargetsFromDefault(kpi = {}, defaultPeriodOverride = "") {
 
 function getKpiComparison(actual, kpi) {
   const numericActual = Number(actual || 0);
-  const primaryTarget = [kpi?.targetValue, kpi?.targetMin, kpi?.targetMax]
-    .find((value) => value !== null && value !== undefined && value !== "");
-  const target = Number(primaryTarget || 0);
-  if (!target) return { percent: 0, status: "No target assigned", className: "neutral", delta: 0, deltaLabel: "Set a target to compare progress." };
+  const hasValue = (value) => value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value));
+  const hasFixedTarget = hasValue(kpi?.targetValue);
+  const hasMinTarget = hasValue(kpi?.targetMin);
+  const hasMaxTarget = hasValue(kpi?.targetMax);
+  const minimum = hasMinTarget ? Number(kpi.targetMin) : null;
+  const maximum = hasMaxTarget ? Number(kpi.targetMax) : null;
+  const fixed = hasFixedTarget ? Number(kpi.targetValue) : null;
+  const target = hasFixedTarget ? fixed : (hasMinTarget ? minimum : maximum);
+  if (!Number.isFinite(target) || target === 0) return { percent: 0, status: "No target assigned", className: "neutral", delta: 0, deltaLabel: "Set a target to compare progress." };
   const rawPercent = Math.round((numericActual / target) * 100);
   const percent = kpi?.valueType === "Percent" ? Math.min(rawPercent, 100) : rawPercent;
-  const delta = numericActual - target;
-  if (delta > 0) {
+  const rangeHasUpperBound = !hasFixedTarget && hasMinTarget && hasMaxTarget;
+  const lowerBound = rangeHasUpperBound ? Math.min(minimum, maximum) : target;
+  const upperBound = rangeHasUpperBound ? Math.max(minimum, maximum) : target;
+  if (numericActual < lowerBound) {
+    const delta = numericActual - lowerBound;
+    return { percent, status: "Below target", className: "warning", delta, deltaLabel: `${formatActualKpiValue(Math.abs(delta), kpi.valueType)} remaining to target` };
+  }
+  if (rangeHasUpperBound && numericActual > upperBound) {
+    const delta = numericActual - upperBound;
     const deltaValue = kpi?.valueType === "Percent" ? `${Number(delta).toFixed(0)}%` : formatActualKpiValue(delta, kpi.valueType);
     return { percent, status: "Exceeded target", className: "good", delta, deltaLabel: `Exceeded by ${deltaValue}` };
   }
-  if (delta === 0) {
-    return { percent, status: "On target", className: "good", delta, deltaLabel: "" };
+  if ((hasFixedTarget || (!hasMinTarget && hasMaxTarget)) && numericActual > target) {
+    const delta = numericActual - target;
+    const deltaValue = kpi?.valueType === "Percent" ? `${Number(delta).toFixed(0)}%` : formatActualKpiValue(delta, kpi.valueType);
+    return { percent, status: "Exceeded target", className: "good", delta, deltaLabel: `Exceeded by ${deltaValue}` };
   }
-  return { percent, status: "Below target", className: "warning", delta, deltaLabel: `${formatActualKpiValue(Math.abs(delta), kpi.valueType)} remaining to target` };
+  return { percent, status: "On target", className: "good", delta: numericActual - target, deltaLabel: "" };
 }
 
 function formatActualKpiValue(value, valueType) {
@@ -524,12 +545,13 @@ function getPresetLabel(value) {
     || "All Time";
 }
 
-function getManagerReportPeriodLabel(value) {
+function getManagerReportPeriodLabel(value, options = MANAGER_REPORT_DATE_OPTIONS) {
   const selectedMonth = value === "YTD" ? currentKpiMonth : String(value || "");
   if (/^\d{4}-\d{2}$/.test(selectedMonth)) {
     const [year, month] = selectedMonth.split("-").map(Number);
-    const startMonth = value === "YTD" ? 0 : month - 1;
-    const startDate = new Date(Date.UTC(year, startMonth, 1));
+    const ytdStartKey = options.find((option) => option.value === "YTD")?.startMonth || `${year}-01`;
+    const [startYear, startMonth] = (value === "YTD" ? ytdStartKey : selectedMonth).split("-").map(Number);
+    const startDate = new Date(Date.UTC(startYear, startMonth - 1, 1));
     const endDate = new Date(Date.UTC(year, month, 0));
     const formatReportDate = (date) => date.toLocaleDateString("en-US", {
       timeZone: "UTC",
@@ -537,7 +559,7 @@ function getManagerReportPeriodLabel(value) {
       day: "numeric",
       year: "numeric",
     });
-    return `${formatReportDate(startDate)} to ${formatReportDate(endDate)}`;
+    return `${formatReportDate(startDate)} - ${formatReportDate(endDate)}`;
   }
   return getPresetLabel(value);
 }
@@ -2211,6 +2233,20 @@ function ManagerPortal({ roleType }) {
   const unitKpiRangeKey = unitKpiDatePreset;
   const branchKpiRangeKey = branchKpiDatePreset;
   const branchKpiDateOptions = KPI_PROGRESS_DATE_OPTIONS;
+  const unitKpiDateOptions = useMemo(() => {
+    const starts = portalData?.reportContext?.performanceDataStartDates || {};
+    const startDate = isAllUnitsSelected
+      ? starts.scope?.sales
+      : starts.units?.[selectedUnit?.name || ""]?.sales;
+    return buildManagerReportDateOptions(startDate || currentKpiMonth)
+      .filter((option) => option.value !== "YTD");
+  }, [isAllUnitsSelected, portalData?.reportContext?.performanceDataStartDates, selectedUnit?.name]);
+
+  useEffect(() => {
+    if (!unitKpiDateOptions.some((option) => option.value === unitKpiDatePreset)) {
+      setUnitKpiDatePreset(currentKpiMonth);
+    }
+  }, [unitKpiDateOptions, unitKpiDatePreset]);
 
   const branchKpiPeriodLabel = useMemo(() => getPresetLabel(branchKpiDatePreset), [branchKpiDatePreset]);
   const branchKpiReportPeriodLabel = useMemo(() => getManagerReportPeriodLabel(branchKpiDatePreset), [branchKpiDatePreset]);
@@ -2252,11 +2288,6 @@ function ManagerPortal({ roleType }) {
       return { kpi: kpiForPeriod, actual, comparison: getKpiComparison(actual, kpiForPeriod), dateRangeLabel: getPresetLabel(unitKpiDatePreset) };
     });
   }, [isAllUnitsSelected, kpiData?.assignments, portalData?.kpiSalesRowsByFrequency, selectedUnit?.name, unitKpiDatePreset, unitKpiPeriod, unitKpiRangeKey]);
-
-  const unitPerformancePeriodLabel = useMemo(
-    () => getManagerReportPeriodLabel(unitPerformanceDatePreset),
-    [unitPerformanceDatePreset],
-  );
 
   const unitSortLabel = useMemo(() => {
     const selectLabels = {
@@ -2324,6 +2355,25 @@ function ManagerPortal({ roleType }) {
     },
     [portalData?.agents, selectedAgentId, selectedUnitRows],
   );
+  const performanceDateOptions = useMemo(() => {
+    const starts = portalData?.reportContext?.performanceDataStartDates || {};
+    const startDate = selectedAgent
+      ? starts.agents?.[String(selectedAgent.userId || "")]?.[unitPerformanceTab]
+      : (isAllUnitsSelected
+        ? starts.scope?.[unitPerformanceTab]
+        : starts.units?.[selectedUnit?.name || ""]?.[unitPerformanceTab]);
+    return buildManagerReportDateOptions(startDate || currentKpiMonth);
+  }, [isAllUnitsSelected, portalData?.reportContext?.performanceDataStartDates, selectedAgent, selectedUnit?.name, unitPerformanceTab]);
+  const unitPerformancePeriodLabel = useMemo(
+    () => getManagerReportPeriodLabel(unitPerformanceDatePreset, performanceDateOptions),
+    [performanceDateOptions, unitPerformanceDatePreset],
+  );
+
+  useEffect(() => {
+    if (!performanceDateOptions.some((option) => option.value === unitPerformanceDatePreset)) {
+      setUnitPerformanceDatePreset(currentKpiMonth);
+    }
+  }, [performanceDateOptions, unitPerformanceDatePreset]);
 
   const orphanAgentTypeOptions = useMemo(() =>
     [...new Set((portalData?.agents || []).map((agent) => String(agent?.agentType || "").trim()).filter(Boolean))]
@@ -3970,7 +4020,7 @@ function ManagerPortal({ roleType }) {
       ],
       filters: [
         { label: "Performance Tab", value: tabLabel },
-        { label: "Date Range", value: getManagerReportPeriodLabel(unitPerformanceDatePreset) },
+        { label: "Date Range", value: getManagerReportPeriodLabel(unitPerformanceDatePreset, performanceDateOptions) },
       ],
       statCards: (detailRowsByTab[unitPerformanceTab] || []).map(([label, value], index) => ({
         label,
@@ -4140,6 +4190,10 @@ function ManagerPortal({ roleType }) {
       : columnsByTab;
     const reportScopeName = isAllUnitsSelected ? (scope.branchName || "Branch") : unitName;
     const reportScopeLabel = isAllUnitsSelected ? "Branch" : "Unit";
+    const includesUnitKpiProgress = unitPerformanceTab === "sales"
+      && isUnitPerformanceMonthSelected
+      && !isAllUnitsSelected
+      && selectedUnitKpiCards.length > 0;
 
     const rows = filteredAgents.map((agent) => ({
       ...agent,
@@ -4177,7 +4231,7 @@ function ManagerPortal({ roleType }) {
           ],
       filters: [
         { label: "Performance Tab", value: tabLabel },
-        { label: "Date Range", value: getManagerReportPeriodLabel(unitPerformanceDatePreset) },
+        { label: "Date Range", value: getManagerReportPeriodLabel(unitPerformanceDatePreset, performanceDateOptions) },
         { label: "Search Filter", value: agentSearch.trim() || "All" },
         { label: "Sort Filter", value: unitSortLabel },
       ],
@@ -4259,10 +4313,10 @@ function ManagerPortal({ roleType }) {
           title: "Agents in Scope",
           columns: columnsForReport[unitPerformanceTab],
           rows,
-          pageSize: unitPerformanceTab === "sales" ? 15 : 20,
-          widePageSizeCap: unitPerformanceTab === "sales" ? 15 : 20,
-          firstPageRows: unitPerformanceTab === "sales" ? 5 : 10,
-          firstPageLimit: unitPerformanceTab === "sales" ? 5 : 10,
+          pageSize: includesUnitKpiProgress ? 20 : (unitPerformanceTab === "sales" ? 15 : 20),
+          widePageSizeCap: includesUnitKpiProgress ? 20 : (unitPerformanceTab === "sales" ? 15 : 20),
+          firstPageRows: includesUnitKpiProgress ? 3 : (unitPerformanceTab === "sales" ? 5 : 10),
+          firstPageLimit: includesUnitKpiProgress ? 3 : (unitPerformanceTab === "sales" ? 5 : 10),
           allowFirstPage: !(normalizedRole === "BM" && unitPerformanceTab === "sales" && !isAllUnitsSelected && isUnitPerformanceMonthSelected),
           emptyMessage: "No agents available for this unit report.",
         },
@@ -4446,7 +4500,7 @@ function ManagerPortal({ roleType }) {
                       value={unitPerformanceDatePreset}
                       onChange={(e) => setUnitPerformanceDatePreset(e.target.value)}
                     >
-                      {MANAGER_REPORT_DATE_OPTIONS.map((option) => (
+                      {performanceDateOptions.map((option) => (
                         <option key={option.value} value={option.value}>{option.label}</option>
                       ))}
                     </select>
@@ -4603,7 +4657,7 @@ function ManagerPortal({ roleType }) {
                       value={unitPerformanceDatePreset}
                       onChange={(e) => setUnitPerformanceDatePreset(e.target.value)}
                     >
-                      {MANAGER_REPORT_DATE_OPTIONS.map((option) => (
+                      {performanceDateOptions.map((option) => (
                         <option key={option.value} value={option.value}>{option.label}</option>
                       ))}
                     </select>
@@ -6155,7 +6209,7 @@ function ManagerPortal({ roleType }) {
                       value={unitKpiDatePreset}
                       onChange={(e) => setUnitKpiDatePreset(e.target.value)}
                     >
-                      {KPI_PROGRESS_DATE_OPTIONS.map((option) => (
+                      {unitKpiDateOptions.map((option) => (
                         <option key={option.value} value={option.value}>{option.label}</option>
                       ))}
                     </select>
