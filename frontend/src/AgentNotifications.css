@@ -517,3 +517,10 @@
   border-color: #efa7b1;
   color: #982536;
 }
+
+.notif-pill.um-recommendation { background: #e0f2fe; border-color: #38bdf8; color: #075985; }
+.notif-pill.aum-recommendation { background: #ede9fe; border-color: #a78bfa; color: #5b21b6; }
+.notif-agent-recommendation { margin-top: 10px; padding: 14px; border: 1px solid #fdba74; border-radius: 12px; background: linear-gradient(135deg, #fff7ed, #fffbeb); }
+.notif-agent-recommendation strong { color: #9a3412; }
+.notif-agent-recommendation p { white-space: pre-line; margin: 8px 0; }
+.notif-agent-recommendation small { color: #64748b; font-weight: 700; }

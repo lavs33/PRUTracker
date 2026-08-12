@@ -9,10 +9,12 @@ const UNIT_KPI_NOTIF_TYPES = ["UNIT_KPI_ASSIGNED", "UNIT_KPI_TARGET_UPDATED", "U
 const AGENT_KPI_NOTIF_TYPES = ["AGENT_KPI_ASSIGNED", "AGENT_KPI_TARGET_UPDATED", "AGENT_KPI_UNASSIGNED"];
 const KPI_NOTIF_TYPES = [...UNIT_KPI_NOTIF_TYPES, ...AGENT_KPI_NOTIF_TYPES];
 const KPI_UNASSIGNED_NOTIF_TYPES = ["UNIT_KPI_UNASSIGNED", "AGENT_KPI_UNASSIGNED"];
-const NOTIF_TYPES = ["TASK_ADDED", "TASK_DUE_TODAY", "TASK_MISSED", "PAYMENT_TRANSFER_REMINDER", "PAYMENT_EOR_REMINDER", "PAYMENT_MISSED_TRANSFER", "POLICY_LAPSED", "POLICY_PAID_UP", "POLICY_MATURED", "POLICY_PAID_UP_MATURED", "POLICY_CANCELLED", "ORPHAN_CLIENT_ASSIGNED", "ORPHAN_CLIENT_TRANSFERRED", ...KPI_NOTIF_TYPES];
+const NOTIF_TYPES = ["UM_RECOMMENDATION", "AUM_RECOMMENDATION", "TASK_ADDED", "TASK_DUE_TODAY", "TASK_MISSED", "PAYMENT_TRANSFER_REMINDER", "PAYMENT_EOR_REMINDER", "PAYMENT_MISSED_TRANSFER", "POLICY_LAPSED", "POLICY_PAID_UP", "POLICY_MATURED", "POLICY_PAID_UP_MATURED", "POLICY_CANCELLED", "ORPHAN_CLIENT_ASSIGNED", "ORPHAN_CLIENT_TRANSFERRED", ...KPI_NOTIF_TYPES];
 const PRIORITY_LEVELS = ["urgent", "high", "normal", "informational"];
 const NOTIFICATIONS_PER_PAGE = 15;
 const PRIORITY_BY_TYPE = {
+  UM_RECOMMENDATION: "urgent",
+  AUM_RECOMMENDATION: "urgent",
   POLICY_LAPSED: "urgent",
   PAYMENT_MISSED_TRANSFER: "urgent",
   TASK_MISSED: "urgent",
@@ -343,6 +345,8 @@ function AgentNotifications() {
     if (t === "TASK_MISSED") return "notif-pill missed";
     if (t === "PAYMENT_TRANSFER_REMINDER" || t === "PAYMENT_EOR_REMINDER" || t === "PAYMENT_MISSED_TRANSFER" || t === "POLICY_LAPSED" || t === "POLICY_PAID_UP" || t === "POLICY_MATURED" || t === "POLICY_PAID_UP_MATURED" || t === "POLICY_CANCELLED") return "notif-pill payment";
     if (t === "ORPHAN_CLIENT_ASSIGNED" || t === "ORPHAN_CLIENT_TRANSFERRED") return "notif-pill orphan";
+    if (t === "UM_RECOMMENDATION") return "notif-pill um-recommendation";
+    if (t === "AUM_RECOMMENDATION") return "notif-pill aum-recommendation";
     if (t === "UNIT_KPI_ASSIGNED" || t === "AGENT_KPI_ASSIGNED") return "notif-pill kpi-assigned";
     if (t === "UNIT_KPI_TARGET_UPDATED" || t === "AGENT_KPI_TARGET_UPDATED") return "notif-pill kpi-updated";
     if (t === "UNIT_KPI_UNASSIGNED" || t === "AGENT_KPI_UNASSIGNED") return "notif-pill kpi-unassigned";
@@ -464,12 +468,14 @@ function AgentNotifications() {
         {String(n.message || "").trim()
           ? (["ORPHAN_CLIENT_ASSIGNED", "ORPHAN_CLIENT_TRANSFERRED"].includes(String(n.type || "").toUpperCase())
             ? <OrphanClientMessage notification={n} />
-            : <div className="notif-msg">{n.message}</div>)
+            : (["UM_RECOMMENDATION", "AUM_RECOMMENDATION"].includes(String(n.type || "").toUpperCase())
+              ? <div className="notif-agent-recommendation"><strong>Sales Production Recommendation</strong><p>{n.message}</p></div>
+              : <div className="notif-msg">{n.message}</div>))
           : null}
       </div>
 
       <div className="notif-right">
-        {n.status === "Read" && !KPI_NOTIF_TYPES.includes(String(n?.type || "").toUpperCase()) ? (
+        {n.status === "Read" && !KPI_NOTIF_TYPES.includes(String(n?.type || "").toUpperCase()) && !["UM_RECOMMENDATION", "AUM_RECOMMENDATION"].includes(String(n?.type || "").toUpperCase()) ? (
           <button
             type="button"
             className="notif-btn ghost"

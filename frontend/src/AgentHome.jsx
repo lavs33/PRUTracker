@@ -114,7 +114,7 @@ function AgentHome() {
       return target && Number(kpi?.actual || 0) < target;
     }).length;
     const priorityByType = {
-      POLICY_LAPSED: "urgent", PAYMENT_MISSED_TRANSFER: "urgent", TASK_MISSED: "urgent",
+      UM_RECOMMENDATION: "urgent", AUM_RECOMMENDATION: "urgent", POLICY_LAPSED: "urgent", PAYMENT_MISSED_TRANSFER: "urgent", TASK_MISSED: "urgent",
       TASK_DUE_TODAY: "high", PAYMENT_TRANSFER_REMINDER: "high", PAYMENT_EOR_REMINDER: "high",
       POLICY_CANCELLED: "high", ORPHAN_CLIENT_ASSIGNED: "high",
     };
@@ -253,6 +253,10 @@ function AgentHome() {
   ];
 
   const openActionItem = (notification) => {
+    if (["UM_RECOMMENDATION", "AUM_RECOMMENDATION"].includes(String(notification?.type || ""))) {
+      navigateToTop(`/agent/${user.username}/notifications?resolution=Unresolved`);
+      return;
+    }
     const policyholderId = notification?.metadata?.policyholderId || (notification?.entityType === "Policyholder" ? notification.entityId : "");
     const annualPaymentId = notification?.metadata?.annualPaymentId || "";
     const paymentId = notification?.metadata?.paymentId || "";
