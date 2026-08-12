@@ -1784,7 +1784,6 @@ function AdminOrganizationPage() {
                   <>
                     <div className="aop-section-head">
                       <h2>All Areas</h2>
-                      <p>Review every area record, search by area name, and open the area forms when needed.</p>
                     </div>
 
                     <div className="aop-list-toolbar">
@@ -1894,7 +1893,6 @@ function AdminOrganizationPage() {
                   <>
                     <div className="aop-section-head">
                       <h2>All Branches</h2>
-                      <p>Review every branch, search the list, and open the add or edit forms from the action bar.</p>
                     </div>
 
                     <div className="aop-list-toolbar">
@@ -2030,7 +2028,6 @@ function AdminOrganizationPage() {
                   <>
                     <div className="aop-section-head">
                       <h2>All Units</h2>
-                      <p>Review every unit, search the list, and open the unit forms from the action bar.</p>
                     </div>
 
                     <div className="aop-list-toolbar">
@@ -2170,7 +2167,6 @@ function AdminOrganizationPage() {
                   <>
                     <div className="aop-section-head">
                       <h2>All Managers</h2>
-                      <p>Review manager records using full user-schema details, then open the assignment form when needed.</p>
                     </div>
 
                     <div className="aop-list-toolbar">
@@ -2626,7 +2622,6 @@ function AdminOrganizationPage() {
                   <>
                     <div className="aop-section-head">
                       <h2>All Agents</h2>
-                      <p>Review all agent records using full user-schema details, then open the add or edit forms when needed.</p>
                     </div>
 
                     <div className="aop-list-toolbar">
