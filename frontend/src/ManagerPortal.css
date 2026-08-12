@@ -1412,6 +1412,76 @@
   min-width: 230px;
 }
 
+.manager-orphan-endorsement-tabs {
+  align-items: stretch;
+}
+
+.manager-endorsement-filters {
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.manager-endorsement-filters .manager-select {
+  min-width: 210px;
+}
+
+.manager-endorsement-filters .manager-clear-btn {
+  align-self: stretch;
+  min-width: 88px;
+}
+
+.manager-agent-sales-recommendation {
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px 10px;
+  border-top: 1px solid #fee2e2;
+}
+
+.manager-agent-sales-recommendation--underperforming {
+  margin: 10px;
+  padding: 14px;
+  border: 1px solid #fdba74;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #fff7ed, #fffbeb);
+  box-shadow: 0 8px 20px rgba(154, 52, 18, 0.08);
+}
+
+.manager-agent-sales-recommendation small,
+.manager-agent-sales-recommendation time {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.manager-agent-sales-recommendation button {
+  justify-self: start;
+  border: 0;
+  border-radius: 8px;
+  padding: 7px 10px;
+  background: #dc2626;
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.manager-agent-sales-recommendation button:not(:disabled):hover {
+  background: #7c3aed;
+  box-shadow: 0 6px 16px rgba(124, 58, 237, 0.24);
+}
+
+@media (max-width: 1100px) {
+  .manager-endorsement-filters {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .manager-endorsement-filters .manager-select {
+    flex: 1 1 220px;
+  }
+}
+
 .manager-unit-details-card > .manager-select {
   min-width: 220px;
   max-width: 320px;
