@@ -2442,6 +2442,43 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
     if (right.leads !== left.leads) return right.leads - left.leads;
     return byName(left, right);
   });
+  const performanceDataStartDates = { scope: {}, units: {}, agents: {} };
+  const unitNameByUserId = new Map(scopedAgents.map((agent) => [
+    String(agent?.userId?._id || ""),
+    String(agent?.unitId?.unitName || "Unassigned Unit"),
+  ]));
+  const recordPerformanceStart = (tab, userId, value) => {
+    const timestamp = new Date(value).getTime();
+    if (!userId || !Number.isFinite(timestamp) || timestamp <= 0) return;
+    const date = new Date(timestamp).toISOString();
+    const unitName = unitNameByUserId.get(String(userId)) || "Unassigned Unit";
+    const keepEarliest = (target) => {
+      if (!target[tab] || timestamp < new Date(target[tab]).getTime()) target[tab] = date;
+    };
+    keepEarliest(performanceDataStartDates.scope);
+    performanceDataStartDates.units[unitName] ||= {};
+    keepEarliest(performanceDataStartDates.units[unitName]);
+    performanceDataStartDates.agents[String(userId)] ||= {};
+    keepEarliest(performanceDataStartDates.agents[String(userId)]);
+  };
+  tasks.forEach((task) => recordPerformanceStart("tasks", String(task?.assignedToUserId || ""), task?.createdAt || task?.dueAt));
+  prospects.forEach((prospect) => recordPerformanceStart("clients", effectiveProspectOwnerId(prospect), prospect?.createdAt));
+  leads.forEach((lead) => {
+    const userId = leadIdToAssignedUserId.get(String(lead?._id || "")) || "";
+    recordPerformanceStart("clients", userId, lead?.createdAt);
+    recordPerformanceStart("sales", userId, lead?.createdAt);
+  });
+  policyholders.forEach((policyholder) => {
+    const userId = effectivePolicyholderOwnerId(policyholder);
+    const appearedAt = policyIssuanceDateForPolicyholder(policyholder);
+    recordPerformanceStart("clients", userId, appearedAt);
+    recordPerformanceStart("sales", userId, appearedAt);
+  });
+  applications.forEach((application) => recordPerformanceStart(
+    "sales",
+    engagementIdToAssignedUserId.get(String(application?.leadEngagementId || "")) || "",
+    application?.recordApplicationSubmission?.savedAt
+  ));
   const branchRecommendationNotifications = context.role === "BM"
     ? await Notification.find({ type: "BM_RECOMMENDATION", "metadata.sentByUserId": String(user._id), softDeletedAt: null })
         .select("metadata.recommendationKey createdAt")
@@ -2451,6 +2488,33 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
   const branchRecommendationHistory = branchRecommendationNotifications.reduce((history, notification) => {
     const key = String(notification?.metadata?.recommendationKey || "");
     if (key && !history[key]) history[key] = notification.createdAt;
+    return history;
+  }, {});
+  const currentUnitSalesRows = buildRowsForSalesContext(buildPresetContext(currentMonthKey));
+  const unitSalesRowsByName = currentUnitSalesRows.reduce((groups, row) => {
+    const name = String(row?.unit || "Unassigned Unit");
+    (groups[name] ||= []).push(row);
+    return groups;
+  }, {});
+  await Promise.all(Object.values(unitSalesRowsByName).map(async (rows) => {
+    const total = rows.reduce((sum, row) => sum + Number(row?.annualPremium || 0), 0);
+    const fairShare = rows.length ? total / rows.length : 0;
+    const achievedUserIds = rows.filter((row) => Number(row?.annualPremium || 0) >= fairShare).map((row) => String(row?.userId || "")).filter(Boolean);
+    if (!achievedUserIds.length) return;
+    await Notification.updateMany({ assignedToUserId: { $in: achievedUserIds }, type: { $in: ["UM_RECOMMENDATION", "AUM_RECOMMENDATION"] }, resolutionStatus: { $ne: "Resolved" }, "metadata.monthKey": currentMonthKey, softDeletedAt: null }, { $set: { resolutionStatus: "Resolved", resolvedAt: new Date(), "metadata.resolutionReason": "Agent achieved the unit sales production fair-share benchmark." } });
+  }));
+  const agentRecommendationNotifications = await Notification.find({
+    type: { $in: ["UM_RECOMMENDATION", "AUM_RECOMMENDATION"] },
+    "metadata.unitId": String(context.unitId || ""),
+    softDeletedAt: null,
+  }).select("metadata createdAt").sort({ createdAt: -1 }).lean();
+  const agentRecommendationHistory = agentRecommendationNotifications.reduce((history, notification) => {
+    const key = String(notification?.metadata?.recommendationKey || "");
+    if (key && !history[key]) history[key] = {
+      notifiedAt: notification.createdAt,
+      senderRole: notification?.metadata?.senderRole || "",
+      senderName: notification?.metadata?.senderName || "",
+    };
     return history;
   }, {});
 
@@ -2492,6 +2556,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
         reassignmentMonthKey: selectedReassignmentMonth,
         reassignmentMonthLabel: reassignmentMonthContext.periodLabel,
         reassignmentMonth: selectedReassignmentMonth,
+        performanceDataStartDates,
       },
       summary: summarizeRows(allRows),
       taskSummary: summarizeRows(taskRows),
@@ -2499,6 +2564,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       kpiSalesRowsByFrequency,
       branchKpiSalesTotalsByFrequency,
       branchRecommendationHistory,
+      agentRecommendationHistory,
       agents,
       taskRows: sortedTaskRows,
       salesRows: sortedSalesRows,
