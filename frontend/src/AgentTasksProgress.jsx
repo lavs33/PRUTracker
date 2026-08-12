@@ -18,10 +18,13 @@ const buildDatePresets = (dataStartDate) => {
   const startMonth = dataYear === CURRENT_YEAR ? Number(parts.find((part) => part.type === "month")?.value) : 1;
   const label = (month) => new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric", timeZone: "UTC" })
     .format(new Date(Date.UTC(CURRENT_YEAR, month - 1, 1)));
-  return [{ value: "YTD", label: `${label(startMonth)} - ${label(CURRENT_MONTH)}` }, ...Array.from({ length: CURRENT_MONTH - startMonth + 1 }, (_, index) => {
+  const monthOptions = Array.from({ length: CURRENT_MONTH - startMonth + 1 }, (_, index) => {
     const month = startMonth + index;
     return { value: `${CURRENT_YEAR}-${String(month).padStart(2, "0")}`, label: label(month) };
-  })];
+  });
+  return startMonth === CURRENT_MONTH
+    ? monthOptions
+    : [{ value: "YTD", label: `${label(startMonth)} - ${label(CURRENT_MONTH)}` }, ...monthOptions];
 };
 const DATE_PRESETS = buildDatePresets();
 const getOptionLabel = (options, value) => options.find((option) => option.value === value)?.label || value || "All";
@@ -155,7 +158,7 @@ function AgentTasksProgress() {
     const formatDate = (value) => {
       const dt = new Date(value);
       if (Number.isNaN(dt.getTime())) return "—";
-      const month = dt.toLocaleString("en-US", { month: "short" }).toLowerCase();
+      const month = dt.toLocaleString("en-US", { month: "short" });
       return `${month}. ${dt.getDate()}, ${dt.getFullYear()}`;
     };
     const computePeriod = () => {
@@ -164,7 +167,7 @@ function AgentTasksProgress() {
       if (start && !Number.isNaN(start.getTime())) {
         const startLabel = formatDate(start);
         const endLabel = formatDate(end);
-        return { label: startLabel === endLabel ? startLabel : `${startLabel} to ${endLabel}`, start, end };
+        return { label: startLabel === endLabel ? startLabel : `${startLabel} - ${endLabel}`, start, end };
       }
       return { label: `Through ${formatDate(end)}`, start: null, end };
     };

@@ -114,7 +114,7 @@ function AgentHome() {
       return target && Number(kpi?.actual || 0) < target;
     }).length;
     const priorityByType = {
-      POLICY_LAPSED: "urgent", PAYMENT_MISSED_TRANSFER: "urgent", TASK_MISSED: "urgent",
+      UM_RECOMMENDATION: "urgent", AUM_RECOMMENDATION: "urgent", POLICY_LAPSED: "urgent", PAYMENT_MISSED_TRANSFER: "urgent", TASK_MISSED: "urgent",
       TASK_DUE_TODAY: "high", PAYMENT_TRANSFER_REMINDER: "high", PAYMENT_EOR_REMINDER: "high",
       POLICY_CANCELLED: "high", ORPHAN_CLIENT_ASSIGNED: "high",
     };
@@ -253,6 +253,10 @@ function AgentHome() {
   ];
 
   const openActionItem = (notification) => {
+    if (["UM_RECOMMENDATION", "AUM_RECOMMENDATION"].includes(String(notification?.type || ""))) {
+      navigateToTop(`/agent/${user.username}/sales/performance`);
+      return;
+    }
     const policyholderId = notification?.metadata?.policyholderId || (notification?.entityType === "Policyholder" ? notification.entityId : "");
     const annualPaymentId = notification?.metadata?.annualPaymentId || "";
     const paymentId = notification?.metadata?.paymentId || "";
@@ -293,7 +297,17 @@ function AgentHome() {
       const duePhrase = notification?.type === "TASK_MISSED" ? "is now overdue." : (taskContext?.[4]?.trim() || "is due today.");
       summary = `${taskTitle} ${duePhrase}`.trim();
     }
+    const isSalesRecommendation = ["UM_RECOMMENDATION", "AUM_RECOMMENDATION"].includes(notification?.type);
+    const recommendationMetrics = isSalesRecommendation ? [
+      ["Agent Production", notification?.metadata?.agentContribution || "—"],
+      ["Unit Production", notification?.metadata?.unitProduction || "—"],
+      ["Unit Target", notification?.metadata?.unitTarget || "—"],
+      ["Unit Share", notification?.metadata?.contributionShare || "0.0%"],
+      ["Reporting Period", notification?.metadata?.periodLabel || "—"],
+    ].map(([label, value]) => ({ label, value })) : details;
     const presentation = {
+      UM_RECOMMENDATION: { heading: notification?.title || "Unit Manager sales production recommendation", guidance: "Review your unit contribution and prioritize the recommended sales activities." },
+      AUM_RECOMMENDATION: { heading: notification?.title || "Assistant Unit Manager sales production recommendation", guidance: "Review your unit contribution and prioritize the recommended sales activities." },
       TASK_MISSED: { heading: "Recover an overdue client activity", guidance: "Complete this missed activity now to restore the lead's follow-through." },
       TASK_DUE_TODAY: { heading: "Complete today's client activity", guidance: "Finish this activity today to keep the lead moving on schedule." },
       PAYMENT_MISSED_TRANSFER: { heading: "Restore a missed premium payment", guidance: "Record the required payment transfer to address the policy risk." },
@@ -303,7 +317,8 @@ function AgentHome() {
       POLICY_CANCELLED: { heading: "Review a cancelled policy relationship", guidance: "Open the policyholder record and review the cancellation concern." },
       ORPHAN_CLIENT_ASSIGNED: { heading: "Welcome a newly assigned client", guidance: "Review the reassigned client context and plan the next relationship action." },
     }[notification?.type] || { heading: "Resolve this client concern", guidance: "Review the linked record and complete the required action." };
-    return { ...presentation, context: summary || notification?.title || "Action required.", details };
+    const recommendationContext = isSalesRecommendation ? summary.split(/Recommended action:/i)[0].trim() : summary;
+    return { ...presentation, context: recommendationContext || notification?.title || "Action required.", details: recommendationMetrics, isSalesRecommendation };
   };
   const urgentActionItems = actionItems.filter((notification) => notification.priority === "urgent");
   const highActionItems = actionItems.filter((notification) => notification.priority === "high");
@@ -318,6 +333,7 @@ function AgentHome() {
       <div className="home-actionBody">
         <div className="home-actionMeta">
           <span>{notification.priority === "urgent" ? "Needs action" : "High priority"}</span>
+          {concern.isSalesRecommendation ? <em className={`home-actionType home-actionType--${String(notification.type || "").toLowerCase()}`}>{String(notification.type || "").replaceAll("_", " ")}</em> : null}
           <time><FiClock aria-hidden="true" /> {formatConcernDate(notification.createdAt)}</time>
         </div>
         <strong>{concern.heading}</strong>
@@ -326,6 +342,7 @@ function AgentHome() {
         {concern.details.length ? <div className="home-actionDetails">
           {concern.details.map((detail) => <span key={detail.label}><small>{detail.label}</small><b>{detail.value}</b></span>)}
         </div> : null}
+        {concern.isSalesRecommendation ? <div className="home-recommendationAction"><strong>Recommended action:</strong><span>{String(notification?.message || "").split(/Recommended action:/i)[1]?.trim() || concern.guidance}</span></div> : null}
         {kpiImpact ? <div className="home-kpiImpact">
           <small>Related KPI progress</small>
           <strong>{kpiImpact.label}</strong>
@@ -336,7 +353,7 @@ function AgentHome() {
           <span>{kpiImpact.currentPct}% now • {kpiImpact.projectedPct}% after completion</span>
         </div> : null}
       </div>
-      <button type="button" onClick={() => openActionItem(notification)}>Open concern <FiArrowRight aria-hidden="true" /></button>
+      <button type="button" onClick={() => openActionItem(notification)}>{concern.isSalesRecommendation ? "View Sales Performance" : "Open concern"} <FiArrowRight aria-hidden="true" /></button>
     </article>;
   };
 
