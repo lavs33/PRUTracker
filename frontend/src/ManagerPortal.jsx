@@ -134,6 +134,9 @@ const BmRecommendationConcernMessage = ({ notification }) => {
         <strong>{metadata.recommendationTitle || "Strengthen KPI performance"}</strong>
         <p>{capitalizedRecommendation}</p>
       </div>
+      {String(metadata.personalizedMessage || "").trim() ? (
+        <p><strong>Personalized message from your Branch Manager:</strong> {metadata.personalizedMessage}</p>
+      ) : null}
     </div>
   );
 };
@@ -159,9 +162,13 @@ const followingMonthKey = (value) => {
 };
 const currentKpiMonth = monthKey();
 const nextKpiMonth = followingMonthKey(currentKpiMonth);
-const buildManagerReportDateOptions = () => {
+const buildManagerReportDateOptions = (dataStartDate = KPI_MONTH_START) => {
   const monthOptions = [];
-  let cursor = KPI_MONTH_START;
+  const startParts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Manila", year: "numeric", month: "2-digit" })
+    .formatToParts(new Date(dataStartDate));
+  const requestedStart = `${startParts.find((part) => part.type === "year")?.value}-${startParts.find((part) => part.type === "month")?.value}`;
+  let cursor = /^\d{4}-\d{2}$/.test(requestedStart) && requestedStart <= currentKpiMonth ? requestedStart : currentKpiMonth;
+  const firstMonth = cursor;
   while (cursor <= currentKpiMonth) {
     const [year, month] = cursor.split("-").map(Number);
     monthOptions.push({
@@ -175,14 +182,16 @@ const buildManagerReportDateOptions = () => {
     cursor = followingMonthKey(cursor);
   }
   const currentYear = currentKpiMonth.slice(0, 4);
+  const firstMonthLabel = monthOptions[0]?.label || currentYear;
   const currentMonthLabel = monthOptions.at(-1)?.label || currentYear;
-  return [{
+  const overallOption = {
     value: "YTD",
-    label: `January ${currentYear} – ${currentMonthLabel}`,
-  }, ...monthOptions];
+    label: `${firstMonthLabel} - ${currentMonthLabel}`,
+    startMonth: firstMonth,
+  };
+  return firstMonth === currentKpiMonth ? monthOptions : [overallOption, ...monthOptions];
 };
 const MANAGER_REPORT_DATE_OPTIONS = buildManagerReportDateOptions();
-const KPI_PROGRESS_DATE_OPTIONS = MANAGER_REPORT_DATE_OPTIONS.filter((option) => option.value !== "YTD");
 const buildKpiMonthOptions = (throughMonth = nextKpiMonth) => {
   const rows = [];
   let cursor = KPI_MONTH_START;
@@ -366,21 +375,35 @@ function buildKpiTargetsFromDefault(kpi = {}, defaultPeriodOverride = "") {
 
 function getKpiComparison(actual, kpi) {
   const numericActual = Number(actual || 0);
-  const primaryTarget = [kpi?.targetValue, kpi?.targetMin, kpi?.targetMax]
-    .find((value) => value !== null && value !== undefined && value !== "");
-  const target = Number(primaryTarget || 0);
-  if (!target) return { percent: 0, status: "No target assigned", className: "neutral", delta: 0, deltaLabel: "Set a target to compare progress." };
+  const hasValue = (value) => value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value));
+  const hasFixedTarget = hasValue(kpi?.targetValue);
+  const hasMinTarget = hasValue(kpi?.targetMin);
+  const hasMaxTarget = hasValue(kpi?.targetMax);
+  const minimum = hasMinTarget ? Number(kpi.targetMin) : null;
+  const maximum = hasMaxTarget ? Number(kpi.targetMax) : null;
+  const fixed = hasFixedTarget ? Number(kpi.targetValue) : null;
+  const target = hasFixedTarget ? fixed : (hasMinTarget ? minimum : maximum);
+  if (!Number.isFinite(target) || target === 0) return { percent: 0, status: "No target assigned", className: "neutral", delta: 0, deltaLabel: "Set a target to compare progress." };
   const rawPercent = Math.round((numericActual / target) * 100);
   const percent = kpi?.valueType === "Percent" ? Math.min(rawPercent, 100) : rawPercent;
-  const delta = numericActual - target;
-  if (delta > 0) {
+  const rangeHasUpperBound = !hasFixedTarget && hasMinTarget && hasMaxTarget;
+  const lowerBound = rangeHasUpperBound ? Math.min(minimum, maximum) : target;
+  const upperBound = rangeHasUpperBound ? Math.max(minimum, maximum) : target;
+  if (numericActual < lowerBound) {
+    const delta = numericActual - lowerBound;
+    return { percent, status: "Below target", className: "warning", delta, deltaLabel: `${formatActualKpiValue(Math.abs(delta), kpi.valueType)} remaining to target` };
+  }
+  if (rangeHasUpperBound && numericActual > upperBound) {
+    const delta = numericActual - upperBound;
     const deltaValue = kpi?.valueType === "Percent" ? `${Number(delta).toFixed(0)}%` : formatActualKpiValue(delta, kpi.valueType);
     return { percent, status: "Exceeded target", className: "good", delta, deltaLabel: `Exceeded by ${deltaValue}` };
   }
-  if (delta === 0) {
-    return { percent, status: "On target", className: "good", delta, deltaLabel: "" };
+  if ((hasFixedTarget || (!hasMinTarget && hasMaxTarget)) && numericActual > target) {
+    const delta = numericActual - target;
+    const deltaValue = kpi?.valueType === "Percent" ? `${Number(delta).toFixed(0)}%` : formatActualKpiValue(delta, kpi.valueType);
+    return { percent, status: "Exceeded target", className: "good", delta, deltaLabel: `Exceeded by ${deltaValue}` };
   }
-  return { percent, status: "Below target", className: "warning", delta, deltaLabel: `${formatActualKpiValue(Math.abs(delta), kpi.valueType)} remaining to target` };
+  return { percent, status: "On target", className: "good", delta: numericActual - target, deltaLabel: "" };
 }
 
 function formatActualKpiValue(value, valueType) {
@@ -498,6 +521,25 @@ function getResignationReassignmentProgress(record = {}) {
   return `${reassignedCount}/${affectedProspects.length}`;
 }
 
+function endorsementReassignmentIsDone(record = {}) {
+  const affectedClients = [
+    ...(Array.isArray(record.affectedProspects) ? record.affectedProspects : []),
+    ...(Array.isArray(record.affectedPolicyholders) ? record.affectedPolicyholders : []),
+  ];
+  return affectedClients.length > 0 && affectedClients.every((client) => client?.reassigned === true);
+}
+
+function filterEndorsementRows(rows, dateField, datePreset, progress) {
+  return rows.filter((record) => {
+    const recordDate = new Date(record?.[dateField]);
+    const dateMatches = datePreset === "ALL"
+      || (!Number.isNaN(recordDate.getTime()) && monthKey(recordDate) === datePreset);
+    const isDone = endorsementReassignmentIsDone(record);
+    const progressMatches = progress === "ALL" || (progress === "DONE" ? isDone : !isDone);
+    return dateMatches && progressMatches;
+  });
+}
+
 function toDateInputValue(value) {
   const dt = new Date(value);
   return Number.isNaN(dt.getTime()) ? "" : dt.toISOString().slice(0, 10);
@@ -524,12 +566,13 @@ function getPresetLabel(value) {
     || "All Time";
 }
 
-function getManagerReportPeriodLabel(value) {
+function getManagerReportPeriodLabel(value, options = MANAGER_REPORT_DATE_OPTIONS) {
   const selectedMonth = value === "YTD" ? currentKpiMonth : String(value || "");
   if (/^\d{4}-\d{2}$/.test(selectedMonth)) {
     const [year, month] = selectedMonth.split("-").map(Number);
-    const startMonth = value === "YTD" ? 0 : month - 1;
-    const startDate = new Date(Date.UTC(year, startMonth, 1));
+    const ytdStartKey = options.find((option) => option.value === "YTD")?.startMonth || `${year}-01`;
+    const [startYear, startMonth] = (value === "YTD" ? ytdStartKey : selectedMonth).split("-").map(Number);
+    const startDate = new Date(Date.UTC(startYear, startMonth - 1, 1));
     const endDate = new Date(Date.UTC(year, month, 0));
     const formatReportDate = (date) => date.toLocaleDateString("en-US", {
       timeZone: "UTC",
@@ -537,7 +580,7 @@ function getManagerReportPeriodLabel(value) {
       day: "numeric",
       year: "numeric",
     });
-    return `${formatReportDate(startDate)} to ${formatReportDate(endDate)}`;
+    return `${formatReportDate(startDate)} - ${formatReportDate(endDate)}`;
   }
   return getPresetLabel(value);
 }
@@ -1057,6 +1100,8 @@ function ManagerPortal({ roleType }) {
   const [selectedUnitName, setSelectedUnitName] = useState("");
   const [unitPerformanceTab, setUnitPerformanceTab] = useState("clients");
   const [orphanEndorsementTab, setOrphanEndorsementTab] = useState("long_leaves");
+  const [orphanEndorsementDatePreset, setOrphanEndorsementDatePreset] = useState("ALL");
+  const [orphanEndorsementProgress, setOrphanEndorsementProgress] = useState("ALL");
   const [selectedUmLongLeaveRecordId, setSelectedUmLongLeaveRecordId] = useState("");
   const [selectedUmAffectedClient, setSelectedUmAffectedClient] = useState(null);
   const [selectedReassignmentAgentId, setSelectedReassignmentAgentId] = useState("");
@@ -1111,6 +1156,8 @@ function ManagerPortal({ roleType }) {
   const [pendingKpiConcern, setPendingKpiConcern] = useState(null);
   const [recommendationNotifyingKey, setRecommendationNotifyingKey] = useState("");
   const [recommendationHistory, setRecommendationHistory] = useState({});
+  const [recommendationMessages, setRecommendationMessages] = useState({});
+  const [agentRecommendationHistory, setAgentRecommendationHistory] = useState({});
   const [recommendationNotice, setRecommendationNotice] = useState(null);
 
   useLayoutEffect(() => {
@@ -1260,6 +1307,7 @@ function ManagerPortal({ roleType }) {
         }
 
         setPortalData(data);
+        setAgentRecommendationHistory(data?.agentRecommendationHistory || {});
       } catch (err) {
         if (err.name === "AbortError") return;
         setLoadError(err.message || "Failed to load manager portal data.");
@@ -1734,15 +1782,42 @@ function ManagerPortal({ roleType }) {
           unitContributionLabel: recommendation.unitContributionLabel,
           branchTargetLabel: recommendation.branchTargetLabel,
           branchContributionLabel: recommendation.branchContributionLabel,
+          personalizedMessage: String(recommendationMessages[recommendation.key] || "").trim(),
         }),
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload?.message || "Failed to notify the Unit Manager.");
       setRecommendationHistory((current) => ({ ...current, [recommendation.key]: payload.notifiedAt || new Date().toISOString() }));
-      setRecommendationNotice({ message: payload.message });
+      setRecommendationMessages((current) => ({ ...current, [recommendation.key]: "" }));
+      setRecommendationNotice({ message: payload.message, personalizedMessage: payload.personalizedMessage || "" });
       window.dispatchEvent(new CustomEvent("notifications:changed"));
     } catch (error) {
       setRecommendationNotice({ message: error.message || "Failed to notify the Unit Manager.", error: true });
+    } finally {
+      setRecommendationNotifyingKey("");
+    }
+  };
+
+  const notifyAgentSalesRecommendation = async (agent) => {
+    const key = `${unitKpiRangeKey}:${selectedUnit?.name || "unit"}:${agent.userId}`;
+    setRecommendationNotifyingKey(key);
+    try {
+      const unitProduction = unitKpiSalesAgents.reduce((total, row) => total + Number(row?.annualPremium || 0), 0);
+      const fairShare = unitKpiSalesAgents.length ? unitProduction / unitKpiSalesAgents.length : 0;
+      const unitSalesProductionCard = dashboardUnitKpiCards.find(({ kpi }) => kpi.key === "monthly_sales_production");
+      const unitTarget = unitSalesProductionCard ? formatKpiTarget(unitSalesProductionCard.kpi) : "No target assigned";
+      const response = await fetch(`${API_BASE}/api/manager/agent-sales-recommendations/notify`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: user.id, agentUserId: agent.userId, recommendationKey: key, periodLabel: getPresetLabel(unitKpiDatePreset), agentContribution: formatMoney(agent.annualPremium), unitProduction: formatMoney(unitProduction), unitTarget, contributionShare: unitProduction ? `${((Number(agent.annualPremium || 0) / unitProduction) * 100).toFixed(1)}%` : "0.0%", fairShare: formatMoney(fairShare), personalizedMessage: String(recommendationMessages[key] || "").trim() }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload?.message || "Failed to notify the agent.");
+      setAgentRecommendationHistory((current) => ({ ...current, [key]: { notifiedAt: payload.notifiedAt, senderRole: payload.senderRole, senderName: payload.senderName } }));
+      setRecommendationMessages((current) => ({ ...current, [key]: "" }));
+      setRecommendationNotice({ message: payload.message, agent: true, personalizedMessage: payload.personalizedMessage || "" });
+      window.dispatchEvent(new CustomEvent("notifications:changed"));
+    } catch (error) {
+      setRecommendationNotice({ message: error.message || "Failed to notify the agent.", error: true });
     } finally {
       setRecommendationNotifyingKey("");
     }
@@ -1856,6 +1931,33 @@ function ManagerPortal({ roleType }) {
         return leftTime - rightTime;
       }),
     [isAllUnitsSelected, portalData?.agents, selectedUnit?.name],
+  );
+
+  const orphanEndorsementDateOptions = useMemo(() => {
+    const datedRecords = [
+      ...unitLongLeaveEndorsementRows.map((record) => record?.leaveStartDate),
+      ...unitResignationEndorsementRows.map((record) => record?.resignationDate),
+    ]
+      .map((value) => new Date(value))
+      .filter((date) => !Number.isNaN(date.getTime()) && date.getTime() > 0)
+      .sort((left, right) => left - right);
+    const firstMonth = datedRecords.length ? monthKey(datedRecords[0]) : currentKpiMonth;
+    const monthOptions = buildManagerReportDateOptions(firstMonth).filter((option) => option.value !== "YTD");
+    const firstLabel = monthOptions[0]?.label || getPresetLabel(currentKpiMonth);
+    const currentLabel = monthOptions.at(-1)?.label || getPresetLabel(currentKpiMonth);
+    return [
+      { value: "ALL", label: firstLabel === currentLabel ? `Overall (${currentLabel})` : `${firstLabel} - ${currentLabel}` },
+      ...monthOptions,
+    ];
+  }, [unitLongLeaveEndorsementRows, unitResignationEndorsementRows]);
+
+  const filteredUnitLongLeaveEndorsementRows = useMemo(
+    () => filterEndorsementRows(unitLongLeaveEndorsementRows, "leaveStartDate", orphanEndorsementDatePreset, orphanEndorsementProgress),
+    [orphanEndorsementDatePreset, orphanEndorsementProgress, unitLongLeaveEndorsementRows],
+  );
+  const filteredUnitResignationEndorsementRows = useMemo(
+    () => filterEndorsementRows(unitResignationEndorsementRows, "resignationDate", orphanEndorsementDatePreset, orphanEndorsementProgress),
+    [orphanEndorsementDatePreset, orphanEndorsementProgress, unitResignationEndorsementRows],
   );
 
   const selectedUmLongLeaveRecord = useMemo(() => {
@@ -2210,7 +2312,31 @@ function ManagerPortal({ roleType }) {
   const unitKpiPeriod = "Monthly";
   const unitKpiRangeKey = unitKpiDatePreset;
   const branchKpiRangeKey = branchKpiDatePreset;
-  const branchKpiDateOptions = KPI_PROGRESS_DATE_OPTIONS;
+  const branchKpiDateOptions = useMemo(() => {
+    const startDate = portalData?.reportContext?.performanceDataStartDates?.scope?.sales;
+    return buildManagerReportDateOptions(startDate || currentKpiMonth)
+      .filter((option) => option.value !== "YTD");
+  }, [portalData?.reportContext?.performanceDataStartDates]);
+  const unitKpiDateOptions = useMemo(() => {
+    const starts = portalData?.reportContext?.performanceDataStartDates || {};
+    const startDate = isAllUnitsSelected
+      ? starts.scope?.sales
+      : starts.units?.[selectedUnit?.name || ""]?.sales;
+    return buildManagerReportDateOptions(startDate || currentKpiMonth)
+      .filter((option) => option.value !== "YTD");
+  }, [isAllUnitsSelected, portalData?.reportContext?.performanceDataStartDates, selectedUnit?.name]);
+
+  useEffect(() => {
+    if (!unitKpiDateOptions.some((option) => option.value === unitKpiDatePreset)) {
+      setUnitKpiDatePreset(currentKpiMonth);
+    }
+  }, [unitKpiDateOptions, unitKpiDatePreset]);
+
+  useEffect(() => {
+    if (!branchKpiDateOptions.some((option) => option.value === branchKpiDatePreset)) {
+      setBranchKpiDatePreset(currentKpiMonth);
+    }
+  }, [branchKpiDateOptions, branchKpiDatePreset]);
 
   const branchKpiPeriodLabel = useMemo(() => getPresetLabel(branchKpiDatePreset), [branchKpiDatePreset]);
   const branchKpiReportPeriodLabel = useMemo(() => getManagerReportPeriodLabel(branchKpiDatePreset), [branchKpiDatePreset]);
@@ -2252,11 +2378,6 @@ function ManagerPortal({ roleType }) {
       return { kpi: kpiForPeriod, actual, comparison: getKpiComparison(actual, kpiForPeriod), dateRangeLabel: getPresetLabel(unitKpiDatePreset) };
     });
   }, [isAllUnitsSelected, kpiData?.assignments, portalData?.kpiSalesRowsByFrequency, selectedUnit?.name, unitKpiDatePreset, unitKpiPeriod, unitKpiRangeKey]);
-
-  const unitPerformancePeriodLabel = useMemo(
-    () => getManagerReportPeriodLabel(unitPerformanceDatePreset),
-    [unitPerformanceDatePreset],
-  );
 
   const unitSortLabel = useMemo(() => {
     const selectLabels = {
@@ -2324,6 +2445,25 @@ function ManagerPortal({ roleType }) {
     },
     [portalData?.agents, selectedAgentId, selectedUnitRows],
   );
+  const performanceDateOptions = useMemo(() => {
+    const starts = portalData?.reportContext?.performanceDataStartDates || {};
+    const startDate = selectedAgent
+      ? starts.agents?.[String(selectedAgent.userId || "")]?.[unitPerformanceTab]
+      : (isAllUnitsSelected
+        ? starts.scope?.[unitPerformanceTab]
+        : starts.units?.[selectedUnit?.name || ""]?.[unitPerformanceTab]);
+    return buildManagerReportDateOptions(startDate || currentKpiMonth);
+  }, [isAllUnitsSelected, portalData?.reportContext?.performanceDataStartDates, selectedAgent, selectedUnit?.name, unitPerformanceTab]);
+  const unitPerformancePeriodLabel = useMemo(
+    () => getManagerReportPeriodLabel(unitPerformanceDatePreset, performanceDateOptions),
+    [performanceDateOptions, unitPerformanceDatePreset],
+  );
+
+  useEffect(() => {
+    if (!performanceDateOptions.some((option) => option.value === unitPerformanceDatePreset)) {
+      setUnitPerformanceDatePreset(currentKpiMonth);
+    }
+  }, [performanceDateOptions, unitPerformanceDatePreset]);
 
   const orphanAgentTypeOptions = useMemo(() =>
     [...new Set((portalData?.agents || []).map((agent) => String(agent?.agentType || "").trim()).filter(Boolean))]
@@ -3215,10 +3355,14 @@ function ManagerPortal({ roleType }) {
   );
 
   const unitKpiSalesAgents = useMemo(
-    () => [...(portalData?.kpiSalesRowsByFrequency?.[unitKpiRangeKey] || [])]
-      .filter((row) => String(row?.unit || "") === String(selectedUnit?.name || "") && Number(row?.annualPremium || 0) > 0)
-      .sort((left, right) => Number(right?.annualPremium || 0) - Number(left?.annualPremium || 0) || String(left?.username || "").localeCompare(String(right?.username || ""), undefined, { numeric: true, sensitivity: "base" })),
-    [portalData?.kpiSalesRowsByFrequency, selectedUnit?.name, unitKpiRangeKey],
+    () => {
+      const periodByUserId = new Map((portalData?.kpiSalesRowsByFrequency?.[unitKpiRangeKey] || []).map((row) => [String(row?.userId || ""), row]));
+      return (portalData?.agents || [])
+      .filter((agent) => String(agent?.unit || "") === String(selectedUnit?.name || ""))
+      .map((agent) => ({ ...agent, ...(periodByUserId.get(String(agent?.userId || "")) || {}), annualPremium: Number(periodByUserId.get(String(agent?.userId || ""))?.annualPremium || 0) }))
+      .filter((agent) => !(unitKpiRangeKey === currentKpiMonth && String(agent?.status || "") === "Resigned" && Number(agent?.annualPremium || 0) === 0))
+      .sort((left, right) => Number(right?.annualPremium || 0) - Number(left?.annualPremium || 0) || String(left?.username || "").localeCompare(String(right?.username || ""), undefined, { numeric: true, sensitivity: "base" }));
+    }, [portalData?.agents, portalData?.kpiSalesRowsByFrequency, selectedUnit?.name, unitKpiRangeKey],
   );
 
   const unitBranchSalesContribution = useMemo(() => {
@@ -3374,9 +3518,10 @@ function ManagerPortal({ roleType }) {
       const comparison = getKpiComparison(actual, kpi);
       const resolveMetric = metricByKpi[kpi.key];
       const guidance = guidanceByKpi[kpi.key];
-      if (comparison.className !== "warning" || !resolveMetric || !guidance) return [];
+      const dependsOnUnitSalesProduction = ["monthly_sales_production", "monthly_target_achievement_index"].includes(kpi.key);
+      if ((!dependsOnUnitSalesProduction && comparison.className !== "warning") || !resolveMetric || !guidance) return [];
       return [...branchKpiUnitRows]
-        .filter((unit) => !["monthly_sales_production", "monthly_target_achievement_index"].includes(kpi.key) || !branchUnitSalesTarget || Number(unit.annualPremium || 0) < branchUnitSalesTarget)
+        .filter((unit) => !dependsOnUnitSalesProduction || !branchUnitSalesTarget || Number(unit.annualPremium || 0) < branchUnitSalesTarget)
         .sort((left, right) => resolveMetric(left) - resolveMetric(right) || left.unit.localeCompare(right.unit))
         .slice(0, 3)
         .map((unit) => {
@@ -3384,6 +3529,7 @@ function ManagerPortal({ roleType }) {
           const branchTargetValue = Number([kpi.targetValue, kpi.targetMin, kpi.targetMax]
             .find((value) => String(value ?? "").trim() !== "") || 0);
           const unitMetric = resolveMetric(unit);
+          const recommendationValueType = kpi.key === "monthly_sales_production" ? "Currency" : kpi.valueType;
           return {
             key: `${branchKpiDatePreset}:${kpi.key}:${unit.unit}`,
             kpiKey: kpi.key,
@@ -3394,14 +3540,14 @@ function ManagerPortal({ roleType }) {
             unitId: unitProfile?.id || "",
             unitManagerCode: unitProfile?.manager?.code || "UM",
             unitManagerName: unitProfile?.manager?.name || unitProfile?.manager?.code || "the Unit Manager",
-            metricValue: formatActualKpiValue(resolveMetric(unit), kpi.valueType),
-            unitContributionLabel: formatActualKpiValue(unitMetric, kpi.valueType),
+            metricValue: formatActualKpiValue(kpi.key === "monthly_sales_production" ? unit.annualPremium : resolveMetric(unit), recommendationValueType),
+            unitContributionLabel: formatActualKpiValue(kpi.key === "monthly_sales_production" ? unit.annualPremium : unitMetric, recommendationValueType),
             branchTargetLabel: formatKpiTarget(kpi),
             branchContributionLabel: kpi.key === "monthly_sales_production" && branchTargetValue
               ? `${Math.round((Number(unit.annualPremium || 0) / branchTargetValue) * 100)}% of branch target`
               : formatActualKpiValue(unitMetric, kpi.valueType),
             progressLabel: kpi.key === "monthly_sales_production"
-              ? formatActualKpiValue(Number(unit.annualPremium || 0), kpi.valueType)
+              ? formatActualKpiValue(Number(unit.annualPremium || 0), recommendationValueType)
               : formatActualKpiValue(actual, kpi.valueType),
             targetLabel: kpi.key === "monthly_sales_production"
               ? branchUnitSalesTargetDetails.label
@@ -3409,8 +3555,8 @@ function ManagerPortal({ roleType }) {
             targetQualifier: kpi.key === "monthly_sales_production"
               ? branchUnitSalesTargetDetails.qualifier
               : (String(kpi.targetMin ?? "").trim() !== "" ? "minimum" : ""),
-            requiredTargetLabel: kpi.key === "monthly_sales_production" && branchUnitSalesTargetDetails.qualifier
-              ? formatActualKpiValue(branchUnitSalesTarget, kpi.valueType)
+            requiredTargetLabel: kpi.key === "monthly_sales_production"
+              ? branchUnitSalesTargetDetails.label
               : (String(kpi.targetMin ?? "").trim() !== "" ? formatActualKpiValue(kpi.targetMin, kpi.valueType) : formatKpiTarget(kpi)),
             action: guidance.action,
             detail: guidance.detail,
@@ -3970,7 +4116,7 @@ function ManagerPortal({ roleType }) {
       ],
       filters: [
         { label: "Performance Tab", value: tabLabel },
-        { label: "Date Range", value: getManagerReportPeriodLabel(unitPerformanceDatePreset) },
+        { label: "Date Range", value: getManagerReportPeriodLabel(unitPerformanceDatePreset, performanceDateOptions) },
       ],
       statCards: (detailRowsByTab[unitPerformanceTab] || []).map(([label, value], index) => ({
         label,
@@ -4140,6 +4286,10 @@ function ManagerPortal({ roleType }) {
       : columnsByTab;
     const reportScopeName = isAllUnitsSelected ? (scope.branchName || "Branch") : unitName;
     const reportScopeLabel = isAllUnitsSelected ? "Branch" : "Unit";
+    const includesUnitKpiProgress = unitPerformanceTab === "sales"
+      && isUnitPerformanceMonthSelected
+      && !isAllUnitsSelected
+      && selectedUnitKpiCards.length > 0;
 
     const rows = filteredAgents.map((agent) => ({
       ...agent,
@@ -4177,7 +4327,7 @@ function ManagerPortal({ roleType }) {
           ],
       filters: [
         { label: "Performance Tab", value: tabLabel },
-        { label: "Date Range", value: getManagerReportPeriodLabel(unitPerformanceDatePreset) },
+        { label: "Date Range", value: getManagerReportPeriodLabel(unitPerformanceDatePreset, performanceDateOptions) },
         { label: "Search Filter", value: agentSearch.trim() || "All" },
         { label: "Sort Filter", value: unitSortLabel },
       ],
@@ -4259,10 +4409,10 @@ function ManagerPortal({ roleType }) {
           title: "Agents in Scope",
           columns: columnsForReport[unitPerformanceTab],
           rows,
-          pageSize: unitPerformanceTab === "sales" ? 15 : 20,
-          widePageSizeCap: unitPerformanceTab === "sales" ? 15 : 20,
-          firstPageRows: unitPerformanceTab === "sales" ? 5 : 10,
-          firstPageLimit: unitPerformanceTab === "sales" ? 5 : 10,
+          pageSize: includesUnitKpiProgress ? 20 : (unitPerformanceTab === "sales" ? 15 : 20),
+          widePageSizeCap: includesUnitKpiProgress ? 20 : (unitPerformanceTab === "sales" ? 15 : 20),
+          firstPageRows: includesUnitKpiProgress ? 3 : (unitPerformanceTab === "sales" ? 5 : 10),
+          firstPageLimit: includesUnitKpiProgress ? 3 : (unitPerformanceTab === "sales" ? 5 : 10),
           allowFirstPage: !(normalizedRole === "BM" && unitPerformanceTab === "sales" && !isAllUnitsSelected && isUnitPerformanceMonthSelected),
           emptyMessage: "No agents available for this unit report.",
         },
@@ -4446,7 +4596,7 @@ function ManagerPortal({ roleType }) {
                       value={unitPerformanceDatePreset}
                       onChange={(e) => setUnitPerformanceDatePreset(e.target.value)}
                     >
-                      {MANAGER_REPORT_DATE_OPTIONS.map((option) => (
+                      {performanceDateOptions.map((option) => (
                         <option key={option.value} value={option.value}>{option.label}</option>
                       ))}
                     </select>
@@ -4603,7 +4753,7 @@ function ManagerPortal({ roleType }) {
                       value={unitPerformanceDatePreset}
                       onChange={(e) => setUnitPerformanceDatePreset(e.target.value)}
                     >
-                      {MANAGER_REPORT_DATE_OPTIONS.map((option) => (
+                      {performanceDateOptions.map((option) => (
                         <option key={option.value} value={option.value}>{option.label}</option>
                       ))}
                     </select>
@@ -5008,8 +5158,32 @@ function ManagerPortal({ roleType }) {
 
                   <div className="manager-tab-row manager-orphan-endorsement-tabs">
                     <div className="manager-tab-buttons">
-                      <button type="button" className={orphanEndorsementTab === "long_leaves" ? "active" : ""} onClick={() => { setSelectedUmLongLeaveRecordId(""); setSelectedUmAffectedClient(null); setSelectedReassignmentAgentId(""); setOrphanEndorsementTab("long_leaves"); }}>From Long Leaves</button>
-                      <button type="button" className={orphanEndorsementTab === "resignations" ? "active" : ""} onClick={() => { setSelectedUmLongLeaveRecordId(""); setSelectedUmAffectedClient(null); setSelectedReassignmentAgentId(""); setOrphanEndorsementTab("resignations"); }}>From Resignations</button>
+                      <button type="button" className={orphanEndorsementTab === "long_leaves" ? "active" : ""} onClick={() => { setSelectedUmLongLeaveRecordId(""); setSelectedUmAffectedClient(null); setSelectedReassignmentAgentId(""); setOrphanEndorsementTab("long_leaves"); }}>From Long Leaves ({filteredUnitLongLeaveEndorsementRows.length})</button>
+                      <button type="button" className={orphanEndorsementTab === "resignations" ? "active" : ""} onClick={() => { setSelectedUmLongLeaveRecordId(""); setSelectedUmAffectedClient(null); setSelectedReassignmentAgentId(""); setOrphanEndorsementTab("resignations"); }}>From Resignations ({filteredUnitResignationEndorsementRows.length})</button>
+                    </div>
+                    <div className="manager-endorsement-filters">
+                      <label className="manager-select" htmlFor="manager-endorsement-date-range">
+                        <span>Date Range</span>
+                        <select id="manager-endorsement-date-range" value={orphanEndorsementDatePreset} onChange={(event) => setOrphanEndorsementDatePreset(event.target.value)}>
+                          {orphanEndorsementDateOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                        </select>
+                      </label>
+                      <label className="manager-select" htmlFor="manager-endorsement-progress">
+                        <span>Reassignments Progress</span>
+                        <select id="manager-endorsement-progress" value={orphanEndorsementProgress} onChange={(event) => setOrphanEndorsementProgress(event.target.value)}>
+                          <option value="ALL">All</option>
+                          <option value="DONE">Done</option>
+                          <option value="NOT_DONE">Not Done</option>
+                        </select>
+                      </label>
+                      <button
+                        type="button"
+                        className="manager-clear-btn"
+                        disabled={orphanEndorsementDatePreset === "ALL" && orphanEndorsementProgress === "ALL"}
+                        onClick={() => { setOrphanEndorsementDatePreset("ALL"); setOrphanEndorsementProgress("ALL"); }}
+                      >
+                        Clear
+                      </button>
                     </div>
                   </div>
                 </>
@@ -5230,7 +5404,7 @@ function ManagerPortal({ roleType }) {
                         </tr>
                       </thead>
                       <tbody>
-                        {unitLongLeaveEndorsementRows.map((record) => (
+                        {filteredUnitLongLeaveEndorsementRows.map((record) => (
                           <tr key={record.id || `${record.agentCode}:${record.leaveStartDate}:${record.leaveEndDate}`} onClick={() => setSelectedUmLongLeaveRecordId(record.id)} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setSelectedUmLongLeaveRecordId(record.id); }}>
                             <td>{record.agentCode || "—"}</td>
                             <td>{record.agentName || "—"}</td>
@@ -5242,7 +5416,7 @@ function ManagerPortal({ roleType }) {
                       </tbody>
                     </table>
                   </div>
-                  {!unitLongLeaveEndorsementRows.length && <div className="manager-empty-state">No endorsed long leave orphan endorsements recorded for this unit.</div>}
+                  {!filteredUnitLongLeaveEndorsementRows.length && <div className="manager-empty-state">No endorsed long leave orphan endorsements match the selected filters.</div>}
                 </>
               ) : (
                 <>
@@ -5257,7 +5431,7 @@ function ManagerPortal({ roleType }) {
                         </tr>
                       </thead>
                       <tbody>
-                        {unitResignationEndorsementRows.map((record) => (
+                        {filteredUnitResignationEndorsementRows.map((record) => (
                           <tr key={record.id || record._id || `${record.agentCode}:${record.resignationDate}`} onClick={() => setSelectedUmLongLeaveRecordId(record.id || record._id)} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setSelectedUmLongLeaveRecordId(record.id || record._id); }}>
                             <td>{record.agentCode || "—"}</td>
                             <td>{record.agentName || "—"}</td>
@@ -5268,7 +5442,7 @@ function ManagerPortal({ roleType }) {
                       </tbody>
                     </table>
                   </div>
-                  {!unitResignationEndorsementRows.length && <div className="manager-empty-state">No resignation orphan endorsements recorded for this unit yet.</div>}
+                  {!filteredUnitResignationEndorsementRows.length && <div className="manager-empty-state">No resignation orphan endorsements match the selected filters.</div>}
                 </>
               )}
             </section>
@@ -6155,7 +6329,7 @@ function ManagerPortal({ roleType }) {
                       value={unitKpiDatePreset}
                       onChange={(e) => setUnitKpiDatePreset(e.target.value)}
                     >
-                      {KPI_PROGRESS_DATE_OPTIONS.map((option) => (
+                      {unitKpiDateOptions.map((option) => (
                         <option key={option.value} value={option.value}>{option.label}</option>
                       ))}
                     </select>
@@ -6190,21 +6364,37 @@ function ManagerPortal({ roleType }) {
                         <section className="manager-kpi-card-insight manager-kpi-card-insight--agents">
                           <div className="manager-kpi-card-insight__head">
                             <strong>Agent Breakdown</strong>
-                            <span>{unitKpiSalesAgents.length} producing agent{unitKpiSalesAgents.length === 1 ? "" : "s"}</span>
+                            <span>{unitKpiSalesAgents.length} agent{unitKpiSalesAgents.length === 1 ? "" : "s"} in scope</span>
                           </div>
                           {unitKpiSalesAgents.length ? (
                             <ul className="manager-kpi-card-agent-list">
-                              {unitKpiSalesAgents.slice(0, 5).map((agent) => (
-                                <li key={`dashboard-unit-card-agent:${agent.id}`}>
+                              {unitKpiSalesAgents.map((agent) => {
+                                const unitProduction = unitKpiSalesAgents.reduce((total, row) => total + Number(row?.annualPremium || 0), 0);
+                                const share = unitProduction ? (Number(agent.annualPremium || 0) / unitProduction) * 100 : 0;
+                                const fairShare = unitKpiSalesAgents.length ? unitProduction / unitKpiSalesAgents.length : 0;
+                                const isCurrentMonth = unitKpiRangeKey === currentKpiMonth;
+                                const needsRecommendation = isCurrentMonth && Number(agent.annualPremium || 0) < fairShare;
+                                const isOnLongLeave = String(agent?.status || "") === "On Long Leave";
+                                const recommendationKey = `${unitKpiRangeKey}:${selectedUnit?.name || "unit"}:${agent.userId}`;
+                                const history = agentRecommendationHistory[recommendationKey];
+                                return <li key={`dashboard-unit-card-agent:${agent.id}`}>
                                   <button type="button" onClick={() => openAgentDetails(agent.id)}>
                                     <span>
                                       <strong>{agent.name || agent.username}</strong>
-                                      <small>{agent.username}</small>
+                                      <small>{agent.username} • {renderAgentStatusPill(agent, { table: true })}</small>
                                     </span>
-                                    <b>{formatMoney(agent.annualPremium)}</b>
+                                    <b>{formatMoney(agent.annualPremium)} • {share.toFixed(1)}%</b>
                                   </button>
-                                </li>
-                              ))}
+                                  {needsRecommendation ? <div className="manager-agent-sales-recommendation manager-agent-sales-recommendation--underperforming">
+                                    <strong>Recommended action: Strengthen sales production</strong>
+                                    <small>Close the {formatMoney(Math.max(0, fairShare - Number(agent.annualPremium || 0)))} fair-share gap by prioritizing qualified prospects, scheduling additional presentations and follow-ups, and converting active opportunities before month-end. Benchmark: {formatMoney(fairShare)}.</small>
+                                    <label htmlFor={`agent-recommendation-message-${recommendationKey}`}>Personalized message</label>
+                                    <textarea id={`agent-recommendation-message-${recommendationKey}`} value={recommendationMessages[recommendationKey] || ""} maxLength={500} rows={3} placeholder={`Add a personalized recommendation for ${agent.name || agent.username} (optional)`} onChange={(event) => setRecommendationMessages((current) => ({ ...current, [recommendationKey]: event.target.value }))} />
+                                    <span title={isOnLongLeave ? "🚫 Agent is currently on long leave and cannot be notified." : undefined}><button type="button" disabled={isOnLongLeave || recommendationNotifyingKey === recommendationKey} onClick={() => notifyAgentSalesRecommendation(agent)}>{isOnLongLeave ? "🚫 Notify unavailable" : recommendationNotifyingKey === recommendationKey ? "Notifying..." : `Notify ${agent.username}`}</button></span>
+                                    {history ? <time>Last notified by {history.senderRole} {history.senderName} • {formatDateTime(history.notifiedAt)}</time> : null}
+                                  </div> : null}
+                                </li>;
+                              })}
                             </ul>
                           ) : (
                             <p>No agents have sales production for this period yet.</p>
@@ -6331,6 +6521,15 @@ function ManagerPortal({ roleType }) {
                                   <h4>{recommendation.title}</h4>
                                   <p>Notify <strong>{recommendation.unitManagerCode} - {recommendation.unitManagerName}</strong> to {recommendation.action}.</p>
                                   <small>{recommendation.detail}</small>
+                                  <label htmlFor={`bm-recommendation-message-${recommendation.key}`}>Personalized message</label>
+                                  <textarea
+                                    id={`bm-recommendation-message-${recommendation.key}`}
+                                    value={recommendationMessages[recommendation.key] || ""}
+                                    maxLength={500}
+                                    rows={3}
+                                    placeholder={`Add a personalized recommendation for ${recommendation.unitManagerName} (optional)`}
+                                    onChange={(event) => setRecommendationMessages((current) => ({ ...current, [recommendation.key]: event.target.value }))}
+                                  />
                                   <button type="button" disabled={recommendationNotifyingKey === recommendation.key} onClick={() => notifyUnitManagerRecommendation(recommendation)}>
                                     {recommendationNotifyingKey === recommendation.key ? "Notifying..." : `Notify ${recommendation.unitManagerName}`} <FaArrowRight aria-hidden="true" />
                                   </button>
@@ -6367,8 +6566,9 @@ function ManagerPortal({ roleType }) {
           <div className="manager-endorse-modal" role="dialog" aria-modal="true" aria-labelledby="recommendation-notice-title">
             <button type="button" className="manager-endorse-modal__x" onClick={() => setRecommendationNotice(null)} aria-label="Close notification result">×</button>
             <div className="manager-endorse-modal__header">
-              <h2 id="recommendation-notice-title">{recommendationNotice.error ? "Unable to notify Unit Manager" : "Unit Manager notified"}</h2>
+              <h2 id="recommendation-notice-title">{recommendationNotice.error ? "Unable to notify" : recommendationNotice.agent ? "Agent notified" : "Unit Manager notified"}</h2>
               <p>{recommendationNotice.message}</p>
+              {recommendationNotice.personalizedMessage ? <p><strong>Personalized message sent:</strong> {recommendationNotice.personalizedMessage}</p> : null}
             </div>
           </div>
         </div>
