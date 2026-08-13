@@ -241,6 +241,12 @@ function UserPreviewCard({ title, subtitle, data, emptyMessage }) {
             <span>Date Employed</span>
             <strong>{formatDateInput(data.dateEmployed) || '—'}</strong>
           </div>
+          {data.agentType ? (
+            <div>
+              <span>Agent Type</span>
+              <strong>{data.agentType}</strong>
+            </div>
+          ) : null}
           <div>
             <span>Current Assignment</span>
             <strong>
@@ -285,6 +291,8 @@ function AdminOrganizationPage() {
   const [editUnitId, setEditUnitId] = useState('');
   const [editUnitForm, setEditUnitForm] = useState(EMPTY_UNIT_FORM);
   const [createManagerForm, setCreateManagerForm] = useState(EMPTY_MANAGER_CREATE_FORM);
+  const [aumCandidateMetrics, setAumCandidateMetrics] = useState({});
+  const [isLoadingAumCandidates, setIsLoadingAumCandidates] = useState(false);
   const [editManagerId, setEditManagerId] = useState('');
   const [editManagerForm, setEditManagerForm] = useState(EMPTY_MANAGER_EDIT_FORM);
   const [editManagerErrors, setEditManagerErrors] = useState({});
@@ -563,14 +571,55 @@ function AdminOrganizationPage() {
     return formOptions.agents.filter((agent) => {
       if (agent.role !== 'AG') return false;
       if (currentManagerAgentId && agent.agentId === currentManagerAgentId) return false;
+      if (agent.status !== 'Active') return false;
 
       if (createManagerForm.managerType === 'BM') {
         return !!createManagerForm.branchId && agent.branchId === createManagerForm.branchId;
       }
 
-      return !!createManagerForm.unitId && agent.unitId === createManagerForm.unitId;
+      if (!createManagerForm.unitId || agent.unitId !== createManagerForm.unitId) return false;
+      if (createManagerForm.managerType !== 'AUM') return true;
+      if (agent.agentType !== 'Full-Time') return false;
+      if ((agent.activeManagerTypes || []).some((type) => type === 'BM' || type === 'UM')) return false;
+      if ((agent.previousAumUnitIds || []).includes(createManagerForm.unitId)) return false;
+      const metrics = aumCandidateMetrics[agent.userId];
+      return metrics?.eligible === true;
     });
-  }, [createManagerForm.branchId, createManagerForm.managerType, createManagerForm.unitId, currentScopeManager?.agentId, formOptions.agents]);
+  }, [aumCandidateMetrics, createManagerForm.branchId, createManagerForm.managerType, createManagerForm.unitId, currentScopeManager?.agentId, formOptions.agents]);
+
+  useEffect(() => {
+    if (createManagerForm.managerType !== 'AUM' || !createManagerForm.unitId) {
+      setAumCandidateMetrics({});
+      return;
+    }
+    const candidates = formOptions.agents.filter((agent) => agent.role === 'AG'
+      && agent.status === 'Active'
+      && agent.agentType === 'Full-Time'
+      && agent.unitId === createManagerForm.unitId
+      && agent.agentId !== currentScopeManager?.agentId
+      && !(agent.activeManagerTypes || []).some((type) => type === 'BM' || type === 'UM')
+      && !(agent.previousAumUnitIds || []).includes(createManagerForm.unitId));
+    const controller = new AbortController();
+    setIsLoadingAumCandidates(true);
+    Promise.all(candidates.map(async (agent) => {
+      const monthParts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit' }).formatToParts(new Date());
+      const month = `${monthParts.find((part) => part.type === 'year')?.value}-${monthParts.find((part) => part.type === 'month')?.value}`;
+      const response = await fetch(`http://localhost:5000/api/agent/kpi-progress?${new URLSearchParams({ userId: agent.userId, month })}`, { signal: controller.signal });
+      const payload = await response.json();
+      if (!response.ok) return [agent.userId, null];
+      const activePolicies = (payload.kpis || []).find((kpi) => kpi.key === 'monthly_policies');
+      const closingRatio = (payload.kpis || []).find((kpi) => kpi.key === 'monthly_closing_ratio');
+      const targetMet = (kpi) => {
+        if (!kpi || kpi.assigned === false) return false;
+        const minimum = [kpi.targetValue, kpi.targetMin].find((value) => Number.isFinite(Number(value)) && Number(value) > 0);
+        return minimum !== undefined && Number(kpi.actual || 0) >= Number(minimum);
+      };
+      return [agent.userId, { activePolicies, closingRatio, eligible: targetMet(activePolicies) && targetMet(closingRatio) }];
+    })).then((entries) => setAumCandidateMetrics(Object.fromEntries(entries.filter(([, value]) => value)))).catch((error) => {
+      if (error.name !== 'AbortError') setAumCandidateMetrics({});
+    }).finally(() => setIsLoadingAumCandidates(false));
+    return () => controller.abort();
+  }, [createManagerForm.managerType, createManagerForm.unitId, currentScopeManager?.agentId, formOptions.agents]);
 
   const selectedManagerBranch = useMemo(
     () => formOptions.branches.find((branch) => branch.id === createManagerForm.branchId) || null,
@@ -1784,7 +1833,6 @@ function AdminOrganizationPage() {
                   <>
                     <div className="aop-section-head">
                       <h2>All Areas</h2>
-                      <p>Review every area record, search by area name, and open the area forms when needed.</p>
                     </div>
 
                     <div className="aop-list-toolbar">
@@ -1894,7 +1942,6 @@ function AdminOrganizationPage() {
                   <>
                     <div className="aop-section-head">
                       <h2>All Branches</h2>
-                      <p>Review every branch, search the list, and open the add or edit forms from the action bar.</p>
                     </div>
 
                     <div className="aop-list-toolbar">
@@ -2030,7 +2077,6 @@ function AdminOrganizationPage() {
                   <>
                     <div className="aop-section-head">
                       <h2>All Units</h2>
-                      <p>Review every unit, search the list, and open the unit forms from the action bar.</p>
                     </div>
 
                     <div className="aop-list-toolbar">
@@ -2170,7 +2216,6 @@ function AdminOrganizationPage() {
                   <>
                     <div className="aop-section-head">
                       <h2>All Managers</h2>
-                      <p>Review manager records using full user-schema details, then open the assignment form when needed.</p>
                     </div>
 
                     <div className="aop-list-toolbar">
@@ -2366,6 +2411,11 @@ function AdminOrganizationPage() {
                         : [selectedManagerBranch?.branchName, selectedManagerUnit?.unitName].filter(Boolean).join(' / ') || 'Choose a branch and unit'}
                     </div>
 
+                    {createManagerForm.managerType === 'AUM' ? (
+                      <div className="aop-form-note">
+                        AUM assignment is based on current-month sales performance. Only Active Full-Time agents who meet both their Active Policies and Closing Ratio KPI targets can be selected. Current Branch Managers, current Unit Managers, and previously assigned AUMs are excluded.
+                      </div>
+                    ) : null}
                     <label htmlFor="manager-agent-select">Select Existing Agent</label>
                     <select
                       id="manager-agent-select"
@@ -2383,10 +2433,10 @@ function AdminOrganizationPage() {
                           : !createManagerForm.branchId || !createManagerForm.unitId
                       }
                     >
-                      <option value="">Choose an eligible agent</option>
+                      <option value="">{isLoadingAumCandidates && createManagerForm.managerType === 'AUM' ? 'Loading eligible agents...' : 'Choose an eligible agent'}</option>
                       {eligibleAgentsForManager.map((agent) => (
                         <option key={agent.agentId} value={agent.agentId}>
-                          {agent.username} · {[agent.firstName, agent.lastName].filter(Boolean).join(' ')} · {agent.branchName}
+                          {agent.username} · {[agent.firstName, agent.lastName].filter(Boolean).join(' ')} · {agent.agentType} · {agent.branchName}
                           {agent.unitName ? ` / ${agent.unitName}` : ''}
                         </option>
                       ))}
@@ -2398,6 +2448,28 @@ function AdminOrganizationPage() {
                       data={selectedCreateManagerAgent}
                       emptyMessage="Choose an existing agent to prefill this manager setup form."
                     />
+
+                    {createManagerForm.managerType === 'AUM' && selectedCreateManagerAgent ? (() => {
+                      const metrics = aumCandidateMetrics[selectedCreateManagerAgent.userId] || {};
+                      const displayTarget = (kpi) => {
+                        const suffix = kpi?.valueType === 'Percent' ? '%' : '';
+                        const formatValue = (value) => `${Number(value).toLocaleString('en-PH')}${suffix}`;
+                        const hasValue = (value) => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
+                        if (hasValue(kpi?.targetValue)) return formatValue(kpi.targetValue);
+                        if (hasValue(kpi?.targetMin) && hasValue(kpi?.targetMax)) {
+                          return `${formatValue(kpi.targetMin)} - ${formatValue(kpi.targetMax)}`;
+                        }
+                        if (hasValue(kpi?.targetMin)) return `${formatValue(kpi.targetMin)} and above`;
+                        if (hasValue(kpi?.targetMax)) return `Up to ${formatValue(kpi.targetMax)}`;
+                        return '—';
+                      };
+                      return <div className="aop-preview-grid">
+                        <div><span>Active Policies Target</span><strong>{displayTarget(metrics.activePolicies)}</strong></div>
+                        <div><span>Agent Active Policies Progress</span><strong>{Number(metrics.activePolicies?.actual || 0).toLocaleString('en-PH')}</strong></div>
+                        <div><span>Closing Ratio Target</span><strong>{displayTarget(metrics.closingRatio)}</strong></div>
+                        <div><span>Agent Closing Ratio Progress</span><strong>{Number(metrics.closingRatio?.actual || 0).toLocaleString('en-PH')}%</strong></div>
+                      </div>;
+                    })() : null}
 
                     {selectedCreateManagerAgent ? (
                       <>
@@ -2444,11 +2516,6 @@ function AdminOrganizationPage() {
                         </div>
                       </>
                     ) : null}
-
-                    <div className="aop-form-note">
-                      Eligible choices only include active agent accounts in the selected scope and exclude the current assigned manager.
-                      This assignment is now stored directly on the manager record for the selected branch or unit.
-                    </div>
 
                     <button type="submit" disabled={isSavingManager}>{isSavingManager ? 'Saving Manager...' : 'Save Manager'}</button>
                     </form>
@@ -2626,7 +2693,6 @@ function AdminOrganizationPage() {
                   <>
                     <div className="aop-section-head">
                       <h2>All Agents</h2>
-                      <p>Review all agent records using full user-schema details, then open the add or edit forms when needed.</p>
                     </div>
 
                     <div className="aop-list-toolbar">
