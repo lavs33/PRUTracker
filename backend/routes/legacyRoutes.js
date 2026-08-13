@@ -57,6 +57,60 @@ function registerLegacyRoutes(app, deps) {
     syncTaskNotificationsForTasks,
     markTaskNotificationAsRead,
   } = deps;
+  let aumUnitIndexEnsured = false;
+  async function ensureAumUnitIndexAllowsHistory() {
+    if (aumUnitIndexEnsured) return;
+    try {
+      const indexes = await AUM.collection.indexes();
+      const legacyUniqueUnitIndex = indexes.find((index) => {
+        const key = index?.key || {};
+        return index?.unique === true
+          && Object.keys(key).length === 1
+          && Number(key.unitId) === 1;
+      });
+      if (legacyUniqueUnitIndex) {
+        await AUM.collection.dropIndex(legacyUniqueUnitIndex.name);
+      }
+      const hasNonUniqueUnitIndex = indexes.some((index) => {
+        const key = index?.key || {};
+        return index?.unique !== true
+          && Object.keys(key).length === 1
+          && Number(key.unitId) === 1;
+      });
+      if (!hasNonUniqueUnitIndex) {
+        await AUM.collection.createIndex({ unitId: 1 }, { name: "unitId_1", background: true });
+      }
+      aumUnitIndexEnsured = true;
+    } catch (err) {
+      if (err?.codeName !== "IndexNotFound" && err?.code !== 26) throw err;
+      aumUnitIndexEnsured = true;
+    }
+  }
+
+  let umUnitIndexEnsured = false;
+  async function ensureUmUnitIndexAllowsHistory() {
+    if (umUnitIndexEnsured) return;
+    try {
+      const indexes = await UM.collection.indexes();
+      const legacyUniqueUnitIndex = indexes.find((index) => {
+        const key = index?.key || {};
+        return index?.unique === true && Object.keys(key).length === 1 && Number(key.unitId) === 1;
+      });
+      if (legacyUniqueUnitIndex) await UM.collection.dropIndex(legacyUniqueUnitIndex.name);
+      const hasNonUniqueUnitIndex = indexes.some((index) => {
+        const key = index?.key || {};
+        return index?.unique !== true && Object.keys(key).length === 1 && Number(key.unitId) === 1;
+      });
+      if (!hasNonUniqueUnitIndex) {
+        await UM.collection.createIndex({ unitId: 1 }, { name: "unitId_1", background: true });
+      }
+      umUnitIndexEnsured = true;
+    } catch (err) {
+      if (err?.codeName !== "IndexNotFound" && err?.code !== 26) throw err;
+      umUnitIndexEnsured = true;
+    }
+  }
+
   let contactAttemptCycleIndexEnsured = false;
   async function ensureContactAttemptCycleIndex() {
     if (contactAttemptCycleIndexEnsured) return;
@@ -2039,6 +2093,7 @@ app.post("/api/manager/kpi-recommendations/notify", async (req, res) => {
       userId, unitId, recommendationKey, recommendationTitle, recommendation,
       kpiKey, kpiLabel, periodLabel, progressLabel, targetLabel, targetQualifier, requiredTargetLabel,
       unitContributionLabel, branchTargetLabel, branchContributionLabel,
+      personalizedMessage,
     } = req.body || {};
     if (![userId, unitId, recommendationKey, recommendationTitle, recommendation].every(Boolean)) {
       return res.status(400).json({ message: "Missing recommendation notification details." });
@@ -2067,6 +2122,7 @@ app.post("/api/manager/kpi-recommendations/notify", async (req, res) => {
     const contextReminder = String(kpiKey) === "monthly_sales_production"
       ? `Your unit is currently at ${progressLabel || "—"} against its required${targetQualifier === "minimum" ? " MINIMUM" : ""} Unit Sales Production target of ${requiredTargetLabel || targetLabel || "—"}. Its production currently contributes ${branchContributionLabel || "—"} toward the Branch Sales Production target.`
       : `Branch progress is currently ${progressLabel || "—"} against the${targetQualifier === "minimum" ? " MINIMUM" : ""} target of ${requiredTargetLabel || targetLabel || "—"}. Your unit's current contribution is ${unitContributionLabel || "—"}; completing the recommended action can help close the remaining branch KPI gap.`;
+    const personalizedRecommendation = String(personalizedMessage || "").trim().slice(0, 500);
     const supersededAt = new Date();
     await Notification.updateMany(
       {
@@ -2106,12 +2162,14 @@ app.post("/api/manager/kpi-recommendations/notify", async (req, res) => {
         branchContributionLabel: String(branchContributionLabel || unitContributionLabel || "—"),
         monthKey: String(recommendationKey).split(":")[0],
         contributionReminder: contextReminder,
+        personalizedMessage: personalizedRecommendation,
       },
     });
     return res.status(201).json({
       message: `UM - ${umName} of ${unit.unitName || "the unit"} has been notified to ${recommendationTitle.toLowerCase()}.`,
       notifiedAt: notification.createdAt,
       unitManager: { code: unitManager.userId.username, name: umName },
+      personalizedMessage: personalizedRecommendation,
     });
   } catch (err) {
     console.error("BM recommendation notification error:", err);
@@ -2121,7 +2179,7 @@ app.post("/api/manager/kpi-recommendations/notify", async (req, res) => {
 
 app.post("/api/manager/agent-sales-recommendations/notify", async (req, res) => {
   try {
-    const { userId, agentUserId, recommendationKey, periodLabel, agentContribution, unitProduction, unitTarget, contributionShare, fairShare } = req.body || {};
+    const { userId, agentUserId, recommendationKey, periodLabel, agentContribution, unitProduction, unitTarget, contributionShare, fairShare, personalizedMessage, kpiKey, kpiLabel, actualProgress, targetLabel, recommendationAction, recommendationDetail } = req.body || {};
     if (![userId, agentUserId, recommendationKey].every(Boolean) || ![userId, agentUserId].every((value) => mongoose.isValidObjectId(value))) {
       return res.status(400).json({ message: "Missing or invalid recommendation details." });
     }
@@ -2140,22 +2198,30 @@ app.post("/api/manager/agent-sales-recommendations/notify", async (req, res) => 
     const recipientName = [recipient.firstName, recipient.middleName, recipient.lastName].filter(Boolean).join(" ").trim() || recipient.username;
     const type = `${sender.role}_RECOMMENDATION`;
     const recommendationMonthKey = String(recommendationKey).split(":")[0];
+    const personalizedRecommendation = String(personalizedMessage || "").trim().slice(0, 500);
+    const isKpiRecommendation = Boolean(kpiKey);
+    const normalizedKpiLabel = String(kpiLabel || "KPI").trim();
+    const normalizedRecommendationAction = String(recommendationAction || `Improve ${normalizedKpiLabel}`).trim();
+    const normalizedRecommendationDetail = String(recommendationDetail || "Focus on consistent daily activity, review current opportunities, and close the remaining KPI gap before the end of the reporting period.").trim();
     await Notification.updateMany({
       assignedToUserId: recipient._id,
       type: { $in: ["UM_RECOMMENDATION", "AUM_RECOMMENDATION"] },
       resolutionStatus: { $ne: "Resolved" },
       "metadata.unitId": String(manager.unitId),
       "metadata.monthKey": recommendationMonthKey,
+      ...(isKpiRecommendation ? { "metadata.kpiKey": String(kpiKey) } : { "metadata.kpiKey": { $exists: false } }),
       softDeletedAt: null,
     }, { $set: { resolutionStatus: "Resolved", resolvedAt: new Date(), "metadata.resolutionReason": "Superseded by a newer UM/AUM sales production recommendation." } });
     const notification = await Notification.create({
       assignedToUserId: recipient._id, type,
-      title: `${sender.role === "UM" ? "Unit Manager" : "Assistant Unit Manager"} ${sender.username} - ${senderName} recommends strengthening your sales production.`,
-      message: `Your contribution for ${periodLabel || "the selected period"} is ${agentContribution || "₱0.00"} of the unit's ${unitProduction || "₱0.00"} sales production, below the fair-share benchmark of ${fairShare || "₱0.00"}.\n\nRecommended action: Close the production gap by prioritizing qualified prospects, scheduling additional presentations and follow-ups, and converting active opportunities before month-end.`,
+      title: `${sender.role === "UM" ? "Unit Manager" : "Assistant Unit Manager"} ${sender.username} - ${senderName} recommends ${isKpiRecommendation ? `improving your ${normalizedKpiLabel.toLowerCase()}` : "strengthening your sales production"}.`,
+      message: isKpiRecommendation
+        ? `Your ${normalizedKpiLabel} progress for ${periodLabel || "the selected period"} is ${actualProgress || "—"}, below the assigned target of ${targetLabel || "—"}.\n\nRecommended action: ${normalizedRecommendationAction}. ${normalizedRecommendationDetail}`
+        : `Your contribution for ${periodLabel || "the selected period"} is ${agentContribution || "₱0.00"} of the unit's ${unitProduction || "₱0.00"} sales production, below the fair-share benchmark of ${fairShare || "₱0.00"}.\n\nRecommended action: Close the production gap by prioritizing qualified prospects, scheduling additional presentations and follow-ups, and converting active opportunities before month-end.`,
       status: "Unread", resolutionStatus: "Unresolved", entityType: "Agent", entityId: agent._id,
-      metadata: { recommendationKey, unitId: String(manager.unitId), agentUserId: String(agentUserId), senderRole: sender.role, senderName, periodLabel, agentContribution, unitProduction, unitTarget, contributionShare, fairShare, monthKey: recommendationMonthKey },
+      metadata: { recommendationKey, unitId: String(manager.unitId), agentUserId: String(agentUserId), senderRole: sender.role, senderName, periodLabel, agentContribution, unitProduction, unitTarget, contributionShare, fairShare, monthKey: recommendationMonthKey, personalizedMessage: personalizedRecommendation, kpiKey: isKpiRecommendation ? String(kpiKey) : undefined, kpiLabel: isKpiRecommendation ? normalizedKpiLabel : undefined, actualProgress: isKpiRecommendation ? String(actualProgress || "—") : undefined, targetLabel: isKpiRecommendation ? String(targetLabel || "—") : undefined, recommendationAction: isKpiRecommendation ? normalizedRecommendationAction : undefined, recommendationDetail: isKpiRecommendation ? normalizedRecommendationDetail : undefined },
     });
-    return res.status(201).json({ message: `${recipient.username} - ${recipientName} has been notified to strengthen sales production.`, notifiedAt: notification.createdAt, senderRole: sender.role, senderName });
+    return res.status(201).json({ message: `${recipient.username} - ${recipientName} has been notified to ${isKpiRecommendation ? normalizedRecommendationAction.toLowerCase() : "strengthen sales production"}.`, notifiedAt: notification.createdAt, senderRole: sender.role, senderName, personalizedMessage: personalizedRecommendation });
   } catch (err) {
     console.error("Agent sales recommendation error:", err);
     return res.status(500).json({ message: "Failed to notify the agent." });
@@ -2243,6 +2309,12 @@ app.post("/api/admin/organization/managers/assign", async (req, res) => {
       return res.status(400).json({ message: "Invalid manager type." });
     }
 
+    if (managerType === "AUM") {
+      await ensureAumUnitIndexAllowsHistory();
+    } else if (managerType === "UM") {
+      await ensureUmUnitIndexAllowsHistory();
+    }
+
     if (!mongoose.Types.ObjectId.isValid(sourceAgentId)) {
       return res.status(400).json({ message: "A valid source agent is required." });
     }
@@ -2287,12 +2359,55 @@ app.post("/api/admin/organization/managers/assign", async (req, res) => {
       return res.status(409).json({ message: "Only active agent accounts can be promoted through this form." });
     }
 
+    if (String(sourceAgent.status || "Active") !== "Active") {
+      return res.status(409).json({ message: "Only agents with Active status can be assigned as managers." });
+    }
+
+    if ((managerType === "AUM" || managerType === "UM") && String(sourceAgent.agentType || "") !== "Full-Time") {
+      return res.status(409).json({ message: `Only Active Full-Time agents can be assigned as ${managerType}.` });
+    }
+
     if (managerType === "BM") {
       if (String(sourceAgent.unitId?.branchId?._id || "") !== branchId) {
         return res.status(400).json({ message: "Selected agent does not belong to the chosen branch." });
       }
+      const previousUmAssignments = await UM.find({ agentId: sourceAgentId, isBlocked: true })
+        .populate({ path: "unitId", select: "branchId" })
+        .lean();
+      const wasUmInSelectedBranch = previousUmAssignments.some(
+        (assignment) => String(assignment.unitId?.branchId || "") === branchId
+      );
+      if (!wasUmInSelectedBranch) {
+        return res.status(409).json({ message: "Only a previous Unit Manager from the selected branch can be assigned as BM." });
+      }
     } else if (String(sourceAgent.unitId?._id || "") !== unitId) {
       return res.status(400).json({ message: "Selected agent does not belong to the chosen unit." });
+    }
+
+    if (managerType === "AUM") {
+      const [activeBmAssignment, activeUmAssignment] = await Promise.all([
+        BM.findOne({ agentId: sourceAgentId, isBlocked: { $ne: true } }).select("_id").lean(),
+        UM.findOne({ agentId: sourceAgentId, isBlocked: { $ne: true } }).select("_id").lean(),
+      ]);
+      if (activeBmAssignment || activeUmAssignment) {
+        return res.status(409).json({ message: "The current Branch Manager or Unit Manager cannot be selected as AUM." });
+      }
+      const previousAumAssignment = await AUM.findOne({ agentId: sourceAgentId, unitId }).select("_id").lean();
+      if (previousAumAssignment) {
+        return res.status(409).json({ message: "A previously assigned AUM cannot be selected again for the same unit." });
+      }
+    } else if (managerType === "UM") {
+      const [activeBmAssignment, activeAumAssignment] = await Promise.all([
+        BM.findOne({ agentId: sourceAgentId, isBlocked: { $ne: true } }).select("_id").lean(),
+        AUM.findOne({ agentId: sourceAgentId, isBlocked: { $ne: true } }).select("_id").lean(),
+      ]);
+      if (activeBmAssignment || activeAumAssignment) {
+        return res.status(409).json({ message: "The current Branch Manager or Assistant Unit Manager cannot be selected as UM." });
+      }
+      const previousUmAssignment = await UM.findOne({ agentId: sourceAgentId, unitId }).select("_id").lean();
+      if (previousUmAssignment) {
+        return res.status(409).json({ message: "A previously assigned UM cannot be selected again for the same unit." });
+      }
     }
 
     const employedDate = new Date(dateEmployed);
@@ -2349,11 +2464,14 @@ app.post("/api/admin/organization/managers/assign", async (req, res) => {
     let blockedManager = null;
 
     if (activeManager) {
-      blockedManager = await ManagerModel.findByIdAndUpdate(
-        activeManager._id,
-        { isBlocked: true, blockedAt: promotionDate },
-        { new: true }
-      )
+      const activeScopeQuery = managerType === "BM"
+        ? { branchId, isBlocked: { $ne: true } }
+        : { unitId, isBlocked: { $ne: true } };
+      await ManagerModel.updateMany(
+        activeScopeQuery,
+        { $set: { isBlocked: true, blockedAt: promotionDate } }
+      );
+      blockedManager = await ManagerModel.findById(activeManager._id)
         .populate(buildManagerPopulateQuery(managerType))
         .lean();
     }
@@ -2381,6 +2499,33 @@ app.post("/api/admin/organization/managers/assign", async (req, res) => {
       : await ManagerModel.create({ agentId: sourceAgentId, userId: managerUser._id, ...scopeUpdate, isBlocked: false, blockedAt: null }).then((doc) =>
           doc.toObject()
         );
+
+    if (managerType === "UM" && activeManager?.userId) {
+      const previousUmUserId = activeManager.userId?._id || activeManager.userId;
+      const pendingOrphanEndorsements = await Notification.find({
+          assignedToUserId: previousUmUserId,
+          type: "ORPHANS_ENDORSEMENTS",
+          status: { $in: ["Unread", "Read"] },
+          softDeletedAt: null,
+        }).select("_id dedupeKey").lean();
+      if (pendingOrphanEndorsements.length) {
+        const oldUserId = String(previousUmUserId);
+        const newUserId = String(managerUser._id);
+        await Notification.bulkWrite(pendingOrphanEndorsements.map((notification) => ({
+          updateOne: {
+            filter: { _id: notification._id },
+            update: {
+              $set: {
+                assignedToUserId: managerUser._id,
+                dedupeKey: String(notification.dedupeKey || "").replace(`:um:${oldUserId}`, `:um:${newUserId}`),
+                status: "Unread",
+                readAt: null,
+              },
+            },
+          },
+        })));
+      }
+    }
 
     if (existingManagerRecord?.userId && String(existingManagerRecord.userId) !== String(managerUser._id)) {
       await User.findByIdAndDelete(existingManagerRecord.userId);

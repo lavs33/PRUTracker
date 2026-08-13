@@ -173,6 +173,9 @@ const BmRecommendationMessage = ({ notification }) => {
         <strong>{metadata.recommendationTitle || "Strengthen KPI performance"}</strong>
         <p>{capitalizedRecommendation}</p>
       </div>
+      {String(metadata.personalizedMessage || "").trim() ? (
+        <p className="notif-recommendation__contribution"><strong>Personalized message from your Branch Manager:</strong> {metadata.personalizedMessage}</p>
+      ) : null}
     </div>
   );
 };

@@ -254,6 +254,9 @@ function AgentHome() {
 
   const openActionItem = (notification) => {
     if (["UM_RECOMMENDATION", "AUM_RECOMMENDATION"].includes(String(notification?.type || ""))) {
+      const kpiKey = String(notification?.metadata?.kpiKey || "");
+      if (kpiKey === "monthly_new_prospects") return navigateToTop(`/agent/${user.username}/prospects`);
+      if (["weekly_approaches", "weekly_appointments", "weekly_presentations"].includes(kpiKey)) return navigateToTop(`/agent/${user.username}/tasks/all`);
       navigateToTop(`/agent/${user.username}/sales/performance`);
       return;
     }
@@ -298,16 +301,21 @@ function AgentHome() {
       summary = `${taskTitle} ${duePhrase}`.trim();
     }
     const isSalesRecommendation = ["UM_RECOMMENDATION", "AUM_RECOMMENDATION"].includes(notification?.type);
-    const recommendationMetrics = isSalesRecommendation ? [
+    const recommendationMetrics = isSalesRecommendation ? (notification?.metadata?.kpiKey ? [
+      ["KPI", notification?.metadata?.kpiLabel || "Agent KPI"],
+      ["Agent Progress", notification?.metadata?.actualProgress || "—"],
+      ["Assigned Target", notification?.metadata?.targetLabel || "—"],
+      ["Reporting Period", notification?.metadata?.periodLabel || "—"],
+    ] : [
       ["Agent Production", notification?.metadata?.agentContribution || "—"],
       ["Unit Production", notification?.metadata?.unitProduction || "—"],
       ["Unit Target", notification?.metadata?.unitTarget || "—"],
       ["Unit Share", notification?.metadata?.contributionShare || "0.0%"],
       ["Reporting Period", notification?.metadata?.periodLabel || "—"],
-    ].map(([label, value]) => ({ label, value })) : details;
+    ]).map(([label, value]) => ({ label, value })) : details;
     const presentation = {
-      UM_RECOMMENDATION: { heading: notification?.title || "Unit Manager sales production recommendation", guidance: "Review your unit contribution and prioritize the recommended sales activities." },
-      AUM_RECOMMENDATION: { heading: notification?.title || "Assistant Unit Manager sales production recommendation", guidance: "Review your unit contribution and prioritize the recommended sales activities." },
+      UM_RECOMMENDATION: { heading: notification?.title || "Unit Manager recommendation", guidance: notification?.metadata?.kpiKey ? `Review your ${String(notification?.metadata?.kpiLabel || "KPI").toLowerCase()} progress and follow the recommended action.` : "Review your unit contribution and prioritize the recommended sales activities." },
+      AUM_RECOMMENDATION: { heading: notification?.title || "Assistant Unit Manager recommendation", guidance: notification?.metadata?.kpiKey ? `Review your ${String(notification?.metadata?.kpiLabel || "KPI").toLowerCase()} progress and follow the recommended action.` : "Review your unit contribution and prioritize the recommended sales activities." },
       TASK_MISSED: { heading: "Recover an overdue client activity", guidance: "Complete this missed activity now to restore the lead's follow-through." },
       TASK_DUE_TODAY: { heading: "Complete today's client activity", guidance: "Finish this activity today to keep the lead moving on schedule." },
       PAYMENT_MISSED_TRANSFER: { heading: "Restore a missed premium payment", guidance: "Record the required payment transfer to address the policy risk." },
@@ -328,6 +336,8 @@ function AgentHome() {
     const kpiImpact = ["TASK_MISSED", "TASK_DUE_TODAY"].includes(notification?.type)
       ? getTaskKpiImpact(notification?.taskType, assignedKpis, notification)
       : null;
+    const recommendationKpiKey = String(notification?.metadata?.kpiKey || "");
+    const recommendationActionLabel = recommendationKpiKey === "monthly_new_prospects" ? "View All Prospects" : ["weekly_approaches", "weekly_appointments", "weekly_presentations"].includes(recommendationKpiKey) ? "View All Tasks" : "View Sales Performance";
     return <article key={notification._id} className={`home-actionItem ${notification.priority}`}>
       <div className="home-actionIcon" aria-hidden="true"><FiAlertCircle /></div>
       <div className="home-actionBody">
@@ -343,6 +353,7 @@ function AgentHome() {
           {concern.details.map((detail) => <span key={detail.label}><small>{detail.label}</small><b>{detail.value}</b></span>)}
         </div> : null}
         {concern.isSalesRecommendation ? <div className="home-recommendationAction"><strong>Recommended action:</strong><span>{String(notification?.message || "").split(/Recommended action:/i)[1]?.trim() || concern.guidance}</span></div> : null}
+        {concern.isSalesRecommendation && String(notification?.metadata?.personalizedMessage || "").trim() ? <p className="home-actionContext home-personalizedMessage"><strong>Personalized message from your {notification?.metadata?.senderRole === "AUM" ? "Assistant Unit Manager" : "Unit Manager"}:</strong> {notification.metadata.personalizedMessage}</p> : null}
         {kpiImpact ? <div className="home-kpiImpact">
           <small>Related KPI progress</small>
           <strong>{kpiImpact.label}</strong>
@@ -353,7 +364,7 @@ function AgentHome() {
           <span>{kpiImpact.currentPct}% now • {kpiImpact.projectedPct}% after completion</span>
         </div> : null}
       </div>
-      <button type="button" onClick={() => openActionItem(notification)}>{concern.isSalesRecommendation ? "View Sales Performance" : "Open concern"} <FiArrowRight aria-hidden="true" /></button>
+      <button type="button" onClick={() => openActionItem(notification)}>{concern.isSalesRecommendation ? recommendationActionLabel : "Open concern"} <FiArrowRight aria-hidden="true" /></button>
     </article>;
   };
 

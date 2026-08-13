@@ -399,6 +399,57 @@ async function buildAdminOrganizationListPayload({
   const activeAumByUnitId = new Map(
     formattedManagers.aum.filter((manager) => !manager.isBlocked).map((manager) => [String(manager.unitId), manager])
   );
+  const aumUnitIdsByAgentId = formattedManagers.aum.reduce((unitIdsByAgent, manager) => {
+    const agentId = String(manager.agentId || "");
+    const unitId = String(manager.unitId || "");
+    if (!agentId || !unitId) return unitIdsByAgent;
+    const unitIds = unitIdsByAgent.get(agentId) || new Set();
+    unitIds.add(unitId);
+    unitIdsByAgent.set(agentId, unitIds);
+    return unitIdsByAgent;
+  }, new Map());
+  const umUnitIdsByAgentId = formattedManagers.um.reduce((unitIdsByAgent, manager) => {
+    const agentId = String(manager.agentId || "");
+    const unitId = String(manager.unitId || "");
+    if (!agentId || !unitId) return unitIdsByAgent;
+    const unitIds = unitIdsByAgent.get(agentId) || new Set();
+    unitIds.add(unitId);
+    unitIdsByAgent.set(agentId, unitIds);
+    return unitIdsByAgent;
+  }, new Map());
+  const previousUmAssignmentsByAgentId = formattedManagers.um.reduce((assignmentsByAgent, manager) => {
+    if (!manager.isBlocked) return assignmentsByAgent;
+    const agentId = String(manager.agentId || "");
+    if (!agentId) return assignmentsByAgent;
+    const assignments = assignmentsByAgent.get(agentId) || [];
+    assignments.push({
+      managerId: manager.managerId,
+      username: manager.username,
+      firstName: manager.firstName,
+      middleName: manager.middleName,
+      lastName: manager.lastName,
+      branchId: manager.branchId,
+      branchName: manager.branchName,
+      unitId: manager.unitId,
+      unitName: manager.unitName,
+      blockedAt: manager.blockedAt,
+    });
+    assignmentsByAgent.set(agentId, assignments);
+    return assignmentsByAgent;
+  }, new Map());
+  const activeManagerTypesByAgentId = [
+    ...formattedManagers.bm,
+    ...formattedManagers.um,
+    ...formattedManagers.aum,
+  ].reduce((typesByAgent, manager) => {
+    if (manager.isBlocked) return typesByAgent;
+    const agentId = String(manager.agentId || "");
+    if (!agentId) return typesByAgent;
+    const managerTypes = typesByAgent.get(agentId) || new Set();
+    managerTypes.add(manager.managerType);
+    typesByAgent.set(agentId, managerTypes);
+    return typesByAgent;
+  }, new Map());
 
   const formattedAreas = areas
     .map((area) => ({
@@ -473,6 +524,11 @@ async function buildAdminOrganizationListPayload({
       displayPhoto: agent.userId?.displayPhoto || "",
       dateEmployed: agent.userId?.dateEmployed || null,
       agentType: agent.agentType || "",
+      status: agent.status || "Active",
+      previousAumUnitIds: [...(aumUnitIdsByAgentId.get(String(agent._id)) || [])],
+      previousUmUnitIds: [...(umUnitIdsByAgentId.get(String(agent._id)) || [])],
+      previousUmAssignments: previousUmAssignmentsByAgentId.get(String(agent._id)) || [],
+      activeManagerTypes: [...(activeManagerTypesByAgentId.get(String(agent._id)) || [])],
       unitId: agent.unitId?._id || "",
       unitName: agent.unitId?.unitName || "",
       branchId: agent.unitId?.branchId?._id || "",
@@ -940,6 +996,9 @@ async function createAgentKpiNotifications({ branchId, branchName, assignmentId,
   const managerRecipientIds = [...new Set(branchManagers.map((manager) => String(manager.userId || "")).filter(Boolean))];
   const agentRecipientIds = recipients.map((recipient) => String(recipient._id));
   await resolvePriorKpiUnassignedNotifications({ recipientIds: [...managerRecipientIds, ...agentRecipientIds], scopeType: "AGENT", assignmentId, kpiKey, monthKey, type });
+  if (["AGENT_KPI_UNASSIGNED", "AGENT_KPI_TARGET_UPDATED"].includes(type)) {
+    await Notification.updateMany({ assignedToUserId: { $in: agentRecipientIds }, type: { $in: ["UM_RECOMMENDATION", "AUM_RECOMMENDATION"] }, resolutionStatus: { $ne: "Resolved" }, "metadata.kpiKey": kpiKey, "metadata.monthKey": monthKey, softDeletedAt: null }, { $set: { resolutionStatus: "Resolved", resolvedAt: new Date(), "metadata.resolutionReason": type === "AGENT_KPI_TARGET_UPDATED" ? "Resolved because the agent KPI target was updated." : "Resolved because the agent KPI was unassigned." } });
+  }
   const notifications = recipients.map((recipient) => ({
     assignedToUserId: recipient._id,
     type,
@@ -2828,7 +2887,10 @@ app.patch("/api/manager/resignation/:resignationId/status", async (req, res) => 
         .populate({ path: "unitId", select: "unitName" })
         .lean();
       const unitManager = agent?.unitId?._id
-        ? await UM.findOne({ unitId: agent.unitId._id, isBlocked: { $ne: true } }).select("userId").lean()
+        ? await UM.findOne({ unitId: agent.unitId._id, isBlocked: { $ne: true } })
+          .sort({ updatedAt: -1, createdAt: -1 })
+          .select("userId")
+          .lean()
         : null;
       const agentUser = agent?.userId || {};
       const agentName = formatPersonName(agentUser);
@@ -2990,7 +3052,10 @@ app.patch("/api/manager/long-leave/:longLeaveId/status", async (req, res) => {
         .populate({ path: "unitId", select: "unitName" })
         .lean();
       const unitManager = agent?.unitId?._id
-        ? await UM.findOne({ unitId: agent.unitId._id, isBlocked: { $ne: true } }).select("userId").lean()
+        ? await UM.findOne({ unitId: agent.unitId._id, isBlocked: { $ne: true } })
+          .sort({ updatedAt: -1, createdAt: -1 })
+          .select("userId")
+          .lean()
         : null;
       const agentUser = agent?.userId || {};
       const agentName = [agentUser.firstName, agentUser.middleName, agentUser.lastName].filter(Boolean).join(" ").trim() || agentUser.username || "agent";
@@ -4186,6 +4251,16 @@ app.get("/api/agent/kpi-progress", async (req, res) => {
       monthly_new_prospects: newProspects,
       monthly_closing_ratio: closingRatio,
     };
+    const achievedKpiKeys = assignedKpis.filter((kpi) => {
+      const target = [kpi.targetValue, kpi.targetMin].find((value) => value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value)));
+      return target !== undefined && Number(actualsByKey[kpi.key] || 0) >= Number(target);
+    }).map((kpi) => kpi.key);
+    if (achievedKpiKeys.length) {
+      await Notification.updateMany(
+        { assignedToUserId: userObjectId, type: { $in: ["UM_RECOMMENDATION", "AUM_RECOMMENDATION"] }, resolutionStatus: { $ne: "Resolved" }, "metadata.kpiKey": { $in: achievedKpiKeys }, "metadata.monthKey": selectedMonth, softDeletedAt: null },
+        { $set: { resolutionStatus: "Resolved", resolvedAt: new Date(), "metadata.resolutionReason": "Agent achieved the assigned KPI target." } }
+      );
+    }
     const dataStartDate = [
       ...tasks.map((task) => task?.createdAt),
       ...prospects.map((prospect) => prospect?.createdAt),

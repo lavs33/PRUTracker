@@ -544,6 +544,7 @@
 .home-actionItem p { margin: 5px 0 0; color: #64748b; font-size: 13px; line-height: 1.45; }
 .home-actionItem .home-actionContext { padding-left: 9px; border-left: 2px solid #fca5a5; color: #475569; font-size: 12px; }
 .home-actionItem.high .home-actionContext { border-left-color: #fcd34d; }
+.home-actionItem .home-personalizedMessage, .home-actionItem .home-personalizedMessage strong { font-size: 12px; line-height: 1.5; }
 .home-actionDetails { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
 .home-actionDetails span { min-width: 110px; padding: 6px 8px; border: 1px solid #fecaca; border-radius: 9px; background: #fff; }
 .home-actionItem.high .home-actionDetails span { border-color: #fde68a; }

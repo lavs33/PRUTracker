@@ -143,9 +143,9 @@ const OrphanClientMessage = ({ notification }) => {
 
 const SalesRecommendationMessage = ({ notification }) => {
   const metadata = notification?.metadata || {};
-  const metrics = [["Agent Sales Production", metadata.agentContribution || "—"], ["Unit Sales Production", metadata.unitProduction || "—"], ["Unit Sales Production Target", metadata.unitTarget || "—"], ["Unit Sales Production Share", metadata.contributionShare || "0.0%"], ["Reporting Period", metadata.periodLabel || "—"]];
+  const metrics = metadata.kpiKey ? [["KPI", metadata.kpiLabel || "Agent KPI"], ["Agent Progress", metadata.actualProgress || "—"], ["Assigned Target", metadata.targetLabel || "—"], ["Reporting Period", metadata.periodLabel || "—"]] : [["Agent Sales Production", metadata.agentContribution || "—"], ["Unit Sales Production", metadata.unitProduction || "—"], ["Unit Sales Production Target", metadata.unitTarget || "—"], ["Unit Sales Production Share", metadata.contributionShare || "0.0%"], ["Reporting Period", metadata.periodLabel || "—"]];
   const recommendation = String(notification?.message || "").split(/Recommended action:/i)[1]?.trim() || "Strengthen sales production.";
-  return <div className="notif-agent-recommendation"><div className="notif-agent-recommendation__metrics">{metrics.map(([label, value]) => <article key={label}><small>{label}</small><b>{value}</b></article>)}</div><p>Your contribution is below the unit fair-share benchmark of <b>{metadata.fairShare || "—"}</b>.</p><div className="notif-agent-recommendation__action"><strong>Recommended action:</strong><span>{recommendation}</span></div></div>;
+  return <div className="notif-agent-recommendation"><div className="notif-agent-recommendation__metrics">{metrics.map(([label, value]) => <article key={label}><small>{label}</small><b>{value}</b></article>)}</div><p>{metadata.kpiKey ? "Your progress is below the assigned KPI target." : <>Your contribution is below the unit fair-share benchmark of <b>{metadata.fairShare || "—"}</b>.</>}</p><div className="notif-agent-recommendation__action"><strong>Recommended action:</strong><span>{recommendation}</span></div>{String(metadata.personalizedMessage || "").trim() ? <p><strong>Personalized message from your {metadata.senderRole === "AUM" ? "Assistant Unit Manager" : "Unit Manager"}:</strong> {metadata.personalizedMessage}</p> : null}</div>;
 };
 
 function AgentNotifications() {
@@ -425,6 +425,15 @@ function AgentNotifications() {
 
   const openNotif = async (n) => {
     if (["UM_RECOMMENDATION", "AUM_RECOMMENDATION"].includes(String(n?.type || "").toUpperCase())) {
+      const kpiKey = String(n?.metadata?.kpiKey || "");
+      if (kpiKey === "monthly_new_prospects") {
+        navigate(`/agent/${username}/prospects`);
+        return;
+      }
+      if (["weekly_approaches", "weekly_appointments", "weekly_presentations"].includes(kpiKey)) {
+        navigate(`/agent/${username}/tasks/all`);
+        return;
+      }
       navigate(`/agent/${username}/sales/performance`);
       return;
     }

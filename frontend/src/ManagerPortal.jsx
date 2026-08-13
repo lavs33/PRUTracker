@@ -134,6 +134,9 @@ const BmRecommendationConcernMessage = ({ notification }) => {
         <strong>{metadata.recommendationTitle || "Strengthen KPI performance"}</strong>
         <p>{capitalizedRecommendation}</p>
       </div>
+      {String(metadata.personalizedMessage || "").trim() ? (
+        <p><strong>Personalized message from your Branch Manager:</strong> {metadata.personalizedMessage}</p>
+      ) : null}
     </div>
   );
 };
@@ -262,6 +265,39 @@ function formatKpiLabel(kpi = {}, scopeType = "") {
   if (scopeType === "AGENT" && legacyAgentLabels[normalizedLabel]) return legacyAgentLabels[normalizedLabel];
   if (scopeType === "BRANCH" && legacyBranchLabels[normalizedLabel]) return legacyBranchLabels[normalizedLabel];
   return label || "KPI";
+}
+
+function getAgentKpiRecommendation(kpi = {}) {
+  const recommendations = {
+    monthly_new_prospects: {
+      action: "Increase the number of new prospects",
+      detail: "Build a larger prospect pipeline by requesting referrals from existing clients, scheduling dedicated prospecting blocks, reconnecting with warm contacts, and recording newly qualified prospects before period-end.",
+    },
+    monthly_policies: {
+      action: "Increase the number of active policies",
+      detail: "Prioritize applications closest to issuance, resolve outstanding underwriting requirements promptly, follow up on pending client documents, and help qualified clients complete policy activation before period-end.",
+    },
+    weekly_approaches: {
+      action: "Increase the number of done approaches",
+      detail: "Set a daily outreach goal, work through the highest-potential prospect list, use calls and personalized messages consistently, and record every completed approach to build enough activity for the week.",
+    },
+    weekly_appointments: {
+      action: "Increase the number of done appointments",
+      detail: "Convert recent approaches into scheduled consultations, offer specific meeting times, confirm appointments in advance, and promptly reschedule cancellations to protect the weekly appointment target.",
+    },
+    weekly_presentations: {
+      action: "Increase the number of done presentations",
+      detail: "Prioritize appointed prospects who are ready for a needs discussion, prepare tailored solutions before each meeting, confirm attendance, and complete follow-ups that move presentations forward within the week.",
+    },
+    monthly_closing_ratio: {
+      action: "Improve the closing ratio",
+      detail: "Focus on well-qualified opportunities, strengthen needs-based presentations, address objections clearly, agree on concrete next steps, and follow up consistently with prospects closest to application submission.",
+    },
+  };
+  return recommendations[kpi.key] || {
+    action: `Improve ${formatKpiLabel(kpi, "AGENT")}`,
+    detail: "Review the activities that drive this KPI, prioritize the largest performance gap, and complete focused follow-ups before the reporting period ends.",
+  };
 }
 
 function formatKpiValue(value, valueType) {
@@ -1153,6 +1189,7 @@ function ManagerPortal({ roleType }) {
   const [pendingKpiConcern, setPendingKpiConcern] = useState(null);
   const [recommendationNotifyingKey, setRecommendationNotifyingKey] = useState("");
   const [recommendationHistory, setRecommendationHistory] = useState({});
+  const [recommendationMessages, setRecommendationMessages] = useState({});
   const [agentRecommendationHistory, setAgentRecommendationHistory] = useState({});
   const [recommendationNotice, setRecommendationNotice] = useState(null);
 
@@ -1778,12 +1815,14 @@ function ManagerPortal({ roleType }) {
           unitContributionLabel: recommendation.unitContributionLabel,
           branchTargetLabel: recommendation.branchTargetLabel,
           branchContributionLabel: recommendation.branchContributionLabel,
+          personalizedMessage: String(recommendationMessages[recommendation.key] || "").trim(),
         }),
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload?.message || "Failed to notify the Unit Manager.");
       setRecommendationHistory((current) => ({ ...current, [recommendation.key]: payload.notifiedAt || new Date().toISOString() }));
-      setRecommendationNotice({ message: payload.message });
+      setRecommendationMessages((current) => ({ ...current, [recommendation.key]: "" }));
+      setRecommendationNotice({ message: payload.message, personalizedMessage: payload.personalizedMessage || "" });
       window.dispatchEvent(new CustomEvent("notifications:changed"));
     } catch (error) {
       setRecommendationNotice({ message: error.message || "Failed to notify the Unit Manager.", error: true });
@@ -1802,18 +1841,38 @@ function ManagerPortal({ roleType }) {
       const unitTarget = unitSalesProductionCard ? formatKpiTarget(unitSalesProductionCard.kpi) : "No target assigned";
       const response = await fetch(`${API_BASE}/api/manager/agent-sales-recommendations/notify`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: user.id, agentUserId: agent.userId, recommendationKey: key, periodLabel: getPresetLabel(unitKpiDatePreset), agentContribution: formatMoney(agent.annualPremium), unitProduction: formatMoney(unitProduction), unitTarget, contributionShare: unitProduction ? `${((Number(agent.annualPremium || 0) / unitProduction) * 100).toFixed(1)}%` : "0.0%", fairShare: formatMoney(fairShare) }),
+        body: JSON.stringify({ userId: user.id, agentUserId: agent.userId, recommendationKey: key, periodLabel: getPresetLabel(unitKpiDatePreset), agentContribution: formatMoney(agent.annualPremium), unitProduction: formatMoney(unitProduction), unitTarget, contributionShare: unitProduction ? `${((Number(agent.annualPremium || 0) / unitProduction) * 100).toFixed(1)}%` : "0.0%", fairShare: formatMoney(fairShare), personalizedMessage: String(recommendationMessages[key] || "").trim() }),
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload?.message || "Failed to notify the agent.");
       setAgentRecommendationHistory((current) => ({ ...current, [key]: { notifiedAt: payload.notifiedAt, senderRole: payload.senderRole, senderName: payload.senderName } }));
-      setRecommendationNotice({ message: payload.message, agent: true });
+      setRecommendationMessages((current) => ({ ...current, [key]: "" }));
+      setRecommendationNotice({ message: payload.message, agent: true, personalizedMessage: payload.personalizedMessage || "" });
       window.dispatchEvent(new CustomEvent("notifications:changed"));
     } catch (error) {
       setRecommendationNotice({ message: error.message || "Failed to notify the agent.", error: true });
     } finally {
       setRecommendationNotifyingKey("");
     }
+  };
+
+  const notifyAgentKpiRecommendation = async ({ kpi, actual, dateRangeLabel }) => {
+    const key = `${unitPerformanceDatePreset}:${selectedAgent.userId}:${kpi.key}`;
+    const { action: recommendationAction, detail: recommendationDetail } = getAgentKpiRecommendation(kpi);
+    setRecommendationNotifyingKey(key);
+    try {
+      const response = await fetch(`${API_BASE}/api/manager/agent-sales-recommendations/notify`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: user.id, agentUserId: selectedAgent.userId, recommendationKey: key, periodLabel: dateRangeLabel, kpiKey: kpi.key, kpiLabel: formatKpiLabel(kpi, "AGENT"), actualProgress: formatActualKpiValue(actual, kpi.valueType), targetLabel: formatKpiTarget(kpi), recommendationAction, recommendationDetail, personalizedMessage: String(recommendationMessages[key] || "").trim() }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload?.message || "Failed to notify the agent.");
+      setAgentRecommendationHistory((current) => ({ ...current, [key]: { notifiedAt: payload.notifiedAt, senderRole: payload.senderRole, senderName: payload.senderName } }));
+      setRecommendationMessages((current) => ({ ...current, [key]: "" }));
+      setRecommendationNotice({ message: payload.message, agent: true, personalizedMessage: payload.personalizedMessage || "" });
+    } catch (error) {
+      setRecommendationNotice({ message: error.message || "Failed to notify the agent.", error: true });
+    } finally { setRecommendationNotifyingKey(""); }
   };
 
   const summary = portalData?.summary || {
@@ -3158,6 +3217,11 @@ function ManagerPortal({ roleType }) {
   const selectedAgentKpiCards = useMemo(() => {
     const isMonthlyRange = /^\d{4}-(0[1-9]|1[0-2])$/.test(String(unitPerformanceDatePreset || ""));
     if (!selectedAgent || !isMonthlyRange) return [];
+    const resignationMonth = (Array.isArray(selectedAgent.resignationRecords) ? selectedAgent.resignationRecords : [])
+      .map((record) => toDateInputValue(record?.resignationDate).slice(0, 7))
+      .filter(Boolean)
+      .sort()[0] || "";
+    if (resignationMonth && unitPerformanceDatePreset > resignationMonth) return [];
     const kpiKeysByTab = {
       clients: new Set(["monthly_new_prospects", "monthly_policies"]),
       tasks: new Set(["weekly_approaches", "weekly_appointments", "weekly_presentations"]),
@@ -3174,8 +3238,8 @@ function ManagerPortal({ roleType }) {
           if (kpiForPeriod.assigned !== true) return null;
           const rowsForFrequency = portalData?.kpiSalesRowsByFrequency?.[unitPerformanceDatePreset] || [];
           const agentRow = rowsForFrequency.find((row) => String(row?.userId || "") === String(selectedAgent.userId || "")) || selectedAgent || {};
-          const activePolicies = Number(agentRow.activePolicies || selectedAgent.activePolicies || 0);
-          const submittedApplications = Number(agentRow.submittedApplications || selectedAgent.submittedApplications || 0);
+          const activePolicies = Number(agentRow.activePolicies ?? 0);
+          const submittedApplications = Number(agentRow.submittedApplications ?? 0);
           const actualByKey = {
             weekly_approaches: Number(agentRow.completedApproaches || selectedAgent.completedApproaches || 0),
             weekly_appointments: Number(agentRow.completedAppointments || selectedAgent.completedAppointments || 0),
@@ -4650,8 +4714,12 @@ function ManagerPortal({ roleType }) {
                   <div className="manager-agent-kpi-section">
                     <h3>Agent KPI Progress</h3>
                     <div className="manager-kpi-progress-grid">
-                      {selectedAgentKpiCards.map(({ assignment, kpi, actual, comparison, dateRangeLabel }) => (
-                        <article className={`manager-kpi-progress-card ${comparison.className}`} key={`${assignment.scopeType}:${assignment.scopeId}:${kpi.key}`}>
+                      {selectedAgentKpiCards.map(({ assignment, kpi, actual, comparison, dateRangeLabel }) => {
+                        const recommendationKey = `${unitPerformanceDatePreset}:${selectedAgent.userId}:${kpi.key}`;
+                        const belowTarget = comparison.className === "warning";
+                        const canNotifyForPeriod = unitPerformanceDatePreset === currentKpiMonth;
+                        const recommendation = getAgentKpiRecommendation(kpi);
+                        return <article className={`manager-kpi-progress-card ${comparison.className}`} key={`${assignment.scopeType}:${assignment.scopeId}:${kpi.key}`}>
                           <span>{assignment.name}</span>
                           <strong>{formatKpiLabel(kpi, assignment.scopeType)}</strong>
                           <small>{dateRangeLabel} • {kpi.period}</small>
@@ -4664,8 +4732,16 @@ function ManagerPortal({ roleType }) {
                             <span style={{ width: `${comparison.percent}%` }} />
                           </div>
                           <small className="manager-kpi-gap-note">{comparison.deltaLabel}</small>
-                        </article>
-                      ))}
+                          {belowTarget && canNotifyForPeriod && ["UM", "AUM"].includes(normalizedRole) ? <div className="manager-agent-sales-recommendation manager-agent-sales-recommendation--underperforming">
+                            <strong>Recommended action: {recommendation.action}</strong>
+                            <small>{recommendation.detail}</small>
+                            <label htmlFor={`agent-kpi-message-${recommendationKey}`}>Personalized message</label>
+                            <textarea id={`agent-kpi-message-${recommendationKey}`} value={recommendationMessages[recommendationKey] || ""} maxLength={500} rows={3} placeholder={`Add a personalized recommendation for ${selectedAgent.name || selectedAgent.username} (optional)`} onChange={(event) => setRecommendationMessages((current) => ({ ...current, [recommendationKey]: event.target.value }))} />
+                            <button type="button" disabled={recommendationNotifyingKey === recommendationKey} onClick={() => notifyAgentKpiRecommendation({ kpi, actual, dateRangeLabel })}>{recommendationNotifyingKey === recommendationKey ? "Notifying..." : `Notify ${selectedAgent.username}`}</button>
+                            {agentRecommendationHistory[recommendationKey] ? <time>Last notified by {agentRecommendationHistory[recommendationKey].senderRole} {agentRecommendationHistory[recommendationKey].senderName} • {formatDateTime(agentRecommendationHistory[recommendationKey].notifiedAt)}</time> : null}
+                          </div> : null}
+                        </article>;
+                      })}
                     </div>
                   </div>
                 ) : null}
@@ -6381,6 +6457,8 @@ function ManagerPortal({ roleType }) {
                                   {needsRecommendation ? <div className="manager-agent-sales-recommendation manager-agent-sales-recommendation--underperforming">
                                     <strong>Recommended action: Strengthen sales production</strong>
                                     <small>Close the {formatMoney(Math.max(0, fairShare - Number(agent.annualPremium || 0)))} fair-share gap by prioritizing qualified prospects, scheduling additional presentations and follow-ups, and converting active opportunities before month-end. Benchmark: {formatMoney(fairShare)}.</small>
+                                    <label htmlFor={`agent-recommendation-message-${recommendationKey}`}>Personalized message</label>
+                                    <textarea id={`agent-recommendation-message-${recommendationKey}`} value={recommendationMessages[recommendationKey] || ""} maxLength={500} rows={3} placeholder={`Add a personalized recommendation for ${agent.name || agent.username} (optional)`} onChange={(event) => setRecommendationMessages((current) => ({ ...current, [recommendationKey]: event.target.value }))} />
                                     <span title={isOnLongLeave ? "🚫 Agent is currently on long leave and cannot be notified." : undefined}><button type="button" disabled={isOnLongLeave || recommendationNotifyingKey === recommendationKey} onClick={() => notifyAgentSalesRecommendation(agent)}>{isOnLongLeave ? "🚫 Notify unavailable" : recommendationNotifyingKey === recommendationKey ? "Notifying..." : `Notify ${agent.username}`}</button></span>
                                     {history ? <time>Last notified by {history.senderRole} {history.senderName} • {formatDateTime(history.notifiedAt)}</time> : null}
                                   </div> : null}
@@ -6512,6 +6590,15 @@ function ManagerPortal({ roleType }) {
                                   <h4>{recommendation.title}</h4>
                                   <p>Notify <strong>{recommendation.unitManagerCode} - {recommendation.unitManagerName}</strong> to {recommendation.action}.</p>
                                   <small>{recommendation.detail}</small>
+                                  <label htmlFor={`bm-recommendation-message-${recommendation.key}`}>Personalized message</label>
+                                  <textarea
+                                    id={`bm-recommendation-message-${recommendation.key}`}
+                                    value={recommendationMessages[recommendation.key] || ""}
+                                    maxLength={500}
+                                    rows={3}
+                                    placeholder={`Add a personalized recommendation for ${recommendation.unitManagerName} (optional)`}
+                                    onChange={(event) => setRecommendationMessages((current) => ({ ...current, [recommendation.key]: event.target.value }))}
+                                  />
                                   <button type="button" disabled={recommendationNotifyingKey === recommendation.key} onClick={() => notifyUnitManagerRecommendation(recommendation)}>
                                     {recommendationNotifyingKey === recommendation.key ? "Notifying..." : `Notify ${recommendation.unitManagerName}`} <FaArrowRight aria-hidden="true" />
                                   </button>
@@ -6550,6 +6637,7 @@ function ManagerPortal({ roleType }) {
             <div className="manager-endorse-modal__header">
               <h2 id="recommendation-notice-title">{recommendationNotice.error ? "Unable to notify" : recommendationNotice.agent ? "Agent notified" : "Unit Manager notified"}</h2>
               <p>{recommendationNotice.message}</p>
+              {recommendationNotice.personalizedMessage ? <p><strong>Personalized message sent:</strong> {recommendationNotice.personalizedMessage}</p> : null}
             </div>
           </div>
         </div>
