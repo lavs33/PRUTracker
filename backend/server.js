@@ -399,6 +399,57 @@ async function buildAdminOrganizationListPayload({
   const activeAumByUnitId = new Map(
     formattedManagers.aum.filter((manager) => !manager.isBlocked).map((manager) => [String(manager.unitId), manager])
   );
+  const aumUnitIdsByAgentId = formattedManagers.aum.reduce((unitIdsByAgent, manager) => {
+    const agentId = String(manager.agentId || "");
+    const unitId = String(manager.unitId || "");
+    if (!agentId || !unitId) return unitIdsByAgent;
+    const unitIds = unitIdsByAgent.get(agentId) || new Set();
+    unitIds.add(unitId);
+    unitIdsByAgent.set(agentId, unitIds);
+    return unitIdsByAgent;
+  }, new Map());
+  const umUnitIdsByAgentId = formattedManagers.um.reduce((unitIdsByAgent, manager) => {
+    const agentId = String(manager.agentId || "");
+    const unitId = String(manager.unitId || "");
+    if (!agentId || !unitId) return unitIdsByAgent;
+    const unitIds = unitIdsByAgent.get(agentId) || new Set();
+    unitIds.add(unitId);
+    unitIdsByAgent.set(agentId, unitIds);
+    return unitIdsByAgent;
+  }, new Map());
+  const previousUmAssignmentsByAgentId = formattedManagers.um.reduce((assignmentsByAgent, manager) => {
+    if (!manager.isBlocked) return assignmentsByAgent;
+    const agentId = String(manager.agentId || "");
+    if (!agentId) return assignmentsByAgent;
+    const assignments = assignmentsByAgent.get(agentId) || [];
+    assignments.push({
+      managerId: manager.managerId,
+      username: manager.username,
+      firstName: manager.firstName,
+      middleName: manager.middleName,
+      lastName: manager.lastName,
+      branchId: manager.branchId,
+      branchName: manager.branchName,
+      unitId: manager.unitId,
+      unitName: manager.unitName,
+      blockedAt: manager.blockedAt,
+    });
+    assignmentsByAgent.set(agentId, assignments);
+    return assignmentsByAgent;
+  }, new Map());
+  const activeManagerTypesByAgentId = [
+    ...formattedManagers.bm,
+    ...formattedManagers.um,
+    ...formattedManagers.aum,
+  ].reduce((typesByAgent, manager) => {
+    if (manager.isBlocked) return typesByAgent;
+    const agentId = String(manager.agentId || "");
+    if (!agentId) return typesByAgent;
+    const managerTypes = typesByAgent.get(agentId) || new Set();
+    managerTypes.add(manager.managerType);
+    typesByAgent.set(agentId, managerTypes);
+    return typesByAgent;
+  }, new Map());
 
   const formattedAreas = areas
     .map((area) => ({
@@ -473,6 +524,11 @@ async function buildAdminOrganizationListPayload({
       displayPhoto: agent.userId?.displayPhoto || "",
       dateEmployed: agent.userId?.dateEmployed || null,
       agentType: agent.agentType || "",
+      status: agent.status || "Active",
+      previousAumUnitIds: [...(aumUnitIdsByAgentId.get(String(agent._id)) || [])],
+      previousUmUnitIds: [...(umUnitIdsByAgentId.get(String(agent._id)) || [])],
+      previousUmAssignments: previousUmAssignmentsByAgentId.get(String(agent._id)) || [],
+      activeManagerTypes: [...(activeManagerTypesByAgentId.get(String(agent._id)) || [])],
       unitId: agent.unitId?._id || "",
       unitName: agent.unitId?.unitName || "",
       branchId: agent.unitId?.branchId?._id || "",
@@ -784,7 +840,7 @@ async function resolvePriorKpiUnassignedNotifications({ recipientIds, scopeType,
 }
 
 
-async function resolveBmRecommendationsForBranchKpiUnassigned({ branchId, kpiKey, monthKey }) {
+async function resolveBmRecommendationsForBranchKpiChange({ branchId, kpiKey, monthKey, changeType }) {
   if (!branchId || !kpiKey || !monthKey) return;
   const units = await Unit.find({ branchId }).select("_id").lean();
   const unitIds = units.map((unit) => String(unit._id || "")).filter(Boolean);
@@ -806,7 +862,9 @@ async function resolveBmRecommendationsForBranchKpiUnassigned({ branchId, kpiKey
       $set: {
         resolutionStatus: "Resolved",
         resolvedAt: new Date(),
-        "metadata.resolutionReason": "Resolved because the related branch KPI was unassigned.",
+        "metadata.resolutionReason": changeType === "BRANCH_KPI_TARGET_UPDATED"
+          ? "Resolved because the related branch KPI target was updated."
+          : "Resolved because the related branch KPI was unassigned.",
       },
     },
   );
@@ -832,8 +890,8 @@ async function createBranchKpiNotifications({ branchId, branchName, assignmentId
   const titleAction = type === "BRANCH_KPI_UNASSIGNED" ? "unassigned" : type === "BRANCH_KPI_ASSIGNED" ? "assigned" : "target updated";
 
   await resolvePriorKpiUnassignedNotifications({ recipientIds, scopeType: "BRANCH", assignmentId, kpiKey, monthKey, type });
-  if (type === "BRANCH_KPI_UNASSIGNED") {
-    await resolveBmRecommendationsForBranchKpiUnassigned({ branchId, kpiKey, monthKey });
+  if (["BRANCH_KPI_UNASSIGNED", "BRANCH_KPI_TARGET_UPDATED"].includes(type)) {
+    await resolveBmRecommendationsForBranchKpiChange({ branchId, kpiKey, monthKey, changeType: type });
   }
 
   await Notification.insertMany(recipientIds.map((assignedToUserId) => ({
@@ -874,6 +932,26 @@ async function createUnitKpiNotifications({ branchId, branchName, assignmentId, 
   const managerRecipientIds = [...new Set(branchManagers.map((manager) => String(manager.userId || "")).filter(Boolean))];
   const unitRecipientIds = [...new Set([...recipientsByUnit.values()].flatMap((recipients) => [...recipients]))];
   await resolvePriorKpiUnassignedNotifications({ recipientIds: [...managerRecipientIds, ...unitRecipientIds], scopeType: "UNIT", assignmentId, kpiKey, monthKey, type });
+  if (kpiKey === "monthly_sales_production" && ["UNIT_KPI_UNASSIGNED", "UNIT_KPI_TARGET_UPDATED"].includes(type)) {
+    await Notification.updateMany(
+      {
+        type: { $in: ["UM_RECOMMENDATION", "AUM_RECOMMENDATION"] },
+        resolutionStatus: { $ne: "Resolved" },
+        "metadata.unitId": { $in: unitIds.map((unitId) => String(unitId)) },
+        "metadata.monthKey": String(monthKey),
+        softDeletedAt: null,
+      },
+      {
+        $set: {
+          resolutionStatus: "Resolved",
+          resolvedAt: new Date(),
+          "metadata.resolutionReason": type === "UNIT_KPI_TARGET_UPDATED"
+            ? "Resolved because the Unit Sales Production KPI target was updated."
+            : "Resolved because the Unit Sales Production KPI was unassigned.",
+        },
+      },
+    );
+  }
   const notifications = units.flatMap((unit) => [...(recipientsByUnit.get(String(unit._id)) || [])].map((assignedToUserId) => ({
     assignedToUserId,
     type,
@@ -918,6 +996,9 @@ async function createAgentKpiNotifications({ branchId, branchName, assignmentId,
   const managerRecipientIds = [...new Set(branchManagers.map((manager) => String(manager.userId || "")).filter(Boolean))];
   const agentRecipientIds = recipients.map((recipient) => String(recipient._id));
   await resolvePriorKpiUnassignedNotifications({ recipientIds: [...managerRecipientIds, ...agentRecipientIds], scopeType: "AGENT", assignmentId, kpiKey, monthKey, type });
+  if (["AGENT_KPI_UNASSIGNED", "AGENT_KPI_TARGET_UPDATED"].includes(type)) {
+    await Notification.updateMany({ assignedToUserId: { $in: agentRecipientIds }, type: { $in: ["UM_RECOMMENDATION", "AUM_RECOMMENDATION"] }, resolutionStatus: { $ne: "Resolved" }, "metadata.kpiKey": kpiKey, "metadata.monthKey": monthKey, softDeletedAt: null }, { $set: { resolutionStatus: "Resolved", resolvedAt: new Date(), "metadata.resolutionReason": type === "AGENT_KPI_TARGET_UPDATED" ? "Resolved because the agent KPI target was updated." : "Resolved because the agent KPI was unassigned." } });
+  }
   const notifications = recipients.map((recipient) => ({
     assignedToUserId: recipient._id,
     type,
@@ -2442,6 +2523,43 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
     if (right.leads !== left.leads) return right.leads - left.leads;
     return byName(left, right);
   });
+  const performanceDataStartDates = { scope: {}, units: {}, agents: {} };
+  const unitNameByUserId = new Map(scopedAgents.map((agent) => [
+    String(agent?.userId?._id || ""),
+    String(agent?.unitId?.unitName || "Unassigned Unit"),
+  ]));
+  const recordPerformanceStart = (tab, userId, value) => {
+    const timestamp = new Date(value).getTime();
+    if (!userId || !Number.isFinite(timestamp) || timestamp <= 0) return;
+    const date = new Date(timestamp).toISOString();
+    const unitName = unitNameByUserId.get(String(userId)) || "Unassigned Unit";
+    const keepEarliest = (target) => {
+      if (!target[tab] || timestamp < new Date(target[tab]).getTime()) target[tab] = date;
+    };
+    keepEarliest(performanceDataStartDates.scope);
+    performanceDataStartDates.units[unitName] ||= {};
+    keepEarliest(performanceDataStartDates.units[unitName]);
+    performanceDataStartDates.agents[String(userId)] ||= {};
+    keepEarliest(performanceDataStartDates.agents[String(userId)]);
+  };
+  tasks.forEach((task) => recordPerformanceStart("tasks", String(task?.assignedToUserId || ""), task?.createdAt || task?.dueAt));
+  prospects.forEach((prospect) => recordPerformanceStart("clients", effectiveProspectOwnerId(prospect), prospect?.createdAt));
+  leads.forEach((lead) => {
+    const userId = leadIdToAssignedUserId.get(String(lead?._id || "")) || "";
+    recordPerformanceStart("clients", userId, lead?.createdAt);
+    recordPerformanceStart("sales", userId, lead?.createdAt);
+  });
+  policyholders.forEach((policyholder) => {
+    const userId = effectivePolicyholderOwnerId(policyholder);
+    const appearedAt = policyIssuanceDateForPolicyholder(policyholder);
+    recordPerformanceStart("clients", userId, appearedAt);
+    recordPerformanceStart("sales", userId, appearedAt);
+  });
+  applications.forEach((application) => recordPerformanceStart(
+    "sales",
+    engagementIdToAssignedUserId.get(String(application?.leadEngagementId || "")) || "",
+    application?.recordApplicationSubmission?.savedAt
+  ));
   const branchRecommendationNotifications = context.role === "BM"
     ? await Notification.find({ type: "BM_RECOMMENDATION", "metadata.sentByUserId": String(user._id), softDeletedAt: null })
         .select("metadata.recommendationKey createdAt")
@@ -2451,6 +2569,36 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
   const branchRecommendationHistory = branchRecommendationNotifications.reduce((history, notification) => {
     const key = String(notification?.metadata?.recommendationKey || "");
     if (key && !history[key]) history[key] = notification.createdAt;
+    return history;
+  }, {});
+  const currentUnitSalesRows = buildRowsForSalesContext(buildPresetContext(currentMonthKey));
+  const eligibleCurrentUnitSalesRows = currentUnitSalesRows.filter((row) => !(
+    String(row?.status || "") === "Resigned" && Number(row?.annualPremium || 0) === 0
+  ));
+  const unitSalesRowsByName = eligibleCurrentUnitSalesRows.reduce((groups, row) => {
+    const name = String(row?.unit || "Unassigned Unit");
+    (groups[name] ||= []).push(row);
+    return groups;
+  }, {});
+  await Promise.all(Object.values(unitSalesRowsByName).map(async (rows) => {
+    const total = rows.reduce((sum, row) => sum + Number(row?.annualPremium || 0), 0);
+    const fairShare = rows.length ? total / rows.length : 0;
+    const achievedUserIds = rows.filter((row) => Number(row?.annualPremium || 0) >= fairShare).map((row) => String(row?.userId || "")).filter(Boolean);
+    if (!achievedUserIds.length) return;
+    await Notification.updateMany({ assignedToUserId: { $in: achievedUserIds }, type: { $in: ["UM_RECOMMENDATION", "AUM_RECOMMENDATION"] }, resolutionStatus: { $ne: "Resolved" }, "metadata.monthKey": currentMonthKey, softDeletedAt: null }, { $set: { resolutionStatus: "Resolved", resolvedAt: new Date(), "metadata.resolutionReason": "Agent achieved the unit sales production fair-share benchmark." } });
+  }));
+  const agentRecommendationNotifications = await Notification.find({
+    type: { $in: ["UM_RECOMMENDATION", "AUM_RECOMMENDATION"] },
+    "metadata.unitId": String(context.unitId || ""),
+    softDeletedAt: null,
+  }).select("metadata createdAt").sort({ createdAt: -1 }).lean();
+  const agentRecommendationHistory = agentRecommendationNotifications.reduce((history, notification) => {
+    const key = String(notification?.metadata?.recommendationKey || "");
+    if (key && !history[key]) history[key] = {
+      notifiedAt: notification.createdAt,
+      senderRole: notification?.metadata?.senderRole || "",
+      senderName: notification?.metadata?.senderName || "",
+    };
     return history;
   }, {});
 
@@ -2492,6 +2640,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
         reassignmentMonthKey: selectedReassignmentMonth,
         reassignmentMonthLabel: reassignmentMonthContext.periodLabel,
         reassignmentMonth: selectedReassignmentMonth,
+        performanceDataStartDates,
       },
       summary: summarizeRows(allRows),
       taskSummary: summarizeRows(taskRows),
@@ -2499,6 +2648,7 @@ async function buildManagerPortalPayload(user, { taskDatePreset = "ALL", salesDa
       kpiSalesRowsByFrequency,
       branchKpiSalesTotalsByFrequency,
       branchRecommendationHistory,
+      agentRecommendationHistory,
       agents,
       taskRows: sortedTaskRows,
       salesRows: sortedSalesRows,
@@ -2737,7 +2887,10 @@ app.patch("/api/manager/resignation/:resignationId/status", async (req, res) => 
         .populate({ path: "unitId", select: "unitName" })
         .lean();
       const unitManager = agent?.unitId?._id
-        ? await UM.findOne({ unitId: agent.unitId._id, isBlocked: { $ne: true } }).select("userId").lean()
+        ? await UM.findOne({ unitId: agent.unitId._id, isBlocked: { $ne: true } })
+          .sort({ updatedAt: -1, createdAt: -1 })
+          .select("userId")
+          .lean()
         : null;
       const agentUser = agent?.userId || {};
       const agentName = formatPersonName(agentUser);
@@ -2899,7 +3052,10 @@ app.patch("/api/manager/long-leave/:longLeaveId/status", async (req, res) => {
         .populate({ path: "unitId", select: "unitName" })
         .lean();
       const unitManager = agent?.unitId?._id
-        ? await UM.findOne({ unitId: agent.unitId._id, isBlocked: { $ne: true } }).select("userId").lean()
+        ? await UM.findOne({ unitId: agent.unitId._id, isBlocked: { $ne: true } })
+          .sort({ updatedAt: -1, createdAt: -1 })
+          .select("userId")
+          .lean()
         : null;
       const agentUser = agent?.userId || {};
       const agentName = [agentUser.firstName, agentUser.middleName, agentUser.lastName].filter(Boolean).join(" ").trim() || agentUser.username || "agent";
@@ -4095,6 +4251,16 @@ app.get("/api/agent/kpi-progress", async (req, res) => {
       monthly_new_prospects: newProspects,
       monthly_closing_ratio: closingRatio,
     };
+    const achievedKpiKeys = assignedKpis.filter((kpi) => {
+      const target = [kpi.targetValue, kpi.targetMin].find((value) => value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value)));
+      return target !== undefined && Number(actualsByKey[kpi.key] || 0) >= Number(target);
+    }).map((kpi) => kpi.key);
+    if (achievedKpiKeys.length) {
+      await Notification.updateMany(
+        { assignedToUserId: userObjectId, type: { $in: ["UM_RECOMMENDATION", "AUM_RECOMMENDATION"] }, resolutionStatus: { $ne: "Resolved" }, "metadata.kpiKey": { $in: achievedKpiKeys }, "metadata.monthKey": selectedMonth, softDeletedAt: null },
+        { $set: { resolutionStatus: "Resolved", resolvedAt: new Date(), "metadata.resolutionReason": "Agent achieved the assigned KPI target." } }
+      );
+    }
     const dataStartDate = [
       ...tasks.map((task) => task?.createdAt),
       ...prospects.map((prospect) => prospect?.createdAt),
