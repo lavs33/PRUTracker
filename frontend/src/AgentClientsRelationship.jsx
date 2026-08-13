@@ -18,13 +18,16 @@ const buildDatePresets = (dataStartDate) => {
   const startMonth = startYear === CURRENT_YEAR ? Number(startParts.find((part) => part.type === "month")?.value) : 1;
   const monthName = (month) => new Intl.DateTimeFormat("en-US", { month: "long", timeZone: "UTC" })
     .format(new Date(Date.UTC(CURRENT_YEAR, month - 1, 1)));
-  return [{ value: "YTD", label: `${monthName(startMonth)} ${CURRENT_YEAR} - ${monthName(CURRENT_MONTH)} ${CURRENT_YEAR}` }, ...Array.from({ length: CURRENT_MONTH - startMonth + 1 }, (_, index) => {
+  const monthOptions = Array.from({ length: CURRENT_MONTH - startMonth + 1 }, (_, index) => {
   const month = startMonth + index;
   const value = `${CURRENT_YEAR}-${String(month).padStart(2, "0")}`;
   const label = new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric", timeZone: "UTC" })
     .format(new Date(Date.UTC(CURRENT_YEAR, month - 1, 1)));
   return { value, label };
-})];
+  });
+  return startMonth === CURRENT_MONTH
+    ? monthOptions
+    : [{ value: "YTD", label: `${monthName(startMonth)} ${CURRENT_YEAR} - ${monthName(CURRENT_MONTH)} ${CURRENT_YEAR}` }, ...monthOptions];
 };
 const DATE_PRESETS = buildDatePresets();
 

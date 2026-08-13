@@ -1031,6 +1031,9 @@
 .manager-branch-kpi-unit__recommendation h4 { margin: 5px 0; color: #7c2d12; font-size: 14px; }
 .manager-branch-kpi-unit__recommendation p { margin: 0; color: #475569; font-size: 12px; line-height: 1.45; }
 .manager-branch-kpi-unit__recommendation small { display: block; margin-top: 6px; line-height: 1.4; }
+.manager-branch-kpi-unit__recommendation label { display: block; margin-top: 12px; color: #9a3412; font-size: 10px; font-weight: 900; letter-spacing: .06em; text-transform: uppercase; }
+.manager-branch-kpi-unit__recommendation textarea { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid #fdba74; border-radius: 10px; padding: 9px 10px; resize: vertical; background: #fff; color: #334155; font: inherit; font-size: 12px; line-height: 1.45; }
+.manager-branch-kpi-unit__recommendation textarea:focus { border-color: #ea580c; outline: 3px solid rgba(251, 146, 60, .2); }
 .manager-branch-kpi-unit__recommendation button { display: inline-flex; align-items: center; gap: 7px; margin-top: 10px; border: 0; border-radius: 9px; padding: 8px 10px; background: #9a3412; color: #fff; font-size: 11px; font-weight: 900; cursor: pointer; }
 .manager-branch-kpi-unit__recommendation button:hover { background: #7c2d12; }
 .manager-branch-kpi-unit__recommendation button:disabled { cursor: wait; opacity: .65; }
@@ -1410,6 +1413,77 @@
 
 .manager-tab-row .manager-select--unit-date select {
   min-width: 230px;
+}
+
+.manager-orphan-endorsement-tabs {
+  align-items: stretch;
+}
+
+.manager-endorsement-filters {
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.manager-endorsement-filters .manager-select {
+  min-width: 210px;
+}
+
+.manager-endorsement-filters .manager-clear-btn {
+  align-self: stretch;
+  min-width: 88px;
+}
+
+.manager-agent-sales-recommendation {
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px 10px;
+  border-top: 1px solid #fee2e2;
+}
+
+.manager-agent-sales-recommendation--underperforming {
+  margin: 10px;
+  padding: 14px;
+  border: 1px solid #fdba74;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #fff7ed, #fffbeb);
+  box-shadow: 0 8px 20px rgba(154, 52, 18, 0.08);
+}
+
+.manager-agent-sales-recommendation small,
+.manager-agent-sales-recommendation time {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.manager-agent-sales-recommendation button {
+  justify-self: start;
+  border: 0;
+  border-radius: 8px;
+  padding: 7px 10px;
+  background: #dc2626;
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.manager-agent-sales-recommendation button:not(:disabled):hover {
+  background: #ffd3a5;
+  color: #9a3412;
+  box-shadow: 0 6px 16px rgba(249, 115, 22, 0.16);
+}
+
+@media (max-width: 1100px) {
+  .manager-endorsement-filters {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .manager-endorsement-filters .manager-select {
+    flex: 1 1 220px;
+  }
 }
 
 .manager-unit-details-card > .manager-select {
@@ -2993,7 +3067,6 @@
 .manager-urgent-recommendation__action p {
   margin: 10px 0 0;
 }
-
 .manager-kpi-card-insights {
   display: grid;
   gap: 14px;
