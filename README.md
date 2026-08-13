@@ -1,17 +1,18 @@
 # PRUTracker
 
-PRUTracker is a full-stack insurance sales workflow, client management, and manager operations system. It supports prospect-to-policy conversion, role-based portals, organizational administration, orphan client reassignment, KPI assignment/progress tracking, task management, notifications, and policyholder payment workflows.
+PRUTracker is a full-stack insurance sales workflow, client management, and manager operations system. It supports prospect-to-policy conversion, role-based portals, organizational administration, historical manager assignments, orphan client endorsement and reassignment, KPI assignment and progress tracking, performance reporting, task management, actionable notifications, manager recommendations, and policyholder payment workflows.
 
 ---
 
 ## Current Application Scope
 
-PRUTracker is organized around four major workflows:
+PRUTracker is organized around five major workflows:
 
 1. **Sales pipeline management** — prospects, leads, contact attempts, meetings, needs assessment, proposal, application, and policy issuance.
 2. **Client and policyholder servicing** — policyholder records, annual payment records, payment/EOR handling, cancellation, and relationship dashboards.
 3. **Manager operations** — branch/unit/agent oversight, orphan client handling for resigned or long-leave agents, endorsements, and KPI assignment/progress monitoring.
 4. **Admin organization management** — areas, branches, units, agents, manager assignments, blocking, and profile updates.
+5. **Performance coaching and reporting** — branch, unit, and agent KPI progress; role-scoped recommendations; personalized coaching messages; date-aware dashboards; and PDF performance reports.
 
 ---
 
@@ -23,12 +24,14 @@ Admins use a dedicated admin login and organization management page to:
 
 - Create, update, and delete organization records for **Areas**, **Branches**, and **Units**.
 - Create and update agent records.
-- Assign manager roles to agents.
+- Assign manager roles using role-specific eligibility rules and preserve historical assignments.
 - Manage supported manager roles:
   - **AUM** — Assistant Unit Manager
   - **UM** — Unit Manager
   - **BM** — Branch Manager
-- Block or unblock manager access where supported by the organization workflow.
+- Automatically block replaced manager accounts from portal access.
+- Select AUM/UM candidates only from Active Full-Time agents who meet the current-month Active Policies and Closing Ratio targets, excluding conflicting or prior same-unit manager assignments.
+- Select BM candidates from previous UMs in the chosen branch and show their UM identity rather than their underlying agent identity.
 
 ### Branch Managers (BM)
 
@@ -42,6 +45,9 @@ Branch Managers use the manager portal for branch-level oversight. Current BM ca
 - Reassigning orphan prospects and policyholders to active agents.
 - Assigning KPIs to branch, unit, and agent scopes.
 - Viewing branch KPI progress dashboards.
+- Reviewing unit contributions even after the overall branch target is met when an individual unit remains below its own target.
+- Sending KPI recommendations and an optional personalized message to the current UM.
+- Viewing branch, unit, and agent performance reports with data-aware reporting periods.
 
 ### Unit Managers (UM)
 
@@ -51,10 +57,14 @@ Unit Managers use the manager portal for unit-level oversight. Current UM capabi
 - Receiving orphan client endorsement notifications from branch workflows.
 - Reviewing orphan endorsements from **long leave** and **resignation** records.
 - Viewing KPI progress for their unit scope.
+- Viewing unit and agent details across Clients, Tasks, and Sales tabs.
+- Sending current-month, KPI-specific recommendations and optional personalized messages to below-target agents.
+- Sending fair-share sales-production recommendations to underperforming agents.
+- Seeing who last notified an agent and when.
 
 ### Assistant Unit Managers (AUM)
 
-Assistant Unit Managers use manager profile and dashboard views scoped to their organizational assignment.
+Assistant Unit Managers use manager profile and dashboard views scoped to their unit assignment. They can inspect unit and agent performance, view Unit KPI Progress, and send the same current-month KPI-specific or fair-share recommendations available to UMs. AUM and UM recommendations share the same cross-role supersession and automatic-resolution rules.
 
 ### Agents
 
@@ -69,6 +79,8 @@ Agents use the agent portal to:
 - Read notifications.
 - View sales performance, client relationship, and KPI progress dashboards.
 - Receive reassigned orphan clients as system-assigned work.
+- Receive urgent UM/AUM recommendations with KPI or sales-production metrics, recommended actions, and optional personalized guidance.
+- Open KPI recommendations in the relevant workspace: All Prospects, All Tasks, or Sales Performance.
 
 ---
 
@@ -168,7 +180,10 @@ For orphan reassignment, the backend can:
 - Remove stale open/overdue tasks from the original agent.
 - Create a new contact task for the receiving agent when an active lead is reassigned.
 - Notify both the original agent and the receiving agent about the transfer.
-- Notify unit managers about orphan endorsements.
+- Notify only the current active unit manager about orphan endorsements.
+- Transfer pending orphan-endorsement concerns to a replacement UM and keep the previous UM blocked from access.
+
+The UM endorsement view supports Long Leave and Resignation tabs with counts, data-aware date filters, reassignment-progress filters, and clear-filter behavior. Long-leave filtering uses the leave start date; resignation filtering uses the resignation date.
 
 ### KPI Assignment and Progress Tracking
 
@@ -213,6 +228,38 @@ Managers and agents can view KPI progress dashboards that compare actual perform
 - Agent KPI progress page.
 - Date preset handling mapped to KPI frequency periods.
 - Progress summaries, target comparison, and status indicators.
+- Data-aware month options that start when relevant performance data first appears for the selected scope and tab.
+- Single-month labels without redundant ranges such as `August 2026 - August 2026`.
+- Target handling for exact values, minimum-only targets, maximum-only targets, and ranges.
+- Resignation-aware agent KPI history: the resignation month and earlier months remain visible, while later months are hidden.
+- Month-specific Active Policies based on issuance during the selected month and policy status as of that period.
+
+### Performance Recommendations
+
+PRUTracker supports three actionable recommendation flows:
+
+1. **BM → UM recommendation** — generated from Branch KPI Progress for a unit requiring attention. The BM may add an optional personalized message without changing the standard KPI context and recommended-action layout.
+2. **UM/AUM → Agent fair-share recommendation** — generated from current-month Unit Sales Production when an agent is below the unit fair-share benchmark.
+3. **UM/AUM → Agent KPI recommendation** — generated from current-month Agent Details when a supported Clients, Tasks, or Sales KPI is below target.
+
+Agent KPI recommendations provide tailored coaching for:
+
+- Number of New Prospects.
+- Number of Active Policies.
+- Number of Done Approaches.
+- Number of Done Appointments.
+- Number of Done Presentations.
+- Closing Ratio.
+
+Recommendation lifecycle behavior includes:
+
+- Recommendations are urgent and unresolved when created.
+- A newer UM or AUM recommendation for the same agent, KPI, and month resolves the prior unresolved recommendation regardless of sender role.
+- Agent KPI recommendations resolve automatically when the agent reaches the assigned target.
+- Fair-share recommendations resolve automatically when the agent reaches the current unit fair-share benchmark.
+- Related unresolved recommendations resolve when a KPI is unassigned or its target is updated.
+- Resolved recommendations stay resolved if a KPI is assigned again later.
+- Recommendation controls are unavailable for historical months and are not exposed to BMs for direct agent KPI coaching.
 
 ### Tasks, Notifications, and Dashboards
 
@@ -223,7 +270,8 @@ Managers and agents can view KPI progress dashboards that compare actual perform
 - Task summary, all tasks, and task progress views.
 - Agent notifications.
 - Manager notifications.
-- Notification deduplication and metadata for tasks, orphan transfers, orphan endorsements, and policyholder/prospect events.
+- Urgent and unresolved action sections on manager and agent home pages.
+- Notification deduplication, supersession, resolution metadata, and role-specific pills for tasks, orphan transfers, orphan endorsements, KPI changes, BM recommendations, and UM/AUM recommendations.
 
 ### Product Catalog
 
@@ -253,6 +301,8 @@ The React app uses React Router and currently exposes these main route groups:
 - `/um/:username/profile`
 - `/bm/:username/profile`
 - `/um/:username/notifications`
+- `/aum/:username/notifications`
+- `/bm/:username/notifications`
 
 Manager views are selected inside the manager portal navigation, including dashboards, agents, KPI assignment/progress, orphan client management, and orphan endorsements where allowed by role.
 
@@ -304,6 +354,9 @@ The backend is an Express API with route groups for:
 - Orphan prospect and policyholder reassignment.
 - Manager KPI assignments.
 - Agent KPI progress.
+- BM-to-UM KPI recommendations and personalized messages.
+- UM/AUM-to-agent fair-share and KPI recommendations.
+- Manager performance reports and data-start-date context.
 
 ---
 
@@ -475,3 +528,6 @@ The backend package currently has a placeholder `npm test` script. For backend v
 - The orphan module depends on `LongLeave`, `Resignation`, `Prospect`, `Policyholder`, `Task`, and `Notification` data staying in sync during reassignment.
 - KPI assignments are stored in `KpiAssignment` documents keyed by `scopeType` and `scopeId`.
 - Agent-facing prospect and policyholder queries account for reassignment using `reassignedToUserId` where applicable.
+- UM and AUM assignment collections retain historical blocked records; active scope lookups explicitly exclude blocked managers.
+- Replaced UM/AUM/BM accounts are blocked and rejected during login.
+- Recommendation text is stored within the notification message limit, while optional personalized guidance is stored separately in notification metadata.
