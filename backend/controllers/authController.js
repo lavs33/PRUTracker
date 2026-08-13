@@ -84,7 +84,7 @@ function createAuthController({
 
         if (manager.isBlocked === true) {
           return res.status(403).json({
-            message: "This manager account has been replaced and can no longer access the portal.",
+            message: "This user is blocked from access because the manager account has been replaced. Please contact Admin.",
           });
         }
 
